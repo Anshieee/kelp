@@ -1,0 +1,388 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>kelp — SDLC tracker</title>
+<meta name="description" content="Milestones, slice dependencies, and decisions for the kelp always-on private assistant." />
+<meta name="color-scheme" content="dark light" />
+<style>
+  :root{
+    --bg:#0b1210;
+    --bg-soft:#101a17;
+    --panel:#121e1a;
+    --line:#233a33;
+    --line-soft:#1a2b26;
+    --text:#e6f2ec;
+    --muted:#9db3aa;
+    --dim:#6f857c;
+    --accent:#3ddc91;
+    --accent-soft:#1f6f4a;
+    --blue:#8ab4ff;
+    --amber:#f2b45c;
+    --radius:14px;
+    --mono:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,"Liberation Mono",monospace;
+    --sans:ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+  }
+  *{box-sizing:border-box}
+  html{scroll-behavior:smooth}
+  body{
+    margin:0;
+    background:
+      radial-gradient(1100px 600px at 15% -10%, #163a2c 0%, transparent 60%),
+      radial-gradient(900px 500px at 100% 0%, #14243a 0%, transparent 55%),
+      var(--bg);
+    color:var(--text);
+    font-family:var(--sans);
+    line-height:1.6;
+    -webkit-font-smoothing:antialiased;
+  }
+  a{color:var(--accent);text-decoration:none;border-bottom:1px solid rgba(61,220,145,.3)}
+  a:hover{border-bottom-color:var(--accent)}
+  .wrap{max-width:1120px;margin:0 auto;padding:0 22px 72px}
+  header.top{padding:44px 0 8px}
+  .eyebrow{
+    display:inline-flex;align-items:center;gap:8px;
+    font-family:var(--mono);font-size:12px;letter-spacing:.14em;text-transform:uppercase;
+    color:var(--muted);
+  }
+  .dot{width:8px;height:8px;border-radius:50%;background:var(--accent);box-shadow:0 0 0 4px rgba(61,220,145,.14)}
+  h1{font-size:clamp(30px,5vw,46px);line-height:1.1;letter-spacing:-.02em;margin:14px 0 10px;font-weight:650}
+  h1 .thin{color:var(--dim);font-weight:400}
+  .lede{max-width:70ch;color:var(--muted);font-size:17px;margin:0 0 22px}
+  .chips{display:flex;flex-wrap:wrap;gap:8px;margin:18px 0 6px}
+  .chip{
+    font-family:var(--mono);font-size:12px;color:var(--muted);
+    border:1px solid var(--line);background:rgba(18,30,26,.7);
+    padding:5px 10px;border-radius:999px;white-space:nowrap;
+  }
+  .chip b{color:var(--text);font-weight:600}
+  nav.jump{display:flex;flex-wrap:wrap;gap:6px;margin:20px 0 0;padding-top:16px;border-top:1px solid var(--line-soft)}
+  nav.jump a{
+    font-size:13px;color:var(--muted);border:1px solid transparent;border-radius:8px;
+    padding:4px 9px;border-bottom-color:transparent;
+  }
+  nav.jump a:hover{color:var(--text);background:var(--panel);border-color:var(--line)}
+  section{margin-top:52px;scroll-margin-top:20px}
+  h2{
+    font-size:13px;font-family:var(--mono);letter-spacing:.16em;text-transform:uppercase;
+    color:var(--dim);font-weight:600;margin:0 0 8px;
+  }
+  h2 + .sub{color:var(--muted);margin:0 0 18px;max-width:78ch;font-size:15px}
+  .card{
+    background:linear-gradient(180deg,rgba(20,33,29,.95),rgba(16,26,23,.95));
+    border:1px solid var(--line);border-radius:var(--radius);
+    padding:20px;overflow:auto;
+  }
+  .card.diagram{position:relative;min-height:120px}
+  pre.mermaid{
+    margin:0;background:transparent;color:var(--text);
+    font-family:var(--mono);font-size:12px;white-space:pre-wrap;
+    opacity:0;transition:opacity .25s ease;
+  }
+  pre.mermaid[data-processed="true"]{opacity:1}
+  .diagram h3{
+    font-size:12px;font-family:var(--mono);letter-spacing:.12em;text-transform:uppercase;
+    color:var(--dim);margin:0 0 14px;font-weight:600;
+  }
+  .grid{display:grid;gap:14px}
+  @media(min-width:820px){.grid.two{grid-template-columns:1fr 1fr}}
+  table{width:100%;border-collapse:collapse;font-size:14.5px;min-width:520px}
+  th,td{text-align:left;padding:10px 12px;border-bottom:1px solid var(--line-soft);vertical-align:top}
+  th{
+    font-family:var(--mono);font-size:11px;letter-spacing:.1em;text-transform:uppercase;
+    color:var(--dim);font-weight:600;border-bottom-color:var(--line);
+  }
+  tbody tr:hover{background:rgba(61,220,145,.04)}
+  td.mono,.mono{font-family:var(--mono);font-size:13px}
+  .tag{
+    display:inline-block;font-family:var(--mono);font-size:11px;padding:2px 7px;border-radius:6px;
+    border:1px solid var(--line);color:var(--muted);white-space:nowrap;
+  }
+  .tag.done{color:#8ff0c0;border-color:#2c6a4d;background:rgba(45,150,100,.12)}
+  .tag.next{color:#ffd39b;border-color:#6b5227;background:rgba(210,150,60,.12)}
+  .tag.todo{color:var(--muted)}
+  .muted{color:var(--muted)}
+  .small{font-size:13px}
+  .callout{
+    border-left:2px solid var(--accent);background:rgba(61,220,145,.06);
+    padding:12px 16px;border-radius:0 10px 10px 0;margin:16px 0 0;color:var(--muted);font-size:14px;
+  }
+  .callout strong{color:var(--text)}
+  ul.clean{margin:0;padding-left:18px}
+  ul.clean li{margin:6px 0;color:var(--muted)}
+  ul.clean li b{color:var(--text);font-weight:600}
+  footer{margin-top:56px;padding-top:20px;border-top:1px solid var(--line-soft);color:var(--dim);font-size:13px}
+  footer .mono{font-size:12px}
+  .fallback{display:none;color:var(--amber);font-size:14px;margin-top:10px}
+  .fallback.show{display:block}
+  code{font-family:var(--mono);font-size:.92em;background:rgba(255,255,255,.05);padding:1px 5px;border-radius:5px}
+  @media print{
+    body{background:#fff;color:#111}
+    .card{border-color:#ccc;background:#fff}
+    nav.jump,.fallback{display:none}
+    a{color:#0a5}
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header class="top">
+    <div class="eyebrow"><span class="dot"></span> kelp · SDLC tracker</div>
+    <h1>Always-on private assistant <span class="thin">— build map</span></h1>
+    <p class="lede">
+      Milestones, the dependency order of the M1 prototype slices, and the decisions that
+      shaped them. This page is the rendered companion to
+      <a href="https://github.com/Anshieee/kelp/blob/main/docs/SDLC_MINDMAP.md">docs/SDLC_MINDMAP.md</a>
+      in the <a href="https://github.com/Anshieee/kelp">Anshieee/kelp</a> repo.
+    </p>
+    <div class="chips">
+      <span class="chip">branch <b>main</b></span>
+      <span class="chip"><b>5</b> milestones</span>
+      <span class="chip"><b>5</b> P0 slices</span>
+      <span class="chip"><b>1</b> P0 landed</span>
+      <span class="chip">synced <b>2026-10-28</b></span>
+    </div>
+    <nav class="jump">
+      <a href="#lifecycle">Lifecycle</a>
+      <a href="#flow">Change flow</a>
+      <a href="#graph">Slice graph</a>
+      <a href="#milestones">Milestones</a>
+      <a href="#decisions">Decisions</a>
+      <a href="#artifacts">Artifacts</a>
+      <a href="#conventions">Conventions</a>
+    </nav>
+  </header>
+
+  <section id="lifecycle">
+    <h2>01 · Lifecycle</h2>
+    <p class="sub">Five milestones from scaffold to full vision, plus the cross-cutting artifacts every phase leans on.</p>
+    <div class="card diagram">
+      <pre class="mermaid">
+mindmap
+  root((kelp SDLC))
+    M0 Foundation
+      Repo scaffold
+      CI baseline
+      Threat model
+      Provider selection
+    M1 Prototype
+      P0-4 Skill contracts
+      P0-1 Agent loop
+      P0-3 Approval gate
+      P0-2 Dashboard chat
+      P0-5 Demo run
+    M2 Polished MVP
+      Restart and resume
+      Retrieval quality
+      Evals
+      Observability
+      Nebius GPU deploy
+    M3 Hardening
+      Privacy controls
+      Secret isolation
+      Rate limits
+      Retention
+      Cost guardrails
+    M4 Full vision
+      Multi-device presence
+      Proactive tasks
+      Plugin surface
+      Team sharing
+    Cross-cutting
+      Decision log
+      ADRs
+      Branch convention
+      Live tracker page
+      </pre>
+      <p class="fallback" data-fallback>Diagram could not render in this browser. The same map is in the <a href="https://github.com/Anshieee/kelp/blob/main/docs/SDLC_MINDMAP.md">GitHub markdown version</a>.</p>
+    </div>
+  </section>
+
+  <section id="flow">
+    <h2>02 · How a change travels</h2>
+    <p class="sub">Intent becomes a spec, the spec becomes a branch named after its issue, and CI decides whether it reaches <code>main</code>.</p>
+    <div class="card diagram">
+      <pre class="mermaid">
+flowchart LR
+  A["Intent<br/>owner words"] --> B["Spec + ADR<br/>docs/"]
+  B --> C["Branch<br/>kel-N-slug"]
+  C --> D["Build + tests<br/>pytest / playwright"]
+  D --> E["PR to main<br/>territory named"]
+  E --> F{"CI gates<br/>lint · types · secrets · tests"}
+  F -- fail --> D
+  F -- pass --> G["Review + merge<br/>no force push"]
+  G --> H["Linear auto-close<br/>KEL-N"]
+  H --> I["Deploy / demo<br/>npm run demo"]
+      </pre>
+      <p class="fallback" data-fallback>Diagram could not render. See the <a href="https://github.com/Anshieee/kelp/blob/main/docs/SDLC_MINDMAP.md">markdown version</a>.</p>
+    </div>
+    <div class="callout">
+      <strong>Branch prefix is load-bearing.</strong> Only <code>kel-&lt;n&gt;-&lt;slug&gt;</code> auto-links to
+      Linear team <code>KEL</code>. A <code>neb-</code> prefix fails silently and the issue never closes.
+    </div>
+  </section>
+
+  <section id="graph">
+    <h2>03 · M1 slice dependency graph</h2>
+    <p class="sub">The contract lands first. The demo is the prototype exit test, so it depends on all four slices.</p>
+    <div class="card diagram">
+      <pre class="mermaid">
+flowchart LR
+  P4["P0-4<br/>Skill contracts"] --> P1["P0-1<br/>Agent loop"]
+  P4 --> P3["P0-3<br/>Approval gate"]
+  P1 --> P2["P0-2<br/>Dashboard chat"]
+  P1 --> P5["P0-5<br/>Demo run"]
+  P2 --> P5
+  P3 --> P5
+      </pre>
+      <p class="fallback" data-fallback>Diagram could not render. See the <a href="https://github.com/Anshieee/kelp/blob/main/docs/SDLC_MINDMAP.md">markdown version</a>.</p>
+    </div>
+    <div class="card" style="margin-top:14px">
+      <table>
+        <thead>
+          <tr><th>Slice</th><th>Title</th><th>Blocked by</th><th>State</th></tr>
+        </thead>
+        <tbody>
+          <tr><td class="mono">P0-4</td><td>Skill contracts: schema + capability manifest</td><td class="muted">—</td><td><span class="tag done">landed · KEL-5</span></td></tr>
+          <tr><td class="mono">P0-1</td><td>Kernel LLM: streaming agent loop with tool calling</td><td class="mono">P0-4</td><td><span class="tag next">next</span></td></tr>
+          <tr><td class="mono">P0-3</td><td>OpenShell: approval-gated execution + audit</td><td class="mono">P0-4</td><td><span class="tag next">next</span></td></tr>
+          <tr><td class="mono">P0-2</td><td>Dashboard chat surface</td><td class="mono">P0-1</td><td><span class="tag todo">queued</span></td></tr>
+          <tr><td class="mono">P0-5</td><td>Demo choreography: 6-beat end-to-end run</td><td class="mono">P0-1 · P0-2 · P0-3 · P0-4</td><td><span class="tag todo">exit test</span></td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <section id="milestones">
+    <h2>04 · Milestones</h2>
+    <p class="sub">Targets are placeholders pending owner confirmation.</p>
+    <div class="card">
+      <table>
+        <thead>
+          <tr><th>#</th><th>Milestone</th><th>Target</th><th>Exit means</th></tr>
+        </thead>
+        <tbody>
+          <tr><td class="mono">M0</td><td>Foundation</td><td class="mono">2026-11-07</td><td>Repo, CI baseline, threat model, model/provider choice recorded</td></tr>
+          <tr><td class="mono">M1</td><td>Prototype</td><td class="mono">2026-11-28</td><td>Query → tool → answer loop, approvals, dashboard chat, <code>npm run demo</code> green under 4 min</td></tr>
+          <tr><td class="mono">M2</td><td>Polished MVP</td><td class="mono">2026-12-19</td><td>Restart/resume, retrieval quality, evals, observability, deployed on Nebius GPU</td></tr>
+          <tr><td class="mono">M3</td><td>Hardening</td><td class="mono">2027-01-23</td><td>Privacy controls, secret isolation, rate limits, retention, cost guardrails</td></tr>
+          <tr><td class="mono">M4</td><td>Full vision</td><td class="mono">2027-03-06</td><td>Multi-device presence, proactive tasks, plugin surface, team sharing</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <section id="decisions">
+    <h2>05 · Decisions that shaped the map</h2>
+    <div class="card">
+      <table>
+        <thead><tr><th>ID</th><th>Decision</th><th>Effect on SDLC</th></tr></thead>
+        <tbody>
+          <tr><td class="mono">Q7</td><td>Dashboard primary; WhatsApp is a mirror, P1</td><td>One surface to build in M1; the mirror is an adapter, not a parallel track</td></tr>
+          <tr><td class="mono">Q8</td><td>Prototype cut: chat, PDF/CSV answers, read-only <code>web.search</code> + <code>github.read</code>, approvals, scheduler</td><td>Fixes P0-2 scope and the four prototype skills</td></tr>
+          <tr><td class="mono">Q9</td><td>Saved cards via Stripe vault</td><td><span class="muted">Superseded by Q18</span></td></tr>
+          <tr><td class="mono">Q10</td><td>Voice memo P1 only</td><td>Keeps audio capture out of M1</td></tr>
+          <tr><td class="mono">Q18</td><td>Payments: Stripe now, Razorpay deferred, balance P2</td><td>Wallet scope is Stripe-only; no Razorpay branch in M1</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <section id="artifacts">
+    <h2>06 · Artifact map</h2>
+    <p class="sub">Every link points at the file on <code>main</code>.</p>
+    <div class="grid two">
+      <div class="card">
+        <ul class="clean small">
+          <li><b><a href="https://github.com/Anshieee/kelp/blob/main/docs/linear-issue-pack-kel.md">Issue pack</a></b> — create-ready Linear structure and P0 bodies</li>
+          <li><b><a href="https://github.com/Anshieee/kelp/blob/main/docs/SKILL_SPEC.md">Skill contract</a></b> — manifest + handler contract, invariants, errors</li>
+          <li><b><a href="https://github.com/Anshieee/kelp/blob/main/docs/adr/0001-docs-answer-single-skill.md">ADR 0001</a></b> — <code>docs.answer</code> as a single skill</li>
+        </ul>
+      </div>
+      <div class="card">
+        <ul class="clean small">
+          <li><b><a href="https://github.com/Anshieee/kelp/blob/main/docs/frontend-scope-simple.md">Frontend brief</a></b> — screens and flows for Figma</li>
+          <li><b><a href="https://github.com/Anshieee/kelp/blob/main/skills/manifest.schema.json">Manifest schema</a></b> — meta-schema for skill manifests</li>
+          <li><b><a href="https://github.com/Anshieee/kelp/blob/main/tests/test_skill_loader.py">Contract tests</a></b> — loader and validation suite</li>
+        </ul>
+      </div>
+    </div>
+  </section>
+
+  <section id="conventions">
+    <h2>07 · Conventions</h2>
+    <div class="card">
+      <ul class="clean">
+        <li><b>Branch</b> — <code>kel-&lt;n&gt;-&lt;slug&gt;</code> off <code>main</code>; <code>main</code> stays releasable.</li>
+        <li><b>Commit</b> — imperative subject, scope in parentheses, issue key in the body when useful.</li>
+        <li><b>PR</b> — state the acceptance criterion exercised, commands run, and what was <em>not</em> verified. No force push, no secrets in diffs.</li>
+        <li><b>CI baseline</b> — secret scan, lint, typecheck, unit tests. A <code>demo</code> workflow is added only after P0-5 exists.</li>
+        <li><b>Deploy</b> — this page is static from <code>netlify/</code>: no build step, no secrets in the client.</li>
+      </ul>
+    </div>
+    <div class="callout">
+      <strong>Manual steps still open:</strong> create the Linear project/milestones/labels/issues,
+      install the Linear↔GitHub app with auto-close, and enable branch protection on <code>main</code>.
+    </div>
+  </section>
+
+  <footer>
+    <span class="mono">kelp · SDLC tracker</span> — rendered from
+    <a href="https://github.com/Anshieee/kelp/blob/main/docs/SDLC_MINDMAP.md">docs/SDLC_MINDMAP.md</a>.
+    Diagrams: Mermaid via jsDelivr. Last synced 2026-10-28.
+  </footer>
+</div>
+
+<script type="module">
+  import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs';
+
+  const dark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+
+  mermaid.initialize({
+    startOnLoad: false,
+    securityLevel: 'loose',
+    theme: 'base',
+    fontFamily: 'ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif',
+    themeVariables: dark ? {
+      background: '#121e1a',
+      primaryColor: '#16302a',
+      primaryTextColor: '#e6f2ec',
+      primaryBorderColor: '#3ddc91',
+      lineColor: '#5d7d70',
+      secondaryColor: '#14243a',
+      tertiaryColor: '#1a2b26',
+      mainBkg: '#16302a',
+      nodeBorder: '#3ddc91',
+      clusterBkg: '#101a17',
+      clusterBorder: '#233a33',
+      edgeLabelBackground: '#0b1210',
+      textColor: '#e6f2ec',
+      titleColor: '#e6f2ec'
+    } : {
+      background: '#ffffff',
+      primaryColor: '#e8f7ef',
+      primaryTextColor: '#10241c',
+      primaryBorderColor: '#1f6f4a',
+      lineColor: '#4c6b5f',
+      mainBkg: '#e8f7ef',
+      nodeBorder: '#1f6f4a',
+      clusterBkg: '#f6fbf8',
+      clusterBorder: '#c9ddd3',
+      edgeLabelBackground: '#ffffff',
+      textColor: '#10241c',
+      titleColor: '#10241c'
+    }
+  });
+
+  try {
+    await mermaid.run({ querySelector: 'pre.mermaid' });
+  } catch (err) {
+    console.error('mermaid render failed', err);
+    document.querySelectorAll('[data-fallback]').forEach(el => el.classList.add('show'));
+    document.querySelectorAll('pre.mermaid').forEach(el => { el.style.opacity = '1'; });
+  }
+</script>
+</body>
+</html>

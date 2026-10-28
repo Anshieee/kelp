@@ -1,0 +1,12 @@
+# Static tracker page. No build step: the page is plain HTML + a Mermaid CDN import.
+[build]
+  publish = "netlify"
+  command = ""
+
+[[headers]]
+  for = "/*"
+  [headers.values]
+    X-Content-Type-Options = "nosniff"
+    X-Frame-Options = "DENY"
+    Referrer-Policy = "strict-origin-when-cross-origin"
+    Permissions-Policy = "camera=(), microphone=(), geolocation=()"
