@@ -1,0 +1,93 @@
+{
+  "manifest_version": "1.0",
+  "name": "web.search",
+  "version": "0.1.0",
+  "description": "Search the public web and return ranked results with titles, URLs, and snippets. Read-only; network egress is limited to the allowlisted search API host.",
+  "triggers": [
+    {
+      "kind": "model",
+      "description": "Use when the user asks about recent events, external facts, or anything that needs a current public source.",
+      "examples": [
+        "What is the latest Nebius GPU pricing?",
+        "Find the release notes for Postgres 17"
+      ]
+    }
+  ],
+  "tools": ["web.search"],
+  "input_schema": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "type": "object",
+    "additionalProperties": false,
+    "required": ["query"],
+    "properties": {
+      "query": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 400
+      },
+      "max_results": {
+        "type": "integer",
+        "minimum": 1,
+        "maximum": 10,
+        "default": 5
+      },
+      "freshness": {
+        "enum": ["day", "week", "month", "year"]
+      }
+    }
+  },
+  "output_schema": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": ["query", "backend", "results"],
+    "properties": {
+      "query": {
+        "type": "string"
+      },
+      "backend": {
+        "type": "string"
+      },
+      "results": {
+        "type": "array",
+        "maxItems": 10,
+        "items": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["title", "url", "snippet"],
+          "properties": {
+            "title": {
+              "type": "string"
+            },
+            "url": {
+              "type": "string",
+              "format": "uri"
+            },
+            "snippet": {
+              "type": "string"
+            },
+            "published_at": {
+              "type": "string"
+            }
+          }
+        }
+      }
+    }
+  },
+  "permissions": {
+    "effects": ["read", "network"],
+    "scopes": {
+      "paths": [],
+      "hosts": ["api.tavily.com"],
+      "repos": []
+    },
+    "requires_approval": false,
+    "secrets": ["TAVILY_API_KEY"]
+  },
+  "entry": {
+    "module": "skills.builtin.web_search.handler",
+    "callable": "run"
+  },
+  "timeout_ms": 15000,
+  "idempotent": true,
+  "cost_class": "metered"
+}

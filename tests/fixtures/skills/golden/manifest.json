@@ -1,0 +1,58 @@
+{
+  "manifest_version": "1.0",
+  "name": "demo.echo",
+  "version": "0.1.0",
+  "description": "Golden fixture used to test the skill loader and invocation pipeline.",
+  "triggers": [
+    {
+      "kind": "model",
+      "description": "Echo the supplied text back with a character count.",
+      "examples": ["echo hello"]
+    }
+  ],
+  "tools": ["demo.echo"],
+  "input_schema": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "type": "object",
+    "additionalProperties": false,
+    "required": ["text"],
+    "properties": {
+      "text": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 100
+      }
+    }
+  },
+  "output_schema": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": ["echo", "chars"],
+    "properties": {
+      "echo": {
+        "type": "string"
+      },
+      "chars": {
+        "type": "integer",
+        "minimum": 0
+      }
+    }
+  },
+  "permissions": {
+    "effects": ["read"],
+    "scopes": {
+      "paths": [],
+      "hosts": [],
+      "repos": []
+    },
+    "requires_approval": false,
+    "secrets": []
+  },
+  "entry": {
+    "module": "tests.fixtures.handlers",
+    "callable": "echo"
+  },
+  "timeout_ms": 2000,
+  "idempotent": true,
+  "cost_class": "free"
+}

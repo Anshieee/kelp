@@ -1,0 +1,96 @@
+{
+  "manifest_version": "1.0",
+  "name": "schedule.create",
+  "version": "0.1.0",
+  "description": "Create a recurring scheduled task from a natural-language prompt and a cron expression. Writes to the scheduler store and therefore always requires human approval.",
+  "triggers": [
+    {
+      "kind": "model",
+      "description": "Use when the user asks to schedule a recurring task, reminder, or check (for example every weekday morning).",
+      "examples": [
+        "Every weekday at 8am, summarize my open issues",
+        "Remind me to review the budget on the first of each month"
+      ]
+    }
+  ],
+  "tools": ["schedule.create"],
+  "input_schema": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "type": "object",
+    "additionalProperties": false,
+    "required": ["title", "prompt", "schedule", "timezone"],
+    "properties": {
+      "title": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 120
+      },
+      "prompt": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 2000
+      },
+      "schedule": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["kind", "expr"],
+        "properties": {
+          "kind": {
+            "const": "cron"
+          },
+          "expr": {
+            "type": "string",
+            "pattern": "^(\\S+\\s+){4}\\S+$"
+          }
+        }
+      },
+      "timezone": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 64
+      },
+      "start_at": {
+        "type": "string",
+        "format": "date-time"
+      },
+      "end_at": {
+        "type": "string",
+        "format": "date-time"
+      }
+    }
+  },
+  "output_schema": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": ["task_id", "status", "next_run_at"],
+    "properties": {
+      "task_id": {
+        "type": "string",
+        "minLength": 1
+      },
+      "status": {
+        "enum": ["scheduled"]
+      },
+      "next_run_at": {
+        "type": "string"
+      }
+    }
+  },
+  "permissions": {
+    "effects": ["write"],
+    "scopes": {
+      "paths": ["${WORKSPACE}/var/scheduler/**"],
+      "hosts": [],
+      "repos": []
+    },
+    "requires_approval": true,
+    "secrets": []
+  },
+  "entry": {
+    "module": "skills.builtin.schedule_create.handler",
+    "callable": "run"
+  },
+  "timeout_ms": 5000,
+  "idempotent": false,
+  "cost_class": "free"
+}

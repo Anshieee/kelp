@@ -1,0 +1,99 @@
+{
+  "manifest_version": "1.0",
+  "name": "docs.answer",
+  "version": "0.1.0",
+  "description": "Answer a question about a previously uploaded PDF or CSV artifact and return the answer plus a citable artifact handle. Read-only, local files only.",
+  "triggers": [
+    {
+      "kind": "model",
+      "description": "Use when the user asks a question about a document they uploaded (PDF summary, PDF detail, CSV totals, CSV filtering).",
+      "examples": [
+        "Summarize this PDF",
+        "What was the total revenue in the CSV?"
+      ]
+    },
+    {
+      "kind": "manual",
+      "description": "Invoked by the dashboard document card when the user asks a follow-up on an uploaded file."
+    }
+  ],
+  "tools": ["docs.answer"],
+  "input_schema": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "type": "object",
+    "additionalProperties": false,
+    "required": ["artifact", "kind", "question"],
+    "properties": {
+      "artifact": {
+        "type": "string",
+        "pattern": "^artifact:[A-Za-z0-9_-]{8,128}$"
+      },
+      "kind": {
+        "enum": ["pdf", "csv"]
+      },
+      "question": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 1000
+      },
+      "max_rows": {
+        "type": "integer",
+        "minimum": 1,
+        "maximum": 200,
+        "default": 20
+      }
+    }
+  },
+  "output_schema": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": ["answer", "artifact", "citations"],
+    "properties": {
+      "answer": {
+        "type": "string"
+      },
+      "artifact": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["handle", "kind", "mime"],
+        "properties": {
+          "handle": {"type": "string"},
+          "kind": {"enum": ["pdf", "csv"]},
+          "mime": {"type": "string"},
+          "pages": {"type": "integer", "minimum": 1},
+          "rows": {"type": "integer", "minimum": 0}
+        }
+      },
+      "citations": {
+        "type": "array",
+        "maxItems": 50,
+        "items": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["locator"],
+          "properties": {
+            "locator": {"type": "string"},
+            "text": {"type": "string"}
+          }
+        }
+      }
+    }
+  },
+  "permissions": {
+    "effects": ["read"],
+    "scopes": {
+      "paths": ["${WORKSPACE}/var/artifacts/**"],
+      "hosts": [],
+      "repos": []
+    },
+    "requires_approval": false,
+    "secrets": []
+  },
+  "entry": {
+    "module": "skills.builtin.docs_answer.handler",
+    "callable": "run"
+  },
+  "timeout_ms": 30000,
+  "idempotent": true,
+  "cost_class": "metered"
+}

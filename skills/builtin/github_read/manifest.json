@@ -1,0 +1,150 @@
+{
+  "manifest_version": "1.0",
+  "name": "github.read",
+  "version": "0.1.0",
+  "description": "Read repositories, issues, pull requests, and file contents through the GitHub API. Read-only: no comments, labels, merges, or pushes.",
+  "triggers": [
+    {
+      "kind": "model",
+      "description": "Use when the user asks about a repository, issue, pull request, or file that lives on GitHub.",
+      "examples": [
+        "What is the status of issue 12 in my repo?",
+        "Show me the README on main"
+      ]
+    }
+  ],
+  "tools": ["github.read"],
+  "input_schema": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "type": "object",
+    "additionalProperties": false,
+    "required": ["kind", "repo"],
+    "properties": {
+      "kind": {
+        "enum": ["repo", "issue", "pull_request", "file"]
+      },
+      "repo": {
+        "type": "string",
+        "pattern": "^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$"
+      },
+      "number": {
+        "type": "integer",
+        "minimum": 1
+      },
+      "path": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 400
+      },
+      "ref": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 200
+      }
+    },
+    "oneOf": [
+      {
+        "properties": {"kind": {"const": "repo"}},
+        "required": ["kind", "repo"]
+      },
+      {
+        "properties": {"kind": {"const": "issue"}},
+        "required": ["kind", "repo", "number"]
+      },
+      {
+        "properties": {"kind": {"const": "pull_request"}},
+        "required": ["kind", "repo", "number"]
+      },
+      {
+        "properties": {"kind": {"const": "file"}},
+        "required": ["kind", "repo", "path"]
+      }
+    ]
+  },
+  "output_schema": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": ["kind"],
+    "properties": {
+      "kind": {
+        "enum": ["repo", "issue", "pull_request", "file"]
+      },
+      "repo": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["full_name", "default_branch", "private", "html_url"],
+        "properties": {
+          "full_name": {"type": "string"},
+          "description": {"type": ["string", "null"]},
+          "default_branch": {"type": "string"},
+          "private": {"type": "boolean"},
+          "html_url": {"type": "string"},
+          "open_issues_count": {"type": "integer", "minimum": 0}
+        }
+      },
+      "issue": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["number", "title", "state", "html_url"],
+        "properties": {
+          "number": {"type": "integer", "minimum": 1},
+          "title": {"type": "string"},
+          "state": {"enum": ["open", "closed"]},
+          "html_url": {"type": "string"},
+          "labels": {"type": "array", "items": {"type": "string"}},
+          "body": {"type": ["string", "null"]}
+        }
+      },
+      "pull_request": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["number", "title", "state", "merged", "html_url"],
+        "properties": {
+          "number": {"type": "integer", "minimum": 1},
+          "title": {"type": "string"},
+          "state": {"enum": ["open", "closed"]},
+          "merged": {"type": "boolean"},
+          "html_url": {"type": "string"},
+          "head": {"type": "string"},
+          "base": {"type": "string"},
+          "body": {"type": ["string", "null"]}
+        }
+      },
+      "file": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["path", "ref", "content"],
+        "properties": {
+          "path": {"type": "string"},
+          "ref": {"type": "string"},
+          "content": {"type": "string"},
+          "encoding": {"enum": ["utf-8", "base64"]},
+          "size": {"type": "integer", "minimum": 0}
+        }
+      }
+    },
+    "oneOf": [
+      {"properties": {"kind": {"const": "repo"}}, "required": ["repo"]},
+      {"properties": {"kind": {"const": "issue"}}, "required": ["issue"]},
+      {"properties": {"kind": {"const": "pull_request"}}, "required": ["pull_request"]},
+      {"properties": {"kind": {"const": "file"}}, "required": ["file"]}
+    ]
+  },
+  "permissions": {
+    "effects": ["read", "network"],
+    "scopes": {
+      "paths": [],
+      "hosts": ["api.github.com"],
+      "repos": ["Anshieee/nebius-nvidia"]
+    },
+    "requires_approval": false,
+    "secrets": ["GITHUB_TOKEN"]
+  },
+  "entry": {
+    "module": "skills.builtin.github_read.handler",
+    "callable": "run"
+  },
+  "timeout_ms": 20000,
+  "idempotent": true,
+  "cost_class": "free"
+}
