@@ -356,6 +356,12 @@ def test_usage_store_failure_does_not_break_the_turn() -> None:
     assert result[-1].usage_persisted is False
 
 
+def test_no_usage_store_is_reported_as_not_persisted() -> None:
+    loop, _ = build([text_script("done")])
+    result = collect(loop, [{"role": "user", "content": "hi"}])
+    assert result[-1].usage_persisted is False
+
+
 def test_events_are_json_serializable() -> None:
     async def executor(call: ToolCall) -> Mapping[str, Any]:
         return {"ok": True, "value": call.arguments.get("n")}

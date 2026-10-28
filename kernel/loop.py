@@ -349,7 +349,7 @@ class AgentLoop:
             duration_ms=duration_ms,
             outcome=reason,
         )
-        persisted = True
+        persisted = self._usage_store is not None
         if self._usage_store is not None:
             try:
                 self._usage_store.record(record)

@@ -118,7 +118,7 @@ One `UsageRecord` per turn is appended to the configured store:
 - `JsonlUsageStore` appends with `fsync` and creates the file `0600`. It contains
   no prompts, no responses, and no secrets — only counts and identifiers.
 - A broken store sets `usage_persisted: false` on `turn_finished`; accounting
-  never kills a turn.
+  never kills a turn. No store configured is also reported as not persisted.
 
 ## 4. Deliberately not in this slice
 
