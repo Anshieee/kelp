@@ -147,6 +147,15 @@ def test_network_host_grammar(engine: PolicyEngine) -> None:
         assert verdict.decision is Decision.DENY
 
 
+def test_ip_literals_are_not_allowed(engine: PolicyEngine) -> None:
+    assert host_allowed("1.2.3.4", {"1.2.3.4"}) is False
+    verdict = engine.evaluate(
+        capability(Effect.NETWORK, hosts=("1.2.3.4",)),
+        host="1.2.3.4",
+    )
+    assert verdict.decision is Decision.DENY
+
+
 def test_network_requires_host(engine: PolicyEngine) -> None:
     verdict = engine.evaluate(
         capability(Effect.NETWORK, hosts=("api.github.com",))

@@ -10,6 +10,7 @@ This module makes no I/O and holds no state.
 from __future__ import annotations
 
 import fnmatch
+import ipaddress
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
@@ -88,6 +89,12 @@ def host_allowed(host: str, patterns: Iterable[str]) -> bool:
 
     candidate = host.strip().lower().rstrip(".")
     if not candidate or "://" in candidate or "/" in candidate or ":" in candidate:
+        return False
+    try:
+        ipaddress.ip_address(candidate)
+    except ValueError:
+        pass
+    else:
         return False
     for pattern in patterns:
         normalised = pattern.strip().lower().rstrip(".")
