@@ -75,11 +75,18 @@
     padding:20px;overflow:auto;
   }
   .card.diagram{position:relative;min-height:120px}
+  @media(max-width:700px){
+    .card.diagram{overflow-x:auto;-webkit-overflow-scrolling:touch}
+    .card.diagram pre.mermaid svg{min-width:620px}
+  }
   pre.mermaid{
     margin:0;background:transparent;color:var(--text);
     font-family:var(--mono);font-size:12px;white-space:pre-wrap;
-    opacity:0;transition:opacity .25s ease;
+    opacity:1;transition:opacity .2s ease;
   }
+  /* Dim the raw source only while Mermaid is actively rendering. If the CDN
+     import fails, this class is never added and the source stays readable. */
+  html.mermaid-loading pre.mermaid:not([data-processed="true"]){opacity:.25}
   pre.mermaid[data-processed="true"]{opacity:1}
   .diagram h3{
     font-size:12px;font-family:var(--mono);letter-spacing:.12em;text-transform:uppercase;
@@ -118,7 +125,7 @@
   .fallback.show{display:block}
   .steps{
     list-style:none;margin:0;padding:0;display:grid;gap:10px;
-    grid-template-columns:repeat(auto-fit,minmax(132px,1fr));
+    grid-template-columns:repeat(2,1fr);
   }
   .steps li{
     position:relative;border:1px solid var(--line);border-radius:10px;
@@ -133,11 +140,7 @@
   .steps li.gate{border-color:#6b5227;background:rgba(210,150,60,.08)}
   .steps li.gate .n{color:var(--amber)}
   @media(min-width:900px){
-    .steps li:not(:last-child)::after{
-      content:"›";position:absolute;right:-8px;top:50%;transform:translateY(-50%);
-      color:var(--dim);font-size:18px;line-height:1;
-    }
-    .steps li.gate:not(:last-child)::after{content:"›"}
+    .steps{grid-template-columns:repeat(4,1fr)}
   }
   .steps-note{margin:14px 0 0;font-size:13px;color:var(--dim)}
   code{font-family:var(--mono);font-size:.92em;background:rgba(255,255,255,.05);padding:1px 5px;border-radius:5px}
@@ -360,17 +363,27 @@ flowchart LR
   </footer>
 </div>
 
+<script>
+  // Fallback for a blocked or unreachable CDN: reveal the source and the link
+  // to the GitHub markdown if no diagram has rendered after 9 seconds.
+  window.setTimeout(function () {
+    if (!document.querySelector('pre.mermaid svg')) {
+      document.documentElement.classList.remove('mermaid-loading');
+      document.querySelectorAll('[data-fallback]').forEach(function (el) {
+        el.classList.add('show');
+      });
+    }
+  }, 9000);
+</script>
 <script type="module">
   import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs';
-
-  const dark = window.matchMedia('(prefers-color-scheme: dark)').matches;
 
   mermaid.initialize({
     startOnLoad: false,
     securityLevel: 'loose',
     theme: 'base',
     fontFamily: 'ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif',
-    themeVariables: dark ? {
+    themeVariables: {
       background: '#121e1a',
       primaryColor: '#16302a',
       primaryTextColor: '#e6f2ec',
@@ -388,31 +401,31 @@ flowchart LR
       cScale0: '#1f6f4a', cScale1: '#24596b', cScale2: '#2f4a6b', cScale3: '#3d3f6b',
       cScale4: '#543d63', cScale5: '#1c5a3f', cScale6: '#2a5f57', cScale7: '#35526b',
       cScale8: '#4a4a6b', cScale9: '#5a3f55', cScale10: '#204d3a', cScale11: '#2b4a5c'
-    } : {
-      background: '#ffffff',
-      primaryColor: '#e8f7ef',
-      primaryTextColor: '#10241c',
-      primaryBorderColor: '#1f6f4a',
-      lineColor: '#4c6b5f',
-      mainBkg: '#e8f7ef',
-      nodeBorder: '#1f6f4a',
-      clusterBkg: '#f6fbf8',
-      clusterBorder: '#c9ddd3',
-      edgeLabelBackground: '#ffffff',
-      textColor: '#10241c',
-      titleColor: '#10241c',
-      cScale0: '#cdeedd', cScale1: '#d3e8f2', cScale2: '#d9e2f7', cScale3: '#e2def7',
-      cScale4: '#ece0f2', cScale5: '#d5f0e2', cScale6: '#d8efe9', cScale7: '#dbe6f5',
-      cScale8: '#e4e4f5', cScale9: '#f0dfe8', cScale10: '#cfe8da', cScale11: '#d6e5ee'
     }
   });
 
+  const showFallback = () => {
+    document.querySelectorAll('[data-fallback]').forEach(el => el.classList.add('show'));
+  };
+  const settle = () => document.documentElement.classList.remove('mermaid-loading');
+
+  document.documentElement.classList.add('mermaid-loading');
+  const watchdog = setTimeout(() => {
+    if (document.querySelectorAll('pre.mermaid svg').length === 0) {
+      showFallback();
+      settle();
+    }
+  }, 8000);
+
   try {
     await mermaid.run({ querySelector: 'pre.mermaid' });
+    clearTimeout(watchdog);
+    settle();
   } catch (err) {
+    clearTimeout(watchdog);
     console.error('mermaid render failed', err);
-    document.querySelectorAll('[data-fallback]').forEach(el => el.classList.add('show'));
-    document.querySelectorAll('pre.mermaid').forEach(el => { el.style.opacity = '1'; });
+    showFallback();
+    settle();
   }
 </script>
 </body>
