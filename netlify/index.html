@@ -116,6 +116,30 @@
   footer .mono{font-size:12px}
   .fallback{display:none;color:var(--amber);font-size:14px;margin-top:10px}
   .fallback.show{display:block}
+  .steps{
+    list-style:none;margin:0;padding:0;display:grid;gap:10px;
+    grid-template-columns:repeat(auto-fit,minmax(132px,1fr));
+  }
+  .steps li{
+    position:relative;border:1px solid var(--line);border-radius:10px;
+    background:rgba(10,18,16,.55);padding:10px 12px;min-height:74px;
+    display:flex;flex-direction:column;gap:2px;
+  }
+  .steps .n{
+    font-family:var(--mono);font-size:11px;color:var(--accent);letter-spacing:.08em;
+  }
+  .steps b{font-size:14px;font-weight:600;line-height:1.25}
+  .steps .d{font-size:12px;color:var(--dim);line-height:1.35}
+  .steps li.gate{border-color:#6b5227;background:rgba(210,150,60,.08)}
+  .steps li.gate .n{color:var(--amber)}
+  @media(min-width:900px){
+    .steps li:not(:last-child)::after{
+      content:"›";position:absolute;right:-8px;top:50%;transform:translateY(-50%);
+      color:var(--dim);font-size:18px;line-height:1;
+    }
+    .steps li.gate:not(:last-child)::after{content:"›"}
+  }
+  .steps-note{margin:14px 0 0;font-size:13px;color:var(--dim)}
   code{font-family:var(--mono);font-size:.92em;background:rgba(255,255,255,.05);padding:1px 5px;border-radius:5px}
   @media print{
     body{background:#fff;color:#111}
@@ -203,20 +227,21 @@ mindmap
   <section id="flow">
     <h2>02 · How a change travels</h2>
     <p class="sub">Intent becomes a spec, the spec becomes a branch named after its issue, and CI decides whether it reaches <code>main</code>.</p>
-    <div class="card diagram">
-      <pre class="mermaid">
-flowchart LR
-  A["Intent<br/>owner words"] --> B["Spec + ADR<br/>docs/"]
-  B --> C["Branch<br/>kel-N-slug"]
-  C --> D["Build + tests<br/>pytest / playwright"]
-  D --> E["PR to main<br/>territory named"]
-  E --> F{"CI gates<br/>lint · types · secrets · tests"}
-  F -- fail --> D
-  F -- pass --> G["Review + merge<br/>no force push"]
-  G --> H["Linear auto-close<br/>KEL-N"]
-  H --> I["Deploy / demo<br/>npm run demo"]
-      </pre>
-      <p class="fallback" data-fallback>Diagram could not render. See the <a href="https://github.com/Anshieee/kelp/blob/main/docs/SDLC_MINDMAP.md">markdown version</a>.</p>
+    <div class="card">
+      <ol class="steps">
+        <li><span class="n">1</span><b>Intent</b><span class="d">owner words</span></li>
+        <li><span class="n">2</span><b>Spec + ADR</b><span class="d">in <code>docs/</code></span></li>
+        <li><span class="n">3</span><b>Branch</b><span class="d"><code>kel-N-slug</code></span></li>
+        <li><span class="n">4</span><b>Build + tests</b><span class="d">pytest · playwright</span></li>
+        <li><span class="n">5</span><b>PR to main</b><span class="d">territory named</span></li>
+        <li class="gate"><span class="n">6</span><b>CI gates</b><span class="d">lint · types · secrets · tests</span></li>
+        <li><span class="n">7</span><b>Merge</b><span class="d">Linear closes KEL-N</span></li>
+        <li><span class="n">8</span><b>Deploy / demo</b><span class="d">this page</span></li>
+      </ol>
+      <p class="steps-note">
+        A failing gate returns the branch to step 4. Merging to <code>main</code> is review-gated:
+        no force push, no secrets in diffs.
+      </p>
     </div>
     <div class="callout">
       <strong>Branch prefix is load-bearing.</strong> Only <code>kel-&lt;n&gt;-&lt;slug&gt;</code> auto-links to
@@ -359,7 +384,10 @@ flowchart LR
       clusterBorder: '#233a33',
       edgeLabelBackground: '#0b1210',
       textColor: '#e6f2ec',
-      titleColor: '#e6f2ec'
+      titleColor: '#e6f2ec',
+      cScale0: '#1f6f4a', cScale1: '#24596b', cScale2: '#2f4a6b', cScale3: '#3d3f6b',
+      cScale4: '#543d63', cScale5: '#1c5a3f', cScale6: '#2a5f57', cScale7: '#35526b',
+      cScale8: '#4a4a6b', cScale9: '#5a3f55', cScale10: '#204d3a', cScale11: '#2b4a5c'
     } : {
       background: '#ffffff',
       primaryColor: '#e8f7ef',
@@ -372,7 +400,10 @@ flowchart LR
       clusterBorder: '#c9ddd3',
       edgeLabelBackground: '#ffffff',
       textColor: '#10241c',
-      titleColor: '#10241c'
+      titleColor: '#10241c',
+      cScale0: '#cdeedd', cScale1: '#d3e8f2', cScale2: '#d9e2f7', cScale3: '#e2def7',
+      cScale4: '#ece0f2', cScale5: '#d5f0e2', cScale6: '#d8efe9', cScale7: '#dbe6f5',
+      cScale8: '#e4e4f5', cScale9: '#f0dfe8', cScale10: '#cfe8da', cScale11: '#d6e5ee'
     }
   });
 

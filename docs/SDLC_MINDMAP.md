@@ -56,16 +56,15 @@ mindmap
 ## 2. How a change travels
 
 ```mermaid
-flowchart LR
-  A["Intent<br/>owner words"] --> B["Spec + ADR<br/>docs/"]
-  B --> C["Branch<br/>kel-N-slug"]
-  C --> D["Build + tests<br/>pytest / playwright"]
-  D --> E["PR to main<br/>territory named"]
+flowchart TD
+  A["Intent — owner words"] --> B["Spec + ADR in docs/"]
+  B --> C["Branch kel-N-slug"]
+  C --> D["Build + tests"]
+  D --> E["PR to main"]
   E --> F{"CI gates<br/>lint · types · secrets · tests"}
   F -- fail --> D
-  F -- pass --> G["Review + merge<br/>no force push"]
-  G --> H["Linear auto-close<br/>KEL-N"]
-  H --> I["Deploy / demo<br/>npm run demo"]
+  F -- pass --> G["Review + merge<br/>Linear closes KEL-N"]
+  G --> H["Deploy / demo"]
 ```
 
 Two rules make the map work in practice:
