@@ -211,8 +211,8 @@ assignee `anshchampion`.
 > - `npm run demo` (or equivalent) single entry point; exit non-zero on any beat failure.
 > - Screenshot capture per beat for the review doc.
 >
-> **Explicitly not in the prototype demo** (P1, per Q8/Q9/Q10)
-> - Saved payment cards via Stripe vault — dashboard flow, post-prototype.
+> **Explicitly not in the prototype demo** (P1, per Q8/Q18/Q10)
+> - Razorpay and balance work (deferred / P2, Q18); Stripe saved-card vault is in scope.
 > - WhatsApp mirror (Q7: dashboard is primary; mirror is P1).
 > - Voice memo input (Q10: P1).
 >
@@ -227,8 +227,9 @@ assignee `anshchampion`.
 |---|---|
 | Q7 | Dashboard is primary; WhatsApp is a mirror, P1 |
 | Q8 | Prototype cut = dashboard chat, PDF/CSV answers, search + GitHub read-only, approvals + scheduler |
-| Q9 | Saved cards via Stripe vault — dashboard flow, post-prototype |
+| Q9 | Saved cards via Stripe vault — superseded by Q18 |
 | Q10 | Voice memo — P1 only |
+| Q18 | Payments: Stripe now, Razorpay deferred, balance P2 |
 
 ## 5. Git / GitHub / Linear integration requirements
 

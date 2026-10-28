@@ -50,8 +50,9 @@ Description body:
 > and takes real actions only behind explicit human approval.
 >
 > ## Non-goals for the MVP
-> Voice memo input, WhatsApp as a first-class surface, Stripe saved-card vault, team sharing,
-> and third-party plugin installs are **post-prototype**. See the decision log below.
+> Voice memo input, WhatsApp as a first-class surface, team sharing, and third-party plugin
+> installs are **post-prototype**. Payments: Stripe now, Razorpay deferred, balance P2 (Q18).
+> See the decision log below.
 >
 > ## Architecture
 > Dashboard (primary) → kernel agent loop (streaming + tool calls) → skill contracts →
@@ -62,8 +63,9 @@ Description body:
 > |---|---|
 > | Q7 | Dashboard is primary; WhatsApp is a **mirror**, P1 |
 > | Q8 | Prototype cut = dashboard chat, PDF/CSV answers, `web.search` + `github.read` (read-only), approvals + scheduler |
-> | Q9 | Saved cards via Stripe vault — dashboard flow, **post-prototype** |
+> | Q9 | Saved cards via Stripe vault — **superseded by Q18** |
 > | Q10 | Voice memo — **P1 only** |
+> | Q18 | Payments: Stripe now, Razorpay deferred, balance **P2** |
 >
 > ADRs live in `docs/adr/`.
 
@@ -169,7 +171,7 @@ All: `team: "KEL"`, `project: "Always-On Private Assistant"`, `state: "Todo"`,
 > - Session list, rename, resume.
 >
 > **Out of scope**
-> - Saved cards / payments UI via Stripe vault (post-prototype, Q9).
+> - Razorpay integration and balance work (deferred / P2, Q18); Stripe saved-card vault is in scope.
 > - Voice memo capture (P1, Q10).
 > - Mobile layout beyond a usable responsive fallback.
 >
@@ -269,7 +271,7 @@ All: `team: "KEL"`, `project: "Always-On Private Assistant"`, `state: "Todo"`,
 > - Screenshot capture per beat for the review doc.
 >
 > **Explicitly not in the prototype demo**
-> - Saved payment cards via Stripe vault — dashboard flow, post-prototype (Q9).
+> - Razorpay and balance work (deferred / P2, Q18); Stripe saved-card vault is in scope.
 > - WhatsApp mirror — dashboard is primary, mirror is P1 (Q7).
 > - Voice memo input — P1 (Q10).
 >
