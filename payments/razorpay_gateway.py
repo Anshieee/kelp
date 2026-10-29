@@ -542,7 +542,10 @@ class HttpRazorpayTransport:
             key_secret=key_secret,
             body={
                 "amount": amount_cents,
-                "currency": currency,
+                # Razorpay only accepts the uppercase ISO code on the wire
+                # ("INR"); sending the wallet's lowercase form is rejected with
+                # BAD_REQUEST_INVALID_CURRENCY (verified against test mode).
+                "currency": currency.upper(),
                 "payment_capture": 1,
                 "notes": {
                     str(k): str(v)[:_MAX_NOTES_CHARS] for k, v in notes.items()
@@ -566,7 +569,7 @@ class HttpRazorpayTransport:
     ) -> Mapping[str, Any]:
         body: dict[str, Any] = {
             "amount": amount_cents,
-            "currency": currency,
+            "currency": currency.upper(),
             "order_id": self._path_id(order_id, "order"),
             "token": self._path_id(token_id, "token"),
             "method": "card",
@@ -597,7 +600,7 @@ class HttpRazorpayTransport:
             f"/payments/{self._path_id(payment_id, 'payment')}/capture",
             key_id=key_id,
             key_secret=key_secret,
-            body={"amount": amount_cents, "currency": currency},
+            body={"amount": amount_cents, "currency": currency.upper()},
         )
 
 

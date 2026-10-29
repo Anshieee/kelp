@@ -1073,6 +1073,77 @@ def test_http_transport_uses_basic_auth_and_the_order_key() -> None:
     assert KEY_ID not in call["url"]
 
 
+def test_http_transport_uppercases_currency_on_the_wire() -> None:
+    """Razorpay rejects the lowercase code: BAD_REQUEST_INVALID_CURRENCY.
+
+    Verified against test mode: ``currency: "inr"`` is a 400, ``"INR"`` is a
+    200. The wallet keeps lowercase; only the REST body is uppercased.
+    """
+
+    client = RecordingClient(
+        FakeResponse(200, {"id": "order_test0001", "amount": 100, "currency": "INR"})
+    )
+    transport = HttpRazorpayTransport(client=client)
+
+    transport.create_order(
+        key_id=KEY_ID,
+        key_secret=TEST_SECRET,
+        amount_cents=100,
+        currency="inr",
+        notes={},
+        idempotency_key="kelp-order-ord_1-order",
+    )
+    transport.create_payment(
+        key_id=KEY_ID,
+        key_secret=TEST_SECRET,
+        order_id="order_test0001",
+        token_id=TOKEN,
+        amount_cents=100,
+        currency="inr",
+        description="",
+        customer_id=CUSTOMER,
+        idempotency_key="kelp-order-ord_1",
+    )
+    transport.capture_payment(
+        key_id=KEY_ID,
+        key_secret=TEST_SECRET,
+        payment_id="pay_test0001",
+        amount_cents=100,
+        currency="inr",
+    )
+
+    assert [call["json"]["currency"] for call in client.calls] == ["INR", "INR", "INR"]
+    assert [call["url"] for call in client.calls] == [
+        "https://api.razorpay.com/v1/orders",
+        "https://api.razorpay.com/v1/payments",
+        "https://api.razorpay.com/v1/payments/pay_test0001/capture",
+    ]
+
+
+def test_uppercase_currency_echo_from_razorpay_is_accepted() -> None:
+    class UpperCaseEchoTransport(FakeTransport):
+        def create_order(self, **kwargs: Any) -> Mapping[str, Any]:
+            payload = dict(super().create_order(**kwargs))
+            payload["currency"] = str(payload["currency"]).upper()
+            return payload
+
+        def create_payment(self, **kwargs: Any) -> Mapping[str, Any]:
+            payload = dict(super().create_payment(**kwargs))
+            payload["currency"] = str(payload["currency"]).upper()
+            return payload
+
+    transport = UpperCaseEchoTransport()
+    wallet = make_wallet(transport=transport)
+    add_card(wallet)
+    proposal, _ = wallet.propose(1500)
+
+    paid, _ = wallet.approve(proposal.id)
+
+    assert paid.status == "paid"
+    assert paid.receipt is not None
+    assert transport.orders[0]["currency"] == "usd"
+
+
 def test_http_transport_maps_retryable_and_definitive_failures() -> None:
     error_body = {"error": {"code": "BAD_REQUEST_ERROR", "description": f"{KEY_ID}"}}
     rejected = HttpRazorpayTransport(client=RecordingClient(FakeResponse(400, error_body)))
