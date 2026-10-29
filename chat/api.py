@@ -967,11 +967,13 @@ class SessionStore:
         *,
         ttl: float = _DEFAULT_SESSION_TTL_SECONDS,
         max_entries: int = _DEFAULT_SESSION_MAX,
-        clock: Callable[[], float] = time.time,
+        clock: Callable[[], float] | None = None,
     ):
         self.ttl = max(60.0, float(ttl))
         self.max_entries = max(1, int(max_entries))
-        self._clock = clock
+        # Resolve at construction, not at class definition, so a test can
+        # monkeypatch ``time.time`` before building the store.
+        self._clock = time.time if clock is None else clock
         self._sessions: dict[str, _Session] = {}
         self._lock = threading.Lock()
 
@@ -1102,13 +1104,13 @@ class AuthFailureTracker:
         lockout_seconds: float = _DEFAULT_AUTH_LOCKOUT_SECONDS,
         idle_seconds: float = _DEFAULT_AUTH_FAILURE_IDLE_SECONDS,
         max_entries: int = _DEFAULT_AUTH_FAILURE_MAX_KEYS,
-        clock: Callable[[], float] = time.time,
+        clock: Callable[[], float] | None = None,
     ):
         self.attempts = max(0, int(attempts))
         self.lockout_seconds = max(1.0, float(lockout_seconds))
         self.idle_seconds = max(1.0, float(idle_seconds))
         self.max_entries = max(1, int(max_entries))
-        self._clock = clock
+        self._clock = time.time if clock is None else clock
         self._records: dict[str, _FailureRecord] = {}
         self._lock = threading.Lock()
 
