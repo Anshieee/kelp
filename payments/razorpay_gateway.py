@@ -127,6 +127,7 @@ _WALLET_TOKEN_RE = re.compile(r"^pm_rzp([A-Za-z0-9]{4,})$")
 _WALLET_PAYMENT_RE = re.compile(r"^pi_rzp([A-Za-z0-9]{4,})$")
 _KEY_ID_RE = re.compile(r"^rzp_(?:test|live)_[A-Za-z0-9]{4,}$")
 _IDEMPOTENCY_RE = re.compile(r"^[A-Za-z0-9._:-]{8,80}$")
+_RECEIPT_RE = re.compile(r"^[A-Za-z0-9._:-]{8,40}$")
 _MAX_IDEMPOTENCY_CHARS = 80
 _MAX_NOTES_CHARS = 200
 
@@ -337,6 +338,15 @@ class RazorpayTransport(Protocol):
         currency: str,
         notes: Mapping[str, str],
         idempotency_key: str,
+        receipt: str = "",
+    ) -> Mapping[str, Any]: ...
+
+    def fetch_payment(
+        self,
+        *,
+        key_id: str,
+        key_secret: str,
+        payment_id: str,
     ) -> Mapping[str, Any]: ...
 
     def create_payment(
@@ -530,28 +540,46 @@ class HttpRazorpayTransport:
         currency: str,
         notes: Mapping[str, str],
         idempotency_key: str,
+        receipt: str = "",
     ) -> Mapping[str, Any]:
         # ``payment_capture=1`` asks Razorpay to capture on authorisation; the
         # gateway still captures explicitly if the payment comes back
         # authorised, so a partial rollout of auto-capture cannot change the
         # wallet's meaning of "paid".
+        body: dict[str, Any] = {
+            "amount": amount_cents,
+            # Razorpay only accepts the uppercase ISO code on the wire
+            # ("INR"); sending the wallet's lowercase form is rejected with
+            # BAD_REQUEST_INVALID_CURRENCY (verified against test mode).
+            "currency": currency.upper(),
+            "payment_capture": 1,
+            "notes": {
+                str(k): str(v)[:_MAX_NOTES_CHARS] for k, v in notes.items()
+            },
+        }
+        if receipt:
+            body["receipt"] = receipt
         return self._request(
             "POST",
             "/orders",
             key_id=key_id,
             key_secret=key_secret,
-            body={
-                "amount": amount_cents,
-                # Razorpay only accepts the uppercase ISO code on the wire
-                # ("INR"); sending the wallet's lowercase form is rejected with
-                # BAD_REQUEST_INVALID_CURRENCY (verified against test mode).
-                "currency": currency.upper(),
-                "payment_capture": 1,
-                "notes": {
-                    str(k): str(v)[:_MAX_NOTES_CHARS] for k, v in notes.items()
-                },
-            },
+            body=body,
             idempotency_key=idempotency_key,
+        )
+
+    def fetch_payment(
+        self,
+        *,
+        key_id: str,
+        key_secret: str,
+        payment_id: str,
+    ) -> Mapping[str, Any]:
+        return self._request(
+            "GET",
+            f"/payments/{self._path_id(payment_id, 'payment')}",
+            key_id=key_id,
+            key_secret=key_secret,
         )
 
     def create_payment(
@@ -823,6 +851,72 @@ class RazorpayGateway:
             "currency": code,
         }
 
+    def create_hosted_order(
+        self,
+        *,
+        secret_key: str,
+        amount_cents: int,
+        currency: str,
+        receipt: str,
+        description: str,
+        idempotency_key: str,
+    ) -> Mapping[str, Any]:
+        """Create the order a hosted Razorpay Checkout is opened against.
+
+        Unlike :meth:`create_payment_intent` this stops after the order, because
+        the browser (not this server) collects the card. ``receipt`` is the
+        local order id (``ord_...``), which is what makes a callback traceable
+        back to one ledger row without trusting a client-supplied value.
+        """
+
+        amount = _validated_amount(amount_cents, self.max_charge_cents)
+        code = _validated_currency(currency)
+        key = _validated_idempotency_key(idempotency_key)
+        safe_receipt = _validated_receipt(receipt)
+        safe_description = redact_razorpay_text(description or "")[:_MAX_NOTES_CHARS]
+        order = self._client().create_order(
+            key_id=self.key_id,
+            key_secret=secret_key,
+            amount_cents=amount,
+            currency=code,
+            notes={
+                "source": "kelp-checkout",
+                "receipt": safe_receipt,
+                "description": safe_description,
+            },
+            idempotency_key=key,
+            receipt=safe_receipt,
+        )
+        order_id = order.get("id")
+        if not isinstance(order_id, str) or _ORDER_RE.match(order_id) is None:
+            raise RazorpayGatewayError("Razorpay returned an unexpected order.")
+        _check_echo(order, amount_cents=amount, currency=code)
+        return order
+
+    def fetch_payment(
+        self, *, secret_key: str, payment_id: str
+    ) -> Mapping[str, Any]:
+        payment_id = _require_provider_id(payment_id, _PAYMENT_RE)
+        return self._client().fetch_payment(
+            key_id=self.key_id, key_secret=secret_key, payment_id=payment_id
+        )
+
+    def capture_payment(
+        self,
+        *,
+        secret_key: str,
+        payment_id: str,
+        amount_cents: int,
+        currency: str,
+    ) -> Mapping[str, Any]:
+        return self._client().capture_payment(
+            key_id=self.key_id,
+            key_secret=secret_key,
+            payment_id=payment_id,
+            amount_cents=amount_cents,
+            currency=_validated_currency(currency),
+        )
+
     def _settle(
         self,
         payment: Mapping[str, Any],
@@ -1041,6 +1135,18 @@ def _validated_idempotency_key(value: Any) -> str:
         raise WalletError(
             "invalid_idempotency_key",
             message="The order key must be 8-80 letters, digits, or . _ : -",
+            user_fixable=True,
+        )
+    return value
+
+
+def _validated_receipt(value: Any) -> str:
+    """A Razorpay receipt is at most 40 characters of ``[A-Za-z0-9._:-]``."""
+
+    if not isinstance(value, str) or _RECEIPT_RE.match(value) is None:
+        raise WalletError(
+            "invalid_request",
+            message="The receipt id isn't valid.",
             user_fixable=True,
         )
     return value

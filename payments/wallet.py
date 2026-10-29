@@ -148,6 +148,8 @@ _STATUS_BY_CODE = {
     "already_decided": 409,
     "payment_failed": 502,
     "gateway_error": 502,
+    "signature_invalid": 400,
+    "payment_mismatch": 409,
     "not_configured": 503,
     "not_found": 404,
     "unauthorized": 401,
@@ -215,6 +217,8 @@ _DEFAULT_MESSAGES = {
     "already_decided": "That order was already answered.",
     "payment_failed": "The card was not charged. Try again.",
     "gateway_error": "Can't reach the card processor right now.",
+    "signature_invalid": "That payment couldn't be verified.",
+    "payment_mismatch": "That payment doesn't match this order.",
     "not_configured": "The wallet isn't connected yet.",
     "not_found": "Unknown endpoint.",
     "unauthorized": "Sign in to use the wallet.",
@@ -565,6 +569,26 @@ CREATE TABLE IF NOT EXISTS proposals (
 
 CREATE INDEX IF NOT EXISTS proposals_spend
     ON proposals (status, currency, paid_at);
+
+-- Hosted Checkout (KEL-10) maps a provider order to the local receipt. The
+-- table is additive: saved-card orders never write to it, so the existing
+-- wallet behaviour is unchanged. ``provider_payment_id`` is unique per
+-- provider, which is what makes a replayed callback idempotent instead of a
+-- second settlement.
+CREATE TABLE IF NOT EXISTS checkout_orders (
+    provider TEXT NOT NULL,
+    provider_order_id TEXT NOT NULL,
+    proposal_id TEXT NOT NULL UNIQUE,
+    receipt TEXT NOT NULL,
+    provider_payment_id TEXT,
+    created_at TEXT NOT NULL,
+    paid_at TEXT,
+    PRIMARY KEY (provider, provider_order_id)
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS checkout_orders_payment
+    ON checkout_orders (provider, provider_payment_id)
+    WHERE provider_payment_id IS NOT NULL;
 """
 
 
@@ -921,6 +945,215 @@ class WalletLedger:
         if proposal is None:  # pragma: no cover - called with a live proposal
             raise WalletError("unknown_proposal")
         return proposal
+
+    # -- hosted checkout ---------------------------------------------------
+
+    def register_checkout_order(
+        self,
+        *,
+        provider: str,
+        provider_order_id: str,
+        proposal_id: str,
+        receipt: str,
+    ) -> tuple[dict[str, Any], bool]:
+        """Map a provider order to a local proposal, once.
+
+        Returns ``(row, created)``. Re-registering the same mapping is a
+        no-op (a retried create is idempotent); a different provider order for
+        the same proposal is a conflict, because one receipt may only be paid
+        once.
+        """
+
+        now = _iso(self._now())
+        with self._lock:
+            existing = self._checkout_row_by_proposal(proposal_id)
+            if existing is not None:
+                if (
+                    existing["provider"] != provider
+                    or existing["provider_order_id"] != provider_order_id
+                ):
+                    raise WalletError(
+                        "already_decided",
+                        message="That order already has a checkout.",
+                    )
+                return existing, False
+            self._conn.execute("BEGIN IMMEDIATE")
+            try:
+                self._conn.execute(
+                    """
+                    INSERT INTO checkout_orders
+                        (provider, provider_order_id, proposal_id, receipt,
+                         created_at)
+                    VALUES (?, ?, ?, ?, ?)
+                    """,
+                    (provider, provider_order_id, proposal_id, receipt, now),
+                )
+            except sqlite3.IntegrityError:
+                # A concurrent create won the race; the mapping must match.
+                self._conn.execute("ROLLBACK")
+                raced = self._checkout_row_by_proposal(proposal_id)
+                if (
+                    raced is None
+                    or raced["provider"] != provider
+                    or raced["provider_order_id"] != provider_order_id
+                ):
+                    raise WalletError(
+                        "already_decided",
+                        message="That order already has a checkout.",
+                    ) from None
+                return raced, False
+            except BaseException:
+                self._conn.execute("ROLLBACK")
+                raise
+            self._conn.execute("COMMIT")
+            row = self._checkout_row_by_proposal(proposal_id)
+            assert row is not None  # just inserted
+            return row, True
+
+    def find_checkout_order(
+        self, *, provider: str, provider_order_id: str
+    ) -> dict[str, Any] | None:
+        with self._lock:
+            row = self._conn.execute(
+                """
+                SELECT * FROM checkout_orders
+                WHERE provider = ? AND provider_order_id = ?
+                """,
+                (provider, provider_order_id),
+            ).fetchone()
+        return None if row is None else dict(row)
+
+    def find_checkout_for_proposal(
+        self, proposal_id: str
+    ) -> dict[str, Any] | None:
+        with self._lock:
+            return self._checkout_row_by_proposal(proposal_id)
+
+    def _checkout_row_by_proposal(self, proposal_id: str) -> dict[str, Any] | None:
+        row = self._conn.execute(
+            "SELECT * FROM checkout_orders WHERE proposal_id = ?",
+            (proposal_id,),
+        ).fetchone()
+        return None if row is None else dict(row)
+
+    def settle_checkout(
+        self,
+        *,
+        provider: str,
+        provider_order_id: str,
+        provider_payment_id: str,
+        receipt_payment_id: str | None = None,
+        card_last4: str | None = None,
+    ) -> tuple[Proposal, bool]:
+        """Settle a hosted-checkout order exactly once.
+
+        The receipt and the processor payment id are written in one
+        transaction, so a crash can never leave an order ``paid`` with no
+        receipt or a payment id recorded against an unpaid order. Replaying the
+        same payment returns ``(proposal, True)``; reusing one payment id for a
+        different order, or a different payment for an already-paid order, is a
+        409 conflict.
+        """
+
+        now = _iso(self._now())
+        receipt_id = receipt_payment_id or provider_payment_id
+        with self._lock:
+            self._conn.execute("BEGIN IMMEDIATE")
+            try:
+                order = self._conn.execute(
+                    """
+                    SELECT * FROM checkout_orders
+                    WHERE provider = ? AND provider_order_id = ?
+                    """,
+                    (provider, provider_order_id),
+                ).fetchone()
+                if order is None:
+                    self._conn.execute("ROLLBACK")
+                    raise WalletError("unknown_proposal")
+                proposal_row = self._conn.execute(
+                    "SELECT * FROM proposals WHERE id = ?",
+                    (order["proposal_id"],),
+                ).fetchone()
+                if proposal_row is None:  # pragma: no cover - FK by construction
+                    self._conn.execute("ROLLBACK")
+                    raise WalletError("unknown_proposal")
+
+                if proposal_row["status"] == "paid":
+                    self._conn.execute("ROLLBACK")
+                    if order["provider_payment_id"] == provider_payment_id:
+                        return self._row_proposal(proposal_row), True
+                    raise WalletError(
+                        "already_decided",
+                        message="That order was already paid by another payment.",
+                    )
+                # A hosted payment can complete after the reservation window
+                # folded the approval. The provider already holds the money, so
+                # an ``approval_expired`` order is still settleable; a denial
+                # or a failed payment is not.
+                payable = proposal_row["status"] == "approved" or (
+                    proposal_row["status"] == "failed"
+                    and proposal_row["reason"] == APPROVAL_EXPIRED_REASON
+                )
+                if not payable:
+                    self._conn.execute("ROLLBACK")
+                    raise WalletError(
+                        "already_decided",
+                        message="That order is no longer payable.",
+                    )
+
+                reused = self._conn.execute(
+                    """
+                    SELECT 1 FROM checkout_orders
+                    WHERE provider = ? AND provider_payment_id = ?
+                      AND provider_order_id <> ?
+                    """,
+                    (provider, provider_payment_id, provider_order_id),
+                ).fetchone()
+                if reused is not None:
+                    self._conn.execute("ROLLBACK")
+                    raise WalletError(
+                        "already_decided",
+                        message="That payment already settled another order.",
+                    )
+
+                updated = self._conn.execute(
+                    """
+                    UPDATE proposals
+                    SET status = 'paid', stripe_payment_intent_id = ?,
+                        card_last4 = ?, paid_at = ?, reason = NULL
+                    WHERE id = ? AND (
+                        status = 'approved'
+                        OR (status = 'failed' AND reason = ?)
+                    )
+                    """,
+                    (
+                        receipt_id,
+                        card_last4,
+                        now,
+                        order["proposal_id"],
+                        APPROVAL_EXPIRED_REASON,
+                    ),
+                ).rowcount
+                recorded = self._conn.execute(
+                    """
+                    UPDATE checkout_orders
+                    SET provider_payment_id = ?, paid_at = ?
+                    WHERE provider = ? AND provider_order_id = ?
+                      AND provider_payment_id IS NULL
+                    """,
+                    (provider_payment_id, now, provider, provider_order_id),
+                ).rowcount
+                if updated != 1 or recorded != 1:  # pragma: no cover - raced
+                    self._conn.execute("ROLLBACK")
+                    raise WalletError("already_decided")
+            except BaseException:
+                if self._conn.in_transaction:
+                    self._conn.execute("ROLLBACK")
+                raise
+            self._conn.execute("COMMIT")
+        proposal = self.get_proposal(order["proposal_id"])
+        assert proposal is not None
+        return proposal, False
 
     def expire_stale_approvals(self, *, before: str) -> int:
         """Fail approved orders whose reservation lapsed, freeing their cap.
@@ -1535,6 +1768,29 @@ class Wallet:
         if current is None:
             raise WalletError("unknown_proposal")
 
+        if (
+            decision == "approve"
+            and self.ledger.find_checkout_for_proposal(proposal_id) is not None
+        ):
+            # The order belongs to hosted Checkout. Charging a saved card as
+            # well would be a second payment for one receipt.
+            raise WalletError(
+                "already_decided",
+                message="That order is being paid through Checkout.",
+            )
+
+        if decision == "approve" and _claimed_by_another_payer(
+            current.payment_method_id
+        ):
+            # Hosted Checkout claims its reservation with a non-``pm_``
+            # marker inside the reservation transaction, before the provider
+            # order is registered. Treating that marker as a card would fall
+            # back to the default card and charge a second time.
+            raise WalletError(
+                "already_decided",
+                message="That order is being paid through Checkout.",
+            )
+
         if decision == "deny":
             since, reserved_since, sweep_before = self._windows()
             proposal, outcome = self.ledger.decide(
@@ -1572,6 +1828,13 @@ class Wallet:
             # A previous attempt answered the order but never produced a
             # receipt (for example, the process stopped). Resume the same
             # charge with the same per-order idempotency key.
+            if _claimed_by_another_payer(current.payment_method_id):
+                # Same guard as above, repeated at the resume branch so the
+                # resume path can never treat a Checkout claim as a card id.
+                raise WalletError(
+                    "already_decided",
+                    message="That order is being paid through Checkout.",
+                )
             resume_card = self._select_card(
                 current.payment_method_id or payment_method_id
             )
@@ -1684,6 +1947,20 @@ class Wallet:
         if card is None:
             raise WalletError("no_saved_card", user_fixable=True)
         return card
+
+
+def _claimed_by_another_payer(payment_method_id: str | None) -> bool:
+    """True when an approved order is held by something other than a card.
+
+    Saved-card approvals always store a ``pm_...`` id. Hosted Checkout stores a
+    provider marker instead, so any other non-empty value means "not yours".
+    """
+
+    if payment_method_id is None:
+        return False
+    if not isinstance(payment_method_id, str):
+        return True
+    return _PAYMENT_METHOD_RE.match(payment_method_id) is None
 
 
 def _validate_amount(amount_cents: int) -> int:
