@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import threading
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -186,6 +187,109 @@ def test_approvals_roundtrip_and_status_updates(tmp_path: Path) -> None:
         assert consumed["status"] == "consumed"
         assert consumed["consumed_at"] == "2026-10-29T09:02:00Z"
         assert consumed["decided_at"] == "2026-10-29T09:01:00Z"
+    finally:
+        store.close()
+
+
+def test_approval_transitions_are_guarded_and_never_reopen(
+    tmp_path: Path,
+) -> None:
+    """A settled approval is terminal; a stale writer cannot revive it."""
+
+    store, _clock = make_store(tmp_path)
+    try:
+        thread = store.create_thread()
+        card = {
+            "id": "apr_guard",
+            "thread_id": thread["id"],
+            "turn_id": None,
+            "call_id": None,
+            "source": "skill",
+            "status": "pending",
+            "requested_at": "2026-10-29T09:00:00Z",
+            "expires_at": "2026-10-29T09:10:00Z",
+            "effects": ["write"],
+        }
+        store.save_approval(card)
+
+        approved = store.transition_approval(
+            "apr_guard", "approved", allowed_from=("pending",)
+        )
+        assert approved is not None
+        assert approved["status"] == "approved"
+        # The second caller of the same transition loses the guard.
+        assert (
+            store.transition_approval(
+                "apr_guard", "denied", allowed_from=("pending",)
+            )
+            is None
+        )
+        # Re-saving the original pending card must not undo the decision.
+        store.save_approval(dict(card))
+        assert store.get_approval("apr_guard")["status"] == "approved"
+
+        consumed = store.transition_approval(
+            "apr_guard", "consumed", allowed_from=("approved",)
+        )
+        assert consumed is not None
+        assert consumed["status"] == "consumed"
+        # And a late approve/expire cannot move a consumed row either way.
+        assert (
+            store.transition_approval(
+                "apr_guard", "expired", allowed_from=("pending", "approved")
+            )
+            is None
+        )
+        store.save_approval({**card, "status": "approved"})
+        assert store.get_approval("apr_guard")["status"] == "consumed"
+        assert store.transition_approval("apr_missing", "approved") is None
+    finally:
+        store.close()
+
+
+def test_concurrent_approval_transitions_have_one_winner(tmp_path: Path) -> None:
+    """The SQL guard, not a Python compare-and-set, picks the winner."""
+
+    store, _clock = make_store(tmp_path)
+    try:
+        thread = store.create_thread()
+        for round_index in range(20):
+            approval_id = f"apr_race{round_index}"
+            store.save_approval(
+                {
+                    "id": approval_id,
+                    "thread_id": thread["id"],
+                    "turn_id": None,
+                    "call_id": None,
+                    "source": "skill",
+                    "status": "pending",
+                    "requested_at": "2026-10-29T09:00:00Z",
+                    "expires_at": "2099-01-01T00:00:00Z",
+                    "effects": ["write"],
+                }
+            )
+            barrier = threading.Barrier(3)
+            wins: list[str | None] = []
+
+            def worker(status: str) -> None:
+                barrier.wait()
+                result = store.transition_approval(
+                    approval_id, status, allowed_from=("pending",)
+                )
+                wins.append(status if result is not None else None)
+
+            threads = [
+                threading.Thread(target=worker, args=("approved",)),
+                threading.Thread(target=worker, args=("denied",)),
+            ]
+            for item in threads:
+                item.start()
+            barrier.wait()
+            for item in threads:
+                item.join()
+            winners = [win for win in wins if win is not None]
+            assert len(winners) == 1
+            assert store.get_approval(approval_id)["status"] == winners[0]
     finally:
         store.close()
 

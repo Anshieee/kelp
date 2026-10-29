@@ -72,6 +72,10 @@ class ToolCallFinished(_Event):
     step: int
     result: Mapping[str, Any] | None = None
     error: Mapping[str, Any] | None = None
+    # Time the executor spent waiting on a human approval. Excluded from the
+    # turn's wall budget but included in ``duration_ms``, so the number stays
+    # honest while a 10-minute approval fits inside a 120 s budget (§14.2).
+    waited_ms: int = 0
 
 
 @dataclass(frozen=True)

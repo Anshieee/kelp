@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 from typing import Any, Mapping
+from urllib.parse import parse_qs, urlsplit
 
 from chat import ChatAPI, ChatService, ChatStore, Request
 from kernel.provider import StreamEnd, TextDelta
@@ -486,6 +487,100 @@ def test_artifact_upload_metadata_preview_and_content(tmp_path: Path) -> None:
             api, "GET", "/api/artifacts/artifact:missing12345/content"
         )
         assert unknown.status == 404
+    finally:
+        api.close()
+        store.close()
+
+
+def test_bound_artifact_requires_its_own_thread(tmp_path: Path) -> None:
+    """A bound handle without the matching thread_id is a 404 (§8)."""
+
+    api, service, store = make_api(tmp_path, [text_script("got it")])
+    try:
+        thread = create_thread(api)
+        other = create_thread(api)
+        csv = b"region,revenue\nEMEA,42\n"
+        payload, content_type = _multipart("revenue.csv", csv, "text/csv")
+        upload = api.handle(
+            Request(
+                "POST",
+                "/api/attachments",
+                {},
+                {**AUTH, **CSRF, "content-type": content_type},
+                payload,
+            )
+        )
+        assert upload.status == 201
+        handle = body(upload)["artifact"]["handle"]
+
+        # Before it is attached the composer may preview its own upload.
+        assert call(api, "GET", f"/api/artifacts/{handle}").status == 200
+
+        sent = call(
+            api,
+            "POST",
+            f"/api/threads/{thread['id']}/turns",
+            {
+                "client_turn_id": "ct-bound-artifact",
+                "text": "summarize",
+                "attachment_handles": [handle],
+            },
+        )
+        assert sent.status == 202, sent.body
+        api.runner.run(service.wait_for_turn(body(sent)["turn_id"]))
+
+        routes = (
+            f"/api/artifacts/{handle}",
+            f"/api/artifacts/{handle}/content",
+            f"/api/artifacts/{handle}/preview",
+        )
+        for route in routes:
+            bare = call(api, "GET", route)
+            assert bare.status == 404, route
+            assert body(bare)["error"]["code"] == "artifact_not_found"
+
+            cross = call(api, "GET", route, query={"thread_id": [other["id"]]})
+            assert cross.status == 404, route
+            assert body(cross)["error"]["code"] == "artifact_not_found"
+
+        own = {"thread_id": [thread["id"]]}
+        meta = call(api, "GET", routes[0], query=own)
+        assert meta.status == 200
+        assert body(meta)["artifact"]["handle"] == handle
+
+        content = call(api, "GET", routes[1], query=own)
+        assert content.status == 200
+        assert content.body == csv
+
+        preview = call(api, "GET", routes[2], query=own)
+        assert preview.status == 200
+        assert body(preview)["columns"] == ["region", "revenue"]
+    finally:
+        api.close()
+        store.close()
+
+
+def test_bound_artifact_card_urls_carry_the_thread_scope(tmp_path: Path) -> None:
+    api, service, store = make_api(tmp_path, [text_script("ok")])
+    try:
+        thread = create_thread(api)
+        meta = service.artifacts.save_upload("rows.csv", b"a,b\n1,2\n")
+        service.artifacts.claim(meta["handle"], thread["id"])
+        card = service.artifacts.card(meta["handle"], thread_id=thread["id"])
+        scope = f"thread_id={thread['id']}"
+        assert scope in card["open_url"]
+        assert scope in card["preview_url"]
+        assert scope in card["download_url"]
+        # Following the card's own URL works without extra client knowledge.
+        def follow(url: str) -> Any:
+            parts = urlsplit(url)
+            return call(api, "GET", parts.path, query=parse_qs(parts.query))
+
+        followed = follow(card["preview_url"])
+        assert followed.status == 200
+        content = follow(card["open_url"])
+        assert content.status == 200
+        assert content.body == b"a,b\n1,2\n"
     finally:
         api.close()
         store.close()

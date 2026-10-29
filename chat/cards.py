@@ -11,6 +11,7 @@ import json
 import re
 from datetime import datetime
 from typing import Any, Iterable, Mapping, Sequence
+from urllib.parse import quote
 
 __all__ = [
     "APPROVAL_RATIONALE_SUFFIX",
@@ -434,6 +435,11 @@ def merge_sources(
 def artifact_card(meta: Mapping[str, Any], *, base: str = "/api/artifacts") -> dict[str, Any]:
     handle = str(meta["handle"])
     kind = str(meta.get("kind") or "file")
+    # A bound artifact is only served to its thread (§8), so every URL the
+    # card exposes must carry that scope. Unbound uploads need no scope.
+    owner = meta.get("thread_id")
+    scope = f"thread_id={quote(str(owner), safe='')}" if owner else ""
+    suffix = f"?{scope}" if scope else ""
     card: dict[str, Any] = {
         "handle": handle,
         "name": meta.get("name") or handle,
@@ -444,13 +450,14 @@ def artifact_card(meta: Mapping[str, Any], *, base: str = "/api/artifacts") -> d
         "rows": meta.get("rows"),
         "columns": meta.get("columns"),
         "created_at": meta.get("created_at"),
-        "open_url": f"{base}/{handle}/content",
-        "preview_url": f"{base}/{handle}/content#page=1&toolbar=0",
-        "download_url": f"{base}/{handle}/content?download=1",
+        "open_url": f"{base}/{handle}/content{suffix}",
+        "preview_url": f"{base}/{handle}/content{suffix}#page=1&toolbar=0",
+        "download_url": f"{base}/{handle}/content?download=1"
+        + (f"&{scope}" if scope else ""),
         "table": meta.get("table"),
     }
     if kind != "pdf":
-        card["preview_url"] = f"{base}/{handle}/preview"
+        card["preview_url"] = f"{base}/{handle}/preview{suffix}"
     return card
 
 
@@ -507,12 +514,31 @@ def approval_card(
     status: str = "pending",
     title: str | None = None,
     skill: str | None = None,
+    secrets: Sequence[str] = (),
 ) -> dict[str, Any]:
-    command_list = list(command) if command is not None else None
-    summary_args: Mapping[str, Any] = dict(arguments or {})
+    secret_values = [
+        str(value)
+        for value in secrets
+        if isinstance(value, str) and len(value) >= 4
+    ]
+    # The argv list is shown in full — it is what will run — except for secret
+    # values, which are scrubbed exactly like any other field (§7.2).
+    command_list = (
+        [_scrub(str(part), secret_values) for part in command]
+        if command is not None
+        else None
+    )
+    summary_args: Mapping[str, Any] = _scrub(
+        dict(arguments or {}), secret_values
+    )
     if command_list:
         summary_args = {"command": command_list}
     summary = summarize_arguments(tool, summary_args)
+    safe_scopes = {
+        "paths": _scrub(list((scopes or {}).get("paths") or []), secret_values),
+        "hosts": _scrub(list((scopes or {}).get("hosts") or []), secret_values),
+        "repos": _scrub(list((scopes or {}).get("repos") or []), secret_values),
+    }
     requested = requested_at or ""
     expires = expires_at or ""
     return {
@@ -524,17 +550,15 @@ def approval_card(
         "tool": tool,
         "skill": skill or tool,
         "title": title or f"Use {tool_label(tool)}",
-        "rationale": approval_rationale(effects, scopes=scopes, command=command_list),
+        "rationale": approval_rationale(
+            effects, scopes=safe_scopes, command=command_list
+        ),
         "summary": summary,
         "effects": [str(effect) for effect in effects],
-        "blast_radius": [str(item) for item in blast_radius],
-        "scopes": {
-            "paths": list((scopes or {}).get("paths") or []),
-            "hosts": list((scopes or {}).get("hosts") or []),
-            "repos": list((scopes or {}).get("repos") or []),
-        },
+        "blast_radius": _scrub([str(item) for item in blast_radius], secret_values),
+        "scopes": safe_scopes,
         "command": command_list,
-        "arguments": redact_arguments(arguments),
+        "arguments": redact_arguments(arguments, secrets=secret_values),
         "arguments_digest": arguments_digest,
         "requested_at": requested,
         "expires_at": expires,

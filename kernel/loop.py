@@ -105,7 +105,12 @@ class CallableToolExecutor:
 
 
 class RegistryToolExecutor:
-    """Runs tool calls through the KEL-5 skill registry, including approvals."""
+    """Runs tool calls through the KEL-5 skill registry, including approvals.
+
+    The approval hook is wrapped so the executor can report how long each call
+    spent waiting on a human. The loop subtracts that from the turn's wall
+    budget (§14.2); the call's own ``duration_ms`` still includes it.
+    """
 
     def __init__(
         self,
@@ -114,20 +119,45 @@ class RegistryToolExecutor:
         approval: Callable[[Any], Awaitable[bool]] | None = None,
         secrets: Mapping[str, str] | None = None,
         workspace_root: str | None = None,
+        time_fn: Callable[[], float] | None = None,
     ):
         self._registry = registry
         self._approval = approval
         self._secrets = secrets
         self._workspace_root = workspace_root
+        self._time = time_fn or time.monotonic
+        self._waits: dict[str, int] = {}
+        self._active_call: str | None = None
 
     async def execute(self, call: ToolCall) -> Mapping[str, Any]:
-        return await self._registry.invoke(
-            call.name,
-            dict(call.arguments),
-            approval=self._approval,
-            secrets=self._secrets,
-            workspace_root=self._workspace_root,
-        )
+        self._waits.pop(call.call_id, None)
+        self._active_call = call.call_id
+        try:
+            return await self._registry.invoke(
+                call.name,
+                dict(call.arguments),
+                approval=self._gate if self._approval is not None else None,
+                secrets=self._secrets,
+                workspace_root=self._workspace_root,
+            )
+        finally:
+            self._active_call = None
+
+    async def _gate(self, request: Any) -> bool:
+        assert self._approval is not None  # only wired when an approval exists
+        started = self._time()
+        try:
+            return await self._approval(request)
+        finally:
+            waited = _elapsed_ms(started, self._time())
+            call_id = self._active_call
+            if call_id is not None:
+                self._waits[call_id] = self._waits.get(call_id, 0) + waited
+
+    def approval_wait_ms(self, call_id: str) -> int:
+        """Milliseconds spent awaiting approval for one call; consumed once."""
+
+        return self._waits.pop(call_id, 0)
 
 
 class AgentLoop:
@@ -179,6 +209,9 @@ class AgentLoop:
         usage_reported = False
         reason = "stop"
         final_message: str | None = None
+        # Approval waiting is paused time for the wall budget, not for the
+        # duration we report: the turn really did take that long (§14.2).
+        approval_paused_ms = 0
         transcript: list[dict[str, Any]] = [dict(message) for message in messages]
 
         yield events.TurnStarted(
@@ -205,7 +238,7 @@ class AgentLoop:
                 )
                 break
 
-            elapsed = self._time() - started_mono
+            elapsed = (self._time() - started_mono) - (approval_paused_ms / 1000.0)
             if elapsed >= budget.max_wall_seconds:
                 reason = "budget"
                 yield _budget_error(
@@ -340,6 +373,8 @@ class AgentLoop:
                     if isinstance(raw_error, Mapping):
                         error = dict(raw_error)
                 duration_ms = _elapsed_ms(call_started, self._time())
+                waited_ms = _approval_wait_ms(self._tool_executor, call.call_id, duration_ms)
+                approval_paused_ms += waited_ms
                 tool_calls_made += 1
                 yield events.ToolCallFinished(
                     call_id=call.call_id,
@@ -349,6 +384,7 @@ class AgentLoop:
                     step=steps,
                     result=_bounded(result),
                     error=error,
+                    waited_ms=waited_ms,
                 )
                 transcript.append(
                     {
@@ -455,6 +491,19 @@ def _budget_error(limit: str, message: str, step: int) -> events.Error:
 
 def _elapsed_ms(started: float, now: float) -> int:
     return max(0, int(round((now - started) * 1000)))
+
+
+def _approval_wait_ms(executor: Any, call_id: str, duration_ms: int) -> int:
+    """Ask a capable executor how much of a call was spent awaiting approval."""
+
+    getter = getattr(executor, "approval_wait_ms", None)
+    if not callable(getter):
+        return 0
+    try:
+        waited = int(getter(call_id) or 0)
+    except Exception:  # pragma: no cover - accounting must not kill a turn
+        return 0
+    return max(0, min(waited, duration_ms))
 
 
 def _bounded(value: Mapping[str, Any] | None, limit: int = MAX_TOOL_CONTENT_CHARS) -> Mapping[str, Any] | None:

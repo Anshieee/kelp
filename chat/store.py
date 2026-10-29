@@ -22,7 +22,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Iterator, Mapping, Sequence
 
-__all__ = ["ChatStore", "iso_now", "new_id"]
+__all__ = ["APPROVAL_TRANSITIONS", "ChatStore", "iso_now", "new_id"]
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS threads (
@@ -128,6 +128,16 @@ def iso_now(moment: datetime | None = None) -> str:
 
 def new_id(prefix: str) -> str:
     return f"{prefix}_{uuid.uuid4().hex}"
+
+
+# Which states may move into a given state. A settled approval is terminal, so
+# no writer can reopen it: approve/deny once, consume once (§7.4).
+APPROVAL_TRANSITIONS: dict[str, tuple[str, ...]] = {
+    "approved": ("pending",),
+    "denied": ("pending",),
+    "expired": ("pending", "approved"),
+    "consumed": ("approved",),
+}
 
 
 def _dump(value: Any) -> str:
@@ -654,15 +664,21 @@ class ChatStore:
     # -- approvals ---------------------------------------------------------
 
     def save_approval(self, card: Mapping[str, Any]) -> dict[str, Any]:
+        """Insert a card once; a later write never moves its state columns.
+
+        The payload is refreshed so a caller that re-saves the same card gets
+        its own shape back, but ``status``/``decided_at``/``consumed_at`` belong
+        to :meth:`transition_approval`. Otherwise a stale writer could undo a
+        decision or a consumption.
+        """
+
         card = dict(card)
         with self.transaction():
             self._conn.execute(
                 "INSERT INTO approvals (id, thread_id, turn_id, call_id, source, "
                 "status, payload_json, requested_at, expires_at, decided_at, "
                 "consumed_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
-                "ON CONFLICT(id) DO UPDATE SET status = excluded.status, "
-                "payload_json = excluded.payload_json, "
-                "decided_at = excluded.decided_at, consumed_at = excluded.consumed_at",
+                "ON CONFLICT(id) DO UPDATE SET payload_json = excluded.payload_json",
                 (
                     card["id"],
                     card.get("thread_id") or "",
@@ -678,6 +694,47 @@ class ChatStore:
                 ),
             )
         return self.get_approval(card["id"])  # type: ignore[return-value]
+
+    def transition_approval(
+        self,
+        approval_id: str,
+        status: str,
+        *,
+        allowed_from: Sequence[str] = ("pending",),
+        decided_at: str | None = None,
+        consumed_at: str | None = None,
+    ) -> dict[str, Any] | None:
+        """Guarded, atomic status change. ``None`` means another caller won.
+
+        The guard is the SQL predicate itself (``WHERE status IN (...)``) and
+        the winner is ``rowcount``, so two concurrent decisions — or a decision
+        racing a settle — cannot both move the row.
+        """
+
+        fields = ["status = ?"]
+        values: list[Any] = [status]
+        if decided_at is not None:
+            fields.append("decided_at = ?")
+            values.append(decided_at)
+        if consumed_at is not None:
+            fields.append("consumed_at = ?")
+            values.append(consumed_at)
+        allowed = tuple(dict.fromkeys(str(item) for item in allowed_from))
+        if not allowed:  # pragma: no cover - callers always name a source state
+            raise ValueError("allowed_from must name at least one status")
+        placeholders = ", ".join("?" for _ in allowed)
+        with self.transaction():
+            cursor = self._conn.execute(
+                f"UPDATE approvals SET {', '.join(fields)} "
+                f"WHERE id = ? AND status IN ({placeholders})",
+                (*values, approval_id, *allowed),
+            )
+            if cursor.rowcount == 0:
+                return None
+            row = self._conn.execute(
+                "SELECT * FROM approvals WHERE id = ?", (approval_id,)
+            ).fetchone()
+        return self._approval_record(row) if row is not None else None
 
     def get_approval(self, approval_id: str) -> dict[str, Any] | None:
         with self._lock:
@@ -724,16 +781,25 @@ class ChatStore:
         *,
         decided_at: str | None = None,
         consumed_at: str | None = None,
+        allowed_from: Sequence[str] | None = None,
     ) -> dict[str, Any] | None:
-        card = self.get_approval(approval_id)
-        if card is None:
+        """Move an approval along its lifecycle; never reopens a settled one."""
+
+        if self.get_approval(approval_id) is None:
             return None
-        card["status"] = status
-        if decided_at is not None:
-            card["decided_at"] = decided_at
-        if consumed_at is not None:
-            card["consumed_at"] = consumed_at
-        return self.save_approval(card)
+        allowed = (
+            allowed_from
+            if allowed_from is not None
+            else APPROVAL_TRANSITIONS.get(status, ())
+        )
+        updated = self.transition_approval(
+            approval_id,
+            status,
+            allowed_from=allowed,
+            decided_at=decided_at,
+            consumed_at=consumed_at,
+        )
+        return updated if updated is not None else self.get_approval(approval_id)
 
     # -- artifacts ---------------------------------------------------------
 

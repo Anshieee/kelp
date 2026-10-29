@@ -220,17 +220,33 @@ class ArtifactRegistry:
     def get(
         self, handle: str, *, thread_id: str | None = None
     ) -> dict[str, Any]:
+        """Resolve a handle, enforcing thread scope for bound artifacts.
+
+        An unbound upload (``thread_id IS NULL``, before it is attached to a
+        turn) is readable so the composer can preview it. Once a turn has
+        claimed it, the same thread must be supplied: a bound handle without a
+        matching ``thread_id`` is indistinguishable from an unknown one, so a
+        guessed handle cannot be read from another thread.
+        """
+
+        meta = self._lookup(handle)
+        owner = meta.get("thread_id")
+        if owner is not None:
+            if owner != thread_id:
+                raise ArtifactError("artifact_not_found", "That file isn't available any more.")
+            if self._store.get_thread(owner) is None:
+                raise ArtifactError("artifact_not_found", "That file isn't available any more.")
+        self._resolve_path(meta)
+        return meta
+
+    def _lookup(self, handle: str) -> dict[str, Any]:
+        """Unscoped store lookup for internal flows (claim, upload card)."""
+
         if not isinstance(handle, str) or not HANDLE_RE.match(handle):
             raise ArtifactError("artifact_not_found", "That file isn't available any more.")
         meta = self._store.get_artifact(handle)
         if meta is None:
             raise ArtifactError("artifact_not_found", "That file isn't available any more.")
-        owner = meta.get("thread_id")
-        if owner is not None and thread_id is not None and owner != thread_id:
-            raise ArtifactError("artifact_not_found", "That file isn't available any more.")
-        if owner is not None and self._store.get_thread(owner) is None:
-            raise ArtifactError("artifact_not_found", "That file isn't available any more.")
-        self._resolve_path(meta)
         return meta
 
     def card(
@@ -249,10 +265,10 @@ class ArtifactRegistry:
     def claim(self, handle: str, thread_id: str) -> dict[str, Any]:
         """Bind an uploaded artifact to the turn's thread exactly once."""
 
-        existing = self.get(handle)
+        existing = self._lookup(handle)
         if existing.get("thread_id") is None:
             if not self._store.bind_artifact(handle, thread_id):
-                existing = self.get(handle)
+                existing = self._lookup(handle)
                 if existing.get("thread_id") != thread_id:
                     raise ArtifactError(
                         "artifact_not_found", "That file isn't available any more."

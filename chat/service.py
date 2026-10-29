@@ -39,7 +39,7 @@ from skills.loader import SkillRegistry
 from . import cards
 from .artifacts import HANDLE_RE, ArtifactError, ArtifactRegistry
 from .errors import ChatError
-from .store import ChatStore, iso_now, new_id
+from .store import APPROVAL_TRANSITIONS, ChatStore, iso_now, new_id
 from .stream import EventBus
 
 __all__ = ["ChatService", "MESSAGE_STATUS_BY_REASON", "TurnBudget"]
@@ -57,6 +57,15 @@ _TERMINAL_RETRY_REASONS = frozenset({"error", "stopped", "interrupted"})
 _MAX_TEXT_CHARS = 8000
 _MAX_ATTACHMENTS = 5
 _MAX_DECISION_NOTE = 200
+
+# Stop: the cooperative token is enough for a normal turn, but a provider
+# stream that does not yield cannot see it, so a hard cancel is armed. While a
+# human decision is in flight the hammer is deferred: cancelling there could
+# leave an approved card with no waiter left to consume it.
+_HARD_CANCEL_DELAY = 0.05
+_HARD_CANCEL_RETRY = 0.25
+_HARD_CANCEL_ATTEMPTS = 40
+_APPROVAL_POLL_SECONDS = 0.05
 
 
 @dataclass
@@ -127,6 +136,7 @@ class ChatService:
         self._done: dict[str, asyncio.Event] = {}
         self._waiters: dict[str, asyncio.Event] = {}
         self._waiter_loops: dict[str, asyncio.AbstractEventLoop] = {}
+        self._waiting_approval: dict[str, str] = {}
         self._live_blocks: dict[str, list[dict[str, Any]]] = {}
 
     # -- threads -----------------------------------------------------------
@@ -249,7 +259,7 @@ class ChatService:
                     field="/attachment_handles",
                 )
             try:
-                meta = self.artifacts.get(handle)
+                meta = self.artifacts.get(handle, thread_id=thread_id)
             except ArtifactError:
                 raise ChatError(
                     "invalid_message",
@@ -258,14 +268,6 @@ class ChatService:
                     user_fixable=True,
                     field="/attachment_handles",
                 ) from None
-            if meta.get("thread_id") not in (None, thread_id):
-                raise ChatError(
-                    "invalid_message",
-                    status=400,
-                    message="An attachment belongs to another thread.",
-                    user_fixable=True,
-                    field="/attachment_handles",
-                )
             attachment_cards.append(meta)
 
         if thread.get("active_turn_id"):
@@ -279,7 +281,7 @@ class ChatService:
         user_id = new_id("msg")
         assistant_id = new_id("msg")
         user_blocks: list[dict[str, Any]] = [
-            _attachment_block(meta) for meta in attachment_cards
+            _attachment_block(meta, thread_id) for meta in attachment_cards
         ]
         user_blocks.append({"type": "text", "text": message})
 
@@ -372,12 +374,39 @@ class ChatService:
             token.cancel()
         task = self._tasks.get(turn_id)
         if task is not None and not task.done():
-            loop = asyncio.get_running_loop()
-            loop.call_later(
-                0.05, lambda: task.cancel() if not task.done() else None
-            )
+            self._arm_hard_cancel(turn_id, task)
         self.store.update_turn(turn_id, state="stopping")
         return {"turn_id": turn_id, "status": "stopping"}
+
+    def _arm_hard_cancel(
+        self,
+        turn_id: str,
+        task: "asyncio.Task[Any]",
+        attempt: int = 0,
+    ) -> None:
+        """Cancel a turn that ignores the cooperative token — but never mid-approval.
+
+        A hard cancel while the approval hook awaits a human can lose the
+        decision: the turn unwinds and the card stays ``approved`` with no
+        waiter left to consume it. The approval wait watches the token itself,
+        so the hammer is deferred for as long as one is in flight.
+        """
+
+        loop = asyncio.get_running_loop()
+
+        def fire() -> None:
+            if task.done():
+                return
+            if self._waiting_approval.get(turn_id):
+                if attempt < _HARD_CANCEL_ATTEMPTS:
+                    loop.call_later(
+                        _HARD_CANCEL_RETRY,
+                        lambda: self._arm_hard_cancel(turn_id, task, attempt + 1),
+                    )
+                return
+            task.cancel()
+
+        loop.call_later(_HARD_CANCEL_DELAY, fire)
 
     async def retry(self, turn_id: str) -> dict[str, Any]:
         turn = self.store.get_turn(turn_id)
@@ -505,18 +534,21 @@ class ChatService:
                 )
         except asyncio.CancelledError:
             if not state.finished:
+                self._abandon_turn_approvals(state)
                 self._mark_running_tools(state, "turn_cancelled")
                 self._finalize(
                     state, "cancelled", duration_ms=self._elapsed(state)
                 )
         except Exception:  # noqa: BLE001 - a turn never escapes to the caller
             if not state.finished:
+                self._abandon_turn_approvals(state)
                 self._emit_error(
                     state, "provider_error", retryable=True, details=None, step=state.steps
                 )
                 self._finalize(state, "error", duration_ms=self._elapsed(state))
         finally:
             self._live_blocks.pop(state.assistant_id, None)
+            self._waiting_approval.pop(turn_id, None)
             self._cancel.pop(turn_id, None)
             self._tasks.pop(turn_id, None)
             done = self._done.get(turn_id)
@@ -932,14 +964,13 @@ class ChatService:
             tool=request.tool,
             skill=request.skill,
             effects=request.effects,
-            arguments=cards.redact_arguments(
-                request.arguments, secrets=self._secret_values
-            ),
+            arguments=request.arguments,
             scopes=request.scopes,
             arguments_digest=request.argument_hash,
             requested_at=requested_at,
             expires_at=expires_at,
             title=_approval_title(request.tool),
+            secrets=self._secret_values,
         )
         self.store.save_approval(card)
         self._attach_approval(state, card)
@@ -947,28 +978,94 @@ class ChatService:
         loop = asyncio.get_running_loop()
         self._waiters[approval_id] = waiter
         self._waiter_loops[approval_id] = loop
+        self._waiting_approval[state.turn["id"]] = approval_id
         timeout = max(
             0.0,
             (
                 datetime.fromisoformat(expires_at.replace("Z", "+00:00")) - now
             ).total_seconds(),
         )
+        cancelled = False
         try:
-            await asyncio.wait_for(
-                waiter.wait(), timeout=timeout if timeout > 0 else 0.01
-            )
-        except asyncio.TimeoutError:
-            current = self.store.get_approval(approval_id)
-            if current is not None and current["status"] == "approved":
-                return True
-            if current is not None and current["status"] == "pending":
-                self._record_resolution(state, approval_id, "expired", executed=False)
-            return False
+            cancelled = await self._wait_for_decision(state, waiter, timeout)
+        except asyncio.CancelledError:
+            # A hard cancel can still land here; never leave the decision
+            # dangling (see ``_abandon_approval``).
+            self._abandon_approval(state, approval_id)
+            raise
         finally:
             self._waiters.pop(approval_id, None)
             self._waiter_loops.pop(approval_id, None)
-        current = self.store.get_approval(approval_id) or card
-        return current["status"] == "approved"
+            self._waiting_approval.pop(state.turn["id"], None)
+        if cancelled:
+            self._abandon_approval(state, approval_id)
+            return False
+        current = self.store.get_approval(approval_id)
+        if current is not None and current["status"] == "approved":
+            return True
+        if current is not None and current["status"] == "pending":
+            self._record_resolution(state, approval_id, "expired", executed=False)
+        return False
+
+    async def _wait_for_decision(
+        self,
+        state: _TurnState,
+        waiter: asyncio.Event,
+        timeout: float,
+    ) -> bool:
+        """Wait for a decision or Stop, whichever comes first.
+
+        Polling in small slices keeps Stop cooperative: the turn ends promptly
+        without a hard cancel that could strand the approval (§5.3, §14.1).
+        Returns ``True`` when Stop won and the approval must be abandoned.
+        """
+
+        token = self._cancel.get(state.turn["id"])
+        deadline = time.monotonic() + timeout
+        while True:
+            if token is not None and token.cancelled:
+                return True
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return False
+            try:
+                await asyncio.wait_for(
+                    waiter.wait(), timeout=min(_APPROVAL_POLL_SECONDS, remaining)
+                )
+                break
+            except asyncio.TimeoutError:
+                continue
+        return token is not None and token.cancelled
+
+    def _abandon_turn_approvals(self, state: _TurnState) -> None:
+        """Close approvals a stopped turn can no longer honour."""
+
+        for card in self.store.list_approvals(thread_id=state.thread_id, limit=200):
+            if card.get("turn_id") != state.turn["id"]:
+                continue
+            self._abandon_approval(state, str(card["id"]))
+
+    def _abandon_approval(self, state: _TurnState, approval_id: str) -> None:
+        """Settle one approval whose turn is over.
+
+        A card left ``pending`` stays decidable, and a later Approve would have
+        no waiter to consume it; an ``approved`` card left behind promises a run
+        that never happens. Both are closed here, without executing anything.
+        """
+
+        card = self.store.get_approval(approval_id)
+        if card is None or card.get("source") == "openshell":
+            return
+        if card.get("status") == "pending":
+            self._record_resolution(state, approval_id, "expired", executed=False)
+        elif card.get("status") == "approved":
+            self._record_resolution(
+                state,
+                approval_id,
+                "consumed",
+                executed=False,
+                allowed_from=("approved",),
+            )
 
     def _current_call_id(self, state: _TurnState) -> str | None:
         for block in reversed(state.blocks):
@@ -1037,51 +1134,102 @@ class ChatService:
             raise ChatError("unknown_approval", status=404)
         if self.store.get_thread(str(card.get("thread_id") or "")) is None:
             raise ChatError("unknown_approval", status=404)
-        now = self._now()
-        now_iso = iso_now(now)
-        if card["status"] == "pending":
-            expires = _as_aware(
-                datetime.fromisoformat(str(card["expires_at"]).replace("Z", "+00:00"))
-            )
-            if now >= expires:
-                self._record_resolution(None, approval_id, "expired", executed=False)
-                raise ChatError("expired", status=409)
-
-        if card["status"] == "consumed":
-            raise ChatError("already_used", status=409)
-        if card["status"] == "expired":
-            raise ChatError("expired", status=409)
-        if card["status"] != "pending":
-            same = (card["status"] == "approved" and decision == "approve") or (
-                card["status"] == "denied" and decision == "deny"
-            )
-            if same:
-                return {
-                    "ok": True,
-                    "approval": card,
-                    "executed": False,
-                    "idempotent": True,
-                }
-            raise ChatError("not_approved", status=409)
-
-        if card.get("source") == "openshell":
-            try:
-                if decision == "approve":
-                    self.approvals.approve(approval_id)
-                else:
-                    self.approvals.deny(approval_id)
-            except ApprovalExpired:
-                self._record_resolution(None, approval_id, "expired", executed=False)
-                raise ChatError("expired", status=409) from None
-            except ApprovalAlreadyUsed:
-                raise ChatError("already_used", status=409) from None
-            except (ApprovalNotGranted, ApprovalDenied):
-                raise ChatError("not_approved", status=409) from None
-            except ApprovalNotFound:
-                raise ChatError("unknown_approval", status=404) from None
-
         status = "approved" if decision == "approve" else "denied"
-        updated = self._record_resolution(None, approval_id, status, executed=False, decided_at=now_iso)
+        if card.get("source") == "openshell":
+            return self._decide_exec(card, decision, status)
+        replay = self._replay_decision(card, status)
+        if replay is not None:
+            return replay
+        return self._decide_card(card, status)
+
+    def _replay_decision(
+        self, card: Mapping[str, Any], status: str
+    ) -> dict[str, Any] | None:
+        """Answer for a card that is not pending; ``None`` means it still is."""
+
+        current = str(card.get("status"))
+        if current == "consumed":
+            raise ChatError("already_used", status=409)
+        if current == "expired":
+            raise ChatError("expired", status=409)
+        if current == status:
+            return {
+                "ok": True,
+                "approval": dict(card),
+                "executed": False,
+                "idempotent": True,
+            }
+        if current != "pending":
+            raise ChatError("not_approved", status=409)
+        return None
+
+    def _decide_card(self, card: Mapping[str, Any], status: str) -> dict[str, Any]:
+        """Decide a skill-runtime approval: the guarded UPDATE is the authority."""
+
+        approval_id = str(card["id"])
+        now = self._now()
+        expires = _as_aware(
+            datetime.fromisoformat(str(card["expires_at"]).replace("Z", "+00:00"))
+        )
+        if now >= expires:
+            self._record_resolution(None, approval_id, "expired", executed=False)
+            raise ChatError("expired", status=409)
+        updated, applied = self._record_resolution(
+            None,
+            approval_id,
+            status,
+            executed=False,
+            decided_at=iso_now(now),
+            allowed_from=("pending",),
+        )
+        if not applied:
+            replay = self._replay_decision(updated, status)
+            if replay is not None:
+                return replay
+            raise ChatError("not_approved", status=409)  # pragma: no cover
+        return {
+            "ok": True,
+            "approval": updated,
+            "executed": False,
+            "idempotent": False,
+        }
+
+    def _decide_exec(
+        self, card: Mapping[str, Any], decision: str, status: str
+    ) -> dict[str, Any]:
+        """Decide an exec approval through KEL-7, whose store owns single use."""
+
+        approval_id = str(card["id"])
+        try:
+            if decision == "approve":
+                self.approvals.approve(approval_id)
+            else:
+                self.approvals.deny(approval_id)
+        except ApprovalExpired:
+            self._record_resolution(None, approval_id, "expired", executed=False)
+            raise ChatError("expired", status=409) from None
+        except ApprovalAlreadyUsed:
+            raise ChatError("already_used", status=409) from None
+        except (ApprovalNotGranted, ApprovalDenied):
+            raise ChatError("not_approved", status=409) from None
+        except ApprovalNotFound:
+            raise ChatError("unknown_approval", status=404) from None
+
+        updated, applied = self._record_resolution(
+            None,
+            approval_id,
+            status,
+            executed=False,
+            decided_at=iso_now(self._now()),
+            allowed_from=("pending",),
+        )
+        if not applied:
+            # A concurrent decision mirrored first: report as a replay so both
+            # callers agree on the same final state.
+            replay = self._replay_decision(updated, status)
+            if replay is not None:
+                return replay
+            raise ChatError("not_approved", status=409)  # pragma: no cover
         return {
             "ok": True,
             "approval": updated,
@@ -1097,18 +1245,35 @@ class ChatService:
         *,
         executed: bool,
         decided_at: str | None = None,
-    ) -> dict[str, Any]:
+        allowed_from: Sequence[str] | None = None,
+    ) -> tuple[dict[str, Any], bool]:
+        """Record a status change atomically; announce it only when we won.
+
+        Losing the guarded UPDATE means another caller already moved the row,
+        so writing a second event (or a stale one) is exactly what two tabs
+        pressing Approve must not produce.
+        """
+
         card = self.store.get_approval(approval_id)
         if card is None:  # pragma: no cover - callers check first
             raise ChatError("unknown_approval", status=404)
         decided = decided_at or iso_now(self._now())
-        consumed = decided if status == "consumed" else None
-        updated = self.store.set_approval_status(
+        source = (
+            allowed_from
+            if allowed_from is not None
+            else APPROVAL_TRANSITIONS.get(status, ("pending",))
+        )
+        updated = self.store.transition_approval(
             approval_id,
             status,
+            allowed_from=source,
             decided_at=decided if status in {"approved", "denied", "expired"} else None,
-            consumed_at=consumed,
-        ) or card
+            consumed_at=decided if status == "consumed" else None,
+        )
+        if updated is None:
+            current = self.store.get_approval(approval_id) or card
+            return current, False
+
         tool_status = {
             "approved": "running",
             "denied": "blocked",
@@ -1149,7 +1314,7 @@ class ChatService:
                 loop.call_soon_threadsafe(waiter.set)
             else:  # pragma: no cover - defensive
                 waiter.set()
-        return updated
+        return updated, True
 
     def _apply_resolution_to_blocks(
         self,
@@ -1184,7 +1349,13 @@ class ChatService:
             return
         if card.get("status") != "approved":
             return
-        self._record_resolution(state, approval_id, "consumed", executed=executed)
+        self._record_resolution(
+            state,
+            approval_id,
+            "consumed",
+            executed=executed,
+            allowed_from=("approved",),
+        )
 
     def open_exec_approval(
         self,
@@ -1224,6 +1395,7 @@ class ChatService:
             requested_at=request.requested_at,
             expires_at=request.expires_at,
             title="Run a command",
+            secrets=self._secret_values,
         )
         self.store.save_approval(card)
         self._emit(
@@ -1343,8 +1515,10 @@ def _result_summary(tool: str, result: Mapping[str, Any] | None, ok: bool) -> st
     return "done"
 
 
-def _attachment_block(meta: Mapping[str, Any]) -> dict[str, Any]:
+def _attachment_block(meta: Mapping[str, Any], thread_id: str) -> dict[str, Any]:
     handle = str(meta["handle"])
+    # The upload is bound to this thread in the same transaction, so its URL
+    # must carry the scope or the message's own link would 404 (§8).
     return {
         "type": "attachment",
         "attachment": {
@@ -1354,7 +1528,7 @@ def _attachment_block(meta: Mapping[str, Any]) -> dict[str, Any]:
             "mime": meta.get("mime"),
             "size_bytes": meta.get("size_bytes"),
             "status": "attached",
-            "open_url": f"/api/artifacts/{handle}/content",
+            "open_url": f"/api/artifacts/{handle}/content?thread_id={thread_id}",
         },
     }
 

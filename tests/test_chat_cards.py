@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from typing import Any
 
 from chat.cards import (
@@ -177,6 +178,35 @@ def test_artifact_card_urls_follow_kind() -> None:
     assert csv["preview_url"] == "/api/artifacts/artifact:csvreport1/preview"
 
 
+def test_artifact_card_urls_carry_a_bound_thread_scope() -> None:
+    pdf = artifact_card(
+        {
+            "handle": "artifact:q3report02",
+            "name": "q3.pdf",
+            "kind": "pdf",
+            "thread_id": "ses_abc123",
+        }
+    )
+    assert pdf["open_url"] == "/api/artifacts/artifact:q3report02/content?thread_id=ses_abc123"
+    assert (
+        pdf["preview_url"]
+        == "/api/artifacts/artifact:q3report02/content?thread_id=ses_abc123#page=1&toolbar=0"
+    )
+    assert (
+        pdf["download_url"]
+        == "/api/artifacts/artifact:q3report02/content?download=1&thread_id=ses_abc123"
+    )
+
+    csv = artifact_card(
+        {"handle": "artifact:csvreport2", "kind": "csv", "thread_id": "ses_abc123"}
+    )
+    assert csv["preview_url"] == "/api/artifacts/artifact:csvreport2/preview?thread_id=ses_abc123"
+
+    unbound = artifact_card({"handle": "artifact:unbound01", "kind": "csv"})
+    assert unbound["preview_url"] == "/api/artifacts/artifact:unbound01/preview"
+    assert unbound["download_url"] == "/api/artifacts/artifact:unbound01/content?download=1"
+
+
 def test_approval_rationale_templates_and_suffix() -> None:
     write = approval_rationale(("write",), scopes={"paths": [], "hosts": [], "repos": []})
     assert "change something in your workspace" in write
@@ -213,6 +243,67 @@ def test_approval_card_shape_uses_argv_and_no_cost() -> None:
     assert card["single_use"] is True
     assert card["source"] == "openshell"
     assert card["status"] == "pending"
+
+
+def test_approval_card_scrubs_secret_values_from_argv_and_arguments() -> None:
+    secret = "sk-live-abc123secret"
+    card = approval_card(
+        approval_id="apr_secret",
+        source="openshell",
+        thread_id="ses_1",
+        turn_id="turn_1",
+        call_id="call_1",
+        tool="shell.exec",
+        effects=("execute",),
+        command=["curl", "-H", f"Authorization: Bearer {secret}", "https://example.test"],
+        arguments={"command": ["curl", "-H", f"Authorization: Bearer {secret}"]},
+        blast_radius=("process:shell",),
+        requested_at="2026-10-29T09:00:00+00:00",
+        expires_at="2026-10-29T09:10:00+00:00",
+        secrets=(secret,),
+    )
+    rendered = json.dumps(card)
+    assert secret not in rendered
+    assert card["command"] == [
+        "curl",
+        "-H",
+        "Authorization: Bearer [redacted]",
+        "https://example.test",
+    ]
+    assert card["arguments"]["command"][2] == "Authorization: Bearer [redacted]"
+    assert secret not in card["summary"]
+    assert "[redacted]" in card["summary"]
+
+    # Without the secret list the card is unchanged: redaction is opt-in and
+    # only the values the process actually holds are scrubbed.
+    plain = approval_card(
+        approval_id="apr_plain",
+        source="openshell",
+        thread_id="ses_1",
+        turn_id=None,
+        call_id=None,
+        tool="shell.exec",
+        command=["curl", "-H", f"Authorization: Bearer {secret}"],
+        requested_at="2026-10-29T09:00:00+00:00",
+        expires_at="2026-10-29T09:10:00+00:00",
+    )
+    assert plain["command"][2] == f"Authorization: Bearer {secret}"
+
+    # A secret inside an ordinary argument never reaches the one-line summary.
+    hinted = approval_card(
+        approval_id="apr_summary",
+        source="skill",
+        thread_id="ses_1",
+        turn_id=None,
+        call_id=None,
+        tool="schedule.create",
+        arguments={"title": f"sync using {secret}"},
+        requested_at="2026-10-29T09:00:00+00:00",
+        expires_at="2026-10-29T09:10:00+00:00",
+        secrets=(secret,),
+    )
+    assert secret not in hinted["summary"]
+    assert secret not in json.dumps(hinted)
 
 
 def test_sweep_items_for_issue_and_repo() -> None:

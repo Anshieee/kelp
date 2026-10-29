@@ -4,11 +4,13 @@ from __future__ import annotations
 
 import asyncio
 import json
+import threading
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
 
+import chat.service as chat_service
 from chat import ArtifactError, ChatService, ChatStore
 from chat.errors import ChatError as ChatErrorType
 from kernel import CallableToolExecutor, TurnBudget
@@ -307,6 +309,331 @@ def test_approval_decisions_are_idempotent_and_conflicts_are_rejected(
         with pytest.raises(ChatErrorType) as missing:
             unknown("apr_missing", "approve")
         assert missing.value.status == 404
+    finally:
+        store.close()
+
+
+def test_concurrent_decisions_have_exactly_one_winner(tmp_path: Path) -> None:
+    """Two tabs pressing Approve/Deny must not both win (§7.4)."""
+
+    service, store, _provider = make_service(tmp_path, [text_script("ok")])
+    try:
+        thread = service.create_thread()
+        for round_index in range(10):
+            approval_id = f"apr_race{round_index}"
+            store.save_approval(
+                {
+                    "id": approval_id,
+                    "thread_id": thread["id"],
+                    "turn_id": None,
+                    "call_id": None,
+                    "source": "skill",
+                    "status": "pending",
+                    "requested_at": "2026-10-29T09:00:00Z",
+                    "expires_at": "2099-01-01T00:00:00Z",
+                    "effects": ["write"],
+                }
+            )
+            barrier = threading.Barrier(3)
+            outcomes: list[tuple[str, str]] = []
+
+            def worker(decision: str) -> None:
+                barrier.wait()
+                try:
+                    service.decide(approval_id, decision)
+                except ChatErrorType as exc:
+                    outcomes.append((decision, exc.code))
+                else:
+                    outcomes.append((decision, "ok"))
+
+            threads = [
+                threading.Thread(target=worker, args=("approve",)),
+                threading.Thread(target=worker, args=("deny",)),
+            ]
+            for item in threads:
+                item.start()
+            barrier.wait()
+            for item in threads:
+                item.join()
+
+            codes = [code for _decision, code in outcomes]
+            assert codes.count("ok") == 1
+            assert all(code in {"ok", "not_approved"} for code in codes)
+            winner, _code = next(
+                (decision, code) for decision, code in outcomes if code == "ok"
+            )
+            expected = "approved" if winner == "approve" else "denied"
+            assert store.get_approval(approval_id)["status"] == expected
+
+            resolved = [
+                event
+                for event in store.events_after(thread["id"])
+                if event["type"] == "approval_resolved"
+                and event["approval_id"] == approval_id
+            ]
+            assert [event["status"] for event in resolved] == [expected]
+    finally:
+        store.close()
+
+
+def test_a_late_approve_cannot_resurrect_a_consumed_approval(tmp_path: Path) -> None:
+    service, store, _provider = make_service(tmp_path, [text_script("ok")])
+    try:
+        thread = service.create_thread()
+        store.save_approval(
+            {
+                "id": "apr_done",
+                "thread_id": thread["id"],
+                "turn_id": None,
+                "call_id": None,
+                "source": "skill",
+                "status": "pending",
+                "requested_at": "2026-10-29T09:00:00Z",
+                "expires_at": "2099-01-01T00:00:00Z",
+                "effects": ["write"],
+            }
+        )
+        assert service.decide("apr_done", "approve")["approval"]["status"] == "approved"
+        store.set_approval_status(
+            "apr_done", "consumed", consumed_at="2026-10-29T09:05:00Z"
+        )
+        with pytest.raises(ChatErrorType) as used:
+            service.decide("apr_done", "approve")
+        assert used.value.status == 409
+        assert used.value.code == "already_used"
+        assert store.get_approval("apr_done")["status"] == "consumed"
+    finally:
+        store.close()
+
+
+def test_hard_cancel_defers_while_an_approval_is_in_flight(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Stop may not hard-cancel a turn that is waiting on a human (§5.3)."""
+
+    service, store, _provider = make_service(tmp_path, [text_script("ok")])
+    monkeypatch.setattr(chat_service, "_HARD_CANCEL_DELAY", 0.0)
+    monkeypatch.setattr(chat_service, "_HARD_CANCEL_RETRY", 0.01)
+
+    class FakeTask:
+        def __init__(self) -> None:
+            self.cancelled = False
+
+        def done(self) -> bool:
+            return False
+
+        def cancel(self) -> None:
+            self.cancelled = True
+
+    try:
+
+        async def scenario() -> None:
+            task = FakeTask()
+            service._waiting_approval["turn_wait"] = "apr_wait"  # noqa: SLF001
+            service._arm_hard_cancel("turn_wait", task)  # type: ignore[arg-type]  # noqa: SLF001
+            await asyncio.sleep(0.05)
+            assert task.cancelled is False
+
+            service._waiting_approval.pop("turn_wait")  # noqa: SLF001
+            await asyncio.sleep(0.05)
+            assert task.cancelled is True
+
+        asyncio.run(scenario())
+    finally:
+        store.close()
+
+
+def _approval_factory(executions: list[bool]) -> object:
+    def factory(hook: object) -> CallableToolExecutor:
+        async def executor(call: object) -> dict:
+            allowed = await hook(_schedule_request(call))  # type: ignore[operator]
+            executions.append(bool(allowed))
+            if not allowed:
+                return {"ok": False, "error": {"code": "approval_denied"}}
+            return {"ok": True, "output": {}}
+
+        return CallableToolExecutor(executor)
+
+    return factory
+
+
+def _schedule_scripts() -> list[list[object]]:
+    return [
+        tool_script(
+            "schedule.create",
+            {
+                "title": "x",
+                "prompt": "y",
+                "schedule": {"kind": "cron", "expr": "* * * * *"},
+                "timezone": "UTC",
+            },
+        ),
+        text_script("done"),
+    ]
+
+
+def test_stop_during_an_approval_ends_the_turn_and_expires_the_card(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Cooperative Stop: the card is closed, so nothing is left decidable."""
+
+    executions: list[bool] = []
+    service, store, _provider = make_service(
+        tmp_path,
+        _schedule_scripts(),
+        tool_executor_factory=_approval_factory(executions),
+        approval_ttl_seconds=600,
+    )
+    monkeypatch.setattr(chat_service, "_HARD_CANCEL_DELAY", 5.0)
+    try:
+        thread = service.create_thread()
+
+        async def scenario() -> None:
+            payload, _created = await service.send(
+                thread["id"], text="schedule", client_turn_id="ct-stop-approval"
+            )
+            pending = await wait_until(lambda: store.list_approvals(status="pending"))
+            approval_id = pending[0]["id"]
+            await service.stop(payload["turn_id"])
+            await service.wait_for_turn(payload["turn_id"], timeout=3)
+
+            turn = store.get_turn(payload["turn_id"])
+            assert turn["reason"] == "cancelled"
+            card = store.get_approval(approval_id)
+            assert card["status"] == "expired"
+            assert True not in executions  # the handler never ran
+            with pytest.raises(ChatErrorType) as late:
+                service.decide(approval_id, "approve")
+            assert late.value.status == 409
+            assert late.value.code == "expired"
+            blocks = store.get_message(payload["assistant_message_id"])["blocks"]
+            tool = next(block for block in blocks if block["type"] == "tool_call")
+            assert tool["status"] == "expired"
+
+        asyncio.run(scenario())
+    finally:
+        store.close()
+
+
+def test_stop_after_approve_spends_the_card_without_running_it(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Approved-then-stopped must never stay ``approved`` and never execute."""
+
+    executions: list[bool] = []
+    service, store, _provider = make_service(
+        tmp_path,
+        _schedule_scripts(),
+        tool_executor_factory=_approval_factory(executions),
+        approval_ttl_seconds=600,
+    )
+    monkeypatch.setattr(chat_service, "_HARD_CANCEL_DELAY", 5.0)
+    try:
+        thread = service.create_thread()
+
+        async def scenario() -> None:
+            payload, _created = await service.send(
+                thread["id"], text="schedule", client_turn_id="ct-stop-approved"
+            )
+            pending = await wait_until(lambda: store.list_approvals(status="pending"))
+            approval_id = pending[0]["id"]
+            decided = service.decide(approval_id, "approve")
+            assert decided["approval"]["status"] == "approved"
+
+            await service.stop(payload["turn_id"])
+            await service.wait_for_turn(payload["turn_id"], timeout=3)
+
+            assert store.get_turn(payload["turn_id"])["reason"] == "cancelled"
+            card = store.get_approval(approval_id)
+            assert card["status"] == "consumed"
+            assert card["consumed_at"] is not None
+            assert True not in executions  # approved, but nothing ran
+
+            with pytest.raises(ChatErrorType) as late:
+                service.decide(approval_id, "approve")
+            assert late.value.status == 409
+            assert late.value.code == "already_used"
+
+        asyncio.run(scenario())
+    finally:
+        store.close()
+
+
+def test_exec_approval_never_stores_a_secret_in_its_command(tmp_path: Path) -> None:
+    secret = "ghp_live_authorization_value_123"
+    service, store, _provider = make_service(
+        tmp_path, [text_script("ok")], secrets={"GITHUB_TOKEN": secret}
+    )
+    try:
+        thread = service.create_thread()
+        card = service.open_exec_approval(
+            thread_id=thread["id"],
+            turn_id=None,
+            call_id="call_exec",
+            tool="shell.exec",
+            command=[
+                "curl",
+                "-H",
+                f"Authorization: Bearer {secret}",
+                "https://api.github.test/user",
+            ],
+        )
+
+        stored = store.get_approval(card["id"])
+        assert stored is not None
+        assert secret not in json.dumps(stored)
+        assert stored["command"][2] == "Authorization: Bearer [redacted]"
+        assert stored["arguments"]["command"][2] == "Authorization: Bearer [redacted]"
+        assert secret not in stored["summary"]
+        assert secret not in json.dumps(store.events_after(thread["id"]))
+        # KEL-7 still holds the real argv: redaction is display, not execution.
+        assert secret in service.approvals.get(card["id"]).command[2]
+    finally:
+        store.close()
+
+
+def test_skill_approval_never_stores_a_secret_from_its_arguments(
+    tmp_path: Path,
+) -> None:
+    secret = "schedule-secret-value-777"
+    executions: list[bool] = []
+    service, store, _provider = make_service(
+        tmp_path,
+        [
+            tool_script(
+                "schedule.create",
+                {
+                    "title": "x",
+                    "prompt": f"call with {secret}",
+                    "schedule": {"kind": "cron", "expr": "* * * * *"},
+                    "timezone": "UTC",
+                },
+            ),
+            text_script("done"),
+        ],
+        secrets={"DEMO_TOKEN": secret},
+        tool_executor_factory=_approval_factory(executions),
+    )
+    try:
+        thread = service.create_thread()
+
+        async def scenario() -> None:
+            payload, _created = await service.send(
+                thread["id"], text="schedule", client_turn_id="ct-secret-approval"
+            )
+            pending = await wait_until(lambda: store.list_approvals(status="pending"))
+            card = pending[0]
+            assert secret not in json.dumps(card)
+            assert secret not in json.dumps(store.events_after(thread["id"]))
+            assert secret not in json.dumps(
+                store.get_message(payload["assistant_message_id"])["blocks"]
+            )
+
+            service.decide(card["id"], "deny")
+            await service.wait_for_turn(payload["turn_id"], timeout=3)
+            assert executions == [False]
+
+        asyncio.run(scenario())
     finally:
         store.close()
 
@@ -682,7 +1009,14 @@ def test_attachment_is_claimed_once_and_rendered_first(tmp_path: Path) -> None:
             user = store.get_message(user_payload["user_message_id"])
             assert [block["type"] for block in user["blocks"]] == ["attachment", "text"]
             assert user["blocks"][0]["attachment"]["handle"] == meta["handle"]
-            assert service.artifacts.get(meta["handle"])["thread_id"] == thread["id"]
+            assert (
+                f"thread_id={thread['id']}"
+                in user["blocks"][0]["attachment"]["open_url"]
+            )
+            assert (
+                service.artifacts.get(meta["handle"], thread_id=thread["id"])["thread_id"]
+                == thread["id"]
+            )
 
             with pytest.raises(ChatErrorType) as other_thread:
                 await service.send(
@@ -695,6 +1029,48 @@ def test_attachment_is_claimed_once_and_rendered_first(tmp_path: Path) -> None:
             assert other_thread.value.code == "invalid_message"
 
         asyncio.run(scenario())
+    finally:
+        store.close()
+
+
+def test_bound_artifact_is_invisible_without_its_thread(tmp_path: Path) -> None:
+    """§8: a claimed handle is only resolvable with the owning thread id."""
+
+    service, store, _provider = make_service(tmp_path, [text_script("ok")])
+    try:
+        thread = service.create_thread()
+        other = service.create_thread()
+        meta = service.artifacts.save_upload("rows.csv", b"region,revenue\nEMEA,42\n")
+
+        # Unbound upload: visible to the composer that will attach it.
+        assert service.artifacts.get(meta["handle"])["thread_id"] is None
+        service.artifacts.claim(meta["handle"], thread["id"])
+
+        for thread_id in (None, other["id"], "", "ses_does_not_exist"):
+            with pytest.raises(ArtifactError) as blocked:
+                service.artifacts.get(meta["handle"], thread_id=thread_id)
+            assert blocked.value.code == "artifact_not_found"
+            assert blocked.value.status == 404
+
+        with pytest.raises(ArtifactError):
+            service.artifacts.content(meta["handle"])
+        with pytest.raises(ArtifactError):
+            service.artifacts.preview(meta["handle"])
+        with pytest.raises(ArtifactError):
+            service.artifacts.card(meta["handle"])
+
+        own = service.artifacts.get(meta["handle"], thread_id=thread["id"])
+        assert own["thread_id"] == thread["id"]
+        assert own["kind"] == "csv"
+        result = service.artifacts.content(meta["handle"], thread_id=thread["id"])
+        assert result.status == 200
+        assert result.body == b"region,revenue\nEMEA,42\n"
+        preview = service.artifacts.preview(meta["handle"], thread_id=thread["id"])
+        assert preview["columns"] == ["region", "revenue"]
+
+        # A handle bound to one thread cannot be re-claimed by another.
+        with pytest.raises(ArtifactError):
+            service.artifacts.claim(meta["handle"], other["id"])
     finally:
         store.close()
 
