@@ -11,17 +11,25 @@ that goes with it is [`sdlc-mindmap.svg`](sdlc-mindmap.svg), with a PNG fallback
 site embeds a copy of the SVG directly in the page, so every box there can be clicked; that copy
 and these two files must be updated together.
 
+What this snapshot rests on: `main` is at `daf3b14`, all **153 tests pass**, and the repository is
+public. KEL-6 and KEL-7 are merged and waiting on review; KEL-8 has a written spec on its branch.
+
 ## How to read the labels
 
 | Label | What it means |
 |---|---|
-| **DONE** | Finished and merged into the shared copy of the code, or finished on its branch and ready to merge. |
+| **DONE** | Finished, merged into the shared copy of the code, and reviewed. |
+| **IN REVIEW** | Merged into the shared copy, with a code review still open. |
 | **IN PROGRESS** | Being built right now. |
 | **TO COME** | Agreed, not started. |
 
 An **M number** is a milestone, a stage of the build. A **KEL number** is a work item in Linear,
 our task tracker. Linear can lag behind by a day; the statuses below match the tracker site on the
 snapshot date.
+
+Two boxes on the map carry a plainer word instead of one of these labels: **SPEC DRAFTED** on
+KEL-8 means the written spec exists and no code does, and **LATER** on the M4 leaves means outside
+this round.
 
 ## The map
 
@@ -30,10 +38,10 @@ snapshot date.
 The same map in words, in case the image does not load:
 
 - **Milestones** — five stages, M0 to M4.
-- **The work** — six work items, KEL-5 to KEL-10.
+- **The work** — six work items, KEL-5 to KEL-10: one done, two in review, one in progress, two to come.
 - **Surfaces** — where you talk to the assistant: dashboard first, Telegram next, WhatsApp and voice memos later.
 - **Money** — Stripe now, Razorpay and an in-app balance later.
-- **Design** — the screen plan is written; the drawing file is next.
+- **Design** — the screen plan is written, and so is the chat spec; the drawing file is next.
 
 On the tracker site ([`netlify/index.html`](../netlify/index.html)) the same SVG is embedded
 inside the page rather than loaded as a picture. Each box is a link: activating it opens the
@@ -47,8 +55,8 @@ promise that full-vision scope lands this week. Scope is cumulative: M2 includes
 
 | Stage | Target | State | What finishing it means |
 |---|---|---|---|
-| **M0 Foundation** | 30 Oct 2026 | IN PROGRESS | Repo and docs in place, the checks that run on every change, a standard development setup, model and provider chosen, and a written list of what could go wrong. The repo, docs, tests, and skill contract are in. The rest is still open. |
-| **M1 Prototype** | 30 Oct 2026 | IN PROGRESS | The end-to-end story: ask, get an answer with sources, read a file, approve an action, pay with a saved card, watch the six-scene demo. All six work items live here. |
+| **M0 Foundation** | 30 Oct 2026 | IN PROGRESS | The repo (public), the docs, the tests, the standard development setup, model and provider chosen, and a written list of what could go wrong. The repo, docs, tests, and skill contract are in. Still open: the automated checks, the development setup, and the threat model. |
+| **M1 Prototype** | 30 Oct 2026 | IN PROGRESS | The end-to-end story: ask, get an answer with sources, read a file, approve an action, pay with a saved card, watch the six-scene demo. All six work items live here. Four are moving: KEL-5 is done, KEL-6 and KEL-7 are merged and in review, and KEL-8 has a spec. |
 | **M2 Polished MVP** | 30 Oct 2026 | TO COME | Survives ordinary use: picks up after a restart, self-checks, better search over your documents, repeatable quality measurements, and a deploy on the Nebius GPU. |
 | **M3 Hardening** | 30 Oct 2026 | TO COME | The privacy and cost promises hold under pressure: who sees what, where keys live, caps on traffic, a retention rule, and a spend ceiling. |
 | **M4 Full vision** | 30 Oct 2026 | TO COME | More devices, work the assistant starts on its own, abilities added by others, and team sharing. A direction, not a deadline. |
@@ -74,8 +82,11 @@ assistant, and the safety layer knows what a tool intends to do before it runs.
 - Contract: [`docs/SKILL_SPEC.md`](SKILL_SPEC.md)
 - Schema: [`skills/manifest.schema.json`](../skills/manifest.schema.json)
 - Tests: [`tests/test_skill_loader.py`](../tests/test_skill_loader.py)
+- Commit: [`b8de92f`](https://github.com/Anshieee/kelp/commit/b8de92f)
 
-### KEL-6 — Kernel loop — IN PROGRESS
+Status detail: merged into `main`; 60 tests cover the contract and the loader.
+
+### KEL-6 — Kernel loop — IN REVIEW
 
 The engine. It reads your message, asks the model what to do, streams the answer to you while it
 is still being written, runs a tool when one is needed, feeds the result back, and stops at a
@@ -89,13 +100,16 @@ asking a small program to do one specific thing. A **token** is a word-sized chu
 price is counted per chunk.
 
 - Linear: https://linear.app/kelp-ai/issue/KEL-6/kernel-llm-streaming-agent-loop-with-tool-calling
-- Design: [`docs/KERNEL.md`](https://github.com/Anshieee/kelp/blob/kel-6/docs/KERNEL.md) (kel-6 branch)
-- Loop: [`kernel/loop.py`](https://github.com/Anshieee/kelp/blob/kel-6/kernel/loop.py)
-- Tests: [`tests/test_kernel_loop.py`](https://github.com/Anshieee/kelp/blob/kel-6/tests/test_kernel_loop.py)
+- Design: [`docs/KERNEL.md`](https://github.com/Anshieee/kelp/blob/main/docs/KERNEL.md) (main)
+- Loop: [`kernel/loop.py`](https://github.com/Anshieee/kelp/blob/main/kernel/loop.py)
+- Tests: [`tests/test_kernel_loop.py`](https://github.com/Anshieee/kelp/blob/main/tests/test_kernel_loop.py)
+- Merge: [`d3c763e`](https://github.com/Anshieee/kelp/commit/d3c763e) (branch [`kel-6`](https://github.com/Anshieee/kelp/tree/kel-6), head `4c72afc`)
 
-Status detail: built on the `kel-6` branch with tests. Not merged into `main` yet.
+Status detail: merged into `main` at `d3c763e`. The kernel suite is 35 tests and passes with the
+rest of the 153. The open code review is written up in
+[`docs/REVIEW_KEL6_KEL7.md`](REVIEW_KEL6_KEL7.md); KEL-8 waits on its sign-off.
 
-### KEL-7 — Approval gate — IN PROGRESS
+### KEL-7 — Approval gate — IN REVIEW
 
 The check at the door. Before anything that changes something, this layer decides: allow, refuse,
 or stop and ask you. Asking creates a one-time request that names exactly what will run and
@@ -109,14 +123,15 @@ wallet and the demo both depend on this gate.
 the rules say nothing, the answer is no.
 
 - Linear: https://linear.app/kelp-ai/issue/KEL-7/openshell-approval-gated-tool-execution-audit
-- Design: [`docs/OPENSHELL.md`](https://github.com/Anshieee/kelp/blob/kel-7/docs/OPENSHELL.md) (kel-7 branch)
-- Policy: [`openshell/policy.py`](https://github.com/Anshieee/kelp/blob/kel-7/openshell/policy.py)
-- Tests: [`tests/test_openshell_approvals.py`](https://github.com/Anshieee/kelp/blob/kel-7/tests/test_openshell_approvals.py)
+- Design: [`docs/OPENSHELL.md`](https://github.com/Anshieee/kelp/blob/main/docs/OPENSHELL.md) (main)
+- Policy: [`openshell/policy.py`](https://github.com/Anshieee/kelp/blob/main/openshell/policy.py)
+- Tests: [`tests/test_openshell_approvals.py`](https://github.com/Anshieee/kelp/blob/main/tests/test_openshell_approvals.py)
+- Merge: [`daf3b14`](https://github.com/Anshieee/kelp/commit/daf3b14) (branch [`kel-7`](https://github.com/Anshieee/kelp/tree/kel-7), head `ef6ea9f`)
 
-Status detail: policy, one-time approvals, gated execution, audit log, and tests are on the
-`kel-7` branch. Not merged yet.
+Status detail: merged into `main` at `daf3b14`. Policy, one-time approvals, gated execution, the
+audit log, and 50 tests are in and passing. Sign-off from the review is the remaining step.
 
-### KEL-8 — Dashboard chat — TO COME
+### KEL-8 — Dashboard chat — IN PROGRESS (spec drafted)
 
 The main screen. Conversations you can name and pick up later, answers that appear as they are
 written, a small openable card for each tool step, previews of PDF and spreadsheet answers, labels
@@ -125,10 +140,13 @@ showing where an answer came from, and approval requests shown in the conversati
 *Why it matters:* it is the front door. Nothing else can be shown to a person until this exists.
 
 - Linear: https://linear.app/kelp-ai/issue/KEL-8/dashboard-chat-surface-primary-interface
+- Chat spec: [`docs/CHAT_SPEC.md`](https://github.com/Anshieee/kelp/blob/kel-8/docs/CHAT_SPEC.md) (kel-8 branch)
+- Spec commit: [`7bcf6d3`](https://github.com/Anshieee/kelp/commit/7bcf6d3)
 - Screen plan: [`docs/frontend-scope-simple.md`](frontend-scope-simple.md)
 
-Status detail: starts once KEL-6 and KEL-7 are merged. Screen code starts once the drawing file
-exists.
+Status detail: the spec is written and committed on `kel-8` — threads, in-chat approvals, and
+artifact cards, 1,037 lines. The `kel-8` branch is not on GitHub yet, so those links open once it is
+pushed. No screen code exists. Building starts once KEL-6 and KEL-7 are signed off.
 
 ### KEL-10 — Wallet — TO COME
 
@@ -142,10 +160,12 @@ charged without a yes.
 them. **SetupIntent** is Stripe's name for the one-time step that saves a card for later.
 
 - Linear: https://linear.app/kelp-ai/issue/KEL-10/wallet-stripe-saved-cards-setupintent-attach-list-propose-approve
-- Placeholder: [`payments/stripe_wallet.py`](https://github.com/Anshieee/kelp/blob/kel-7/payments/stripe_wallet.py) (kel-7 branch)
+- Placeholder: [`payments/stripe_wallet.py`](https://github.com/Anshieee/kelp/blob/main/payments/stripe_wallet.py) (main)
+- Tests: [`tests/test_payments.py`](https://github.com/Anshieee/kelp/blob/main/tests/test_payments.py)
 
-Status detail: only a placeholder settings file exists today. No real Stripe calls yet. Razorpay
-and an in-app balance are outside this round.
+Status detail: the Linear issue is created and sits in Todo. Only a placeholder settings file
+exists today, now on `main` because it came in with KEL-7. No real Stripe calls yet. Razorpay and
+an in-app balance are outside this round.
 
 ### KEL-9 — Demo run — TO COME
 
@@ -163,7 +183,7 @@ works offline.
 - Linear: https://linear.app/kelp-ai/issue/KEL-9/demo-choreography-6-beat-scripted-end-to-end-run-npm-run-demo
 - Repository: https://github.com/Anshieee/kelp (no demo script yet)
 
-Status detail: runs last, after the dashboard and the wallet.
+Status detail: runs last, after the dashboard and the wallet. Nothing is written for it yet.
 
 ## Decisions that shape the map
 
@@ -185,17 +205,25 @@ Status detail: runs last, after the dashboard and the wallet.
 
 - **The screen plan is done.** Thirteen screens, three main flows, four states per screen. See
   [`docs/frontend-scope-simple.md`](frontend-scope-simple.md).
+- **The chat spec is done.** Threads, approvals inside the conversation, and artifact cards are
+  written out in [`docs/CHAT_SPEC.md`](https://github.com/Anshieee/kelp/blob/kel-8/docs/CHAT_SPEC.md)
+  on the `kel-8` branch.
 - **The drawing file is next.** No screen code until it exists.
 
 ## Where everything lives
 
 ### GitHub
 
-- Repository: https://github.com/Anshieee/kelp
-- Shared copy of the code: https://github.com/Anshieee/kelp/tree/main
+- Repository (public): https://github.com/Anshieee/kelp
+- Shared copy of the code: https://github.com/Anshieee/kelp/tree/main — head `daf3b14`
 - All branches: https://github.com/Anshieee/kelp/branches
+  - `kel-5` — merged (`b8de92f`)
+  - `kel-6` — merged at `d3c763e`; branch head `4c72afc`
+  - `kel-7` — merged at `daf3b14`; branch head `ef6ea9f`
+  - `kel-8` — carries the chat spec, head `7bcf6d3` (not on GitHub yet)
 - Change history: https://github.com/Anshieee/kelp/commits/main
 - Pull requests: https://github.com/Anshieee/kelp/pulls
+- Tests: 153 pass on `main` (`python -m pytest`)
 
 ### Linear
 
@@ -212,10 +240,13 @@ Status detail: runs last, after the dashboard and the wallet.
 ### Docs and code
 
 - Mind map image: [`docs/sdlc-mindmap.svg`](sdlc-mindmap.svg), PNG fallback `docs/sdlc-mindmap.png`
+- Mind map source: [`docs/sdlc-mindmap.gv`](sdlc-mindmap.gv)
 - Tracker site: [`netlify/index.html`](../netlify/index.html)
 - Skill contract: [`docs/SKILL_SPEC.md`](SKILL_SPEC.md)
-- Kernel design: [`docs/KERNEL.md`](https://github.com/Anshieee/kelp/blob/kel-6/docs/KERNEL.md) (kel-6 branch)
-- Approval gate design: [`docs/OPENSHELL.md`](https://github.com/Anshieee/kelp/blob/kel-7/docs/OPENSHELL.md) (kel-7 branch)
+- Kernel design: [`docs/KERNEL.md`](https://github.com/Anshieee/kelp/blob/main/docs/KERNEL.md) (main)
+- Approval gate design: [`docs/OPENSHELL.md`](https://github.com/Anshieee/kelp/blob/main/docs/OPENSHELL.md) (main)
+- Chat surface spec: [`docs/CHAT_SPEC.md`](https://github.com/Anshieee/kelp/blob/kel-8/docs/CHAT_SPEC.md) (kel-8 branch)
+- Code review for KEL-6 and KEL-7: [`docs/REVIEW_KEL6_KEL7.md`](REVIEW_KEL6_KEL7.md)
 - ADR 0001, one document skill: [`docs/adr/0001-docs-answer-single-skill.md`](adr/0001-docs-answer-single-skill.md)
 - Screen plan: [`docs/frontend-scope-simple.md`](frontend-scope-simple.md)
 - Issue pack: [`docs/linear-issue-pack-kel.md`](linear-issue-pack-kel.md)
@@ -227,7 +258,8 @@ Status detail: runs last, after the dashboard and the wallet.
 ## Keeping this true
 
 1. When a work item moves, change it here, in Linear, and on the tracker site in the same pass.
-2. When a branch merges, move the item to DONE and link the merge commit.
+2. When a branch merges, move the item to IN REVIEW and link the merge commit; move it to DONE once
+   the review signs off.
 3. When a date or the scope changes, change the milestone table, the Graphviz source
    `docs/sdlc-mindmap.gv`, and the rendered `docs/sdlc-mindmap.svg` and `.png` together. The
    tracker site carries its own copy of the SVG inline, so paste the new rendering into

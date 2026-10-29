@@ -4,6 +4,7 @@
 //         dot -Tpng docs/sdlc-mindmap.gv -o docs/sdlc-mindmap.png
 // Colours: white background, small muted fills per branch, black text.
 // Meaning is carried by words, never by colour alone. No emojis.
+// Status words: DONE, IN REVIEW, IN PROGRESS, TO COME, LATER, SPEC DRAFTED.
 // Interactivity: every node has URL (page anchor) + tooltip (one plain line),
 // so dot emits <a href> links and <title> tooltips in the SVG.
 digraph sdlc {
@@ -48,9 +49,9 @@ digraph sdlc {
 
   // M1 holds the six KEL work items (soft green family)
   k5  [label="KEL-5 Skills\nDONE" shape="box" style="filled,bold,rounded" fillcolor="#D9EDD7" URL="#kel-5" tooltip="Rulebook every new ability follows. Finished."];
-  k6  [label="KEL-6 Answer loop\nIN PROGRESS" shape="box" style="filled,bold,rounded" fillcolor="#D9EDD7" URL="#kel-6" tooltip="Engine: reads, thinks, answers bit by bit. Being built now."];
-  k7  [label="KEL-7 Ask first\nIN PROGRESS" shape="box" style="filled,bold,rounded" fillcolor="#D9EDD7" URL="#kel-7" tooltip="Checkpoint that asks you before acting. Being built now."];
-  k8  [label="KEL-8 Chat screen\nTO COME" shape="box" style="filled,bold,rounded" fillcolor="#D9EDD7" URL="#kel-8" tooltip="Main screen you talk through. Agreed, not started."];
+  k6  [label="KEL-6 Answer loop\nIN REVIEW" shape="box" style="filled,bold,rounded" fillcolor="#D9EDD7" URL="#kel-6" tooltip="Engine: reads, thinks, answers bit by bit. Merged to main; review pending."];
+  k7  [label="KEL-7 Ask first\nIN REVIEW" shape="box" style="filled,bold,rounded" fillcolor="#D9EDD7" URL="#kel-7" tooltip="Checkpoint that asks you before acting. Merged to main; review pending."];
+  k8  [label="KEL-8 Chat screen\nSPEC DRAFTED" shape="box" style="filled,bold,rounded" fillcolor="#D9EDD7" URL="#kel-8" tooltip="Main screen you talk through. Spec drafted; no screen built yet."];
   k10 [label="KEL-10 Saved cards\nTO COME" shape="box" style="filled,bold,rounded" fillcolor="#D9EDD7" URL="#kel-10" tooltip="Pay with saved cards after you say yes. Agreed, not started."];
   k9  [label="KEL-9 Final check\nTO COME" shape="box" style="filled,bold,rounded" fillcolor="#D9EDD7" URL="#kel-9" tooltip="Six-scene demo that proves it works. Runs last."];
   m1 -> k5;
@@ -69,25 +70,25 @@ digraph sdlc {
   k5 -> k5_add;
 
   // KEL-6 leaves
-  k6_stream [label="Answers bit by bit\nIN PROGRESS" fillcolor="#EDF6EC" URL="#kel-6" tooltip="Words appear as they arrive. Being built now."];
-  k6_tools  [label="Runs tools mid-answer\nIN PROGRESS" fillcolor="#EDF6EC" URL="#kel-6" tooltip="Asks a small program to do one thing, feeds back result. Being built now."];
-  k6_cap    [label="Stops at cost ceiling\nIN PROGRESS" fillcolor="#EDF6EC" URL="#kel-6" tooltip="Hard limit on steps and length, tallies price. Being built now."];
+  k6_stream [label="Answers bit by bit\nIN REVIEW" fillcolor="#EDF6EC" URL="#kel-6" tooltip="Words appear as they arrive. Merged to main; review pending."];
+  k6_tools  [label="Runs tools mid-answer\nIN REVIEW" fillcolor="#EDF6EC" URL="#kel-6" tooltip="Asks a small program to do one thing, feeds back result. Merged to main; review pending."];
+  k6_cap    [label="Stops at cost ceiling\nIN REVIEW" fillcolor="#EDF6EC" URL="#kel-6" tooltip="Hard limit on steps and length, tallies price. Merged to main; review pending."];
   k6 -> k6_stream;
   k6 -> k6_tools;
   k6 -> k6_cap;
 
   // KEL-7 leaves
-  k7_ask   [label="Allow, refuse, or ask\nIN PROGRESS" fillcolor="#EDF6EC" URL="#kel-7" tooltip="Nothing changes something without a yes. Being built now."];
-  k7_once  [label="One yes, 10 minutes\nIN PROGRESS" fillcolor="#EDF6EC" URL="#kel-7" tooltip="Approval names exact action, works once, then expires. Being built now."];
-  k7_diary [label="Diary no one can edit\nIN PROGRESS" fillcolor="#EDF6EC" URL="#kel-7" tooltip="Every decision logged, keys removed. Being built now."];
+  k7_ask   [label="Allow, refuse, or ask\nIN REVIEW" fillcolor="#EDF6EC" URL="#kel-7" tooltip="Nothing changes something without a yes. Merged to main; review pending."];
+  k7_once  [label="One yes, 10 minutes\nIN REVIEW" fillcolor="#EDF6EC" URL="#kel-7" tooltip="Approval names exact action, works once, then expires. Merged to main; review pending."];
+  k7_diary [label="Diary no one can edit\nIN REVIEW" fillcolor="#EDF6EC" URL="#kel-7" tooltip="Every decision logged, keys removed. Merged to main; review pending."];
   k7 -> k7_ask;
   k7 -> k7_once;
   k7 -> k7_diary;
 
   // KEL-8 leaves
-  k8_chat [label="Chats you keep\nTO COME" fillcolor="#EDF6EC" URL="#kel-8" tooltip="Conversations you name and pick up later. Not started."];
-  k8_cards [label="File cards, source labels\nTO COME" fillcolor="#EDF6EC" URL="#kel-8" tooltip="PDF and table previews plus where answers came from. Not started."];
-  k8_appr [label="Approval inside chat\nTO COME" fillcolor="#EDF6EC" URL="#kel-8" tooltip="Yes or no buttons shown in the conversation. Not started."];
+  k8_chat [label="Chats you keep\nTO COME" fillcolor="#EDF6EC" URL="#kel-8" tooltip="Conversations you name and pick up later. Spec drafted, not built."];
+  k8_cards [label="File cards, source labels\nTO COME" fillcolor="#EDF6EC" URL="#kel-8" tooltip="PDF and table previews plus where answers came from. Spec drafted, not built."];
+  k8_appr [label="Approval inside chat\nTO COME" fillcolor="#EDF6EC" URL="#kel-8" tooltip="Yes or no buttons shown in the conversation. Spec drafted, not built."];
   k8 -> k8_chat;
   k8 -> k8_cards;
   k8 -> k8_appr;

@@ -314,6 +314,12 @@
     color: #08080a;
   }
 
+  .status.review {
+    background: #1d1d24;
+    border-color: #70707a;
+    color: var(--ink-2);
+  }
+
   .status.progress {
     background: transparent;
     border-color: var(--ink);
@@ -982,12 +988,14 @@
       <p class="lede">
         This is the delivery map for the private assistant: five milestones and six pieces of
         work, each written once in everyday language. Every line opens to say what it is, why it
-        matters, how far along it is, and where the evidence lives. No prior knowledge needed.
+        matters, the plain words, how far along it is, and where the evidence lives. No prior
+        knowledge needed.
       </p>
 
       <div class="hero-meta">
-        <ul class="legend" aria-label="What the three status labels mean">
-          <li><strong class="status done">Done</strong> finished and merged</li>
+        <ul class="legend" aria-label="What the four status labels mean">
+          <li><strong class="status done">Done</strong> finished, merged and reviewed</li>
+          <li><strong class="status review">In review</strong> merged, waiting on review</li>
           <li><strong class="status progress">In progress</strong> being built right now</li>
           <li><strong class="status todo">To come</strong> agreed, not started</li>
         </ul>
@@ -1003,8 +1011,8 @@
           </div>
           <div>
             <p class="label">Work items</p>
-            <p>1 done, 2 active</p>
-            <p class="soft">3 still to come</p>
+            <p>1 done, 2 in review</p>
+            <p class="soft">1 in progress, 2 to come</p>
           </div>
         </div>
       </div>
@@ -1014,8 +1022,9 @@
         <div class="map-frame" id="map-frame" role="group" aria-label="Delivery mind map">
           <svg class="mm" role="group" viewBox="0.00 0.00 1146.00 2748.00" preserveAspectRatio="xMidYMid meet" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink">
           <title>Delivery mind map</title>
-          <desc>White panel with pale coloured boxes. The centre is the Kelp assistant, live on 30 October. Six branches lead to M0 to M4, the six work items KEL-5 to KEL-10, surfaces, payments, and design. Every box is a link to its entry or decision on the same page.</desc>
+          <desc>White panel with pale coloured boxes. The centre is the Kelp assistant, live on 30 October. Six branches lead to M0 to M4, the six work items KEL-5 to KEL-10, surfaces, payments, and design. Status words say done, in review, in progress, or to come. Every box is a link to its entry or decision on the same page.</desc>
           <g id="graph0" class="graph" transform="scale(1 1) rotate(0) translate(4 2743.98)">
+          <title>sdlc</title>
           <polygon fill="white" stroke="none" points="-4,4 -4,-2743.98 1141.65,-2743.98 1141.65,4 -4,4"/>
           <!-- center -->
           <g id="node1" class="node">
@@ -1208,10 +1217,10 @@
           <!-- k6 -->
           <g id="node14" class="node">
           <title>k6</title>
-          <g id="a_node14"><a href="#kel-6" xlink:href="#kel-6" aria-label="Engine: reads, thinks, answers bit by bit. Being built now. Opens the KEL-6 entry.">
+          <g id="a_node14"><a href="#kel-6" xlink:href="#kel-6" aria-label="Engine: reads, thinks, answers bit by bit. Merged to main; review pending. Opens the KEL-6 entry.">
           <path fill="#d9edd7" stroke="black" stroke-width="2" d="M710.71,-2283.49C710.71,-2283.49 596.46,-2283.49 596.46,-2283.49 590.46,-2283.49 584.46,-2277.49 584.46,-2271.49 584.46,-2271.49 584.46,-2254.49 584.46,-2254.49 584.46,-2248.49 590.46,-2242.49 596.46,-2242.49 596.46,-2242.49 710.71,-2242.49 710.71,-2242.49 716.71,-2242.49 722.71,-2248.49 722.71,-2254.49 722.71,-2254.49 722.71,-2271.49 722.71,-2271.49 722.71,-2277.49 716.71,-2283.49 710.71,-2283.49"/>
           <text xml:space="preserve" text-anchor="middle" x="653.58" y="-2267.14" font-family="Helvetica,sans-Serif" font-size="13.00">KEL&#45;6 Answer loop</text>
-          <text xml:space="preserve" text-anchor="middle" x="653.58" y="-2250.64" font-family="Helvetica,sans-Serif" font-size="13.00">IN PROGRESS</text>
+          <text xml:space="preserve" text-anchor="middle" x="653.58" y="-2250.64" font-family="Helvetica,sans-Serif" font-size="13.00">IN REVIEW</text>
           </a>
           </g>
           </g>
@@ -1223,10 +1232,10 @@
           <!-- k7 -->
           <g id="node15" class="node">
           <title>k7</title>
-          <g id="a_node15"><a href="#kel-7" xlink:href="#kel-7" aria-label="Checkpoint that asks you before acting. Being built now. Opens the KEL-7 entry.">
+          <g id="a_node15"><a href="#kel-7" xlink:href="#kel-7" aria-label="Checkpoint that asks you before acting. Merged to main; review pending. Opens the KEL-7 entry.">
           <path fill="#d9edd7" stroke="black" stroke-width="2" d="M696.83,-2035.49C696.83,-2035.49 610.33,-2035.49 610.33,-2035.49 604.33,-2035.49 598.33,-2029.49 598.33,-2023.49 598.33,-2023.49 598.33,-2006.49 598.33,-2006.49 598.33,-2000.49 604.33,-1994.49 610.33,-1994.49 610.33,-1994.49 696.83,-1994.49 696.83,-1994.49 702.83,-1994.49 708.83,-2000.49 708.83,-2006.49 708.83,-2006.49 708.83,-2023.49 708.83,-2023.49 708.83,-2029.49 702.83,-2035.49 696.83,-2035.49"/>
           <text xml:space="preserve" text-anchor="middle" x="653.58" y="-2019.14" font-family="Helvetica,sans-Serif" font-size="13.00">KEL&#45;7 Ask first</text>
-          <text xml:space="preserve" text-anchor="middle" x="653.58" y="-2002.64" font-family="Helvetica,sans-Serif" font-size="13.00">IN PROGRESS</text>
+          <text xml:space="preserve" text-anchor="middle" x="653.58" y="-2002.64" font-family="Helvetica,sans-Serif" font-size="13.00">IN REVIEW</text>
           </a>
           </g>
           </g>
@@ -1238,10 +1247,10 @@
           <!-- k8 -->
           <g id="node16" class="node">
           <title>k8</title>
-          <g id="a_node16"><a href="#kel-8" xlink:href="#kel-8" aria-label="Main screen you talk through. Agreed, not started. Opens the KEL-8 entry.">
+          <g id="a_node16"><a href="#kel-8" xlink:href="#kel-8" aria-label="Main screen you talk through. Spec drafted; no screen built yet. Opens the KEL-8 entry.">
           <path fill="#d9edd7" stroke="black" stroke-width="2" d="M709.58,-1827.49C709.58,-1827.49 597.58,-1827.49 597.58,-1827.49 591.58,-1827.49 585.58,-1821.49 585.58,-1815.49 585.58,-1815.49 585.58,-1798.49 585.58,-1798.49 585.58,-1792.49 591.58,-1786.49 597.58,-1786.49 597.58,-1786.49 709.58,-1786.49 709.58,-1786.49 715.58,-1786.49 721.58,-1792.49 721.58,-1798.49 721.58,-1798.49 721.58,-1815.49 721.58,-1815.49 721.58,-1821.49 715.58,-1827.49 709.58,-1827.49"/>
           <text xml:space="preserve" text-anchor="middle" x="653.58" y="-1811.14" font-family="Helvetica,sans-Serif" font-size="13.00">KEL&#45;8 Chat screen</text>
-          <text xml:space="preserve" text-anchor="middle" x="653.58" y="-1794.64" font-family="Helvetica,sans-Serif" font-size="13.00">TO COME</text>
+          <text xml:space="preserve" text-anchor="middle" x="653.58" y="-1794.64" font-family="Helvetica,sans-Serif" font-size="13.00">SPEC DRAFTED</text>
           </a>
           </g>
           </g>
@@ -1606,10 +1615,10 @@
           <!-- k6_stream -->
           <g id="node22" class="node">
           <title>k6_stream</title>
-          <g id="a_node22"><a href="#kel-6" xlink:href="#kel-6" aria-label="Words appear as they arrive. Being built now. Opens the KEL-6 entry.">
+          <g id="a_node22"><a href="#kel-6" xlink:href="#kel-6" aria-label="Words appear as they arrive. Merged to main; review pending. Opens the KEL-6 entry.">
           <ellipse fill="#edf6ec" stroke="black" cx="998" cy="-2387.99" rx="95.11" ry="28.99"/>
           <text xml:space="preserve" text-anchor="middle" x="998" y="-2392.14" font-family="Helvetica,sans-Serif" font-size="13.00">Answers bit by bit</text>
-          <text xml:space="preserve" text-anchor="middle" x="998" y="-2375.64" font-family="Helvetica,sans-Serif" font-size="13.00">IN PROGRESS</text>
+          <text xml:space="preserve" text-anchor="middle" x="998" y="-2375.64" font-family="Helvetica,sans-Serif" font-size="13.00">IN REVIEW</text>
           </a>
           </g>
           </g>
@@ -1621,10 +1630,10 @@
           <!-- k6_tools -->
           <g id="node23" class="node">
           <title>k6_tools</title>
-          <g id="a_node23"><a href="#kel-6" xlink:href="#kel-6" aria-label="Asks a small program to do one thing, feeds back result. Being built now. Opens the KEL-6 entry.">
+          <g id="a_node23"><a href="#kel-6" xlink:href="#kel-6" aria-label="Asks a small program to do one thing, feeds back result. Merged to main; review pending. Opens the KEL-6 entry.">
           <ellipse fill="#edf6ec" stroke="black" cx="998" cy="-2304.99" rx="117.38" ry="28.99"/>
           <text xml:space="preserve" text-anchor="middle" x="998" y="-2309.14" font-family="Helvetica,sans-Serif" font-size="13.00">Runs tools mid&#45;answer</text>
-          <text xml:space="preserve" text-anchor="middle" x="998" y="-2292.64" font-family="Helvetica,sans-Serif" font-size="13.00">IN PROGRESS</text>
+          <text xml:space="preserve" text-anchor="middle" x="998" y="-2292.64" font-family="Helvetica,sans-Serif" font-size="13.00">IN REVIEW</text>
           </a>
           </g>
           </g>
@@ -1636,10 +1645,10 @@
           <!-- k6_cap -->
           <g id="node24" class="node">
           <title>k6_cap</title>
-          <g id="a_node24"><a href="#kel-6" xlink:href="#kel-6" aria-label="Hard limit on steps and length, tallies price. Being built now. Opens the KEL-6 entry.">
+          <g id="a_node24"><a href="#kel-6" xlink:href="#kel-6" aria-label="Hard limit on steps and length, tallies price. Merged to main; review pending. Opens the KEL-6 entry.">
           <ellipse fill="#edf6ec" stroke="black" cx="998" cy="-2221.99" rx="106.77" ry="28.99"/>
           <text xml:space="preserve" text-anchor="middle" x="998" y="-2226.14" font-family="Helvetica,sans-Serif" font-size="13.00">Stops at cost ceiling</text>
-          <text xml:space="preserve" text-anchor="middle" x="998" y="-2209.64" font-family="Helvetica,sans-Serif" font-size="13.00">IN PROGRESS</text>
+          <text xml:space="preserve" text-anchor="middle" x="998" y="-2209.64" font-family="Helvetica,sans-Serif" font-size="13.00">IN REVIEW</text>
           </a>
           </g>
           </g>
@@ -1651,10 +1660,10 @@
           <!-- k7_ask -->
           <g id="node25" class="node">
           <title>k7_ask</title>
-          <g id="a_node25"><a href="#kel-7" xlink:href="#kel-7" aria-label="Nothing changes something without a yes. Being built now. Opens the KEL-7 entry.">
+          <g id="a_node25"><a href="#kel-7" xlink:href="#kel-7" aria-label="Nothing changes something without a yes. Merged to main; review pending. Opens the KEL-7 entry.">
           <ellipse fill="#edf6ec" stroke="black" cx="998" cy="-2138.99" rx="106.24" ry="28.99"/>
           <text xml:space="preserve" text-anchor="middle" x="998" y="-2143.14" font-family="Helvetica,sans-Serif" font-size="13.00">Allow, refuse, or ask</text>
-          <text xml:space="preserve" text-anchor="middle" x="998" y="-2126.64" font-family="Helvetica,sans-Serif" font-size="13.00">IN PROGRESS</text>
+          <text xml:space="preserve" text-anchor="middle" x="998" y="-2126.64" font-family="Helvetica,sans-Serif" font-size="13.00">IN REVIEW</text>
           </a>
           </g>
           </g>
@@ -1666,10 +1675,10 @@
           <!-- k7_once -->
           <g id="node26" class="node">
           <title>k7_once</title>
-          <g id="a_node26"><a href="#kel-7" xlink:href="#kel-7" aria-label="Approval names exact action, works once, then expires. Being built now. Opens the KEL-7 entry.">
+          <g id="a_node26"><a href="#kel-7" xlink:href="#kel-7" aria-label="Approval names exact action, works once, then expires. Merged to main; review pending. Opens the KEL-7 entry.">
           <ellipse fill="#edf6ec" stroke="black" cx="998" cy="-2055.99" rx="108.36" ry="28.99"/>
           <text xml:space="preserve" text-anchor="middle" x="998" y="-2060.14" font-family="Helvetica,sans-Serif" font-size="13.00">One yes, 10 minutes</text>
-          <text xml:space="preserve" text-anchor="middle" x="998" y="-2043.64" font-family="Helvetica,sans-Serif" font-size="13.00">IN PROGRESS</text>
+          <text xml:space="preserve" text-anchor="middle" x="998" y="-2043.64" font-family="Helvetica,sans-Serif" font-size="13.00">IN REVIEW</text>
           </a>
           </g>
           </g>
@@ -1681,10 +1690,10 @@
           <!-- k7_diary -->
           <g id="node27" class="node">
           <title>k7_diary</title>
-          <g id="a_node27"><a href="#kel-7" xlink:href="#kel-7" aria-label="Every decision logged, keys removed. Being built now. Opens the KEL-7 entry.">
+          <g id="a_node27"><a href="#kel-7" xlink:href="#kel-7" aria-label="Every decision logged, keys removed. Merged to main; review pending. Opens the KEL-7 entry.">
           <ellipse fill="#edf6ec" stroke="black" cx="998" cy="-1972.99" rx="112.61" ry="28.99"/>
           <text xml:space="preserve" text-anchor="middle" x="998" y="-1977.14" font-family="Helvetica,sans-Serif" font-size="13.00">Diary no one can edit</text>
-          <text xml:space="preserve" text-anchor="middle" x="998" y="-1960.64" font-family="Helvetica,sans-Serif" font-size="13.00">IN PROGRESS</text>
+          <text xml:space="preserve" text-anchor="middle" x="998" y="-1960.64" font-family="Helvetica,sans-Serif" font-size="13.00">IN REVIEW</text>
           </a>
           </g>
           </g>
@@ -1696,7 +1705,7 @@
           <!-- k8_chat -->
           <g id="node28" class="node">
           <title>k8_chat</title>
-          <g id="a_node28"><a href="#kel-8" xlink:href="#kel-8" aria-label="Conversations you name and pick up later. Not started. Opens the KEL-8 entry.">
+          <g id="a_node28"><a href="#kel-8" xlink:href="#kel-8" aria-label="Conversations you name and pick up later. Spec drafted, not built. Opens the KEL-8 entry.">
           <ellipse fill="#edf6ec" stroke="black" cx="998" cy="-1889.99" rx="83.44" ry="28.99"/>
           <text xml:space="preserve" text-anchor="middle" x="998" y="-1894.14" font-family="Helvetica,sans-Serif" font-size="13.00">Chats you keep</text>
           <text xml:space="preserve" text-anchor="middle" x="998" y="-1877.64" font-family="Helvetica,sans-Serif" font-size="13.00">TO COME</text>
@@ -1711,7 +1720,7 @@
           <!-- k8_cards -->
           <g id="node29" class="node">
           <title>k8_cards</title>
-          <g id="a_node29"><a href="#kel-8" xlink:href="#kel-8" aria-label="PDF and table previews plus where answers came from. Not started. Opens the KEL-8 entry.">
+          <g id="a_node29"><a href="#kel-8" xlink:href="#kel-8" aria-label="PDF and table previews plus where answers came from. Spec drafted, not built. Opens the KEL-8 entry.">
           <ellipse fill="#edf6ec" stroke="black" cx="998" cy="-1806.99" rx="123.21" ry="28.99"/>
           <text xml:space="preserve" text-anchor="middle" x="998" y="-1811.14" font-family="Helvetica,sans-Serif" font-size="13.00">File cards, source labels</text>
           <text xml:space="preserve" text-anchor="middle" x="998" y="-1794.64" font-family="Helvetica,sans-Serif" font-size="13.00">TO COME</text>
@@ -1726,7 +1735,7 @@
           <!-- k8_appr -->
           <g id="node30" class="node">
           <title>k8_appr</title>
-          <g id="a_node30"><a href="#kel-8" xlink:href="#kel-8" aria-label="Yes or no buttons shown in the conversation. Not started. Opens the KEL-8 entry.">
+          <g id="a_node30"><a href="#kel-8" xlink:href="#kel-8" aria-label="Yes or no buttons shown in the conversation. Spec drafted, not built. Opens the KEL-8 entry.">
           <ellipse fill="#edf6ec" stroke="black" cx="998" cy="-1723.99" rx="106.77" ry="28.99"/>
           <text xml:space="preserve" text-anchor="middle" x="998" y="-1728.14" font-family="Helvetica,sans-Serif" font-size="13.00">Approval inside chat</text>
           <text xml:space="preserve" text-anchor="middle" x="998" y="-1711.64" font-family="Helvetica,sans-Serif" font-size="13.00">TO COME</text>
@@ -1884,7 +1893,7 @@
         </li>
         <li>
           <p class="label">The work</p>
-          <p>Six work items numbered KEL-5 to KEL-10. One is done, two are being built, three have not started.</p>
+          <p>Six work items numbered KEL-5 to KEL-10. One is done, two are merged and waiting on review, one has a written screen spec, and two have not started.</p>
         </li>
         <li>
           <p class="label">Surfaces</p>
@@ -1896,7 +1905,7 @@
         </li>
         <li>
           <p class="label">Design</p>
-          <p>The screen plan is written and agreed. The drawing file itself comes next.</p>
+          <p>The screen plan and the chat spec are written. The drawing file itself comes next.</p>
         </li>
       </ul>
 
@@ -1954,15 +1963,15 @@
             <div class="fact">
               <p class="fact-label">Status</p>
               <p>
-                In progress. The repository, the documentation, the tests, and the skill contract
-                are in. Still open: the automated checks, the standard development setup, and the
-                written threat model.
+                In progress. The repository (public since this snapshot), the documentation, the
+                tests, and the skill contract are in. Still open: the automated checks, the standard
+                development setup, and the written threat model.
               </p>
             </div>
             <div class="fact fact-wide">
               <p class="fact-label">Where to look</p>
               <ul class="links">
-                <li><a target="_blank" rel="noopener" href="https://github.com/Anshieee/kelp">The repository on GitHub</a><small>Anshieee/kelp</small></li>
+                <li><a target="_blank" rel="noopener" href="https://github.com/Anshieee/kelp">The repository on GitHub</a><small>Anshieee/kelp, public</small></li>
                 <li><a target="_blank" rel="noopener" href="https://linear.app/kelp-ai/project/always-on-private-assistant-23297ecfd7f0">The project in Linear</a><small>Milestones, status, and discussion</small></li>
               </ul>
             </div>
@@ -2002,15 +2011,17 @@
             <div class="fact">
               <p class="fact-label">Status</p>
               <p>
-                In progress. KEL-5 is done and merged. KEL-6 and KEL-7 are built on their own
-                branches. KEL-8, then KEL-10, then KEL-9 follow in that order.
+                In progress. KEL-5 is done and merged. KEL-6 and KEL-7 are merged into main and
+                waiting on review; the full suite is 153 tests, all passing. KEL-8 has a written
+                screen spec. KEL-10, then KEL-9, follow in that order.
               </p>
             </div>
             <div class="fact fact-wide">
               <p class="fact-label">Where to look</p>
               <ul class="links">
                 <li><a href="#issues">The six work items, one by one</a><small>Jump to the detail below</small></li>
-                <li><a target="_blank" rel="noopener" href="https://github.com/Anshieee/kelp/branches">All branches on GitHub</a><small>Where the work in progress lives</small></li>
+                <li><a target="_blank" rel="noopener" href="https://github.com/Anshieee/kelp/commits/main">Change history on main</a><small>Latest: daf3b14, which merged KEL-7 (KEL-6 came in at d3c763e)</small></li>
+                <li><a target="_blank" rel="noopener" href="https://github.com/Anshieee/kelp/branches">All branches on GitHub</a><small>kel-6 and kel-7 are merged; kel-8 carries the chat spec</small></li>
               </ul>
             </div>
           </div>
@@ -2159,8 +2170,8 @@
           <h2 id="issues-title">Six pieces of work, KEL-5 to KEL-10</h2>
         </div>
         <p>
-          Each line opens to the same four things: what it is, why it matters, where it stands, and
-          the file to read. Open one at a time, or open them all.
+          Each line opens to the same five things: what it is, why it matters, the plain words,
+          where it stands, and the file to read. Open one at a time, or open them all.
         </p>
       </div>
 
@@ -2200,15 +2211,16 @@
             </div>
             <div class="fact">
               <p class="fact-label">Status</p>
-              <p>Done. Merged into the main copy of the code and covered by tests.</p>
+              <p>Done. Merged into main in b8de92f, with 60 tests covering the contract and loader.</p>
             </div>
             <div class="fact fact-wide">
               <p class="fact-label">Where to look</p>
               <ul class="links">
                 <li><a target="_blank" rel="noopener" href="https://linear.app/kelp-ai/issue/KEL-5/skill-contracts-schema-capability-manifest-4-prototype-skills">KEL-5 in Linear</a><small>Description and discussion</small></li>
-                <li><a target="_blank" rel="noopener" href="https://github.com/Anshieee/kelp/blob/main/docs/SKILL_SPEC.md">docs/SKILL_SPEC.md</a><small>The contract itself</small></li>
+                <li><a target="_blank" rel="noopener" href="https://github.com/Anshieee/kelp/blob/main/docs/SKILL_SPEC.md">docs/SKILL_SPEC.md</a><small>The contract itself, on main</small></li>
                 <li><a target="_blank" rel="noopener" href="https://github.com/Anshieee/kelp/blob/main/skills/manifest.schema.json">skills/manifest.schema.json</a><small>The shape every manifest is checked against</small></li>
                 <li><a target="_blank" rel="noopener" href="https://github.com/Anshieee/kelp/blob/main/tests/test_skill_loader.py">tests/test_skill_loader.py</a><small>The checks that keep it honest</small></li>
+                <li><a target="_blank" rel="noopener" href="https://github.com/Anshieee/kelp/commit/b8de92f">Commit b8de92f</a><small>Where the contract landed</small></li>
               </ul>
             </div>
           </div>
@@ -2219,7 +2231,7 @@
             <small class="item-id">KEL-6</small>
             <strong class="item-title">Kernel loop &mdash; the thinking engine</strong>
             <small class="item-line">Turns your message into an answer, and decides when to use a tool.</small>
-            <strong class="status progress">In progress</strong>
+            <strong class="status review">In review</strong>
           </summary>
           <div class="item-body">
             <div class="fact">
@@ -2249,17 +2261,20 @@
             <div class="fact">
               <p class="fact-label">Status</p>
               <p>
-                In progress. Built on the kel-6 branch with tests. Not merged into the main copy of
-                the code yet.
+                In review. Built on kel-6, merged into main at d3c763e; the branch head was 4c72afc.
+                The kernel suite is 35 tests and they pass, alongside the rest of the 153. Waiting on
+                the code review written up in docs/REVIEW_KEL6_KEL7.md before KEL-8 starts.
               </p>
             </div>
             <div class="fact fact-wide">
               <p class="fact-label">Where to look</p>
               <ul class="links">
                 <li><a target="_blank" rel="noopener" href="https://linear.app/kelp-ai/issue/KEL-6/kernel-llm-streaming-agent-loop-with-tool-calling">KEL-6 in Linear</a><small>Description and discussion</small></li>
-                <li><a target="_blank" rel="noopener" href="https://github.com/Anshieee/kelp/blob/kel-6/docs/KERNEL.md">docs/KERNEL.md</a><small>The design, on the kel-6 branch</small></li>
-                <li><a target="_blank" rel="noopener" href="https://github.com/Anshieee/kelp/blob/kel-6/kernel/loop.py">kernel/loop.py</a><small>The loop itself</small></li>
-                <li><a target="_blank" rel="noopener" href="https://github.com/Anshieee/kelp/blob/kel-6/tests/test_kernel_loop.py">tests/test_kernel_loop.py</a><small>How it is checked</small></li>
+                <li><a target="_blank" rel="noopener" href="https://github.com/Anshieee/kelp/blob/main/docs/KERNEL.md">docs/KERNEL.md</a><small>The design, now on main</small></li>
+                <li><a target="_blank" rel="noopener" href="https://github.com/Anshieee/kelp/blob/main/kernel/loop.py">kernel/loop.py</a><small>The loop itself</small></li>
+                <li><a target="_blank" rel="noopener" href="https://github.com/Anshieee/kelp/blob/main/tests/test_kernel_loop.py">tests/test_kernel_loop.py</a><small>How it is checked</small></li>
+                <li><a target="_blank" rel="noopener" href="https://github.com/Anshieee/kelp/commit/d3c763e">Merge commit d3c763e</a><small>KEL-6 joining main</small></li>
+                <li><a target="_blank" rel="noopener" href="https://github.com/Anshieee/kelp/tree/kel-6">Branch kel-6</a><small>Head 4c72afc, merged</small></li>
               </ul>
             </div>
           </div>
@@ -2270,7 +2285,7 @@
             <small class="item-id">KEL-7</small>
             <strong class="item-title">Approval gate &mdash; nothing happens until you say yes</strong>
             <small class="item-line">A checkpoint before every real action, plus a log of what happened.</small>
-            <strong class="status progress">In progress</strong>
+            <strong class="status review">In review</strong>
           </summary>
           <div class="item-body">
             <div class="fact">
@@ -2301,17 +2316,20 @@
             <div class="fact">
               <p class="fact-label">Status</p>
               <p>
-                In progress. Built on the kel-7 branch: the policy check, one-time approvals, gated
-                execution, the audit log, and tests. Not merged yet.
+                In review. Built on kel-7, merged into main at daf3b14; the branch head was ef6ea9f.
+                The policy check, one-time approvals, gated execution, the audit log, and 50 tests
+                are all in and passing. Sign-off is the remaining step.
               </p>
             </div>
             <div class="fact fact-wide">
               <p class="fact-label">Where to look</p>
               <ul class="links">
                 <li><a target="_blank" rel="noopener" href="https://linear.app/kelp-ai/issue/KEL-7/openshell-approval-gated-tool-execution-audit">KEL-7 in Linear</a><small>Description and discussion</small></li>
-                <li><a target="_blank" rel="noopener" href="https://github.com/Anshieee/kelp/blob/kel-7/docs/OPENSHELL.md">docs/OPENSHELL.md</a><small>The rules, on the kel-7 branch</small></li>
-                <li><a target="_blank" rel="noopener" href="https://github.com/Anshieee/kelp/blob/kel-7/openshell/policy.py">openshell/policy.py</a><small>Where allow, ask, and refuse are decided</small></li>
-                <li><a target="_blank" rel="noopener" href="https://github.com/Anshieee/kelp/blob/kel-7/tests/test_openshell_approvals.py">tests/test_openshell_approvals.py</a><small>How the gate is checked</small></li>
+                <li><a target="_blank" rel="noopener" href="https://github.com/Anshieee/kelp/blob/main/docs/OPENSHELL.md">docs/OPENSHELL.md</a><small>The rules, now on main</small></li>
+                <li><a target="_blank" rel="noopener" href="https://github.com/Anshieee/kelp/blob/main/openshell/policy.py">openshell/policy.py</a><small>Where allow, ask, and refuse are decided</small></li>
+                <li><a target="_blank" rel="noopener" href="https://github.com/Anshieee/kelp/blob/main/tests/test_openshell_approvals.py">tests/test_openshell_approvals.py</a><small>How the gate is checked</small></li>
+                <li><a target="_blank" rel="noopener" href="https://github.com/Anshieee/kelp/commit/daf3b14">Merge commit daf3b14</a><small>KEL-7 joining main</small></li>
+                <li><a target="_blank" rel="noopener" href="https://github.com/Anshieee/kelp/tree/kel-7">Branch kel-7</a><small>Head ef6ea9f, merged</small></li>
               </ul>
             </div>
           </div>
@@ -2322,7 +2340,7 @@
             <small class="item-id">KEL-8</small>
             <strong class="item-title">Dashboard chat &mdash; the main screen</strong>
             <small class="item-line">The conversation where you can see every step the assistant takes.</small>
-            <strong class="status todo">To come</strong>
+            <strong class="status progress">In progress</strong>
           </summary>
           <div class="item-body">
             <div class="fact">
@@ -2351,14 +2369,18 @@
             <div class="fact">
               <p class="fact-label">Status</p>
               <p>
-                To come. Starts once KEL-6 and KEL-7 are merged. The screen plan is written; no
-                screen is built yet.
+                In progress, spec first. docs/CHAT_SPEC.md is written and committed on kel-8
+                (7bcf6d3): threads, in-chat approvals, and artifact cards, in 1,037 lines. The
+                branch is not on GitHub yet, so that link opens once it is pushed. No screen code
+                exists; building starts after KEL-6 and KEL-7 are signed off.
               </p>
             </div>
             <div class="fact fact-wide">
               <p class="fact-label">Where to look</p>
               <ul class="links">
                 <li><a target="_blank" rel="noopener" href="https://linear.app/kelp-ai/issue/KEL-8/dashboard-chat-surface-primary-interface">KEL-8 in Linear</a><small>Description and discussion</small></li>
+                <li><a target="_blank" rel="noopener" href="https://github.com/Anshieee/kelp/blob/kel-8/docs/CHAT_SPEC.md">docs/CHAT_SPEC.md</a><small>The chat surface spec, on the kel-8 branch</small></li>
+                <li><a target="_blank" rel="noopener" href="https://github.com/Anshieee/kelp/commit/7bcf6d3">Commit 7bcf6d3</a><small>Where the spec landed</small></li>
                 <li><a target="_blank" rel="noopener" href="https://github.com/Anshieee/kelp/blob/main/docs/frontend-scope-simple.md">docs/frontend-scope-simple.md</a><small>The screen plan: thirteen screens, three flows</small></li>
               </ul>
             </div>
@@ -2399,7 +2421,10 @@
             </div>
             <div class="fact">
               <p class="fact-label">Status</p>
-              <p>To come. It runs last, after the dashboard and the wallet are in place.</p>
+              <p>
+                To come. It runs last, after the dashboard and the wallet are in place. Nothing is
+                written for it yet.
+              </p>
             </div>
             <div class="fact fact-wide">
               <p class="fact-label">Where to look</p>
@@ -2446,15 +2471,17 @@
             <div class="fact">
               <p class="fact-label">Status</p>
               <p>
-                To come. Only a placeholder settings file exists today, on the kel-7 branch; there
-                are no real Stripe calls yet. Razorpay and an in-app balance are outside this round.
+                To come. Only a placeholder settings file exists today, now on main (it came in with
+                KEL-7); there are no real Stripe calls yet. Razorpay and an in-app balance are outside
+                this round. The Linear issue is created and sitting in Todo.
               </p>
             </div>
             <div class="fact fact-wide">
               <p class="fact-label">Where to look</p>
               <ul class="links">
                 <li><a target="_blank" rel="noopener" href="https://linear.app/kelp-ai/issue/KEL-10/wallet-stripe-saved-cards-setupintent-attach-list-propose-approve">KEL-10 in Linear</a><small>Description and discussion</small></li>
-                <li><a target="_blank" rel="noopener" href="https://github.com/Anshieee/kelp/blob/kel-7/payments/stripe_wallet.py">payments/stripe_wallet.py</a><small>The placeholder, on the kel-7 branch</small></li>
+                <li><a target="_blank" rel="noopener" href="https://github.com/Anshieee/kelp/blob/main/payments/stripe_wallet.py">payments/stripe_wallet.py</a><small>The placeholder, on main</small></li>
+                <li><a target="_blank" rel="noopener" href="https://github.com/Anshieee/kelp/blob/main/tests/test_payments.py">tests/test_payments.py</a><small>The 8 checks that hold the placeholder in shape</small></li>
                 <li><a target="_blank" rel="noopener" href="https://linear.app/kelp-ai/project/always-on-private-assistant-23297ecfd7f0">The project in Linear</a><small>Everything in one place</small></li>
               </ul>
             </div>
@@ -2465,7 +2492,7 @@
 
       <p class="note">
         Linear can lag behind by a day until someone updates it. The status here is the version this
-        page was built from, on 29 October 2026.
+        page was built from, on 29 October 2026: main at daf3b14, with all 153 tests passing.
       </p>
     </section>
 
@@ -2549,11 +2576,15 @@
               <dd><strong>Four states</strong> for every screen: working, waiting on you, failed, done.</dd>
             </div>
             <div>
+              <dt>Done</dt>
+              <dd><strong>The chat spec.</strong> Threads, approvals shown in the conversation, and artifact cards, written out in docs/CHAT_SPEC.md on the kel-8 branch.</dd>
+            </div>
+            <div>
               <dt>Next</dt>
               <dd><strong>Draw the file.</strong> Screen code starts only once the drawing file exists.</dd>
             </div>
           </dl>
-          <p class="note"><a target="_blank" rel="noopener" href="https://github.com/Anshieee/kelp/blob/main/docs/frontend-scope-simple.md">Read the screen plan</a></p>
+          <p class="note"><a target="_blank" rel="noopener" href="https://github.com/Anshieee/kelp/blob/main/docs/frontend-scope-simple.md">Read the screen plan</a> and <a target="_blank" rel="noopener" href="https://github.com/Anshieee/kelp/blob/kel-8/docs/CHAT_SPEC.md">the chat spec</a>.</p>
         </article>
 
       </div>
@@ -2656,10 +2687,10 @@
         <article class="card">
           <h3>GitHub</h3>
           <ul>
-            <li><a target="_blank" rel="noopener" href="https://github.com/Anshieee/kelp">Repository</a><small>Anshieee/kelp</small></li>
+            <li><a target="_blank" rel="noopener" href="https://github.com/Anshieee/kelp">Repository</a><small>Anshieee/kelp, public</small></li>
             <li><a target="_blank" rel="noopener" href="https://github.com/Anshieee/kelp/tree/main">The main copy of the code</a></li>
-            <li><a target="_blank" rel="noopener" href="https://github.com/Anshieee/kelp/branches">All branches</a><small>Including kel-6 and kel-7</small></li>
-            <li><a target="_blank" rel="noopener" href="https://github.com/Anshieee/kelp/commits/main">Change history</a></li>
+            <li><a target="_blank" rel="noopener" href="https://github.com/Anshieee/kelp/branches">All branches</a><small>kel-6 and kel-7 are merged; kel-8 carries the chat spec</small></li>
+            <li><a target="_blank" rel="noopener" href="https://github.com/Anshieee/kelp/commits/main">Change history</a><small>Head daf3b14</small></li>
             <li><a target="_blank" rel="noopener" href="https://github.com/Anshieee/kelp/pulls">Pull requests</a><small>Proposed changes waiting to be merged</small></li>
           </ul>
         </article>
@@ -2681,9 +2712,10 @@
           <h3>Docs</h3>
           <ul>
             <li><a target="_blank" rel="noopener" href="https://github.com/Anshieee/kelp/blob/main/docs/SDLC_MINDMAP.md">The mind map, in words</a><small>The source this page is built from</small></li>
-            <li><a target="_blank" rel="noopener" href="https://github.com/Anshieee/kelp/blob/main/docs/SKILL_SPEC.md">Skill contract</a></li>
-            <li><a target="_blank" rel="noopener" href="https://github.com/Anshieee/kelp/blob/kel-6/docs/KERNEL.md">Kernel loop design</a><small>On the kel-6 branch</small></li>
-            <li><a target="_blank" rel="noopener" href="https://github.com/Anshieee/kelp/blob/kel-7/docs/OPENSHELL.md">Approval gate design</a><small>On the kel-7 branch</small></li>
+            <li><a target="_blank" rel="noopener" href="https://github.com/Anshieee/kelp/blob/main/docs/SKILL_SPEC.md">Skill contract</a><small>KEL-5, on main</small></li>
+            <li><a target="_blank" rel="noopener" href="https://github.com/Anshieee/kelp/blob/main/docs/KERNEL.md">Kernel loop design</a><small>KEL-6, on main</small></li>
+            <li><a target="_blank" rel="noopener" href="https://github.com/Anshieee/kelp/blob/main/docs/OPENSHELL.md">Approval gate design</a><small>KEL-7, on main</small></li>
+            <li><a target="_blank" rel="noopener" href="https://github.com/Anshieee/kelp/blob/kel-8/docs/CHAT_SPEC.md">Chat surface spec</a><small>KEL-8, on the kel-8 branch</small></li>
             <li><a target="_blank" rel="noopener" href="https://github.com/Anshieee/kelp/blob/main/docs/adr/0001-docs-answer-single-skill.md">ADR 0001: one document skill, not two</a></li>
             <li><a target="_blank" rel="noopener" href="https://github.com/Anshieee/kelp/blob/main/docs/frontend-scope-simple.md">Screen plan</a></li>
           </ul>
@@ -2701,7 +2733,7 @@
 
 <footer>
   <div class="wrap">
-    <p>Snapshot 29 October 2026. Program target 30 October 2026, for M0 to M4.</p>
+    <p>Snapshot 29 October 2026: main at daf3b14, 153 tests passing. Program target 30 October 2026, for M0 to M4.</p>
     <p>
       Source of truth: <a target="_blank" rel="noopener" href="https://github.com/Anshieee/kelp/blob/main/docs/SDLC_MINDMAP.md">docs/SDLC_MINDMAP.md</a>.
       Work items: <a target="_blank" rel="noopener" href="https://linear.app/kelp-ai/project/always-on-private-assistant-23297ecfd7f0">Linear project</a>.

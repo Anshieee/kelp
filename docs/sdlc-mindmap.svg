@@ -200,10 +200,10 @@
 <!-- k6 -->
 <g id="node14" class="node">
 <title>k6</title>
-<g id="a_node14"><a xlink:href="#kel-6" xlink:title="Engine: reads, thinks, answers bit by bit. Being built now.">
+<g id="a_node14"><a xlink:href="#kel-6" xlink:title="Engine: reads, thinks, answers bit by bit. Merged to main; review pending.">
 <path fill="#d9edd7" stroke="black" stroke-width="2" d="M710.71,-2283.49C710.71,-2283.49 596.46,-2283.49 596.46,-2283.49 590.46,-2283.49 584.46,-2277.49 584.46,-2271.49 584.46,-2271.49 584.46,-2254.49 584.46,-2254.49 584.46,-2248.49 590.46,-2242.49 596.46,-2242.49 596.46,-2242.49 710.71,-2242.49 710.71,-2242.49 716.71,-2242.49 722.71,-2248.49 722.71,-2254.49 722.71,-2254.49 722.71,-2271.49 722.71,-2271.49 722.71,-2277.49 716.71,-2283.49 710.71,-2283.49"/>
 <text xml:space="preserve" text-anchor="middle" x="653.58" y="-2267.14" font-family="Helvetica,sans-Serif" font-size="13.00">KEL&#45;6 Answer loop</text>
-<text xml:space="preserve" text-anchor="middle" x="653.58" y="-2250.64" font-family="Helvetica,sans-Serif" font-size="13.00">IN PROGRESS</text>
+<text xml:space="preserve" text-anchor="middle" x="653.58" y="-2250.64" font-family="Helvetica,sans-Serif" font-size="13.00">IN REVIEW</text>
 </a>
 </g>
 </g>
@@ -215,10 +215,10 @@
 <!-- k7 -->
 <g id="node15" class="node">
 <title>k7</title>
-<g id="a_node15"><a xlink:href="#kel-7" xlink:title="Checkpoint that asks you before acting. Being built now.">
+<g id="a_node15"><a xlink:href="#kel-7" xlink:title="Checkpoint that asks you before acting. Merged to main; review pending.">
 <path fill="#d9edd7" stroke="black" stroke-width="2" d="M696.83,-2035.49C696.83,-2035.49 610.33,-2035.49 610.33,-2035.49 604.33,-2035.49 598.33,-2029.49 598.33,-2023.49 598.33,-2023.49 598.33,-2006.49 598.33,-2006.49 598.33,-2000.49 604.33,-1994.49 610.33,-1994.49 610.33,-1994.49 696.83,-1994.49 696.83,-1994.49 702.83,-1994.49 708.83,-2000.49 708.83,-2006.49 708.83,-2006.49 708.83,-2023.49 708.83,-2023.49 708.83,-2029.49 702.83,-2035.49 696.83,-2035.49"/>
 <text xml:space="preserve" text-anchor="middle" x="653.58" y="-2019.14" font-family="Helvetica,sans-Serif" font-size="13.00">KEL&#45;7 Ask first</text>
-<text xml:space="preserve" text-anchor="middle" x="653.58" y="-2002.64" font-family="Helvetica,sans-Serif" font-size="13.00">IN PROGRESS</text>
+<text xml:space="preserve" text-anchor="middle" x="653.58" y="-2002.64" font-family="Helvetica,sans-Serif" font-size="13.00">IN REVIEW</text>
 </a>
 </g>
 </g>
@@ -230,10 +230,10 @@
 <!-- k8 -->
 <g id="node16" class="node">
 <title>k8</title>
-<g id="a_node16"><a xlink:href="#kel-8" xlink:title="Main screen you talk through. Agreed, not started.">
+<g id="a_node16"><a xlink:href="#kel-8" xlink:title="Main screen you talk through. Spec drafted; no screen built yet.">
 <path fill="#d9edd7" stroke="black" stroke-width="2" d="M709.58,-1827.49C709.58,-1827.49 597.58,-1827.49 597.58,-1827.49 591.58,-1827.49 585.58,-1821.49 585.58,-1815.49 585.58,-1815.49 585.58,-1798.49 585.58,-1798.49 585.58,-1792.49 591.58,-1786.49 597.58,-1786.49 597.58,-1786.49 709.58,-1786.49 709.58,-1786.49 715.58,-1786.49 721.58,-1792.49 721.58,-1798.49 721.58,-1798.49 721.58,-1815.49 721.58,-1815.49 721.58,-1821.49 715.58,-1827.49 709.58,-1827.49"/>
 <text xml:space="preserve" text-anchor="middle" x="653.58" y="-1811.14" font-family="Helvetica,sans-Serif" font-size="13.00">KEL&#45;8 Chat screen</text>
-<text xml:space="preserve" text-anchor="middle" x="653.58" y="-1794.64" font-family="Helvetica,sans-Serif" font-size="13.00">TO COME</text>
+<text xml:space="preserve" text-anchor="middle" x="653.58" y="-1794.64" font-family="Helvetica,sans-Serif" font-size="13.00">SPEC DRAFTED</text>
 </a>
 </g>
 </g>
@@ -598,10 +598,10 @@
 <!-- k6_stream -->
 <g id="node22" class="node">
 <title>k6_stream</title>
-<g id="a_node22"><a xlink:href="#kel-6" xlink:title="Words appear as they arrive. Being built now.">
+<g id="a_node22"><a xlink:href="#kel-6" xlink:title="Words appear as they arrive. Merged to main; review pending.">
 <ellipse fill="#edf6ec" stroke="black" cx="998" cy="-2387.99" rx="95.11" ry="28.99"/>
 <text xml:space="preserve" text-anchor="middle" x="998" y="-2392.14" font-family="Helvetica,sans-Serif" font-size="13.00">Answers bit by bit</text>
-<text xml:space="preserve" text-anchor="middle" x="998" y="-2375.64" font-family="Helvetica,sans-Serif" font-size="13.00">IN PROGRESS</text>
+<text xml:space="preserve" text-anchor="middle" x="998" y="-2375.64" font-family="Helvetica,sans-Serif" font-size="13.00">IN REVIEW</text>
 </a>
 </g>
 </g>
@@ -613,10 +613,10 @@
 <!-- k6_tools -->
 <g id="node23" class="node">
 <title>k6_tools</title>
-<g id="a_node23"><a xlink:href="#kel-6" xlink:title="Asks a small program to do one thing, feeds back result. Being built now.">
+<g id="a_node23"><a xlink:href="#kel-6" xlink:title="Asks a small program to do one thing, feeds back result. Merged to main; review pending.">
 <ellipse fill="#edf6ec" stroke="black" cx="998" cy="-2304.99" rx="117.38" ry="28.99"/>
 <text xml:space="preserve" text-anchor="middle" x="998" y="-2309.14" font-family="Helvetica,sans-Serif" font-size="13.00">Runs tools mid&#45;answer</text>
-<text xml:space="preserve" text-anchor="middle" x="998" y="-2292.64" font-family="Helvetica,sans-Serif" font-size="13.00">IN PROGRESS</text>
+<text xml:space="preserve" text-anchor="middle" x="998" y="-2292.64" font-family="Helvetica,sans-Serif" font-size="13.00">IN REVIEW</text>
 </a>
 </g>
 </g>
@@ -628,10 +628,10 @@
 <!-- k6_cap -->
 <g id="node24" class="node">
 <title>k6_cap</title>
-<g id="a_node24"><a xlink:href="#kel-6" xlink:title="Hard limit on steps and length, tallies price. Being built now.">
+<g id="a_node24"><a xlink:href="#kel-6" xlink:title="Hard limit on steps and length, tallies price. Merged to main; review pending.">
 <ellipse fill="#edf6ec" stroke="black" cx="998" cy="-2221.99" rx="106.77" ry="28.99"/>
 <text xml:space="preserve" text-anchor="middle" x="998" y="-2226.14" font-family="Helvetica,sans-Serif" font-size="13.00">Stops at cost ceiling</text>
-<text xml:space="preserve" text-anchor="middle" x="998" y="-2209.64" font-family="Helvetica,sans-Serif" font-size="13.00">IN PROGRESS</text>
+<text xml:space="preserve" text-anchor="middle" x="998" y="-2209.64" font-family="Helvetica,sans-Serif" font-size="13.00">IN REVIEW</text>
 </a>
 </g>
 </g>
@@ -643,10 +643,10 @@
 <!-- k7_ask -->
 <g id="node25" class="node">
 <title>k7_ask</title>
-<g id="a_node25"><a xlink:href="#kel-7" xlink:title="Nothing changes something without a yes. Being built now.">
+<g id="a_node25"><a xlink:href="#kel-7" xlink:title="Nothing changes something without a yes. Merged to main; review pending.">
 <ellipse fill="#edf6ec" stroke="black" cx="998" cy="-2138.99" rx="106.24" ry="28.99"/>
 <text xml:space="preserve" text-anchor="middle" x="998" y="-2143.14" font-family="Helvetica,sans-Serif" font-size="13.00">Allow, refuse, or ask</text>
-<text xml:space="preserve" text-anchor="middle" x="998" y="-2126.64" font-family="Helvetica,sans-Serif" font-size="13.00">IN PROGRESS</text>
+<text xml:space="preserve" text-anchor="middle" x="998" y="-2126.64" font-family="Helvetica,sans-Serif" font-size="13.00">IN REVIEW</text>
 </a>
 </g>
 </g>
@@ -658,10 +658,10 @@
 <!-- k7_once -->
 <g id="node26" class="node">
 <title>k7_once</title>
-<g id="a_node26"><a xlink:href="#kel-7" xlink:title="Approval names exact action, works once, then expires. Being built now.">
+<g id="a_node26"><a xlink:href="#kel-7" xlink:title="Approval names exact action, works once, then expires. Merged to main; review pending.">
 <ellipse fill="#edf6ec" stroke="black" cx="998" cy="-2055.99" rx="108.36" ry="28.99"/>
 <text xml:space="preserve" text-anchor="middle" x="998" y="-2060.14" font-family="Helvetica,sans-Serif" font-size="13.00">One yes, 10 minutes</text>
-<text xml:space="preserve" text-anchor="middle" x="998" y="-2043.64" font-family="Helvetica,sans-Serif" font-size="13.00">IN PROGRESS</text>
+<text xml:space="preserve" text-anchor="middle" x="998" y="-2043.64" font-family="Helvetica,sans-Serif" font-size="13.00">IN REVIEW</text>
 </a>
 </g>
 </g>
@@ -673,10 +673,10 @@
 <!-- k7_diary -->
 <g id="node27" class="node">
 <title>k7_diary</title>
-<g id="a_node27"><a xlink:href="#kel-7" xlink:title="Every decision logged, keys removed. Being built now.">
+<g id="a_node27"><a xlink:href="#kel-7" xlink:title="Every decision logged, keys removed. Merged to main; review pending.">
 <ellipse fill="#edf6ec" stroke="black" cx="998" cy="-1972.99" rx="112.61" ry="28.99"/>
 <text xml:space="preserve" text-anchor="middle" x="998" y="-1977.14" font-family="Helvetica,sans-Serif" font-size="13.00">Diary no one can edit</text>
-<text xml:space="preserve" text-anchor="middle" x="998" y="-1960.64" font-family="Helvetica,sans-Serif" font-size="13.00">IN PROGRESS</text>
+<text xml:space="preserve" text-anchor="middle" x="998" y="-1960.64" font-family="Helvetica,sans-Serif" font-size="13.00">IN REVIEW</text>
 </a>
 </g>
 </g>
@@ -688,7 +688,7 @@
 <!-- k8_chat -->
 <g id="node28" class="node">
 <title>k8_chat</title>
-<g id="a_node28"><a xlink:href="#kel-8" xlink:title="Conversations you name and pick up later. Not started.">
+<g id="a_node28"><a xlink:href="#kel-8" xlink:title="Conversations you name and pick up later. Spec drafted, not built.">
 <ellipse fill="#edf6ec" stroke="black" cx="998" cy="-1889.99" rx="83.44" ry="28.99"/>
 <text xml:space="preserve" text-anchor="middle" x="998" y="-1894.14" font-family="Helvetica,sans-Serif" font-size="13.00">Chats you keep</text>
 <text xml:space="preserve" text-anchor="middle" x="998" y="-1877.64" font-family="Helvetica,sans-Serif" font-size="13.00">TO COME</text>
@@ -703,7 +703,7 @@
 <!-- k8_cards -->
 <g id="node29" class="node">
 <title>k8_cards</title>
-<g id="a_node29"><a xlink:href="#kel-8" xlink:title="PDF and table previews plus where answers came from. Not started.">
+<g id="a_node29"><a xlink:href="#kel-8" xlink:title="PDF and table previews plus where answers came from. Spec drafted, not built.">
 <ellipse fill="#edf6ec" stroke="black" cx="998" cy="-1806.99" rx="123.21" ry="28.99"/>
 <text xml:space="preserve" text-anchor="middle" x="998" y="-1811.14" font-family="Helvetica,sans-Serif" font-size="13.00">File cards, source labels</text>
 <text xml:space="preserve" text-anchor="middle" x="998" y="-1794.64" font-family="Helvetica,sans-Serif" font-size="13.00">TO COME</text>
@@ -718,7 +718,7 @@
 <!-- k8_appr -->
 <g id="node30" class="node">
 <title>k8_appr</title>
-<g id="a_node30"><a xlink:href="#kel-8" xlink:title="Yes or no buttons shown in the conversation. Not started.">
+<g id="a_node30"><a xlink:href="#kel-8" xlink:title="Yes or no buttons shown in the conversation. Spec drafted, not built.">
 <ellipse fill="#edf6ec" stroke="black" cx="998" cy="-1723.99" rx="106.77" ry="28.99"/>
 <text xml:space="preserve" text-anchor="middle" x="998" y="-1728.14" font-family="Helvetica,sans-Serif" font-size="13.00">Approval inside chat</text>
 <text xml:space="preserve" text-anchor="middle" x="998" y="-1711.64" font-family="Helvetica,sans-Serif" font-size="13.00">TO COME</text>
