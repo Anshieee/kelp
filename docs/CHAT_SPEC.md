@@ -908,7 +908,7 @@ KEL-8 adds a network surface to a private assistant; these are requirements, not
 
 | Area | Requirement |
 |---|---|
-| Auth | Single owner. Session cookie `HttpOnly; Secure; SameSite=Lax`, 30-day rolling; `POST`/`PATCH`/`DELETE` require a CSRF token (double-submit) or an `Origin`-checked same-site request. Unauthenticated API → `401` JSON, not a redirect, for `/api/*`. |
+| Auth | Single owner. The root `KELP_AUTH_TOKEN` is accepted as a bearer token and can mint a server-side session (`POST /api/auth/session`). The session cookie is `HttpOnly; Secure; SameSite=Lax`, 30-day rolling; cookie mutations require a same-origin `Origin` **and** a per-session CSRF double-submit pair (`csrf` cookie + `X-CSRF-Token`). `DELETE /api/auth/session` revokes one session; `DELETE /api/auth/sessions` revokes all. Unauthenticated API → `401` JSON, not a redirect, for `/api/*`. |
 | Authorisation | Thread, approval, and artifact access is checked against the authenticated owner on **every** call. Guessing an id must not leak existence: `404`, not `403`. |
 | Secrets | No API keys or Stripe values in any response; the provider's base URL is server config and is never echoed to the client. `NEBIUS_API_KEY` stays server-side. `arguments`, `result`, and audit text pass the existing scrubbers; error envelopes keep their no-echo rule. |
 | SSE | Same-origin only; no `Access-Control-Allow-Origin: *`; no `EventSource` with credentials in a URL; stream disconnects on auth expiry. |
@@ -972,6 +972,45 @@ identity; a presented token is hashed and never retained as a key.
 
 This layer does not change `TurnBudget`: the kernel's per-turn step, token,
 tool-call, and wall-clock limits remain the only turn limits.
+
+### 12.2 Owner sessions (KEL-19)
+
+The bearer token is the root credential. A browser exchanges it once for an
+opaque server-side session; the raw session id exists only in the client's
+`HttpOnly` cookie, while the server stores its SHA-256. Sessions are
+process-local and bounded (`KELP_SESSION_MAX`); a restart invalidates every one
+of them, so the bearer token is always the recovery path.
+
+| Route | Auth | What it does |
+|---|---|---|
+| `POST /api/auth/session` | Bearer | Mint a session. `201` with `session.expires_at` and `session.csrf_token`; sets both cookies. |
+| `DELETE /api/auth/session` | Session cookie | Revoke the presented session and clear both cookies. A bearer-only caller gets `400 invalid_request`. |
+| `DELETE /api/auth/sessions` | Bearer or session cookie | Revoke every session in this process and clear the caller's cookies. |
+
+Cookie rules:
+
+- `session` is `Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=2592000`
+  (30 days), refreshed on every successful cookie-authenticated response.
+  `KELP_SESSION_COOKIE_SECURE=0` exists only for a loopback HTTP development
+  run; production keeps it on.
+- `csrf` is readable by the app (`HttpOnly` omitted), `Secure`, `SameSite=Lax`,
+  and rolled with the session. It is not a credential: it only proves the
+  caller can read the cookie.
+- A cookie-authenticated `POST`/`PATCH`/`PUT`/`DELETE` must carry an `Origin`
+  that matches `Host` and an `X-CSRF-Token` equal to the `csrf` cookie. A
+  request with no `Origin` is rejected even if the CSRF pair matches; this
+  closes the non-browser cross-site shape that a bare token check accepts.
+- A bearer-authenticated mutation keeps the earlier rule: a configured
+  `KELP_CSRF_TOKEN` must match `X-CSRF-Token`, otherwise an `Origin`, when
+  present, must be same-origin. A bearer sign-in is exempt because it already
+  proves possession of the root token.
+- Every rejected credential emits exactly one structured `auth_failed` record
+  with `outcome` (`rejected`/`locked`), `reason`, `count`, `status`, and a
+  truncated SHA-256 `identity_hash`. The presented token, cookie, and peer
+  address are never logged. The counter is bounded by
+  `KELP_AUTH_FAILURE_MAX_KEYS` and idles out; after
+  `KELP_AUTH_LOCKOUT_ATTEMPTS` failures that identity gets a
+  `429 rate_limited` with `Retry-After` for `KELP_AUTH_LOCKOUT_SECONDS`.
 
 ---
 

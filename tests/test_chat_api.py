@@ -94,8 +94,17 @@ def test_missing_auth_is_json_401(tmp_path: Path) -> None:
         assert body(response)["error"]["code"] == "unauthorized"
         assert response.headers["Content-Type"].startswith("application/json")
 
+        sign_in = api.handle(
+            Request("POST", "/api/auth/session", {}, {"authorization": "Bearer tok"}, b"")
+        )
+        assert sign_in.status == 201
+        session_cookie = next(
+            cookie.split(";", 1)[0]
+            for cookie in sign_in.cookies
+            if cookie.startswith("session=")
+        )
         cookie = api.handle(
-            Request("GET", "/api/threads", {}, {"cookie": "session=tok"}, b"")
+            Request("GET", "/api/threads", {}, {"cookie": session_cookie}, b"")
         )
         assert cookie.status == 200
     finally:
