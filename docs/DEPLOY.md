@@ -128,6 +128,12 @@ no default: the process refuses to start without them (`missing_api_key` or
 | `KELP_RATE_LIMIT_ADMIN_RPM` / `_BURST` | no | `1200` / `300` | no | Metrics and readiness per client; keep it above the probe rate |
 | `KELP_RATE_LIMIT_IDLE_SECONDS` | no | `300` | no | Idle-out before a limiter key starts with a full bucket again |
 | `KELP_MAX_CONCURRENT_TURNS` | no | `4` | no | Global cap on turns running at once; `0` disables |
+| `KELP_RETENTION_AUDIT_DAYS` / `_AUDIT_KEEP` | no | `30` / `40` | no | Audit segment TTL and count cap (§8.1) |
+| `KELP_RETENTION_USAGE_DAYS` / `_USAGE_KEEP` | no | `90` / `100` | no | Usage segment TTL and count cap (§8.1) |
+| `KELP_RETENTION_ORPHAN_SECONDS` | no | `3600` | no | Grace before an unclaimed upload or unreferenced file is swept |
+| `KELP_RETENTION_LOG_MAX_BYTES` | no | `10485760` | no | Audit/usage active-file size that forces a rotation |
+| `KELP_RETENTION_LOG_ROTATE_SECONDS` | no | `86400` | no | Maximum segment interval for audit and usage records |
+| `KELP_RETENTION_INTERVAL_SECONDS` | no | `86400` | no | Orphan-sweep and rotation cadence after boot |
 | `KELP_MAX_STREAMS_PER_OWNER` | no | `3` | no | Concurrent SSE streams per owner; `0` disables |
 | `KELP_VERSION` / `KELP_GIT_COMMIT` | no | build args | no | Echoed by `/api/healthz`, `/api/readyz`, `/metrics` |
 
@@ -414,8 +420,8 @@ Everything mutable is one volume, `kelp-data`, mounted at `/data`:
 | `/data/workspace/` | skill workspace root (`${WORKSPACE}`) | Skills cannot escape it |
 | `/data/workspace/var/artifacts/` | uploaded PDF/CSV bytes and metadata | 20 MiB per upload |
 | `/data/workspace/var/index/` | `docs.answer` chunk cache | Created on the first document answer |
-| `/data/audit/audit.jsonl` | append-only decisions, approvals, executions | Rotate by deployment, never by API |
-| `/data/usage/usage.jsonl` | one record per turn: model, tokens, cost | Feeds the cost note |
+| `/data/audit/audit.jsonl` | append-only decisions, approvals, executions | Rotated by the app (daily/size); retained segments are read-transparent |
+| `/data/usage/usage.jsonl` | one record per turn: model, tokens, cost | Rotated by the app; spend totals include retained segments |
 
 Directories are created `0700`; new files are owner-only where the code creates
 them (`chat.db`, `chat.db.lock`). All of it is owned by `10001:10001`. The
@@ -430,6 +436,48 @@ first with the right owner or the server cannot start:
 
 ```bash
 sudo install -d -o 10001 -g 10001 -m 0700 /srv/kelp/data
+```
+
+### 8.1 Retention table
+
+One table is the contract: `chat/retention.py` defines the values and
+`RETENTION_ROWS`, and this table mirrors it. Boot runs the sweep once; a daemon
+thread then runs the same pass every `KELP_RETENTION_INTERVAL_SECONDS` (24 h by
+default). The sweep logs counts only — never thread text, file names, or
+artifact names.
+
+| Data class | Where | TTL / trigger | Enforced by | Override |
+|---|---|---|---|---|
+| Chat content | `chat.db` threads, messages, blocks, events, turns, approvals | Until the owner deletes the thread (immediate hard delete, no `deleted_at` shadow) | `ChatStore.purge_thread` | none (explicit delete only) |
+| Uploaded files | `KELP_ARTIFACT_DIR` (default `workspace/var/artifacts`) | Thread lifetime; unclaimed or parentless uploads after 1 h grace | `ArtifactRegistry.purge` / `sweep_orphans`, boot + daily | `KELP_RETENTION_ORPHAN_SECONDS` |
+| Derived index | `workspace/var/index` (`docs.answer` chunk cache) | Removed eagerly when the artifact or thread is deleted; orphan dirs swept | `ArtifactRegistry.purge` → `remove_index`; `sweep_orphans` | none (follows the artifact) |
+| Audit records | `KELP_AUDIT_DIR/audit.jsonl` and its segments | 30 days, capped at 40 segments | `RetentionMaintenance.rotate`, boot + daily | `KELP_RETENTION_AUDIT_DAYS`, `KELP_RETENTION_AUDIT_KEEP` |
+| Usage records | `KELP_USAGE_DIR/usage.jsonl` and its segments | 90 days, capped at 100 segments | `RetentionMaintenance.rotate`, boot + daily | `KELP_RETENTION_USAGE_DAYS`, `KELP_RETENTION_USAGE_KEEP` |
+| Request/correlation logs | container stdout, not the data volume | 14 days | Docker json-file `max-age` (operator config) | `deploy/compose.env.example` |
+| Temporary artifacts | `/tmp` (16 MiB `noexec` tmpfs) | Container lifetime | container tmpfs, never persisted | `docker-compose.yml` |
+
+Rotation renames the active file to a timestamped segment; it never rewrites a
+line, so an append already in flight finishes inside that segment instead of
+being dropped. A segment older than its TTL or beyond the count cap is unlinked
+whole. Both readers (`AuditLog.entries`, `JsonlUsageStore.records`, and
+`SpendGuard`) include the retained segments, so rotation can never reset a
+day/month spend window. Size rotation also fires when a file reaches
+`KELP_RETENTION_LOG_MAX_BYTES` (10 MiB by default); the interval is
+`KELP_RETENTION_LOG_ROTATE_SECONDS` (86,400).
+
+Deleting a thread runs `VACUUM` after the delete transaction commits (and
+truncates the WAL) so the file on disk shrinks; the daily orphan sweep does the
+same when it removed registry rows. Both run outside an HTTP read path.
+
+On-box files outside the app's own records follow the same clock. Configure the
+container log driver in `docker-compose.yml` so stdout does not grow forever:
+
+```yaml
+logging:
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "14"
 ```
 
 ---
@@ -735,9 +783,9 @@ KELP_SPEND_UNKNOWN_PRICE_MODE=block   # block | count_as
 KELP_SPEND_UNKNOWN_PRICE_USD=0.01     # count_as only
 ```
 
-The totals are recomputed from `/data/usage/usage.jsonl` on every check, so a
-restart mid-window neither resets the counter nor forgets that a warning was
-already sent. Behaviour:
+The totals are recomputed from `/data/usage/usage.jsonl` plus its retained
+segments on every check, so a rotation mid-window does not reset the counter and
+a restart neither forgets the total nor the warning already sent. Behaviour:
 
 - **80% of a window** — one structured `spend_cap_warning` log line and audit
   entry, plus the `spend_used_usd`, `spend_cap_usd`, `spend_cap_ratio`, and

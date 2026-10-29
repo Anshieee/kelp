@@ -16,8 +16,9 @@ import re
 import secrets
 import unicodedata
 from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any, Mapping, Sequence
 
 from .cards import artifact_card
 from .store import ChatStore, iso_now
@@ -37,6 +38,7 @@ PREVIEW_ROWS_MAX = 20
 PREVIEW_ROWS_DEFAULT = 5
 CELL_CHARS = 60
 _CSV_HEADER_DELIMITERS = (",", ";")
+_STORAGE_TOKEN_RE = re.compile(r"^[A-Za-z0-9_-]{8,128}$")
 _CONTENT_TYPES = {
     "pdf": "application/pdf",
     "csv": "text/csv; charset=utf-8",
@@ -122,6 +124,7 @@ class ArtifactRegistry:
         root: str | Path,
         *,
         now: Any | None = None,
+        workspace_root: str | Path | None = None,
     ):
         self._store = store
         self._root = Path(root)
@@ -131,10 +134,29 @@ class ArtifactRegistry:
         except OSError:  # pragma: no cover - platform dependent
             pass
         self._now = now or iso_now
+        self._workspace_root = (
+            Path(workspace_root).expanduser().resolve()
+            if workspace_root is not None
+            else None
+        )
 
     @property
     def root(self) -> Path:
         return self._root
+
+    def _workspace(self) -> Path | None:
+        """Workspace that owns ``var/index``, or ``None`` when unknown.
+
+        The server passes it explicitly. A default layout
+        (``<workspace>/var/artifacts``) is recognised so embedders such as the
+        demo and the test harness get eager index removal without extra wiring.
+        """
+
+        if self._workspace_root is not None:
+            return self._workspace_root
+        if self._root.name == "artifacts" and self._root.parent.name == "var":
+            return self._root.parent.parent
+        return None
 
     # -- upload ------------------------------------------------------------
 
@@ -279,6 +301,153 @@ class ArtifactRegistry:
             )
         return self.get(handle, thread_id=thread_id)
 
+    # -- deletion ----------------------------------------------------------
+
+    def purge(self, artifacts: Sequence[Mapping[str, Any]]) -> dict[str, int]:
+        """Unlink stored bytes and drop derived index entries for rows already
+        removed from the registry.
+
+        Best effort per item: one unreadable path must not stop the rest. A
+        file that is already gone counts as ``missing`` (the normal
+        second-delete case); every leftover is safe to retry, and the orphan
+        sweep does exactly that.
+        """
+
+        files_removed = 0
+        files_missing = 0
+        indexes_removed = 0
+        errors = 0
+        workspace = self._workspace()
+        for meta in artifacts:
+            path = self._storage_path_for_unlink(meta.get("storage_path"))
+            if path is None:
+                errors += 1
+            else:
+                try:
+                    path.unlink()
+                    files_removed += 1
+                except FileNotFoundError:
+                    files_missing += 1
+                except OSError:
+                    errors += 1
+            handle = meta.get("handle")
+            if workspace is not None and isinstance(handle, str):
+                try:
+                    if _remove_index(workspace, handle):
+                        indexes_removed += 1
+                except (OSError, ValueError):
+                    errors += 1
+        return {
+            "files_removed": files_removed,
+            "files_missing": files_missing,
+            "indexes_removed": indexes_removed,
+            "errors": errors,
+        }
+
+    def sweep_orphans(
+        self,
+        *,
+        older_than_seconds: float,
+        skip_handles: Sequence[str] = (),
+        now: datetime | None = None,
+    ) -> dict[str, int]:
+        """Remove parentless registry rows, files, and index directories.
+
+        The age threshold is the crash window: a file is written before its
+        registry row, so anything younger than the grace period may belong to
+        an upload or a delete that is still in flight. Handles referenced by
+        any message block are skipped even when the row looks unbound, which is
+        the "never sweep a turn-referenced artifact" rule.
+        """
+
+        current = now or datetime.now(timezone.utc)
+        if current.tzinfo is None:
+            current = current.replace(tzinfo=timezone.utc)
+        cutoff_dt = current - timedelta(seconds=max(0.0, float(older_than_seconds)))
+        cutoff_iso = iso_now(cutoff_dt)
+        cutoff_ts = cutoff_dt.timestamp()
+
+        skipped = set(str(handle) for handle in skip_handles)
+        skipped.update(self._store.referenced_artifact_handles())
+        rows = self._store.orphan_artifact_rows(
+            cutoff_iso, skip_handles=tuple(skipped)
+        )
+        handles = [row["handle"] for row in rows]
+        deleted_rows = self._store.delete_artifacts(handles)
+        purged = self.purge(rows)
+
+        # Files that never got a registry row (crash between write and insert,
+        # or a delete interrupted after the row went). Only age-eligible ones
+        # are candidates; a symlink is unlinked, never followed.
+        referenced = self._store.artifact_storage_paths()
+        orphan_files = 0
+        try:
+            entries = list(self._root.iterdir())
+        except OSError:
+            entries = []
+        for entry in entries:
+            if entry.name in referenced:
+                continue
+            try:
+                if entry.is_dir() and not entry.is_symlink():
+                    continue
+                if entry.stat(follow_symlinks=False).st_mtime >= cutoff_ts:
+                    continue
+                entry.unlink()
+            except OSError:
+                purged["errors"] += 1
+                continue
+            orphan_files += 1
+            token = entry.name.split(".", 1)[0]
+            workspace = self._workspace()
+            if workspace is not None and _STORAGE_TOKEN_RE.fullmatch(token):
+                try:
+                    if _remove_index(workspace, f"artifact:{token}"):
+                        purged["indexes_removed"] += 1
+                except (OSError, ValueError):
+                    purged["errors"] += 1
+
+        # Index directories whose artifact row is already gone. This catches a
+        # crash between the registry delete and eager remove_index.
+        orphan_indexes = 0
+        workspace = self._workspace()
+        if workspace is not None:
+            live = self._store.artifact_handles()
+            live_tokens = {
+                handle.split(":", 1)[1]
+                for handle in live
+                if handle.startswith("artifact:")
+            }
+            index_root = workspace / "var" / "index"
+            try:
+                entries = list(index_root.iterdir())
+            except OSError:
+                entries = []
+            for entry in entries:
+                if entry.name in live_tokens:
+                    continue
+                if not _STORAGE_TOKEN_RE.fullmatch(entry.name):
+                    continue
+                if (
+                    entry.is_dir()
+                    and entry.stat(follow_symlinks=False).st_mtime >= cutoff_ts
+                ):
+                    continue
+                try:
+                    if _remove_index(workspace, f"artifact:{entry.name}"):
+                        orphan_indexes += 1
+                except (OSError, ValueError):
+                    purged["errors"] += 1
+
+        return {
+            "artifact_rows": deleted_rows,
+            "files_removed": purged["files_removed"] + orphan_files,
+            "files_missing": purged["files_missing"],
+            "indexes_removed": purged["indexes_removed"] + orphan_indexes,
+            "skipped": len(skipped),
+            "errors": purged["errors"],
+        }
+
     # -- content -----------------------------------------------------------
 
     def content(
@@ -349,6 +518,27 @@ class ArtifactRegistry:
 
     # -- internals ---------------------------------------------------------
 
+    def _storage_path_for_unlink(self, raw_value: Any) -> Path | None:
+        """A direct child of the artifact root, or ``None`` when unusable.
+
+        Deletion accepts a missing file (idempotent second delete) but never a
+        path with separators, a directory, or anything outside the root. A
+        symlink is returned so the link itself is removed, not its target.
+        """
+
+        raw = str(raw_value or "")
+        if not raw or "/" in raw or "\\" in raw or raw in {".", ".."}:
+            return None
+        path = self._root / raw
+        if path.parent != self._root:
+            return None
+        try:
+            if path.is_dir() and not path.is_symlink():
+                return None
+        except OSError:
+            return None
+        return path
+
     def _resolve_path(self, meta: Mapping[str, Any]) -> Path:
         raw = str(meta.get("storage_path") or "")
         if not raw or "/" in raw or "\\" in raw or raw in {".", ".."}:
@@ -368,6 +558,14 @@ class ArtifactRegistry:
         if not resolved.is_file():
             raise ArtifactError("artifact_not_found", "That file isn't available any more.")
         return resolved
+
+
+def _remove_index(workspace_root: Path, handle: str) -> bool:
+    """Eagerly drop a handle's ``docs.answer`` index, if the skill is present."""
+
+    from skills.builtin.docs_answer.index import remove_index
+
+    return remove_index(workspace_root, handle)
 
 
 def _parse_range(header: str, total: int) -> tuple[int, int] | None:

@@ -41,9 +41,10 @@ from skills.loader import SkillRegistry
 
 from .api import ChatAPI, HealthProbe, make_server
 from .artifacts import ArtifactRegistry
-from .logging import configure_logging
+from .logging import configure_logging, log
 from .metrics import LoggedUsageStore, Metrics
 from .recovery import RecoveryReport, settle_interrupted
+from .retention import RetentionMaintenance, RetentionPolicy
 from .service import ChatService
 from .store import ChatStore
 
@@ -358,6 +359,7 @@ class Application:
     recovery: RecoveryReport
     provider: Any | None = None
     owns_provider: bool = False
+    maintenance: RetentionMaintenance | None = field(default=None, repr=False)
     _closed: bool = field(default=False, init=False, repr=False)
 
     def close(self) -> None:
@@ -368,6 +370,8 @@ class Application:
         # still alive, so each one ends ``interrupted`` (§10.4) instead of
         # vanishing with the process.
         self._close_turns()
+        if self.maintenance is not None:
+            self.maintenance.stop()
         if self.owns_provider and self.provider is not None:
             aclose = getattr(self.provider, "aclose", None)
             if aclose is not None:
@@ -451,9 +455,14 @@ def build_app(
     """Build the full runtime and run boot recovery exactly once."""
 
     source = os.environ if environ is None else environ
+    try:
+        retention_policy = RetentionPolicy.from_env(source)
+    except ValueError as exc:
+        raise ConfigError("invalid_config", str(exc)) from None
     config.ensure_directories()
     lock = DatabaseLock(config.db_path).acquire()
     store: ChatStore | None = None
+    maintenance: RetentionMaintenance | None = None
     owns_provider = provider is None
     runtime_provider = provider
     try:
@@ -477,11 +486,16 @@ def build_app(
             config.spend_caps,
             state_path=config.usage_dir / "spend-state.json",
         )
+        artifacts = ArtifactRegistry(
+            store,
+            config.artifact_dir,
+            workspace_root=config.workspace_root,
+        )
         service = ChatService(
             store=store,
             provider=runtime_provider,
             registry=registry,
-            artifacts=ArtifactRegistry(store, config.artifact_dir),
+            artifacts=artifacts,
             approvals=ApprovalStore(),
             usage_store=usage_store,
             model=config.kernel.primary_model,
@@ -501,6 +515,24 @@ def build_app(
         recovered = len(recovery.closed_turns) + len(recovery.expired_approvals)
         if recovered:
             metrics.add_recoveries(recovered)
+        # Boot orphan sweep + rotation, then the same pass daily. A retention
+        # failure is logged and must not keep the assistant offline.
+        maintenance = RetentionMaintenance(
+            store=store,
+            artifacts=artifacts,
+            audit_path=config.audit_path,
+            usage_path=config.usage_path,
+            policy=retention_policy,
+        )
+        try:
+            maintenance.run_once()
+        except Exception as exc:  # noqa: BLE001 - retention is not traffic
+            log(
+                "retention_boot_failed",
+                error_code=type(exc).__name__,
+                status="error",
+            )
+        maintenance.start()
         api = ChatAPI(
             service,
             auth_token=config.auth_token,
@@ -518,8 +550,11 @@ def build_app(
             recovery=recovery,
             provider=runtime_provider,
             owns_provider=owns_provider,
+            maintenance=maintenance,
         )
     except BaseException:
+        if maintenance is not None:
+            maintenance.stop()
         if store is not None:
             try:
                 store.close()

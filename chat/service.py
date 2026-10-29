@@ -173,6 +173,7 @@ class ChatService:
             store,
             store.path.parent / "artifacts",
             now=lambda: iso_now(self._now()),
+            workspace_root=workspace_root,
         )
         self._provider = provider
         self._registry = registry
@@ -423,10 +424,29 @@ class ChatService:
                 await self.wait_for_turn(active, timeout=2.0)
             except (ChatError, asyncio.TimeoutError):
                 pass
-        self.store.soft_delete_thread(thread_id)
-        self.store.delete_artifacts_for_thread(thread_id)
+            # Never purge under a live turn: its finalize step appends events
+            # and updates rows that no longer exist, which would leave orphans
+            # behind every successful delete.
+            current = self.store.get_turn(active)
+            task = self._tasks.get(active)
+            if (
+                current is not None
+                and current["state"] in {"queued", "running", "stopping"}
+                and task is not None
+                and not task.done()
+            ):
+                raise ChatError(
+                    "turn_in_progress",
+                    status=409,
+                    message="The turn is still settling; retry the delete.",
+                    details={"active_turn_id": active},
+                )
+        result = self.store.purge_thread(
+            thread_id,
+            on_artifacts=self.artifacts.purge,
+        )
         self.bus.close(thread_id)
-        return {"ok": True}
+        return {"ok": True, **result}
 
     # -- turns -------------------------------------------------------------
 

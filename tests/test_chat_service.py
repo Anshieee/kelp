@@ -1099,7 +1099,8 @@ def test_delete_stops_the_turn_and_hides_approvals_and_artifacts(tmp_path: Path)
             await asyncio.sleep(0.02)
             await service.delete_thread(thread["id"])
             assert store.get_thread(thread["id"]) is None
-            assert store.get_turn(payload["turn_id"])["reason"] == "cancelled"
+            # Hard delete: the turn row is gone, not merely flagged.
+            assert store.get_turn(payload["turn_id"]) is None
             with pytest.raises(ChatErrorType):
                 service.get_approval(card["id"])
             # The thread is gone, so its bound artifact is unreachable.
