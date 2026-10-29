@@ -47,6 +47,7 @@ from pathlib import Path
 from typing import Any, Callable, Iterable, Iterator, Mapping
 
 from openshell.audit import AuditLog
+from openshell.egress_ledger import EgressLedger, recipient_for_host
 from openshell.errors import PolicyDenied
 from openshell.policy import (
     Capability,
@@ -758,6 +759,7 @@ class EgressClient:
         policy: InvocationPolicy,
         *,
         audit: AuditLog | None = None,
+        ledger: EgressLedger | None = None,
         turn_id: str | None = None,
         transport: Callable[
             [str, str, Mapping[str, str] | None, bytes | None, float],
@@ -773,6 +775,11 @@ class EgressClient:
             raise ValueError("timeout must be positive")
         self._policy = policy
         self._audit_log = audit
+        # KEL-22: the ledger is the per-recipient byte account. It shares the
+        # audit trail's storage and retention; it never sees the request body.
+        self._ledger = ledger if ledger is not None else (
+            EgressLedger(audit) if audit is not None else None
+        )
         self._turn_id = turn_id
         self._transport = transport
         self._max_bytes = int(max_bytes)
@@ -788,6 +795,7 @@ class EgressClient:
         timeout: float | None = None,
     ) -> EgressResponse:
         normalised = str(method).upper()
+        request_bytes = len(body) if body is not None else 0
         try:
             host = self._policy.check_url(url, normalised)
         except PolicyDenied:
@@ -797,6 +805,9 @@ class EgressClient:
                 normalised,
                 "deny",
                 "policy_denied",
+            )
+            self._ledger_record(
+                _url_host_hint(url), normalised, request_bytes, 0, "policy_denied"
             )
             raise
         effective_timeout = self._timeout if timeout is None else float(timeout)
@@ -821,9 +832,11 @@ class EgressClient:
                 )
         except PolicyDenied:
             self._audit("skill_egress", host, normalised, "deny", "policy_denied")
+            self._ledger_record(host, normalised, request_bytes, 0, "policy_denied")
             raise
         except Exception:
             self._audit("skill_egress", host, normalised, "allow", "egress_error")
+            self._ledger_record(host, normalised, request_bytes, 0, "egress_error")
             raise
         finally:
             _EGRESS_ALLOWED.reset(token)
@@ -832,6 +845,14 @@ class EgressClient:
             host,
             normalised,
             "allow",
+            "completed",
+            status=response.status,
+        )
+        self._ledger_record(
+            host,
+            normalised,
+            request_bytes,
+            len(response.body),
             "completed",
             status=response.status,
         )
@@ -870,6 +891,37 @@ class EgressClient:
                 extra=extra,
             )
         except Exception:  # noqa: BLE001 - audit is accounting, not traffic
+            return
+
+    def _ledger_record(
+        self,
+        host: str,
+        method: str,
+        request_bytes: int,
+        response_bytes: int,
+        outcome: str,
+        *,
+        status: int | None = None,
+    ) -> None:
+        """One content-free egress row: recipient, purpose, byte counts."""
+
+        if self._ledger is None:
+            return
+        purpose = getattr(self._policy, "skill", None) or "skill.egress"
+        try:
+            self._ledger.record(
+                recipient=recipient_for_host(host),
+                purpose=purpose,
+                request_bytes=request_bytes,
+                response_bytes=response_bytes,
+                outcome=outcome,
+                method=method,
+                host=host,
+                turn_id=self._turn_id,
+                tool=purpose,
+                status=status,
+            )
+        except Exception:  # noqa: BLE001 - ledger is accounting, not traffic
             return
 
 

@@ -2,7 +2,9 @@
 
 Public surface::
 
-    from openshell import ApprovalStore, AuditLog, ExecGate, PolicyConfig, PolicyEngine
+    from openshell import (
+        ApprovalStore, AuditLog, EgressLedger, ExecGate, PolicyConfig, PolicyEngine
+    )
 
     policy = PolicyEngine(PolicyConfig(
         workspace_root="/srv/kelp",
@@ -10,6 +12,7 @@ Public surface::
         allow_exec=True,
     ))
     audit = AuditLog("var/audit/openshell.jsonl", secret_names=("NEBIUS_API_KEY",))
+    ledger = EgressLedger(audit)  # one content-free row per outbound call
     gate = ExecGate(policy=policy, approvals=ApprovalStore(), audit=audit)
 
     request = gate.request(["echo", "hi"], turn_id="turn_1")
@@ -28,6 +31,7 @@ from .approvals import (
     ApprovalStore,
 )
 from .audit import AuditLog, SecretScrubber, is_secret_env_name
+from .egress_ledger import RECIPIENTS, EgressLedger, recipient_for_host
 from .errors import (
     ApprovalAlreadyUsed,
     ApprovalDenied,
@@ -67,12 +71,15 @@ __all__ = [
     "Effect",
     "ExecGate",
     "ExecResult",
+    "EgressLedger",
     "OpenShellError",
     "PolicyConfig",
     "PolicyDenied",
     "PolicyEngine",
     "PolicyVerdict",
+    "RECIPIENTS",
     "SecretScrubber",
     "host_allowed",
     "is_secret_env_name",
+    "recipient_for_host",
 ]

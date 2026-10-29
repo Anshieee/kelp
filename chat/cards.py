@@ -16,6 +16,8 @@ from urllib.parse import quote
 __all__ = [
     "APPROVAL_RATIONALE_SUFFIX",
     "ERROR_COPY",
+    "EXEC_AVAILABLE",
+    "EXEC_UNAVAILABLE_CLAUSE",
     "MAX_ARGUMENT_BYTES",
     "MAX_SOURCES",
     "MAX_SUMMARY_CHARS",
@@ -42,6 +44,24 @@ _SNIPPET_CHARS = 240
 
 APPROVAL_RATIONALE_SUFFIX = (
     "Nothing has run yet. This approval expires in 10 minutes and works once."
+)
+
+#: Whether this build can execute an approved command (KEL-22 decision).
+#:
+#: It cannot. ``chat.server.build_app`` never constructs ``openshell.ExecGate``,
+#: no skill manifest may declare the ``execute`` effect, and ``shell.exec`` is
+#: not in the model-facing tool list. The flag exists so the card copy and the
+#: wiring cannot drift apart: the promise below follows this value, and
+#: ``tests/test_privacy.py`` fails if the flag is flipped without the gate.
+#: See ``docs/PRIVACY.md`` §5 for the decision and how to reverse it.
+EXEC_AVAILABLE = False
+
+#: Card copy for an ``execute`` approval in a build that cannot run commands.
+#: It still names the request and the single-use window, but it does not
+#: promise a run that will not happen.
+EXEC_UNAVAILABLE_CLAUSE = (
+    "The assistant asked to run a command on this machine. This build does not "
+    "run commands: approving records your decision and nothing is executed."
 )
 
 _SECRET_KEY_RE = re.compile(
@@ -475,7 +495,12 @@ def approval_rationale(
     if "write" in effect_set:
         clauses.append("The assistant wants to change something in your workspace.")
     if "execute" in effect_set:
-        clauses.append("The assistant wants to run a command on this machine. It runs once.")
+        if EXEC_AVAILABLE:
+            clauses.append(
+                "The assistant wants to run a command on this machine. It runs once."
+            )
+        else:
+            clauses.append(EXEC_UNAVAILABLE_CLAUSE)
     hosts = list((scopes or {}).get("hosts") or [])
     if not hosts and command and effect_set & {"execute", "network"}:
         hosts = []

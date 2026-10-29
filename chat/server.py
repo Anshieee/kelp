@@ -36,6 +36,7 @@ from kernel import JsonlUsageStore, KernelConfig, TokenFactoryClient
 from kernel.usage import SpendCaps, SpendGuard
 from openshell.approvals import ApprovalStore
 from openshell.audit import AuditLog, SecretScrubber
+from openshell.egress_ledger import EgressLedger
 from skills.errors import SkillManifestError
 from skills.loader import SkillRegistry
 
@@ -492,8 +493,18 @@ def build_app(
         )
         metrics = Metrics(scrubber=SecretScrubber(secret_values))
         audit = AuditLog(config.audit_path, secret_values=secret_values)
+        # KEL-22: one per-recipient egress account, written into the same audit
+        # trail (so its retention and scrubbing apply) and shared by the model
+        # client and every skill's egress client.
+        egress = EgressLedger(audit)
         if runtime_provider is None:
             runtime_provider = TokenFactoryClient(config.kernel)
+            # Attach after construction on purpose: ``TokenFactoryClient(config)``
+            # stays a one-argument call, which the serve harness relies on.
+            try:
+                runtime_provider.ledger = egress
+            except AttributeError:  # pragma: no cover - slotted replacement
+                pass
         usage_store = LoggedUsageStore(JsonlUsageStore(config.usage_path))
         spend_guard = SpendGuard(
             usage_store,
