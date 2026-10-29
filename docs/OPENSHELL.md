@@ -34,7 +34,11 @@ P0-3 owns; a future spec revision can bridge them.
 `SkillRegistry.invoke` builds an `InvocationPolicy` from the loaded manifest on
 every call. Concrete path, host, and repo targets in the arguments are checked
 against the declared scopes after schema validation and **before** approval.
-A handler can also assert its own intent through the context:
+Arguments are typed by the skill: only an `input_schema` property declaring
+`format: kelp-path` (read), `kelp-write-path`, `kelp-host`, or `kelp-repo` is
+interpreted, and a typed target with no declared scope is denied. An unknown
+`kelp-*` format fails the manifest at load. A handler can also assert its own
+intent through the context:
 
 | Context call | Enforced |
 |---|---|
@@ -46,8 +50,14 @@ A handler can also assert its own intent through the context:
 The egress client is the single network chokepoint. It refuses redirects,
 embedded credentials, IP literals, and non-80/443 ports, and caps the response
 body. A ContextVar-scoped socket guard blocks direct `socket`, `urllib`, and
-HTTP-library connections while a handler runs; importing egress code directly
-in `skills/builtin` also fails the policy test.
+HTTP-library connections while a handler runs — DNS (`getaddrinfo`,
+`gethostbyname*`, `gethostbyaddr`), `create_connection`,
+`connect`/`connect_ex`/`sendto`/`sendmsg` — and follows the handler into threads
+and executor tasks started during the call. The guard is cooperative: raw
+`_socket` objects, child processes, C extensions, and pre-existing threads fed
+through a queue rather than `submit` are outside it. Importing egress code
+directly in `skills/builtin` also fails the policy test, including
+`from`-imports, aliases, `__import__`, and `importlib`.
 
 A policy `deny` is terminal: `policy_denied` has no approval block and the
 approval hook is never invoked. Only `requires_approval: true` in the manifest

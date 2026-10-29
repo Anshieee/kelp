@@ -31,6 +31,7 @@ from .errors import (
     Violation,
 )
 from .policy import (
+    SCOPE_FORMATS,
     GuardedSkillContext,
     InvocationPolicy,
     PolicyDenied,
@@ -179,6 +180,20 @@ def _collect_refs(node: Any, pointer: str = "") -> list[tuple[str, str]]:
     return found
 
 
+def _collect_formats(node: Any, pointer: str = "") -> list[tuple[str, str]]:
+    found: list[tuple[str, str]] = []
+    if isinstance(node, Mapping):
+        for key, value in node.items():
+            child = f"{pointer}/{str(key).replace('~', '~0').replace('/', '~1')}"
+            if key == "format" and isinstance(value, str):
+                found.append((child, value))
+            found.extend(_collect_formats(value, child))
+    elif isinstance(node, list):
+        for index, value in enumerate(node):
+            found.extend(_collect_formats(value, f"{pointer}/{index}"))
+    return found
+
+
 def _check_schema(
     schema: Any, field_name: str, label: str, *, require_closed: bool
 ) -> list[Violation]:
@@ -203,6 +218,16 @@ def _check_schema(
                     label,
                     f"/{field_name}{pointer}",
                     f"remote references are not allowed ({ref!r}); inline or use local '#/' refs",
+                )
+            )
+    for pointer, declared in _collect_formats(schema):
+        if declared.startswith("kelp") and declared not in SCOPE_FORMATS:
+            violations.append(
+                Violation(
+                    label,
+                    f"/{field_name}{pointer}",
+                    f"{declared!r} is not a supported scope format; use one of "
+                    + ", ".join(sorted(SCOPE_FORMATS)),
                 )
             )
     if require_closed and schema.get("additionalProperties") is not False:

@@ -12,10 +12,18 @@ runs. The same policy backs the handler-facing chokepoints:
   and method against the declared ``hosts`` before a request is made.
 
 Network egress has a second, independent guard: while a skill handler runs,
-process-wide socket entry points refuse direct connections and DNS lookups.
-A handler that ignores ``context.egress()`` and reaches for ``socket`` or
-``urllib`` fails closed instead of escaping its allowlist. The guard is a
-ContextVar, so code outside an invocation is unaffected.
+process-wide socket entry points refuse direct connections, datagram sends, and
+DNS lookups. A handler that ignores ``context.egress()`` and reaches for
+``socket`` or ``urllib`` fails closed instead of escaping its allowlist. The
+guard is a ContextVar, so code outside an invocation is unaffected. Threads
+started during an invocation inherit it through ``contextvars.copy_context()``.
+
+The guard is cooperative and covers the Python-level ``socket`` module, plus
+``threading.Thread`` and ``ThreadPoolExecutor`` context propagation. It does
+not intercept a raw ``_socket`` object, a child process, a C extension calling
+``connect(2)`` directly, or a thread that was already running before the
+invocation and receives work through a queue or shared state rather than
+``submit``. Those boundaries are the deployment's, not this module's.
 
 A policy ``deny`` is terminal. It never becomes an approval request; only a
 manifest-level ``requires_approval`` (or an in-scope write, which the manifest
@@ -25,6 +33,7 @@ must already gate) can ask a human.
 from __future__ import annotations
 
 import asyncio
+import concurrent.futures
 import contextvars
 import ipaddress
 import socket
@@ -56,6 +65,7 @@ __all__ = [
     "GuardedSkillContext",
     "InvocationPolicy",
     "PolicyDenied",
+    "SCOPE_FORMATS",
     "active_invocation",
     "install_network_guard",
     "repo_allowed",
@@ -69,28 +79,15 @@ DEFAULT_MAX_EGRESS_BYTES = 2 * 1024 * 1024
 _HTTP_METHODS = frozenset({"GET", "HEAD", "OPTIONS", "POST", "PUT", "PATCH", "DELETE"})
 _SAFE_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
 
-# Argument keys the runtime treats as concrete scope targets. The sets are
-# deliberately narrow: a skill's free-text fields (``query``, ``prompt``,
-# ``question``) are never interpreted as paths or hosts.
-_PATH_KEYS = frozenset(
-    {
-        "path",
-        "paths",
-        "file",
-        "files",
-        "filename",
-        "dir",
-        "directory",
-        "cwd",
-        "target",
-        "destination",
-        "root",
-    }
-)
-_HOST_KEYS = frozenset(
-    {"url", "uri", "host", "hostname", "endpoint", "webhook", "href", "callback_url"}
-)
-_REPO_KEYS = frozenset({"repo", "repository", "repos", "full_name"})
+#: JSON-Schema ``format`` values that type one input argument as a scope
+#: target. The runtime never guesses from an argument name: a skill opts in
+#: per property, in its own ``input_schema`` (see ``docs/SKILL_SPEC.md`` §8.5).
+SCOPE_FORMATS: Mapping[str, str] = {
+    "kelp-path": "read_path",
+    "kelp-write-path": "write_path",
+    "kelp-host": "host",
+    "kelp-repo": "repo",
+}
 
 
 # ---------------------------------------------------------------------------
@@ -140,9 +137,16 @@ def active_invocation(
 # ---------------------------------------------------------------------------
 
 _REAL_GETADDRINFO = socket.getaddrinfo
+_REAL_GETHOSTBYNAME = socket.gethostbyname
+_REAL_GETHOSTBYNAME_EX = socket.gethostbyname_ex
+_REAL_GETHOSTBYADDR = socket.gethostbyaddr
 _REAL_CREATE_CONNECTION = socket.create_connection
 _REAL_SOCKET_CONNECT = socket.socket.connect
 _REAL_SOCKET_CONNECT_EX = socket.socket.connect_ex
+_REAL_SOCKET_SENDTO = socket.socket.sendto
+_REAL_SOCKET_SENDMSG = socket.socket.sendmsg
+_REAL_THREAD_START = threading.Thread.start
+_REAL_SUBMIT = concurrent.futures.ThreadPoolExecutor.submit
 _INSTALL_LOCK = threading.Lock()
 _INSTALLED = False
 
@@ -177,37 +181,114 @@ def _guard_socket_target(host: Any) -> None:
     active.policy.check_host(candidate, "GET")
 
 
+def _refuse_direct_egress() -> None:
+    raise PolicyDenied(
+        "direct network access is not allowed from a skill; use context.egress()",
+        ("net:direct", "egress:direct"),
+    )
+
+
+def _guard_address(address: Any) -> None:
+    """Check the ``(host, port)`` tuple a datagram send would target."""
+
+    if isinstance(address, tuple) and address:
+        _guard_socket_target(address[0])
+    else:
+        _guard_socket_target(address)
+
+
 def _guarded_getaddrinfo(host: Any, port: Any, *args: Any, **kwargs: Any) -> Any:
     _guard_socket_target(host)
     return _REAL_GETADDRINFO(host, port, *args, **kwargs)
 
 
+def _guarded_gethostbyname(host: Any) -> Any:
+    _guard_socket_target(host)
+    return _REAL_GETHOSTBYNAME(host)
+
+
+def _guarded_gethostbyname_ex(host: Any) -> Any:
+    _guard_socket_target(host)
+    return _REAL_GETHOSTBYNAME_EX(host)
+
+
+def _guarded_gethostbyaddr(host: Any) -> Any:
+    _guard_socket_target(host)
+    return _REAL_GETHOSTBYADDR(host)
+
+
 def _guarded_create_connection(address: Any, *args: Any, **kwargs: Any) -> Any:
-    if isinstance(address, tuple) and address:
-        _guard_socket_target(address[0])
-    else:
-        _guard_socket_target(None)
+    _guard_address(address)
     return _REAL_CREATE_CONNECTION(address, *args, **kwargs)
 
 
 def _guarded_connect(self: socket.socket, address: Any) -> Any:
-    active = _ACTIVE.get()
-    if active is not None and not _EGRESS_ALLOWED.get():
-        raise PolicyDenied(
-            "direct network access is not allowed from a skill; use context.egress()",
-            ("net:direct", "egress:direct"),
-        )
+    if _ACTIVE.get() is not None and not _EGRESS_ALLOWED.get():
+        _refuse_direct_egress()
     return _REAL_SOCKET_CONNECT(self, address)
 
 
 def _guarded_connect_ex(self: socket.socket, address: Any) -> Any:
-    active = _ACTIVE.get()
-    if active is not None and not _EGRESS_ALLOWED.get():
-        raise PolicyDenied(
-            "direct network access is not allowed from a skill; use context.egress()",
-            ("net:direct", "egress:direct"),
-        )
+    if _ACTIVE.get() is not None and not _EGRESS_ALLOWED.get():
+        _refuse_direct_egress()
     return _REAL_SOCKET_CONNECT_EX(self, address)
+
+
+def _guarded_sendto(self: socket.socket, data: Any, *args: Any) -> Any:
+    if args:
+        _guard_address(args[0])
+    elif _ACTIVE.get() is not None and not _EGRESS_ALLOWED.get():
+        # Connected socket with no address: ``connect`` predates the
+        # invocation, so refuse the direct send itself.
+        _refuse_direct_egress()
+    return _REAL_SOCKET_SENDTO(self, data, *args)
+
+
+def _guarded_sendmsg(
+    self: socket.socket,
+    buffers: Any,
+    ancdata: Any = (),
+    flags: int = 0,
+    address: Any = None,
+) -> Any:
+    if address is not None:
+        _guard_address(address)
+    elif _ACTIVE.get() is not None and not _EGRESS_ALLOWED.get():
+        _refuse_direct_egress()
+    return _REAL_SOCKET_SENDMSG(self, buffers, ancdata, flags, address)
+
+
+def _is_pool_worker(target: Any) -> bool:
+    """ThreadPoolExecutor workers outlive a turn; ``submit`` covers them."""
+
+    return getattr(target, "__module__", None) == "concurrent.futures.thread"
+
+
+def _guarded_thread_start(self: threading.Thread) -> None:
+    if _ACTIVE.get() is not None and not _is_pool_worker(getattr(self, "_target", None)):
+        # A new thread starts with an empty context, which would hide the
+        # guard. Run its body inside a copy of the caller's context instead.
+        context = contextvars.copy_context()
+        body = self.run
+
+        def _run_guarded() -> None:
+            context.run(body)
+
+        self.run = _run_guarded  # type: ignore[method-assign]
+    return _REAL_THREAD_START(self)
+
+
+def _guarded_submit(self: Any, fn: Any, /, *args: Any, **kwargs: Any) -> Any:
+    if _ACTIVE.get() is not None:
+        # Pool workers are created once and reused; bind the guard per task.
+        context = contextvars.copy_context()
+        submitted = fn
+
+        def _run_guarded(*call_args: Any, **call_kwargs: Any) -> Any:
+            return context.run(submitted, *call_args, **call_kwargs)
+
+        fn = _run_guarded
+    return _REAL_SUBMIT(self, fn, *args, **kwargs)
 
 
 def install_network_guard() -> None:
@@ -225,9 +306,16 @@ def install_network_guard() -> None:
         if _INSTALLED:
             return
         socket.getaddrinfo = _guarded_getaddrinfo  # type: ignore[assignment]
+        socket.gethostbyname = _guarded_gethostbyname  # type: ignore[assignment]
+        socket.gethostbyname_ex = _guarded_gethostbyname_ex  # type: ignore[assignment]
+        socket.gethostbyaddr = _guarded_gethostbyaddr  # type: ignore[assignment]
         socket.create_connection = _guarded_create_connection  # type: ignore[assignment]
         socket.socket.connect = _guarded_connect  # type: ignore[assignment]
         socket.socket.connect_ex = _guarded_connect_ex  # type: ignore[assignment]
+        socket.socket.sendto = _guarded_sendto  # type: ignore[assignment]
+        socket.socket.sendmsg = _guarded_sendmsg  # type: ignore[assignment]
+        threading.Thread.start = _guarded_thread_start  # type: ignore[assignment]
+        concurrent.futures.ThreadPoolExecutor.submit = _guarded_submit  # type: ignore[assignment]
         _INSTALLED = True
 
 
@@ -279,16 +367,63 @@ def _strings(key: str, value: Any) -> list[str]:
     )
 
 
-def _walk_arguments(value: Any, pointer: str = "") -> Iterator[tuple[str, Any]]:
-    if isinstance(value, Mapping):
-        for key, item in value.items():
-            child = f"{pointer}/{key}"
-            if isinstance(key, str):
-                yield key, item
-            yield from _walk_arguments(item, child)
-    elif isinstance(value, (list, tuple)):
-        for index, item in enumerate(value):
-            yield from _walk_arguments(item, f"{pointer}/{index}")
+def _walk_schema(
+    schema: Any, root: Any, segments: tuple[str, ...] = (), *, depth: int = 0
+) -> Iterator[tuple[tuple[str, ...], str]]:
+    """Yield ``(segments, kind)`` for every scope-typed input argument.
+
+    ``segments`` address the value inside the argument object; ``"*"`` stands
+    for an array index. Only local ``$ref`` pointers are followed; the loader
+    rejects remote references.
+    """
+
+    if depth > 32 or not isinstance(schema, Mapping):
+        return
+    declared = schema.get("format")
+    if segments and isinstance(declared, str) and declared in SCOPE_FORMATS:
+        yield segments, SCOPE_FORMATS[declared]
+    reference = schema.get("$ref")
+    if isinstance(reference, str) and reference.startswith("#/"):
+        target: Any = root
+        try:
+            for part in reference[2:].split("/"):
+                target = target[part.replace("~1", "/").replace("~0", "~")]
+        except (KeyError, TypeError):
+            return
+        yield from _walk_schema(target, root, segments, depth=depth + 1)
+    for branch in ("allOf", "anyOf", "oneOf"):
+        subschemas = schema.get(branch)
+        if isinstance(subschemas, list):
+            for subschema in subschemas:
+                yield from _walk_schema(subschema, root, segments, depth=depth + 1)
+    properties = schema.get("properties")
+    if isinstance(properties, Mapping):
+        for name, child in properties.items():
+            if isinstance(name, str) and isinstance(child, Mapping):
+                yield from _walk_schema(
+                    child, root, (*segments, name), depth=depth + 1
+                )
+    items = schema.get("items")
+    if isinstance(items, Mapping):
+        yield from _walk_schema(items, root, (*segments, "*"), depth=depth + 1)
+
+
+def _values_at(value: Any, segments: tuple[str, ...]) -> Iterator[Any]:
+    if not segments:
+        yield value
+        return
+    head, rest = segments[0], segments[1:]
+    if head == "*":
+        if isinstance(value, (list, tuple)):
+            for item in value:
+                yield from _values_at(item, rest)
+        return
+    if isinstance(value, Mapping) and head in value:
+        yield from _values_at(value[head], rest)
+
+
+def _worst(current: PolicyVerdict, candidate: PolicyVerdict) -> PolicyVerdict:
+    return candidate if _RANK[candidate.decision] > _RANK[current.decision] else current
 
 
 @dataclass(frozen=True)
@@ -302,14 +437,26 @@ class InvocationPolicy:
     hosts: tuple[str, ...]
     repos: tuple[str, ...]
     config: PolicyConfig
+    input_schema: Mapping[str, Any] = field(default_factory=dict)
     _engine: PolicyEngine = field(init=False, repr=False, compare=False)
+    _typed_args: tuple[tuple[tuple[str, ...], str], ...] = field(
+        init=False, repr=False, compare=False
+    )
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "_engine", PolicyEngine(self.config))
+        typed: dict[tuple[str, ...], str] = {}
+        for segments, kind in _walk_schema(self.input_schema, self.input_schema):
+            typed.setdefault(segments, kind)
+        object.__setattr__(self, "_typed_args", tuple(typed.items()))
 
     @classmethod
     def from_skill(cls, skill: Any, config: PolicyConfig) -> "InvocationPolicy":
         scopes = getattr(skill, "scopes", {}) or {}
+        manifest = getattr(skill, "manifest", None)
+        input_schema = (
+            manifest.get("input_schema") if isinstance(manifest, Mapping) else None
+        )
         return cls(
             skill=str(skill.name),
             version=str(getattr(skill, "version", "")),
@@ -318,6 +465,7 @@ class InvocationPolicy:
             hosts=tuple(scopes.get("hosts", ())),
             repos=tuple(scopes.get("repos", ())),
             config=config,
+            input_schema=input_schema if isinstance(input_schema, Mapping) else {},
         )
 
     @property
@@ -469,42 +617,41 @@ class InvocationPolicy:
     # -- argument-level scope ---------------------------------------------
 
     def evaluate_arguments(self, arguments: Mapping[str, Any]) -> PolicyVerdict:
-        """Check every concrete path/host/repo target in ``arguments``.
+        """Check every scope-typed concrete target in ``arguments``.
 
-        Raises :class:`PolicyDenied` on the first escape. Returns the worst
-        non-denying verdict (``allow`` or ``require_approval``) for the audit
-        record.
+        Only arguments the manifest's ``input_schema`` annotates with a
+        ``kelp-*`` format are interpreted; the runtime never guesses a target
+        from an argument's name. A typed target with no matching declared
+        scope is denied, so a read path cannot slip past an empty ``paths``
+        list. Raises :class:`PolicyDenied` on the first escape; returns the
+        worst non-denying verdict for the audit record.
         """
 
         worst = PolicyVerdict(Decision.ALLOW, "arguments are inside the declared scope")
-        if not isinstance(arguments, Mapping):
+        if not isinstance(arguments, Mapping) or not self._typed_args:
             return worst
 
-        for key, value in _walk_arguments(arguments):
-            if key in _PATH_KEYS and self.paths:
-                for item in _strings(key, value):
-                    verdict, _ = self._path_verdict(
-                        item, write="write" in self.effects
-                    )
-                    if verdict.decision is Decision.DENY:
-                        raise PolicyDenied(verdict.reason, verdict.blast_radius)
-                    if _RANK[verdict.decision] > _RANK[worst.decision]:
-                        worst = verdict
-            if key in _HOST_KEYS:
-                for item in _strings(key, value):
-                    if "network" not in self.effects:
-                        raise PolicyDenied(
-                            f"effect 'network' is not declared by {self.skill}",
-                            ("effect:network",),
+        for segments, kind in self._typed_args:
+            name = segments[-1] if segments else ""
+            for value in _values_at(arguments, segments):
+                for item in _strings(name, value):
+                    if kind == "repo":
+                        self.check_repo(item)
+                        worst = _worst(
+                            worst, PolicyVerdict(Decision.ALLOW, f"repo {item!r} allowed")
                         )
-                    host = self.check_url_or_host(item, "GET")
-                    if _RANK[Decision.ALLOW] > _RANK[worst.decision]:
-                        worst = PolicyVerdict(Decision.ALLOW, f"host {host!r} allowed")
-            if key in _REPO_KEYS:
-                for item in _strings(key, value):
-                    self.check_repo(item)
-                    if _RANK[Decision.ALLOW] > _RANK[worst.decision]:
-                        worst = PolicyVerdict(Decision.ALLOW, f"repo {item!r} allowed")
+                    elif kind == "host":
+                        host = self.check_url_or_host(item, "GET")
+                        worst = _worst(
+                            worst, PolicyVerdict(Decision.ALLOW, f"host {host!r} allowed")
+                        )
+                    else:
+                        verdict, _ = self._path_verdict(
+                            item, write=kind == "write_path"
+                        )
+                        if verdict.decision is Decision.DENY:
+                            raise PolicyDenied(verdict.reason, verdict.blast_radius)
+                        worst = _worst(worst, verdict)
         return worst
 
     def check_url_or_host(self, value: str, method: str = "GET") -> str:

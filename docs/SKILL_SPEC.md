@@ -288,16 +288,38 @@ never widen it.
 | Target | Check |
 |---|---|
 | `paths` | The target is resolved (symlinks first) and must stay inside `${WORKSPACE}` and match a declared prefix. `..` and NUL bytes fail closed. |
-| `hosts` | A URL/host argument and every egress request must match an exact declared host or leading `*.` wildcard; scheme, embedded credentials, IP literals, and non-80/443 ports are refused. |
-| `repos` | A `repo` argument must be an exact declared `owner/name`, or the manifest must declare `*`. |
+| `hosts` | A `kelp-host` argument and every egress request must match an exact declared host or leading `*.` wildcard; scheme, embedded credentials, IP literals, and non-80/443 ports are refused. |
+| `repos` | A `kelp-repo` argument must be an exact declared `owner/name`, or the manifest must declare `*`. |
 | `effects` | A handler that asks for an effect the manifest did not declare is denied. |
+
+Arguments are typed by the skill, not guessed from their name. The runtime interprets an
+input argument only when its `input_schema` property declares one of these `format` values; a
+plain `path`, `url`, or `repo` key without a format is opaque data.
+
+| `format` | Scope | Check |
+|---|---|---|
+| `kelp-path` | `paths` | read target: resolved and inside a declared prefix |
+| `kelp-write-path` | `paths` | write target: in scope ⇒ approval, outside ⇒ deny |
+| `kelp-host` | `hosts` | http(s) URL or bare host, exact or `*.` wildcard |
+| `kelp-repo` | `repos` | exact `owner/name`, or `*` |
+
+An unknown `kelp-*` format is a manifest error, and a typed target with no matching declared
+scope is **denied** (fail closed), so a read path cannot slip past an empty `paths` list.
+Formats on array `items` and local `$ref` targets are followed; remote references are rejected
+at load.
 
 Handlers use the context chokepoints: `read_path` / `write_path`, `check_repo`, and
 `context.egress()` for network access. The egress client checks host **and** method (a non-GET
 method needs the `write` effect), disables redirects, and caps the response body. Independently,
 a ContextVar-scoped socket guard refuses direct `socket`/`urllib`/HTTP-library connections while
-a handler runs, so an ignoring handler fails closed. A test scans `skills/builtin` for direct
-egress imports.
+a handler runs, so an ignoring handler fails closed. It covers `getaddrinfo`, `gethostbyname`,
+`gethostbyname_ex`, `gethostbyaddr`, `create_connection`,
+`socket.connect`/`connect_ex`/`sendto`/`sendmsg`, and it propagates into threads and executor
+tasks started during the invocation. The guard is cooperative: a raw `_socket` object, a child
+process, a C extension calling `connect(2)`, or a thread that was already running before the
+invocation and gets work through a queue rather than `submit` is outside its reach and must be
+stopped at the deployment boundary. A test scans `skills/builtin` for direct egress imports
+(including `from`-imports and aliases) and dynamic imports (`__import__`, `importlib`).
 
 Decisions are `allow` / `require_approval` / `deny`. Only a manifest-level
 `requires_approval: true` can produce an approval prompt. A policy `deny` is **terminal**: it has
