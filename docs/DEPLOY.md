@@ -116,7 +116,24 @@ no default: the process refuses to start without them (`missing_api_key` or
 | `KELP_USAGE_DIR` | no | `/data/usage` | no | Append-only `usage.jsonl` |
 | `KELP_SKILL_ROOT` | no | unset → built-in skills | no | Custom skill directory |
 | `KELP_LOG_LEVEL` | no | `info` | no | `debug` / `info` / `warning` / `error` |
+| `KELP_RATE_LIMIT_ENABLED` | no | `1` | no | Token buckets on; `0` disables them (concurrency caps stay on) |
+| `KELP_RATE_LIMIT_AUTH_RPM` / `_BURST` | no | `30` / `10` | no | Failed-auth attempts per minute and burst, per peer address |
+| `KELP_RATE_LIMIT_CHAT_RPM` / `_BURST` | no | `120` / `30` | no | Thread, turn, and approval calls per client |
+| `KELP_RATE_LIMIT_UPLOAD_RPM` / `_BURST` | no | `60` / `20` | no | Attachment uploads per client |
+| `KELP_RATE_LIMIT_READ_RPM` / `_BURST` | no | `600` / `200` | no | Read calls per client |
+| `KELP_RATE_LIMIT_ADMIN_RPM` / `_BURST` | no | `1200` / `300` | no | Metrics and readiness per client; keep it above the probe rate |
+| `KELP_RATE_LIMIT_IDLE_SECONDS` | no | `300` | no | Idle-out before a limiter key starts with a full bucket again |
+| `KELP_MAX_CONCURRENT_TURNS` | no | `4` | no | Global cap on turns running at once; `0` disables |
+| `KELP_MAX_STREAMS_PER_OWNER` | no | `3` | no | Concurrent SSE streams per owner; `0` disables |
 | `KELP_VERSION` / `KELP_GIT_COMMIT` | no | build args | no | Echoed by `/api/healthz`, `/api/readyz`, `/metrics` |
+
+Rate-limit rejections are `429` JSON with `error.code = "rate_limited"` and a
+`Retry-After` header in whole seconds. They are never a `5xx`: an internal
+limiter fault fails open. The admin bucket must stay comfortably above the
+readiness probe interval, or probes will see `429` instead of `503`. The
+`/api/metrics` exposition includes `kelp_limiter_in_use`,
+`kelp_limiter_capacity`, and `kelp_limiter_saturation` for the turn and stream
+caps.
 
 ```bash
 cd /opt/kelp

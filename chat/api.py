@@ -13,9 +13,11 @@ mutations, and JSON ``401`` instead of a redirect.
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import hmac
 import inspect
 import json
+import math
 import os
 import re
 import sqlite3
@@ -45,8 +47,10 @@ __all__ = [
     "ChatAPI",
     "HealthProbe",
     "LoopRunner",
+    "RateLimiter",
     "Request",
     "Response",
+    "TokenBucket",
     "make_server",
     "serve",
 ]
@@ -56,6 +60,40 @@ _CLIENT_TURN_RE = re.compile(r"^[A-Za-z0-9_-]{1,100}$")
 _MUTATING = frozenset({"POST", "PATCH", "DELETE", "PUT"})
 _JSON_LIMIT = 1024 * 1024
 _DECISION_LIMIT = 1024
+_UPLOAD_OVERHEAD = 64 * 1024
+
+# -- rate limiting and concurrency (KEL-17 M3-A) ---------------------------
+#
+# Every route belongs to one class. ``auth`` is charged only when a request
+# cannot authenticate, so a burst of bad credentials cannot spend the owner's
+# chat/read budget; the other four classes are charged per client identity.
+_RATE_LIMIT_CLASSES = ("auth", "chat", "upload", "read", "admin")
+_RATE_LIMIT_ENV_PREFIX = "KELP_RATE_LIMIT_"
+_RATE_LIMIT_ENABLED_ENV = "KELP_RATE_LIMIT_ENABLED"
+_RATE_LIMIT_IDLE_ENV = "KELP_RATE_LIMIT_IDLE_SECONDS"
+_RATE_LIMIT_MAX_KEYS_ENV = "KELP_RATE_LIMIT_MAX_KEYS"
+#: ``class -> (requests per minute, burst capacity)``. The defaults are
+#: deliberately generous: they must not turn ordinary browsing into a 429,
+#: while still bounding a runaway client.
+_DEFAULT_RATE_LIMITS: dict[str, tuple[float, float]] = {
+    "auth": (30.0, 10.0),
+    "chat": (120.0, 30.0),
+    "upload": (60.0, 20.0),
+    "read": (600.0, 200.0),
+    # Readiness probes and scrapes are deliberately far more generous: a
+    # supervisor loop must not be the thing that makes the service look down.
+    "admin": (1200.0, 300.0),
+}
+_DEFAULT_RATE_LIMIT_IDLE_SECONDS = 300.0
+_DEFAULT_RATE_LIMIT_MAX_KEYS = 4096
+#: After this long without a failure, an auth bucket is discarded; the next
+#: attempt starts with a full bucket. This also bounds the failure map.
+_AUTH_IDLE_SECONDS = 300.0
+_DEFAULT_MAX_CONCURRENT_TURNS = 4
+_DEFAULT_MAX_STREAMS_PER_OWNER = 3
+_MAX_CONCURRENT_TURNS_ENV = "KELP_MAX_CONCURRENT_TURNS"
+_MAX_STREAMS_PER_OWNER_ENV = "KELP_MAX_STREAMS_PER_OWNER"
+_RATE_LIMITED_FALLBACK_RETRY = 60.0
 #: A readiness probe is cached so a slow upstream cannot slow every scrape.
 _PROVIDER_TTL_SECONDS = 30.0
 _PROVIDER_PROBE_TIMEOUT = 3.0
@@ -71,6 +109,9 @@ class Request:
     query: Mapping[str, list[str]] = field(default_factory=dict)
     headers: Mapping[str, str] = field(default_factory=dict)
     body: bytes = b""
+    #: Peer address when an adapter knows it. Tests and embedded callers may
+    #: leave it unset; the limiter then falls back to forwarded-address headers.
+    client: str | None = None
 
     def __post_init__(self) -> None:
         self.headers = {key.lower(): value for key, value in self.headers.items()}
@@ -109,6 +150,11 @@ class LoopRunner:
     def run(self, coro: Any, timeout: float = 30.0) -> Any:
         future = asyncio.run_coroutine_threadsafe(coro, self._loop)
         return future.result(timeout)
+
+    def spawn(self, coro: Any) -> Any:
+        """Schedule a coroutine and return its future without waiting for it."""
+
+        return asyncio.run_coroutine_threadsafe(coro, self._loop)
 
     def close(self) -> None:
         if self._loop.is_running():
@@ -457,6 +503,404 @@ def _route_label(path: str) -> str:
     return "/api/other"
 
 
+def _gauge(value: float) -> str:
+    """Prometheus number formatting without importing the metrics internals."""
+
+    number = float(value)
+    if not math.isfinite(number):
+        number = 0.0
+    if number.is_integer():
+        return str(int(number))
+    return repr(round(number, 9))
+
+
+def _rate_limited_response(
+    retry_after: float,
+    *,
+    class_name: str,
+    reason: str,
+    limit: int | None = None,
+) -> Response:
+    """Build the one 429 shape: ``rate_limited`` plus a usable Retry-After.
+
+    The status is always 429 and the body is always the ordinary error
+    envelope, so the client's existing rate-limited state renders it without a
+    special case.
+    """
+
+    try:
+        seconds = float(retry_after)
+    except (TypeError, ValueError):
+        seconds = _RATE_LIMITED_FALLBACK_RETRY
+    if not math.isfinite(seconds) or seconds <= 0:
+        seconds = _RATE_LIMITED_FALLBACK_RETRY
+    header = str(max(1, int(math.ceil(seconds))))
+    details: dict[str, Any] = {"class": class_name, "reason": reason}
+    if limit is not None:
+        details["limit"] = max(0, int(limit))
+    error = ChatError(
+        "rate_limited",
+        status=429,
+        retryable=True,
+        details=details,
+    )
+    response = _json_response(429, error.to_body())
+    response.headers["Retry-After"] = header
+    return response
+
+
+def _body_rejection_response(rejected: "_BodyRejected") -> Response:
+    error = ChatError(
+        rejected.code,
+        status=rejected.status,
+        message=rejected.message,
+        retryable=False,
+        user_fixable=True,
+    )
+    return _json_response(rejected.status, error.to_body())
+
+
+def _env_number(
+    source: Mapping[str, str], name: str, default: float, *, minimum: float = 0.0
+) -> float:
+    """Read a finite, non-negative number; an unusable value keeps the default."""
+
+    raw = source.get(name)
+    if raw is None or not str(raw).strip():
+        return default
+    try:
+        value = float(str(raw).strip())
+    except (TypeError, ValueError):
+        return default
+    if not math.isfinite(value) or value < minimum:
+        return default
+    return value
+
+
+def _env_int(
+    source: Mapping[str, str], name: str, default: int, *, minimum: int = 0
+) -> int:
+    return int(_env_number(source, name, float(default), minimum=minimum))
+
+
+def _env_enabled(raw: str | None, default: bool = True) -> bool:
+    if raw is None:
+        return default
+    return str(raw).strip().lower() not in {"", "0", "false", "no", "off", "disabled"}
+
+
+def _client_address(request: Request) -> str:
+    """Best-effort peer identity for an unauthenticated caller.
+
+    The adapter records the socket peer in :attr:`Request.client`. Forwarded
+    headers are only a fallback for tests and embedded servers that do not, and
+    the first hop is taken: a proxy appends, it does not replace.
+    """
+
+    if request.client:
+        return str(request.client)[:64]
+    forwarded = request.header("x-forwarded-for")
+    if forwarded:
+        first = forwarded.split(",")[0].strip()
+        if first:
+            return first[:64]
+    for name in ("x-real-ip", "cf-connecting-ip"):
+        value = request.header(name)
+        if value and value.strip():
+            return value.strip()[:64]
+    return "unknown"
+
+
+def _presented_token(request: Request) -> str | None:
+    header = request.header("authorization") or ""
+    prefix = "Bearer "
+    if header.startswith(prefix) and header[len(prefix) :]:
+        return header[len(prefix) :]
+    session = _parse_cookies(request.header("cookie")).get("session")
+    return session or None
+
+
+def _client_identity(request: Request) -> str:
+    """A stable, non-secret limiter key.
+
+    A presented token is hashed, never retained: the map must not become a
+    secondary store of the owner token. With auth disabled the peer address is
+    the identity, which also makes per-client tests possible.
+    """
+
+    token = _presented_token(request)
+    if token:
+        digest = hashlib.sha256(token.encode("utf-8", "surrogatepass")).hexdigest()
+        return f"owner:{digest[:24]}"
+    return f"client:{_client_address(request)}"
+
+
+def _classify_route(method: str, segments: list[str]) -> str:
+    """Map a route to its rate-limit class; unknown routes are cheap reads."""
+
+    parts = segments[1:] if segments and segments[0] == "api" else segments
+    if not parts:
+        return "read"
+    head = parts[0]
+    verb = method.upper()
+    if verb == "GET":
+        return "admin" if head in {"metrics", "readyz"} else "read"
+    if head == "attachments":
+        return "upload"
+    if head in {"threads", "turns", "approvals"}:
+        return "chat"
+    return "read"
+
+
+class TokenBucket:
+    """A classic token bucket with a monotonic refill clock.
+
+    ``capacity`` is the largest burst; ``rate_per_second`` is the steady-state
+    allowance. ``take`` returns ``(allowed, retry_after_seconds)`` and never
+    blocks, so the HTTP loop cannot be parked behind a limiter.
+    """
+
+    __slots__ = ("capacity", "rate_per_second", "tokens", "updated")
+
+    def __init__(
+        self,
+        rate_per_second: float,
+        capacity: float,
+        *,
+        tokens: float | None = None,
+        now: float | None = None,
+    ):
+        self.rate_per_second = max(0.0, float(rate_per_second))
+        self.capacity = max(0.0, float(capacity))
+        self.updated = time.monotonic() if now is None else float(now)
+        if tokens is None:
+            self.tokens = self.capacity
+        else:
+            self.tokens = max(0.0, min(float(tokens), self.capacity))
+
+    def take(
+        self, cost: float = 1.0, *, now: float | None = None
+    ) -> tuple[bool, float]:
+        cost = max(0.0, float(cost))
+        current = time.monotonic() if now is None else float(now)
+        elapsed = max(0.0, current - self.updated)
+        if elapsed:
+            self.tokens = min(
+                self.capacity, self.tokens + elapsed * self.rate_per_second
+            )
+            self.updated = current
+        if cost == 0.0:
+            return True, 0.0
+        if self.tokens >= cost:
+            self.tokens -= cost
+            return True, 0.0
+        if self.rate_per_second <= 0.0 or cost > self.capacity:
+            return False, _RATE_LIMITED_FALLBACK_RETRY
+        return False, (cost - self.tokens) / self.rate_per_second
+
+
+class RateLimiter:
+    """Per-class, per-identity token buckets with idle eviction.
+
+    The limiter is intentionally fail-safe at the boundary in :class:`ChatAPI`:
+    a bug here must never turn traffic into a 500. Buckets are keyed by
+    ``(class, identity)`` so one client's burst cannot spend another's budget.
+    """
+
+    def __init__(
+        self,
+        limits: Mapping[str, tuple[float, float]] | None = None,
+        *,
+        enabled: bool = True,
+        clock: Callable[[], float] = time.monotonic,
+        idle_seconds: float = _DEFAULT_RATE_LIMIT_IDLE_SECONDS,
+        max_keys: int = _DEFAULT_RATE_LIMIT_MAX_KEYS,
+    ):
+        self.enabled = bool(enabled)
+        self._clock = clock
+        self.idle_seconds = max(0.0, float(idle_seconds))
+        self.max_keys = max(1, int(max_keys))
+        source = limits or _DEFAULT_RATE_LIMITS
+        self.limits: dict[str, tuple[float, float]] = {}
+        for name in _RATE_LIMIT_CLASSES:
+            rpm, burst = source.get(name, _DEFAULT_RATE_LIMITS[name])
+            self.limits[name] = (max(0.0, float(rpm)), max(0.0, float(burst)))
+        #: ``class -> identity -> (bucket, last_seen)``.
+        self._buckets: dict[str, dict[str, tuple[TokenBucket, float]]] = {
+            name: {} for name in self.limits
+        }
+        self._lock = threading.Lock()
+
+    @classmethod
+    def from_env(
+        cls,
+        env: Mapping[str, str] | None = None,
+        *,
+        clock: Callable[[], float] = time.monotonic,
+    ) -> "RateLimiter":
+        source = os.environ if env is None else env
+        limits: dict[str, tuple[float, float]] = {}
+        for name, (rpm, burst) in _DEFAULT_RATE_LIMITS.items():
+            limits[name] = (
+                _env_number(source, f"{_RATE_LIMIT_ENV_PREFIX}{name.upper()}_RPM", rpm),
+                _env_number(
+                    source, f"{_RATE_LIMIT_ENV_PREFIX}{name.upper()}_BURST", burst
+                ),
+            )
+        return cls(
+            limits,
+            enabled=_env_enabled(source.get(_RATE_LIMIT_ENABLED_ENV)),
+            clock=clock,
+            idle_seconds=_env_number(
+                source,
+                _RATE_LIMIT_IDLE_ENV,
+                _DEFAULT_RATE_LIMIT_IDLE_SECONDS,
+            ),
+            max_keys=_env_int(
+                source,
+                _RATE_LIMIT_MAX_KEYS_ENV,
+                _DEFAULT_RATE_LIMIT_MAX_KEYS,
+                minimum=1,
+            ),
+        )
+
+    def consume(
+        self, class_name: str, key: str, cost: float = 1.0
+    ) -> tuple[bool, float]:
+        if not self.enabled:
+            return True, 0.0
+        name = class_name if class_name in self.limits else "read"
+        identity = str(key or "unknown")
+        now = float(self._clock())
+        rpm, burst = self.limits[name]
+        with self._lock:
+            buckets = self._buckets[name]
+            entry = buckets.get(identity)
+            if entry is None or now - entry[1] > self.idle_seconds:
+                # Idle-out: a key that went quiet starts from a full bucket.
+                bucket = TokenBucket(rpm / 60.0, burst, now=now)
+            else:
+                bucket = entry[0]
+            allowed, retry_after = bucket.take(cost, now=now)
+            buckets[identity] = (bucket, now)
+            if len(buckets) > self.max_keys:
+                overflow = len(buckets) - self.max_keys
+                stale = sorted(buckets, key=lambda item: buckets[item][1])[:overflow]
+                for item in stale:
+                    buckets.pop(item, None)
+        return allowed, retry_after
+
+    # A readable alias for direct callers and tests.
+    take = consume
+
+    def forget_class(self, class_name: str, key: str) -> None:
+        """Drop one identity's bucket, e.g. after a successful authentication."""
+
+        with self._lock:
+            buckets = self._buckets.get(class_name)
+            if buckets is not None:
+                buckets.pop(str(key or "unknown"), None)
+
+    def forget(self, key: str) -> None:
+        identity = str(key or "unknown")
+        with self._lock:
+            for buckets in self._buckets.values():
+                buckets.pop(identity, None)
+
+    def reset(self) -> None:
+        with self._lock:
+            for buckets in self._buckets.values():
+                buckets.clear()
+
+
+class _Capacity:
+    """A non-blocking counting semaphore with observable saturation."""
+
+    def __init__(self, limit: int):
+        self.limit = max(0, int(limit))
+        self._used = 0
+        self._lock = threading.Lock()
+
+    def acquire(self) -> bool:
+        if self.limit <= 0:
+            return True
+        with self._lock:
+            if self._used >= self.limit:
+                return False
+            self._used += 1
+            return True
+
+    def release(self) -> None:
+        if self.limit <= 0:
+            return
+        with self._lock:
+            self._used = max(0, self._used - 1)
+
+    def stats(self) -> tuple[int, int]:
+        with self._lock:
+            return self._used, self.limit
+
+
+class _PerOwnerCapacity:
+    """A per-owner counting semaphore; a zero limit disables the cap."""
+
+    def __init__(self, limit: int):
+        self.limit = max(0, int(limit))
+        self._used: dict[str, int] = {}
+        self._lock = threading.Lock()
+
+    def acquire(self, owner: str) -> bool:
+        if self.limit <= 0:
+            return True
+        with self._lock:
+            used = self._used.get(owner, 0)
+            if used >= self.limit:
+                return False
+            self._used[owner] = used + 1
+            return True
+
+    def release(self, owner: str) -> None:
+        if self.limit <= 0:
+            return
+        with self._lock:
+            used = self._used.get(owner, 0)
+            if used <= 1:
+                self._used.pop(owner, None)
+            else:
+                self._used[owner] = used - 1
+
+    def stats(self) -> tuple[int, int]:
+        """Return ``(busiest_owner_usage, per_owner_limit)``."""
+
+        with self._lock:
+            return (max(self._used.values(), default=0), self.limit)
+
+
+class _Lease:
+    """Idempotent release for a stream slot, including a never-started stream."""
+
+    def __init__(self, release: Callable[[], None]):
+        self._release = release
+        self._released = False
+        self._lock = threading.Lock()
+
+    def release(self) -> None:
+        with self._lock:
+            if self._released:
+                return
+            self._released = True
+        try:
+            self._release()
+        except Exception:  # noqa: BLE001 - a lease must never raise
+            pass
+
+    def __del__(self) -> None:  # pragma: no cover - timing is interpreter-owned
+        try:
+            self.release()
+        except Exception:  # noqa: BLE001
+            pass
+
+
 class ChatAPI:
     def __init__(
         self,
@@ -469,6 +913,9 @@ class ChatAPI:
         max_upload: int = MAX_UPLOAD_BYTES,
         health: HealthProbe | None = None,
         metrics: Metrics | None = None,
+        limiter: RateLimiter | None = None,
+        max_concurrent_turns: int | None = None,
+        max_streams_per_owner: int | None = None,
     ):
         self.service = service
         self.auth_token = auth_token
@@ -477,6 +924,26 @@ class ChatAPI:
         self.max_upload = max_upload
         self.health = health or HealthProbe.from_service(service)
         self.metrics = metrics or get_metrics()
+        self.limiter = limiter or RateLimiter.from_env()
+        source = os.environ
+        self._turn_slots = _Capacity(
+            _env_int(
+                source,
+                _MAX_CONCURRENT_TURNS_ENV,
+                _DEFAULT_MAX_CONCURRENT_TURNS,
+            )
+            if max_concurrent_turns is None
+            else max_concurrent_turns
+        )
+        self._stream_slots = _PerOwnerCapacity(
+            _env_int(
+                source,
+                _MAX_STREAMS_PER_OWNER_ENV,
+                _DEFAULT_MAX_STREAMS_PER_OWNER,
+            )
+            if max_streams_per_owner is None
+            else max_streams_per_owner
+        )
         self._owns_runner = runner is None
         self.runner = runner or LoopRunner()
 
@@ -533,6 +1000,9 @@ class ChatAPI:
             # Liveness is the one unauthenticated route: a supervisor must be
             # able to tell "process alive" from "owner token missing".
             if not self._is_public(request, segments):
+                limited = self._limit(request, segments)
+                if limited is not None:
+                    return limited
                 self._authorize(request)
             if len(segments) < 1 or segments[0] != "api":
                 raise ChatError("not_found", status=404, message="Unknown endpoint.")
@@ -565,6 +1035,82 @@ class ChatAPI:
                     },
                 },
             )
+
+    def _limit(self, request: Request, segments: list[str]) -> Response | None:
+        """Charge the request's limiter class, or return a typed 429.
+
+        Unauthenticated calls are checked by the independent ``auth`` bucket,
+        keyed by peer address, before :meth:`_authorize` produces its 401. A
+        valid credential is never charged against that bucket. Any limiter
+        fault fails open: a broken bucket must not turn a request into a 500.
+        """
+
+        try:
+            if not self.limiter.enabled:
+                return None
+            if self._authorized_for(request):
+                route = _classify_route(request.method, segments)
+                allowed, retry_after = self.limiter.consume(
+                    route, _client_identity(request)
+                )
+                # A successful login clears accumulated failure debt for this
+                # peer without touching the owner's route budget.
+                self.limiter.forget_class("auth", _client_address(request))
+                if not allowed:
+                    return _rate_limited_response(
+                        retry_after, class_name=route, reason="rate"
+                    )
+                return None
+            allowed, retry_after = self.limiter.consume(
+                "auth", _client_address(request)
+            )
+            if not allowed:
+                return _rate_limited_response(
+                    retry_after, class_name="auth", reason="failed_auth"
+                )
+            return None
+        except Exception:  # noqa: BLE001 - observability/limits never break traffic
+            log("rate_limit_error", level="warning", status="error")
+            return None
+
+    def _limiter_exposition(self) -> str:
+        """Prometheus gauges for the two concurrency caps, appended to /metrics."""
+
+        try:
+            return self._limiter_gauges()
+        except Exception:  # noqa: BLE001 - a scrape must never fail on a gauge
+            return ""
+
+    def _limiter_gauges(self) -> str:
+        turn_used, turn_limit = self._turn_slots.stats()
+        stream_used, stream_limit = self._stream_slots.stats()
+        turn_ratio = turn_used / turn_limit if turn_limit > 0 else 0.0
+        stream_ratio = stream_used / stream_limit if stream_limit > 0 else 0.0
+        lines = [
+            "# HELP kelp_limiter_in_use Slots currently held by a limiter.",
+            "# TYPE kelp_limiter_in_use gauge",
+            f'kelp_limiter_in_use{{class="turns"}} {_gauge(turn_used)}',
+            f'kelp_limiter_in_use{{class="streams"}} {_gauge(stream_used)}',
+            "# HELP kelp_limiter_capacity Slot limit per class; streams are per owner.",
+            "# TYPE kelp_limiter_capacity gauge",
+            f'kelp_limiter_capacity{{class="turns"}} {_gauge(turn_limit)}',
+            f'kelp_limiter_capacity{{class="streams"}} {_gauge(stream_limit)}',
+            "# HELP kelp_limiter_saturation Fraction of a limiter's capacity in use.",
+            "# TYPE kelp_limiter_saturation gauge",
+            f'kelp_limiter_saturation{{class="turns"}} {_gauge(turn_ratio)}',
+            f'kelp_limiter_saturation{{class="streams"}} {_gauge(stream_ratio)}',
+        ]
+        return "\n".join(lines) + "\n"
+
+    def _busy_response(
+        self, *, class_name: str, reason: str, limit: int, retry_after: float = 1.0
+    ) -> Response:
+        return _rate_limited_response(
+            retry_after,
+            class_name=class_name,
+            reason=reason,
+            limit=limit,
+        )
 
     def _route(self, request: Request, segments: list[str]) -> Response:
         if not segments:
@@ -602,7 +1148,8 @@ class ChatAPI:
             if len(segments) != 1 or method != "GET":
                 raise ChatError("not_found", status=404, message="Unknown endpoint.")
             # Reached only through ``handle``, which has already authorized it.
-            body = self.metrics.render().encode("utf-8")
+            text = self.metrics.render() + self._limiter_exposition()
+            body = text.encode("utf-8")
             return Response(
                 status=200,
                 headers={
@@ -682,20 +1229,33 @@ class ChatAPI:
     def _stream(self, request: Request, thread_id: str) -> Response:
         if self.service.store.get_thread(thread_id) is None:
             raise ChatError("unknown_thread", status=404)
-        after = _after_param(request)
-        if after > 0:
-            # A resume asks for a position it already had: the browser is
-            # reconnecting, not opening a fresh stream.
-            self.metrics.inc_sse_reconnect()
-        frames = sse_frames(
-            self.service.store,
-            self.service.bus,
-            thread_id,
-            after=after,
-            idle=self.stream_idle,
-            auth_check=lambda: self._authorized_for(request),
-            thread_check=lambda: self.service.store.get_thread(thread_id) is not None,
-        )
+        owner = _client_identity(request)
+        if not self._stream_slots.acquire(owner):
+            return self._busy_response(
+                class_name="streams",
+                reason="stream_capacity",
+                limit=self._stream_slots.limit,
+            )
+        try:
+            after = _after_param(request)
+            if after > 0:
+                # A resume asks for a position it already had: the browser is
+                # reconnecting, not opening a fresh stream.
+                self.metrics.inc_sse_reconnect()
+            frames = sse_frames(
+                self.service.store,
+                self.service.bus,
+                thread_id,
+                after=after,
+                idle=self.stream_idle,
+                auth_check=lambda: self._authorized_for(request),
+                thread_check=lambda: (
+                    self.service.store.get_thread(thread_id) is not None
+                ),
+            )
+        except BaseException:
+            self._stream_slots.release(owner)
+            raise
         return Response(
             status=200,
             headers={
@@ -704,8 +1264,27 @@ class ChatAPI:
                 "X-Accel-Buffering": "no",
                 "Connection": "keep-alive",
             },
-            stream=frames,
+            stream=self._lease_stream(frames, owner),
         )
+
+    def _lease_stream(
+        self, frames: Iterator[str], owner: str
+    ) -> Iterator[str]:
+        """Release a stream slot on exhaustion, ``close()``, or GC.
+
+        A generator that was never started would not run its ``finally``, so
+        the lease object is also released when the generator is collected.
+        """
+
+        lease = _Lease(lambda: self._stream_slots.release(owner))
+
+        def guarded() -> Iterator[str]:
+            try:
+                yield from frames
+            finally:
+                lease.release()
+
+        return guarded()
 
     def _send(self, request: Request, thread_id: str) -> Response:
         body = self._json_body(request)
@@ -736,15 +1315,51 @@ class ChatAPI:
                 user_fixable=True,
                 field="/attachment_handles",
             )
-        payload, created = self.runner.run(
-            self.service.send(
-                thread_id,
-                text=text,
-                client_turn_id=client_turn_id,
-                attachment_handles=handles,
+        if not self._turn_slots.acquire():
+            return self._busy_response(
+                class_name="turns",
+                reason="turn_capacity",
+                limit=self._turn_slots.limit,
             )
-        )
+        try:
+            payload, created = self.runner.run(
+                self.service.send(
+                    thread_id,
+                    text=text,
+                    client_turn_id=client_turn_id,
+                    attachment_handles=handles,
+                )
+            )
+        except BaseException:
+            # The turn never started, so its slot is returned immediately.
+            self._turn_slots.release()
+            raise
+        if created:
+            self._release_turn_slot_when_done(str(payload.get("turn_id", "")))
+        else:
+            # An idempotent replay owns no new work.
+            self._turn_slots.release()
         return _json_response(202 if created else 200, {"ok": True, **payload})
+
+    def _release_turn_slot_when_done(self, turn_id: str) -> None:
+        """Return a turn slot when the background turn finalizes."""
+
+        async def waiter() -> None:
+            try:
+                await self.service.wait_for_turn(turn_id, timeout=None)
+            except BaseException:  # noqa: BLE001 - release is the contract
+                pass
+            finally:
+                self._turn_slots.release()
+
+        coro = waiter()
+        try:
+            self.runner.spawn(coro)
+        except Exception:  # noqa: BLE001 - a closed runner must not leak the slot
+            close = getattr(coro, "close", None)
+            if close is not None:
+                close()
+            self._turn_slots.release()
 
     # -- turns -------------------------------------------------------------
 
@@ -870,6 +1485,24 @@ class ChatAPI:
         return bool(host) and parsed.netloc == host
 
     # -- body parsing ------------------------------------------------------
+
+    def body_limit_for(self, path: str) -> tuple[int, int, str]:
+        """Return ``(cap, status, code)`` for a request path.
+
+        The transport adapter uses this to reject a declared body before any
+        bytes are read. Uploads keep their richer ``413 upload_too_large``;
+        every other route reports ``400 invalid_request``, matching
+        :meth:`_json_body`.
+        """
+
+        try:
+            clean = unquote(urlsplit(path).path)
+            segments = [segment for segment in clean.split("/") if segment]
+        except ValueError:  # pragma: no cover - urlsplit rarely raises here
+            segments = []
+        if len(segments) >= 2 and segments[0] == "api" and segments[1] == "attachments":
+            return self.max_upload + _UPLOAD_OVERHEAD, 413, "upload_too_large"
+        return _JSON_LIMIT, 400, "invalid_request"
 
     def _json_body(self, request: Request, *, optional: bool = False, limit: int = _JSON_LIMIT) -> dict[str, Any]:
         if not request.body:
@@ -1014,6 +1647,16 @@ def _multipart_file(request: Request) -> tuple[str, bytes]:
 # -- stdlib adapter --------------------------------------------------------
 
 
+class _BodyRejected(Exception):
+    """A body that must be refused before it is read into memory."""
+
+    def __init__(self, status: int, code: str, message: str):
+        self.status = status
+        self.code = code
+        self.message = message
+        super().__init__(message)
+
+
 class _Handler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
     api: ChatAPI
@@ -1032,8 +1675,16 @@ class _Handler(BaseHTTPRequestHandler):
 
     def _dispatch(self) -> None:
         parsed = urlsplit(self.path)
-        length = int(self.headers.get("Content-Length") or 0)
-        body = self.rfile.read(length) if length else b""
+        try:
+            body = self._read_body(parsed.path)
+        except _BodyRejected as rejected:
+            self._respond(_body_rejection_response(rejected), close=True)
+            return
+        except (ConnectionError, OSError):
+            # The peer vanished mid-body; there is nobody to answer and the
+            # partially consumed stream cannot be reused.
+            self.close_connection = True
+            return
         headers = {key.lower(): value for key, value in self.headers.items()}
         request = Request(
             method=self.command,
@@ -1041,17 +1692,117 @@ class _Handler(BaseHTTPRequestHandler):
             query=parse_qs(parsed.query, keep_blank_values=True),
             headers=headers,
             body=body,
+            client=self.client_address[0] if self.client_address else None,
         )
-        response = self.api.handle(request)
+        self._respond(self.api.handle(request))
+
+    def _read_body(self, path: str) -> bytes:
+        """Read a bounded body, refusing an oversized declaration up front.
+
+        ``Content-Length`` is parsed before a single byte is read: a
+        non-numeric, negative, duplicated, or over-cap value gets a typed
+        response and the connection is closed, so a large body is never
+        buffered. Chunked bodies are read incrementally and aborted as soon as
+        the running total would exceed the same cap.
+        """
+
+        cap, status, code = self.api.body_limit_for(path)
+        transfer = ",".join(self.headers.get_all("Transfer-Encoding") or [])
+        if transfer.strip():
+            if transfer.strip().lower() != "chunked":
+                raise _BodyRejected(
+                    400, "invalid_request", "Unsupported Transfer-Encoding."
+                )
+            return self._read_chunked(cap, status, code)
+
+        declared = self.headers.get_all("Content-Length") or []
+        if not declared:
+            return b""
+        values = {value.strip() for value in declared}
+        if len(values) != 1:
+            raise _BodyRejected(
+                400, "invalid_request", "The Content-Length header is ambiguous."
+            )
+        raw = values.pop()
+        if not re.fullmatch(r"[0-9]+", raw):
+            raise _BodyRejected(
+                400, "invalid_request", "The Content-Length header is not valid."
+            )
+        length = int(raw, 10)
+        if length > cap:
+            raise _BodyRejected(status, code, "The request body is too large.")
+        if length == 0:
+            return b""
+        body = self.rfile.read(length)
+        if len(body) != length:
+            raise _BodyRejected(
+                400, "invalid_request", "The request body ended early."
+            )
+        return body
+
+    def _read_chunked(self, cap: int, status: int, code: str) -> bytes:
+        chunks: list[bytes] = []
+        total = 0
+        while True:
+            line = self.rfile.readline(1024)
+            if not line:
+                raise _BodyRejected(
+                    400, "invalid_request", "The chunked body ended early."
+                )
+            if len(line) == 1024 and not line.endswith(b"\n"):
+                raise _BodyRejected(
+                    400, "invalid_request", "A chunk header is too long."
+                )
+            size_token = line.split(b";", 1)[0].strip()
+            try:
+                size = int(size_token, 16)
+            except (TypeError, ValueError):
+                raise _BodyRejected(
+                    400, "invalid_request", "A chunk size is not valid."
+                ) from None
+            if size < 0:
+                raise _BodyRejected(
+                    400, "invalid_request", "A chunk size is not valid."
+                )
+            if size == 0:
+                # Consume trailers without retaining them; a bounded loop keeps
+                # a malicious trailer stream from parking the handler.
+                for _ in range(100):
+                    trailer = self.rfile.readline(8192)
+                    if not trailer or trailer in (b"\r\n", b"\n"):
+                        return b"".join(chunks)
+                raise _BodyRejected(
+                    400, "invalid_request", "The chunked trailer is too large."
+                )
+            if total + size > cap:
+                # Abort mid-read: the unread remainder is never buffered and
+                # the connection is closed after the response.
+                raise _BodyRejected(status, code, "The request body is too large.")
+            data = self.rfile.read(size)
+            if len(data) != size:
+                raise _BodyRejected(
+                    400, "invalid_request", "The chunked body ended early."
+                )
+            chunks.append(data)
+            total += size
+            if self.rfile.read(2) != b"\r\n":
+                raise _BodyRejected(
+                    400, "invalid_request", "A chunk is not terminated."
+                )
+
+    def _respond(self, response: Response, *, close: bool = False) -> None:
+        if close:
+            self.close_connection = True
         self.send_response(response.status)
+        names = {name.lower() for name in response.headers}
         for name, value in response.headers.items():
             if name.lower() == "content-length" and response.stream is not None:
                 continue
             self.send_header(name, value)
-        if response.stream is None and "content-length" not in {
-            name.lower() for name in response.headers
-        }:
+        if response.stream is None and "content-length" not in names:
             self.send_header("Content-Length", str(len(response.body)))
+        if close and "connection" not in names:
+            self.send_header("Connection", "close")
         self.end_headers()
         try:
             if response.stream is not None:
