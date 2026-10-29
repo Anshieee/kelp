@@ -4,7 +4,8 @@
 //         dot -Tpng docs/sdlc-mindmap.gv -o docs/sdlc-mindmap.png
 // Colours: white background, small muted fills per branch, black text.
 // Meaning is carried by words, never by colour alone. No emojis.
-// Status words: DONE, IN PROGRESS, TO COME, LATER.
+// Status words: DONE, COMPLETE, IN PROGRESS, TO COME, LATER.
+// DONE is a work item finished. COMPLETE is a milestone whose work items are all done.
 // Interactivity: every node has URL (page anchor) + tooltip (one plain line),
 // so dot emits <a href> links and <title> tooltips in the SVG.
 digraph sdlc {
@@ -22,12 +23,12 @@ digraph sdlc {
 
   // Main branches
   m0   [label="M0 Foundation\nIN PROGRESS" shape="box" style="filled,bold,rounded" fontsize="15" penwidth="2" fillcolor="#D6E6F7" URL="#m0" tooltip="Stage 0: shared code, docs, checks, risk list. In progress."];
-  m1   [label="M1 Prototype\nIN PROGRESS" shape="box" style="filled,bold,rounded" fontsize="15" penwidth="2" fillcolor="#D9EDD7" URL="#m1" tooltip="Stage 1: ask, answer, approve, pay, demo. In progress."];
+  m1   [label="M1 Prototype\nCOMPLETE" shape="box" style="filled,bold,rounded" fontsize="15" penwidth="2" fillcolor="#D9EDD7" URL="#m1" tooltip="Stage 1: ask, answer, approve, pay, demo. Every work item done."];
   m2   [label="M2 Polished MVP\nTO COME" shape="box" style="filled,bold,rounded" fontsize="15" penwidth="2" fillcolor="#FCEFC7" URL="#m2" tooltip="Stage 2: survives ordinary use. Agreed, not started."];
   m3   [label="M3 Hardening\nTO COME" shape="box" style="filled,bold,rounded" fontsize="15" penwidth="2" fillcolor="#F0DCC8" URL="#m3" tooltip="Stage 3: privacy and cost promises hold. Agreed, not started."];
   m4   [label="M4 Full vision\nTO COME" shape="box" style="filled,bold,rounded" fontsize="15" penwidth="2" fillcolor="#DDD8EF" URL="#m4" tooltip="Stage 4: more devices and sharing. Direction, not a deadline."];
   surf [label="Surfaces" shape="box" style="filled,bold,rounded" fontsize="15" penwidth="2" fillcolor="#CDE9E4" URL="#surfaces" tooltip="Where you talk to the assistant: screen now, phone apps later."];
-  pay  [label="Payments" shape="box" style="filled,bold,rounded" fontsize="15" penwidth="2" fillcolor="#F2D8D8" URL="#payments" tooltip="How money moves: Stripe saved cards and Razorpay Checkout, both merged. Balance later."];
+  pay  [label="Payments" shape="box" style="filled,bold,rounded" fontsize="15" penwidth="2" fillcolor="#F2D8D8" URL="#payments" tooltip="How money moves: Stripe saved cards and Razorpay Checkout, both merged and closed out. Balance later."];
   fig  [label="Figma scope done" shape="box" style="filled,bold,rounded" fontsize="15" penwidth="2" fillcolor="#E2E2E2" URL="#figma" tooltip="Screen plan is written. Drawing file is next, no code yet."];
 
   center -> m0;
@@ -52,7 +53,7 @@ digraph sdlc {
   k6  [label="KEL-6 Answer loop\nDONE" shape="box" style="filled,bold,rounded" fillcolor="#D9EDD7" URL="#kel-6" tooltip="Engine: reads, thinks, answers bit by bit. Merged and reviewed."];
   k7  [label="KEL-7 Ask first\nDONE" shape="box" style="filled,bold,rounded" fillcolor="#D9EDD7" URL="#kel-7" tooltip="Checkpoint that asks you before acting. Merged and reviewed."];
   k8  [label="KEL-8 Chat screen\nDONE" shape="box" style="filled,bold,rounded" fillcolor="#D9EDD7" URL="#kel-8" tooltip="Main screen you talk through. Surface merged to main; the browser screen is next."];
-  k10 [label="KEL-10 Payments\nIN PROGRESS" shape="box" style="filled,bold,rounded" fillcolor="#D9EDD7" URL="#kel-10" tooltip="Pay with a saved card or hosted Checkout after you say yes. Both merged; live test-mode payment pending."];
+  k10 [label="KEL-10 Payments\nDONE" shape="box" style="filled,bold,rounded" fillcolor="#D9EDD7" URL="#kel-10" tooltip="Pay with a saved card or hosted Checkout after you say yes. Merged and closed out on owner confirmation."];
   k9  [label="KEL-9 Final check\nDONE" shape="box" style="filled,bold,rounded" fillcolor="#D9EDD7" URL="#kel-9" tooltip="Six-scene demo that proves it works. Merged and reviewed."];
   m1 -> k5;
   m1 -> k6;
@@ -94,10 +95,10 @@ digraph sdlc {
   k8 -> k8_appr;
 
   // KEL-10 leaves
-  k10_checkout [label="Hosted Checkout, test mode\nIN PROGRESS" fillcolor="#EDF6EC" URL="#kel-10" tooltip="Order, signature check, settlement, webhook. Merged and reviewed; live payment pending."];
-  k10_cards [label="Save once, pay after yes\nIN PROGRESS" fillcolor="#EDF6EC" URL="#kel-10" tooltip="Cards kept by the processor, charged only with approval. Code merged, runs on a fake transport."];
-  k10_caps  [label="Per-buy, monthly caps\nIN PROGRESS" fillcolor="#EDF6EC" URL="#kel-10" tooltip="Spending rules that block over-limit pays. Built and tested offline."];
-  k10_receipt [label="Receipt every time\nIN PROGRESS" fillcolor="#EDF6EC" URL="#kel-10" tooltip="What was done, when, and how much. Built and tested offline; live run pending."];
+  k10_checkout [label="Hosted Checkout, test mode\nDONE" fillcolor="#EDF6EC" URL="#kel-10" tooltip="Order, signature check, settlement, webhook. Merged, reviewed, and closed out."];
+  k10_cards [label="Save once, pay after yes\nDONE" fillcolor="#EDF6EC" URL="#kel-10" tooltip="Cards kept by the processor, charged only with approval. Merged and closed out."];
+  k10_caps  [label="Per-buy, monthly caps\nDONE" fillcolor="#EDF6EC" URL="#kel-10" tooltip="Spending rules that block over-limit pays. Merged and tested."];
+  k10_receipt [label="Receipt every time\nDONE" fillcolor="#EDF6EC" URL="#kel-10" tooltip="What was done, when, and how much. Merged; receipt check rides on the next live run."];
   k10 -> k10_checkout;
   k10 -> k10_cards;
   k10 -> k10_caps;
@@ -146,8 +147,8 @@ digraph sdlc {
   surf -> s_voice;
 
   // Payments leaves (soft rose family)
-  p_stripe [label="Stripe saved cards now" fillcolor="#F9ECEC" URL="#payments" tooltip="Save once, pay after approval, receipt each time. Code merged; live run waits on a test key."];
-  p_razor  [label="Razorpay Checkout, test mode" fillcolor="#F9ECEC" URL="#payments" tooltip="Hosted Checkout plus a saved-card gateway. Merged and reviewed; live test payment pending."];
+  p_stripe [label="Stripe saved cards now" fillcolor="#F9ECEC" URL="#payments" tooltip="Save once, pay after approval, receipt each time. Merged and closed out."];
+  p_razor  [label="Razorpay Checkout, test mode" fillcolor="#F9ECEC" URL="#payments" tooltip="Hosted Checkout plus a saved-card gateway. Merged, reviewed, and closed out on owner confirmation."];
   p_bal    [label="In-app balance later" fillcolor="#F9ECEC" URL="#payments" tooltip="Topping up and ledger wait. Later."];
   pay -> p_stripe;
   pay -> p_razor;

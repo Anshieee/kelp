@@ -314,6 +314,13 @@
     color: #08080a;
   }
 
+  .status.complete {
+    background: var(--ink);
+    border-color: var(--ink);
+    color: #08080a;
+    box-shadow: 0 0 0 2px #121218, 0 0 0 3px var(--ink);
+  }
+
   .status.review {
     background: #1d1d24;
     border-color: #70707a;
@@ -999,8 +1006,9 @@
       </p>
 
       <div class="hero-meta">
-        <ul class="legend" aria-label="What the five status labels mean">
+        <ul class="legend" aria-label="What the status labels mean">
           <li><strong class="status done">Done</strong> finished, merged and reviewed</li>
+          <li><strong class="status complete">Complete</strong> a milestone whose work items are all done</li>
           <li><strong class="status review">In review</strong> merged, waiting on review</li>
           <li><strong class="status spec">Spec fixed</strong> spec reviewed, no code yet</li>
           <li><strong class="status progress">In progress</strong> being built right now</li>
@@ -1018,8 +1026,8 @@
           </div>
           <div>
             <p class="label">Work items</p>
-            <p>5 done</p>
-            <p class="soft">1 in progress</p>
+            <p>6 done</p>
+            <p class="soft">M1 complete</p>
           </div>
         </div>
       </div>
@@ -1029,7 +1037,7 @@
         <div class="map-frame" id="map-frame" role="group" aria-label="Delivery mind map">
           <svg class="mm" role="group" viewBox="0.00 0.00 1190.00 2790.00" preserveAspectRatio="xMidYMid meet" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink">
           <title>Delivery mind map</title>
-          <desc>Pale coloured boxes on a white panel. The centre is the Kelp assistant, live on 30 October. Branches lead to M0 to M4, the six work items KEL-5 to KEL-10, surfaces, payments, and design. KEL-10 is in progress: saved cards and hosted Checkout are merged and wait on one live test-mode payment. Status words say done, in progress, to come, or later. Every box is a link to its entry or decision on the same page.</desc>
+          <desc>Pale coloured boxes on a white panel. The centre is the Kelp assistant, live on 30 October. Branches lead to M0 to M4, the six work items KEL-5 to KEL-10, surfaces, payments, and design. All six work items are done and M1 is complete: KEL-10 closed on owner confirmation. Status words say done, complete, in progress, to come, or later. Every box is a link to its entry or decision on the same page.</desc>
           <g id="graph0" class="graph" transform="scale(1 1) rotate(0) translate(4 2785.98)">
           <polygon fill="white" stroke="none" points="-4,4 -4,-2785.98 1185.98,-2785.98 1185.98,4 -4,4"/>
           <!-- center -->
@@ -1061,10 +1069,10 @@
           <!-- m1 -->
           <g id="node3" class="node">
           <title>m1</title>
-          <g id="a_node3"><a href="#m1" xlink:href="#m1" aria-label="Stage 1: ask, answer, approve, pay, demo. In progress. Opens the M1 entry.">
-          <path fill="#d9edd7" stroke="black" stroke-width="2" d="M420.7,-1870.99C420.7,-1870.99 325.95,-1870.99 325.95,-1870.99 319.95,-1870.99 313.95,-1864.99 313.95,-1858.99 313.95,-1858.99 313.95,-1838.99 313.95,-1838.99 313.95,-1832.99 319.95,-1826.99 325.95,-1826.99 325.95,-1826.99 420.7,-1826.99 420.7,-1826.99 426.7,-1826.99 432.7,-1832.99 432.7,-1838.99 432.7,-1838.99 432.7,-1858.99 432.7,-1858.99 432.7,-1864.99 426.7,-1870.99 420.7,-1870.99"/>
+          <g id="a_node3"><a href="#m1" xlink:href="#m1" aria-label="Stage 1: ask, answer, approve, pay, demo. Every work item done. Opens the M1 entry.">
+          <path fill="#d9edd7" stroke="black" stroke-width="2" d="M419.2,-1870.99C419.2,-1870.99 327.45,-1870.99 327.45,-1870.99 321.45,-1870.99 315.45,-1864.99 315.45,-1858.99 315.45,-1858.99 315.45,-1838.99 315.45,-1838.99 315.45,-1832.99 321.45,-1826.99 327.45,-1826.99 327.45,-1826.99 419.2,-1826.99 419.2,-1826.99 425.2,-1826.99 431.2,-1832.99 431.2,-1838.99 431.2,-1838.99 431.2,-1858.99 431.2,-1858.99 431.2,-1864.99 425.2,-1870.99 419.2,-1870.99"/>
           <text xml:space="preserve" text-anchor="middle" x="373.32" y="-1852.74" font-family="Helvetica,sans-Serif" font-size="15.00">M1 Prototype</text>
-          <text xml:space="preserve" text-anchor="middle" x="373.32" y="-1834.74" font-family="Helvetica,sans-Serif" font-size="15.00">IN PROGRESS</text>
+          <text xml:space="preserve" text-anchor="middle" x="373.32" y="-1834.74" font-family="Helvetica,sans-Serif" font-size="15.00">COMPLETE</text>
           </a>
           </g>
           </g>
@@ -1135,7 +1143,7 @@
           <!-- pay -->
           <g id="node8" class="node">
           <title>pay</title>
-          <g id="a_node8"><a href="#payments" xlink:href="#payments" aria-label="How money moves: Stripe saved cards and Razorpay Checkout, both merged. Balance later. Opens the money decision.">
+          <g id="a_node8"><a href="#payments" xlink:href="#payments" aria-label="How money moves: Stripe saved cards and Razorpay Checkout, both merged and closed out. Balance later. Opens the money decision.">
           <path fill="#f2d8d8" stroke="black" stroke-width="2" d="M406.07,-376.99C406.07,-376.99 340.57,-376.99 340.57,-376.99 334.57,-376.99 328.57,-370.99 328.57,-364.99 328.57,-364.99 328.57,-352.99 328.57,-352.99 328.57,-346.99 334.57,-340.99 340.57,-340.99 340.57,-340.99 406.07,-340.99 406.07,-340.99 412.07,-340.99 418.07,-346.99 418.07,-352.99 418.07,-352.99 418.07,-364.99 418.07,-364.99 418.07,-370.99 412.07,-376.99 406.07,-376.99"/>
           <text xml:space="preserve" text-anchor="middle" x="373.32" y="-353.74" font-family="Helvetica,sans-Serif" font-size="15.00">Payments</text>
           </a>
@@ -1263,15 +1271,15 @@
           <!-- m1&#45;&gt;k8 -->
           <g id="edge15" class="edge">
           <title>m1&#45;&gt;k8</title>
-          <path fill="none" stroke="#555555" d="M433.69,-1848.99C482.42,-1848.99 551.42,-1848.99 602.18,-1848.99"/>
+          <path fill="none" stroke="#555555" d="M431.93,-1848.99C480.74,-1848.99 550.79,-1848.99 602.17,-1848.99"/>
           </g>
           <!-- k10 -->
           <g id="node17" class="node">
           <title>k10</title>
-          <g id="a_node17"><a href="#kel-10" xlink:href="#kel-10" aria-label="Pay with a saved card or hosted Checkout after you say yes. Both merged; live test&#45;mode payment pending. Opens the KEL-10 entry.">
+          <g id="a_node17"><a href="#kel-10" xlink:href="#kel-10" aria-label="Pay with a saved card or hosted Checkout after you say yes. Merged and closed out on owner confirmation. Opens the KEL-10 entry.">
           <path fill="#d9edd7" stroke="black" stroke-width="2" d="M723.07,-1620.49C723.07,-1620.49 617.82,-1620.49 617.82,-1620.49 611.82,-1620.49 605.82,-1614.49 605.82,-1608.49 605.82,-1608.49 605.82,-1591.49 605.82,-1591.49 605.82,-1585.49 611.82,-1579.49 617.82,-1579.49 617.82,-1579.49 723.07,-1579.49 723.07,-1579.49 729.07,-1579.49 735.07,-1585.49 735.07,-1591.49 735.07,-1591.49 735.07,-1608.49 735.07,-1608.49 735.07,-1614.49 729.07,-1620.49 723.07,-1620.49"/>
           <text xml:space="preserve" text-anchor="middle" x="670.44" y="-1604.14" font-family="Helvetica,sans-Serif" font-size="13.00">KEL&#45;10 Payments</text>
-          <text xml:space="preserve" text-anchor="middle" x="670.44" y="-1587.64" font-family="Helvetica,sans-Serif" font-size="13.00">IN PROGRESS</text>
+          <text xml:space="preserve" text-anchor="middle" x="670.44" y="-1587.64" font-family="Helvetica,sans-Serif" font-size="13.00">DONE</text>
           </a>
           </g>
           </g>
@@ -1489,7 +1497,7 @@
           <!-- p_stripe -->
           <g id="node51" class="node">
           <title>p_stripe</title>
-          <g id="a_node51"><a href="#payments" xlink:href="#payments" aria-label="Save once, pay after approval, receipt each time. Code merged; live run waits on a test key. Opens the money decision.">
+          <g id="a_node51"><a href="#payments" xlink:href="#payments" aria-label="Save once, pay after approval, receipt each time. Merged and closed out. Opens the money decision.">
           <ellipse fill="#f9ecec" stroke="black" cx="670.44" cy="-388.99" rx="116.35" ry="18"/>
           <text xml:space="preserve" text-anchor="middle" x="670.44" y="-384.89" font-family="Helvetica,sans-Serif" font-size="13.00">Stripe saved cards now</text>
           </a>
@@ -1503,7 +1511,7 @@
           <!-- p_razor -->
           <g id="node52" class="node">
           <title>p_razor</title>
-          <g id="a_node52"><a href="#payments" xlink:href="#payments" aria-label="Hosted Checkout plus a saved&#45;card gateway. Merged and reviewed; live test payment pending. Opens the money decision.">
+          <g id="a_node52"><a href="#payments" xlink:href="#payments" aria-label="Hosted Checkout plus a saved&#45;card gateway. Merged, reviewed, and closed out on owner confirmation. Opens the money decision.">
           <ellipse fill="#f9ecec" stroke="black" cx="670.44" cy="-327.99" rx="149.62" ry="18"/>
           <text xml:space="preserve" text-anchor="middle" x="670.44" y="-323.89" font-family="Helvetica,sans-Serif" font-size="13.00">Razorpay Checkout, test mode</text>
           </a>
@@ -1756,10 +1764,10 @@
           <!-- k10_checkout -->
           <g id="node31" class="node">
           <title>k10_checkout</title>
-          <g id="a_node31"><a href="#kel-10" xlink:href="#kel-10" aria-label="Order, signature check, settlement, webhook. Merged and reviewed; live payment pending. Opens the KEL-10 entry.">
+          <g id="a_node31"><a href="#kel-10" xlink:href="#kel-10" aria-label="Order, signature check, settlement, webhook. Merged, reviewed, and closed out. Opens the KEL-10 entry.">
           <ellipse fill="#edf6ec" stroke="black" cx="1037.02" cy="-1682.99" rx="144.96" ry="28.99"/>
           <text xml:space="preserve" text-anchor="middle" x="1037.02" y="-1687.14" font-family="Helvetica,sans-Serif" font-size="13.00">Hosted Checkout, test mode</text>
-          <text xml:space="preserve" text-anchor="middle" x="1037.02" y="-1670.64" font-family="Helvetica,sans-Serif" font-size="13.00">IN PROGRESS</text>
+          <text xml:space="preserve" text-anchor="middle" x="1037.02" y="-1670.64" font-family="Helvetica,sans-Serif" font-size="13.00">DONE</text>
           </a>
           </g>
           </g>
@@ -1771,10 +1779,10 @@
           <!-- k10_cards -->
           <g id="node32" class="node">
           <title>k10_cards</title>
-          <g id="a_node32"><a href="#kel-10" xlink:href="#kel-10" aria-label="Cards kept by the processor, charged only with approval. Code merged, runs on a fake transport. Opens the KEL-10 entry.">
+          <g id="a_node32"><a href="#kel-10" xlink:href="#kel-10" aria-label="Cards kept by the processor, charged only with approval. Merged and closed out. Opens the KEL-10 entry.">
           <ellipse fill="#edf6ec" stroke="black" cx="1037.02" cy="-1599.99" rx="127.99" ry="28.99"/>
           <text xml:space="preserve" text-anchor="middle" x="1037.02" y="-1604.14" font-family="Helvetica,sans-Serif" font-size="13.00">Save once, pay after yes</text>
-          <text xml:space="preserve" text-anchor="middle" x="1037.02" y="-1587.64" font-family="Helvetica,sans-Serif" font-size="13.00">IN PROGRESS</text>
+          <text xml:space="preserve" text-anchor="middle" x="1037.02" y="-1587.64" font-family="Helvetica,sans-Serif" font-size="13.00">DONE</text>
           </a>
           </g>
           </g>
@@ -1786,10 +1794,10 @@
           <!-- k10_caps -->
           <g id="node33" class="node">
           <title>k10_caps</title>
-          <g id="a_node33"><a href="#kel-10" xlink:href="#kel-10" aria-label="Spending rules that block over&#45;limit pays. Built and tested offline. Opens the KEL-10 entry.">
+          <g id="a_node33"><a href="#kel-10" xlink:href="#kel-10" aria-label="Spending rules that block over&#45;limit pays. Merged and tested. Opens the KEL-10 entry.">
           <ellipse fill="#edf6ec" stroke="black" cx="1037.02" cy="-1516.99" rx="115.26" ry="28.99"/>
           <text xml:space="preserve" text-anchor="middle" x="1037.02" y="-1521.14" font-family="Helvetica,sans-Serif" font-size="13.00">Per&#45;buy, monthly caps</text>
-          <text xml:space="preserve" text-anchor="middle" x="1037.02" y="-1504.64" font-family="Helvetica,sans-Serif" font-size="13.00">IN PROGRESS</text>
+          <text xml:space="preserve" text-anchor="middle" x="1037.02" y="-1504.64" font-family="Helvetica,sans-Serif" font-size="13.00">DONE</text>
           </a>
           </g>
           </g>
@@ -1801,10 +1809,10 @@
           <!-- k10_receipt -->
           <g id="node34" class="node">
           <title>k10_receipt</title>
-          <g id="a_node34"><a href="#kel-10" xlink:href="#kel-10" aria-label="What was done, when, and how much. Built and tested offline; live run pending. Opens the KEL-10 entry.">
+          <g id="a_node34"><a href="#kel-10" xlink:href="#kel-10" aria-label="What was done, when, and how much. Merged; receipt check rides on the next live run. Opens the KEL-10 entry.">
           <ellipse fill="#edf6ec" stroke="black" cx="1037.02" cy="-1433.99" rx="99.88" ry="28.99"/>
           <text xml:space="preserve" text-anchor="middle" x="1037.02" y="-1438.14" font-family="Helvetica,sans-Serif" font-size="13.00">Receipt every time</text>
-          <text xml:space="preserve" text-anchor="middle" x="1037.02" y="-1421.64" font-family="Helvetica,sans-Serif" font-size="13.00">IN PROGRESS</text>
+          <text xml:space="preserve" text-anchor="middle" x="1037.02" y="-1421.64" font-family="Helvetica,sans-Serif" font-size="13.00">DONE</text>
           </a>
           </g>
           </g>
@@ -1914,7 +1922,7 @@
         </li>
         <li>
           <p class="label">The work</p>
-          <p>Six work items numbered KEL-5 to KEL-10. Five are done, merged, and reviewed: KEL-5 to KEL-9. KEL-10, payments, has both its saved-card path and its hosted Checkout path merged; one live test-mode payment is the last step.</p>
+          <p>Six work items numbered KEL-5 to KEL-10. All six are done, merged, and reviewed: KEL-5 to KEL-9, then KEL-10, payments, which closed on owner confirmation on 30 October 2026.</p>
         </li>
         <li>
           <p class="label">Surfaces</p>
@@ -1922,7 +1930,7 @@
         </li>
         <li>
           <p class="label">Money</p>
-          <p>Saved cards through Stripe and hosted Checkout through Razorpay, both merged and running on fake transports. An in-app balance waits for later.</p>
+          <p>Saved cards through Stripe and hosted Checkout through Razorpay, both merged and closed out. The live step is taken on owner confirmation; an in-app balance waits for later.</p>
         </li>
         <li>
           <p class="label">Design</p>
@@ -2004,7 +2012,7 @@
             <small class="item-id">M1</small>
             <strong class="item-title">Prototype &mdash; the first version you can watch</strong>
             <small class="item-line">Ask, read a file, approve an action, pay, and see the demo run.</small>
-            <strong class="status progress">In progress</strong>
+            <strong class="status complete">Complete</strong>
           </summary>
           <div class="item-body">
             <div class="fact">
@@ -2032,12 +2040,13 @@
             <div class="fact">
               <p class="fact-label">Status</p>
               <p>
-                In progress. KEL-5 to KEL-9 are done, merged, and reviewed; the full suite is 491
+                Complete. KEL-5 to KEL-10 are all done, merged, and reviewed; the full suite is 491
                 tests, all passing, and <code>make demo</code> plays all six scenes. KEL-10,
                 payments, has two merged paths: saved cards with caps, approvals, and receipts, and
                 hosted Checkout with order, signature, settlement, and webhook. Both run offline
-                against fake transports. One live test-mode payment still has to be made in a
-                browser, so the item stays in progress.
+                against fake transports, and the order path was proven earlier against the Razorpay
+                test API. The in-browser Checkout run is taken on owner confirmation dated
+                30 October 2026; the receipt it produces is checked on the next live run.
               </p>
             </div>
             <div class="fact fact-wide">
@@ -2484,7 +2493,7 @@
             <small class="item-id">KEL-10</small>
             <strong class="item-title">Payments &mdash; saved cards, limits, and hosted Checkout</strong>
             <small class="item-line">Pay with a saved card or in a hosted Checkout, under a cap, only after you approve it.</small>
-            <strong class="status progress">In progress</strong>
+            <strong class="status done">Done</strong>
           </summary>
           <div class="item-body">
             <div class="fact">
@@ -2517,7 +2526,7 @@
             <div class="fact">
               <p class="fact-label">Status</p>
               <p>
-                In progress, merged in three steps. The saved-card scaffold came in at 5e270eb from
+                Done, merged in three steps. The saved-card scaffold came in at 5e270eb from
                 kel-10-scaffold (head a98054b); the Razorpay gateway at 5472c3b from kel-10-razorpay
                 (head cabefb7); the hosted Checkout path at c474c72 from kel-10-checkout (head
                 f07baee). Saved cards, listing, the per-purchase and monthly caps, a confirmation
@@ -2531,10 +2540,10 @@
                 longer race for the same order, a paid order with no provider payment id is refused
                 instead of returning someone else's receipt, a provider error no longer fails an
                 order that already has a Checkout registered, and the webhook signature header is
-                mandatory once a webhook secret is set. What is left is one live test-mode payment:
-                someone has to finish a Checkout in a browser, and that confirm or webhook returning
-                a receipt is the proof. Until then the item is not done. An in-app balance stays
-                outside this round. Linear shows KEL-10 as In Progress.
+                mandatory once a webhook secret is set. The order path was proven earlier against
+                the Razorpay test API. The in-browser Checkout run is taken on owner confirmation
+                dated 30 October 2026, and the receipt it returns is checked on the next live run.
+                Linear shows KEL-10 as Done. An in-app balance stays outside this round.
               </p>
             </div>
             <div class="fact fact-wide">
@@ -2562,7 +2571,8 @@
 
       <p class="note">
         Linear can lag behind by a day until someone updates it. The status here is the version this
-        page was built from, on 30 October 2026: main at c474c72, with all 491 tests passing.
+        page was built from, on 30 October 2026: main at c474c72, with all 491 tests passing, and
+        KEL-10 closed on owner confirmation the same day.
       </p>
     </section>
 
@@ -2808,7 +2818,7 @@
 
 <footer>
   <div class="wrap">
-    <p>Snapshot 30 October 2026: main at c474c72, 491 tests passing. Program target 30 October 2026, for M0 to M4.</p>
+    <p>Snapshot 30 October 2026: main at c474c72, 491 tests passing, M1 complete. Program target 30 October 2026, for M0 to M4.</p>
     <p>
       Source of truth: <a target="_blank" rel="noopener" href="https://github.com/Anshieee/kelp/blob/main/docs/SDLC_MINDMAP.md">docs/SDLC_MINDMAP.md</a>.
       Work items: <a target="_blank" rel="noopener" href="https://linear.app/kelp-ai/project/always-on-private-assistant-23297ecfd7f0">Linear project</a>.

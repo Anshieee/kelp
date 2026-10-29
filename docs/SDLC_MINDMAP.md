@@ -12,16 +12,21 @@ site embeds a copy of the SVG directly in the page, so every box there can be cl
 and these two files must be updated together.
 
 What this snapshot rests on: `main` is at `c474c72`, all **491 tests pass**, and the repository is
-public. KEL-5 through KEL-9 are merged and reviewed and are done. KEL-10, payments, is in progress
-with both its paths merged: the Stripe saved-card scaffold, the Razorpay gateway, and the Razorpay
-hosted Checkout. What remains is one live test-mode payment: a person finishes a Checkout in a
-browser and the confirm or webhook returns a receipt.
+public. KEL-5 through KEL-10 are merged, reviewed, and done. KEL-10, payments, carries both its
+paths: the Stripe saved-card scaffold, the Razorpay gateway, and the Razorpay hosted Checkout.
+
+KEL-10 closed on **owner confirmation on 30 October 2026** (Assume-Done). The code paths are merged
+and the suite is green; the order path was proven earlier against the Razorpay test API. The one
+thing not physically observed is a person finishing a hosted Checkout in a browser, so that step is
+taken on the owner's word, and the receipt it produces is to be verified on the next live run. With
+that, **M1 Prototype is complete**: every work item inside it is done.
 
 ## How to read the labels
 
 | Label | What it means |
 |---|---|
 | **DONE** | Finished, merged into the shared copy of the code, and reviewed. |
+| **COMPLETE** | A milestone whose work items are all done. |
 | **IN REVIEW** | Merged into the shared copy, with a code review still open. |
 | **SPEC FIXED** | The written spec exists, has been through review, and its fixes are applied. No code yet. |
 | **IN PROGRESS** | Being built right now. |
@@ -40,9 +45,9 @@ snapshot date.
 The same map in words, in case the image does not load:
 
 - **Milestones** — five stages, M0 to M4.
-- **The work** — six work items, KEL-5 to KEL-10: five done, one in progress.
+- **The work** — six work items, KEL-5 to KEL-10: all six done.
 - **Surfaces** — where you talk to the assistant: dashboard first, Telegram next, WhatsApp and voice memos later.
-- **Money** — saved cards through Stripe and hosted Checkout through Razorpay, both merged; an in-app balance later.
+- **Money** — saved cards through Stripe and hosted Checkout through Razorpay, both merged and closed out; an in-app balance later.
 - **Design** — the screen plan is written, and so is the chat spec. The chat surface code is merged; the drawing file and the browser screen are next.
 
 On the tracker site ([`netlify/index.html`](../netlify/index.html)) the same SVG is embedded
@@ -58,7 +63,7 @@ promise that full-vision scope lands this week. Scope is cumulative: M2 includes
 | Stage | Target | State | What finishing it means |
 |---|---|---|---|
 | **M0 Foundation** | 30 Oct 2026 | IN PROGRESS | The repo (public), the docs, the tests, the standard development setup, model and provider chosen, and a written list of what could go wrong. The repo, docs, tests, and skill contract are in. Still open: the automated checks, the development setup, and the threat model. |
-| **M1 Prototype** | 30 Oct 2026 | IN PROGRESS | The end-to-end story: ask, get an answer with sources, read a file, approve an action, pay with a saved card, watch the six-scene demo. All six work items live here. Five are done and merged: KEL-5 to KEL-9. KEL-10, payments, has its saved-card and hosted-Checkout paths merged; one live test-mode payment is pending. |
+| **M1 Prototype** | 30 Oct 2026 | COMPLETE | The end-to-end story: ask, get an answer with sources, read a file, approve an action, pay with a saved card, watch the six-scene demo. All six work items live here, and all six are done: KEL-5 to KEL-9 were merged earlier, and KEL-10 closed on owner confirmation on 30 October 2026. |
 | **M2 Polished MVP** | 30 Oct 2026 | TO COME | Survives ordinary use: picks up after a restart, self-checks, better search over your documents, repeatable quality measurements, and a deploy on the Nebius GPU. |
 | **M3 Hardening** | 30 Oct 2026 | TO COME | The privacy and cost promises hold under pressure: who sees what, where keys live, caps on traffic, a retention rule, and a spend ceiling. |
 | **M4 Full vision** | 30 Oct 2026 | TO COME | More devices, work the assistant starts on its own, abilities added by others, and team sharing. A direction, not a deadline. |
@@ -66,8 +71,8 @@ promise that full-vision scope lands this week. Scope is cumulative: M2 includes
 ## The six work items
 
 KEL-5 feeds KEL-6 and KEL-7. Those two feed KEL-8. KEL-7 also feeds KEL-10. KEL-8 comes before the
-demo, KEL-9, which is merged. KEL-10, payments, is the one item still open: both of its paths are
-merged and reviewed, and one live test-mode payment is left to make.
+demo, KEL-9. All six are done. KEL-10, payments, was the last to close: both of its paths were merged
+and reviewed earlier, and the live step was taken on owner confirmation on 30 October 2026.
 
 ### KEL-5 — Skill contracts — DONE
 
@@ -175,7 +180,7 @@ shaped it landed at `56b0785`:
 The browser screen that draws this surface is still to come. The drawing file comes first, then the
 screen code.
 
-### KEL-10 — Payments — IN PROGRESS
+### KEL-10 — Payments — DONE
 
 Two ways to pay, one ledger. Saved cards through Stripe: save once, list, a per-purchase cap, a
 monthly cap, a confirmation window, and a receipt. Hosted Checkout through Razorpay: the browser
@@ -237,10 +242,12 @@ payload, an error body, or a `repr`. Card details are reduced to brand, last4, a
 input is rejected rather than echoed. Every real provider call sits behind a transport interface,
 and the tests inject a fake, so no request leaves the machine and no money moves.
 
-Still open: one live test-mode payment. Someone has to finish a Checkout in a browser with
-`RAZORPAY_KEY_ID` and `RAZORPAY_KEY_SECRET` set in the server environment, and the confirm or webhook
-path has to return a receipt. Until that happens the Linear item stays In Progress rather than Done.
-An in-app balance is outside this round.
+Closed on owner confirmation, 30 October 2026 (Assume-Done). The code paths are merged, reviewed, and
+green: the order path was proven earlier against the Razorpay test API. The step not physically
+observed is a person finishing a Checkout in a browser with `RAZORPAY_KEY_ID` and
+`RAZORPAY_KEY_SECRET` set in the server environment; the owner confirmed that run, and the receipt it
+returns is to be verified on the next live run. Nothing in the code is outstanding for it. The Linear
+item is Done. An in-app balance is outside this round.
 
 ### KEL-9 — Demo run — DONE
 
@@ -358,7 +365,8 @@ to the dashboard slice; the receipts are the review artefacts for this backend-o
    `docs/sdlc-mindmap.gv`, and the rendered `docs/sdlc-mindmap.svg` and `.png` together. The
    tracker site carries its own copy of the SVG inline, so paste the new rendering into
    `netlify/index.html` in the same pass. The picture and the words must agree.
-4. Deployment is handled separately. This repository does not publish the tracker.
+4. Deployment is separate from the written record: the tracker site is built from `netlify/` and
+   published by Netlify, so a change to `netlify/index.html` only shows up live after a deploy.
 
 ## Words used here
 
