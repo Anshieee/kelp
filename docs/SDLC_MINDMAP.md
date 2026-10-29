@@ -1,6 +1,6 @@
 # SDLC mind map — Always-On Private Assistant
 
-Snapshot: 29 October 2026
+Snapshot: 30 October 2026
 Program target: **30 October 2026** for M0 through M4
 Tracker site: [`netlify/index.html`](../netlify/index.html)
 
@@ -11,9 +11,11 @@ that goes with it is [`sdlc-mindmap.svg`](sdlc-mindmap.svg), with a PNG fallback
 site embeds a copy of the SVG directly in the page, so every box there can be clicked; that copy
 and these two files must be updated together.
 
-What this snapshot rests on: `main` is at `5e270eb`, all **345 tests pass**, and the repository is
-public. KEL-5 through KEL-9 are merged and reviewed and are done. KEL-10, the wallet, merged as an
-offline scaffold and is in progress: its live exercise still needs a Stripe test key.
+What this snapshot rests on: `main` is at `c474c72`, all **491 tests pass**, and the repository is
+public. KEL-5 through KEL-9 are merged and reviewed and are done. KEL-10, payments, is in progress
+with both its paths merged: the Stripe saved-card scaffold, the Razorpay gateway, and the Razorpay
+hosted Checkout. What remains is one live test-mode payment: a person finishes a Checkout in a
+browser and the confirm or webhook returns a receipt.
 
 ## How to read the labels
 
@@ -40,7 +42,7 @@ The same map in words, in case the image does not load:
 - **Milestones** — five stages, M0 to M4.
 - **The work** — six work items, KEL-5 to KEL-10: five done, one in progress.
 - **Surfaces** — where you talk to the assistant: dashboard first, Telegram next, WhatsApp and voice memos later.
-- **Money** — Stripe now, Razorpay and an in-app balance later.
+- **Money** — saved cards through Stripe and hosted Checkout through Razorpay, both merged; an in-app balance later.
 - **Design** — the screen plan is written, and so is the chat spec. The chat surface code is merged; the drawing file and the browser screen are next.
 
 On the tracker site ([`netlify/index.html`](../netlify/index.html)) the same SVG is embedded
@@ -56,7 +58,7 @@ promise that full-vision scope lands this week. Scope is cumulative: M2 includes
 | Stage | Target | State | What finishing it means |
 |---|---|---|---|
 | **M0 Foundation** | 30 Oct 2026 | IN PROGRESS | The repo (public), the docs, the tests, the standard development setup, model and provider chosen, and a written list of what could go wrong. The repo, docs, tests, and skill contract are in. Still open: the automated checks, the development setup, and the threat model. |
-| **M1 Prototype** | 30 Oct 2026 | IN PROGRESS | The end-to-end story: ask, get an answer with sources, read a file, approve an action, pay with a saved card, watch the six-scene demo. All six work items live here. Five are done and merged: KEL-5 to KEL-9. KEL-10, the wallet, is merged as an offline scaffold; its live Stripe exercise is pending a test key. |
+| **M1 Prototype** | 30 Oct 2026 | IN PROGRESS | The end-to-end story: ask, get an answer with sources, read a file, approve an action, pay with a saved card, watch the six-scene demo. All six work items live here. Five are done and merged: KEL-5 to KEL-9. KEL-10, payments, has its saved-card and hosted-Checkout paths merged; one live test-mode payment is pending. |
 | **M2 Polished MVP** | 30 Oct 2026 | TO COME | Survives ordinary use: picks up after a restart, self-checks, better search over your documents, repeatable quality measurements, and a deploy on the Nebius GPU. |
 | **M3 Hardening** | 30 Oct 2026 | TO COME | The privacy and cost promises hold under pressure: who sees what, where keys live, caps on traffic, a retention rule, and a spend ceiling. |
 | **M4 Full vision** | 30 Oct 2026 | TO COME | More devices, work the assistant starts on its own, abilities added by others, and team sharing. A direction, not a deadline. |
@@ -64,8 +66,8 @@ promise that full-vision scope lands this week. Scope is cumulative: M2 includes
 ## The six work items
 
 KEL-5 feeds KEL-6 and KEL-7. Those two feed KEL-8. KEL-7 also feeds KEL-10. KEL-8 comes before the
-demo, KEL-9, which is merged. KEL-10, the wallet, is the one item still open: its code is merged and
-its live run waits on a Stripe test key.
+demo, KEL-9, which is merged. KEL-10, payments, is the one item still open: both of its paths are
+merged and reviewed, and one live test-mode payment is left to make.
 
 ### KEL-5 — Skill contracts — DONE
 
@@ -107,7 +109,7 @@ price is counted per chunk.
 - Merge: [`d3c763e`](https://github.com/Anshieee/kelp/commit/d3c763e) (branch [`kel-6`](https://github.com/Anshieee/kelp/tree/kel-6), head `4c72afc`)
 
 Status detail: merged into `main` at `d3c763e`. The kernel suite is 43 tests — 25 for the loop and
-18 for the streaming client — and passes with the rest of the 345. The review written up in
+18 for the streaming client — and passes with the rest of the 491. The review written up in
 [`docs/REVIEW_KEL6_KEL7.md`](REVIEW_KEL6_KEL7.md) signed off, and KEL-8 built on top of it.
 
 ### KEL-7 — Approval gate — DONE
@@ -150,7 +152,7 @@ showing where an answer came from, and approval requests shown in the conversati
 Status detail: merged into `main` at `e0bbb72`. The chat surface is in: named threads that can be
 reopened, an append-only stream of events, a card for each tool step, approvals shown in the
 conversation over the KEL-7 gate, artifacts, and a cooperative cancel token so Stop works. The chat
-suite is 86 tests, part of the 345. The spec is on `main` at 1,164 lines; the review fixes that
+suite is 86 tests, part of the 491. The spec is on `main` at 1,164 lines; the review fixes that
 shaped it landed at `56b0785`:
 
 - **Honest dependencies (M1).** The web search, GitHub read, and document handlers are still stubs.
@@ -173,42 +175,72 @@ shaped it landed at `56b0785`:
 The browser screen that draws this surface is still to come. The drawing file comes first, then the
 screen code.
 
-### KEL-10 — Wallet — IN PROGRESS
+### KEL-10 — Payments — IN PROGRESS
 
-Saved cards through Stripe: save once, list, a per-purchase cap, a monthly cap, a confirmation
-window, and a receipt. Every payment passes through the KEL-7 approval step, so nothing is
-charged without a yes.
+Two ways to pay, one ledger. Saved cards through Stripe: save once, list, a per-purchase cap, a
+monthly cap, a confirmation window, and a receipt. Hosted Checkout through Razorpay: the browser
+pays on Razorpay's page, and the order is reserved against the same caps before it leaves the
+machine. Every payment passes through the KEL-7 approval step, so nothing is charged without a yes.
 
 *Why it matters:* paying is the clearest case of something the assistant must never do on its own.
 
-*Plain words:* **Stripe** is the payment company that stores card details, so the app never holds
+*Plain words:* **Stripe** is a payment company that stores card details, so the app never holds
 them. **SetupIntent** is Stripe's name for the one-time step that saves a card for later.
+**Razorpay** is a second payment company, and a **hosted Checkout** is its own payment page — the
+card is typed there, not here. A **signature** is a short code computed with a shared secret; it
+proves a message really came from Razorpay.
 
 - Linear: https://linear.app/kelp-ai/issue/KEL-10/wallet-stripe-saved-cards-setupintent-attach-list-propose-approve
 - Wallet: [`payments/wallet.py`](https://github.com/Anshieee/kelp/blob/main/payments/wallet.py) (main)
-- HTTP surface: [`chat/wallet.py`](https://github.com/Anshieee/kelp/blob/main/chat/wallet.py) (main)
-- Tests: [`tests/test_wallet.py`](https://github.com/Anshieee/kelp/blob/main/tests/test_wallet.py) and
-  [`tests/test_wallet_api.py`](https://github.com/Anshieee/kelp/blob/main/tests/test_wallet_api.py)
-- Merge: [`5e270eb`](https://github.com/Anshieee/kelp/commit/5e270eb) (branch
+- Wallet HTTP surface: [`chat/wallet.py`](https://github.com/Anshieee/kelp/blob/main/chat/wallet.py) (main)
+- Razorpay gateway: [`payments/razorpay_gateway.py`](https://github.com/Anshieee/kelp/blob/main/payments/razorpay_gateway.py) (main)
+- Checkout: [`payments/razorpay_checkout.py`](https://github.com/Anshieee/kelp/blob/main/payments/razorpay_checkout.py) (main)
+- Checkout HTTP surface: [`chat/checkout.py`](https://github.com/Anshieee/kelp/blob/main/chat/checkout.py) (main)
+- Tests: [`tests/test_wallet.py`](https://github.com/Anshieee/kelp/blob/main/tests/test_wallet.py),
+  [`tests/test_wallet_api.py`](https://github.com/Anshieee/kelp/blob/main/tests/test_wallet_api.py),
+  [`tests/test_razorpay_gateway.py`](https://github.com/Anshieee/kelp/blob/main/tests/test_razorpay_gateway.py),
+  [`tests/test_razorpay_checkout.py`](https://github.com/Anshieee/kelp/blob/main/tests/test_razorpay_checkout.py), and
+  [`tests/test_checkout_api.py`](https://github.com/Anshieee/kelp/blob/main/tests/test_checkout_api.py)
+- Merge, saved cards: [`5e270eb`](https://github.com/Anshieee/kelp/commit/5e270eb) (branch
   [`kel-10-scaffold`](https://github.com/Anshieee/kelp/tree/kel-10-scaffold), head `a98054b`)
+- Merge, Razorpay gateway: [`5472c3b`](https://github.com/Anshieee/kelp/commit/5472c3b) (branch
+  [`kel-10-razorpay`](https://github.com/Anshieee/kelp/tree/kel-10-razorpay), head `cabefb7`)
+- Merge, hosted Checkout: [`c474c72`](https://github.com/Anshieee/kelp/commit/c474c72) (branch
+  [`kel-10-checkout`](https://github.com/Anshieee/kelp/tree/kel-10-checkout), head `f07baee`)
 - Placeholder settings file it grew out of: [`payments/stripe_wallet.py`](https://github.com/Anshieee/kelp/blob/main/payments/stripe_wallet.py)
 
-Status detail: merged into `main` at `5e270eb`, built on `kel-10-scaffold` from `fa84773`. The
-scaffold is in and runs offline: a SQLite ledger for cards, proposals, and receipts; save-once and
-list; per-purchase and monthly caps; a ten-minute confirmation window; approve or deny as a
-single-use compare-and-set that also reserves the amount, so two approvals cannot overspend; an
-idempotency key per order so a retry cannot charge twice; and an HTTP surface under `/api/wallet`
-with the same bearer-token, cookie, and CSRF rules as the chat API. The suite grew by 86 tests — 54
-for the wallet and 32 for its HTTP surface — for 345 in total.
+Status detail: merged into `main` in three steps — saved cards at `5e270eb`, the Razorpay gateway at
+`5472c3b`, and hosted Checkout at `c474c72`. Everything runs offline: a SQLite ledger for cards,
+proposals, and receipts; save-once and list; per-purchase and monthly caps; a ten-minute
+confirmation window; approve or deny as a single-use compare-and-set that also reserves the amount,
+so two approvals cannot overspend; an idempotency key per order so a retry cannot charge twice; and
+HTTP surfaces under `/api/wallet` and `/api/wallet/checkout` with the same bearer-token, cookie, and
+CSRF rules as the chat API. Checkout adds four routes — status, create, confirm, and webhook — and
+settles only when a constant-time HMAC signature checks out *and* a provider fetch agrees on the
+order, amount, and currency. Settlement is idempotent by receipt, a definitive mismatch fails the
+order and releases its reservation, and an unknown outcome stays approved for a retry.
 
-The secret key is read from the server environment only. It never reaches a browser, the ledger, a
-status payload, an error body, or a `repr`. Card details are reduced to brand, last4, and expiry;
-card-like input is rejected rather than echoed. Every real Stripe call sits behind a gateway
-interface, and the tests inject a fake, so no request leaves the machine and no money moves.
+The suite grew by 266 tests: 54 for the wallet, 32 for its HTTP surface, 72 for the Razorpay
+gateway, 52 for Checkout, and 22 for the Checkout HTTP surface — 491 in total.
 
-Still open: the live exercise against Stripe test mode. That needs `STRIPE_SECRET_KEY` set in the
-server environment; until it is, the wallet is visible but cannot take payments, and the Linear item
-stays In Progress rather than Done. Razorpay and an in-app balance are outside this round.
+The review of the Checkout path raised four findings, and all four are fixed. A Checkout order and a
+saved-card approval can no longer race for the same order: the reservation writes the checkout claim
+inside the same transaction that checks the cap, so the loser gets a 409. A paid order whose
+checkout row has no provider payment id is refused rather than returning a receipt someone else
+settled. A definitive provider error no longer fails an order that already has a Checkout
+registered. And once `RAZORPAY_WEBHOOK_SECRET` is set, the `X-Razorpay-Signature` header is the only
+accepted webhook authentication: a per-payment signature in the body is not a fallback, and an
+empty header counts as missing.
+
+Keys are read from the server environment only. They never reach a browser, the ledger, a status
+payload, an error body, or a `repr`. Card details are reduced to brand, last4, and expiry; card-like
+input is rejected rather than echoed. Every real provider call sits behind a transport interface,
+and the tests inject a fake, so no request leaves the machine and no money moves.
+
+Still open: one live test-mode payment. Someone has to finish a Checkout in a browser with
+`RAZORPAY_KEY_ID` and `RAZORPAY_KEY_SECRET` set in the server environment, and the confirm or webhook
+path has to return a receipt. Until that happens the Linear item stays In Progress rather than Done.
+An in-app balance is outside this round.
 
 ### KEL-9 — Demo run — DONE
 
@@ -248,9 +280,11 @@ to the dashboard slice; the receipts are the review artefacts for this backend-o
 
 ### Money
 
-- **Stripe, now.** Saved cards with a per-purchase cap, a monthly cap, a confirmation window, and a
+- **Stripe saved cards, now.** A per-purchase cap, a monthly cap, a confirmation window, and a
   receipt. Tracked by KEL-10.
-- **Razorpay, later.** No integration in this prototype.
+- **Razorpay hosted Checkout, now.** A second path into the same ledger: the order is reserved
+  against the same caps, the card is typed on Razorpay's page, and settlement needs a signature plus
+  a provider lookup that agrees on the order, amount, and currency. Also KEL-10.
 - **In-app balance, later.** Showing a balance, topping it up, and keeping a ledger all wait.
 
 ### Design
@@ -271,7 +305,7 @@ to the dashboard slice; the receipts are the review artefacts for this backend-o
 ### GitHub
 
 - Repository (public): https://github.com/Anshieee/kelp
-- Shared copy of the code: https://github.com/Anshieee/kelp/tree/main — head `5e270eb`
+- Shared copy of the code: https://github.com/Anshieee/kelp/tree/main — head `c474c72`
 - All branches: https://github.com/Anshieee/kelp/branches
   - `kel-5` — merged (`b8de92f`)
   - `kel-6` — merged at `d3c763e`; branch head `4c72afc`
@@ -280,9 +314,11 @@ to the dashboard slice; the receipts are the review artefacts for this backend-o
   - `kel-8-build` — merged at `e0bbb72`; branch head `d9e8618`
   - `kel-9` — merged at `1f08e53`; branch head `60f653b`
   - `kel-10-scaffold` — merged at `5e270eb`; branch head `a98054b`
+  - `kel-10-razorpay` — merged at `5472c3b`; branch head `cabefb7`
+  - `kel-10-checkout` — merged at `c474c72`; branch head `f07baee`
 - Change history: https://github.com/Anshieee/kelp/commits/main
 - Pull requests: https://github.com/Anshieee/kelp/pulls
-- Tests: 345 pass on `main` (`python -m pytest`); `make demo` plays all six beats
+- Tests: 491 pass on `main` (`python -m pytest`); `make demo` plays all six beats
 
 ### Linear
 

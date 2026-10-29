@@ -27,7 +27,7 @@ digraph sdlc {
   m3   [label="M3 Hardening\nTO COME" shape="box" style="filled,bold,rounded" fontsize="15" penwidth="2" fillcolor="#F0DCC8" URL="#m3" tooltip="Stage 3: privacy and cost promises hold. Agreed, not started."];
   m4   [label="M4 Full vision\nTO COME" shape="box" style="filled,bold,rounded" fontsize="15" penwidth="2" fillcolor="#DDD8EF" URL="#m4" tooltip="Stage 4: more devices and sharing. Direction, not a deadline."];
   surf [label="Surfaces" shape="box" style="filled,bold,rounded" fontsize="15" penwidth="2" fillcolor="#CDE9E4" URL="#surfaces" tooltip="Where you talk to the assistant: screen now, phone apps later."];
-  pay  [label="Payments" shape="box" style="filled,bold,rounded" fontsize="15" penwidth="2" fillcolor="#F2D8D8" URL="#payments" tooltip="How money moves: Stripe now, the rest later."];
+  pay  [label="Payments" shape="box" style="filled,bold,rounded" fontsize="15" penwidth="2" fillcolor="#F2D8D8" URL="#payments" tooltip="How money moves: Stripe saved cards and Razorpay Checkout, both merged. Balance later."];
   fig  [label="Figma scope done" shape="box" style="filled,bold,rounded" fontsize="15" penwidth="2" fillcolor="#E2E2E2" URL="#figma" tooltip="Screen plan is written. Drawing file is next, no code yet."];
 
   center -> m0;
@@ -52,7 +52,7 @@ digraph sdlc {
   k6  [label="KEL-6 Answer loop\nDONE" shape="box" style="filled,bold,rounded" fillcolor="#D9EDD7" URL="#kel-6" tooltip="Engine: reads, thinks, answers bit by bit. Merged and reviewed."];
   k7  [label="KEL-7 Ask first\nDONE" shape="box" style="filled,bold,rounded" fillcolor="#D9EDD7" URL="#kel-7" tooltip="Checkpoint that asks you before acting. Merged and reviewed."];
   k8  [label="KEL-8 Chat screen\nDONE" shape="box" style="filled,bold,rounded" fillcolor="#D9EDD7" URL="#kel-8" tooltip="Main screen you talk through. Surface merged to main; the browser screen is next."];
-  k10 [label="KEL-10 Saved cards\nIN PROGRESS" shape="box" style="filled,bold,rounded" fillcolor="#D9EDD7" URL="#kel-10" tooltip="Pay with saved cards after you say yes. Scaffold merged; live Stripe run waits on a test key."];
+  k10 [label="KEL-10 Payments\nIN PROGRESS" shape="box" style="filled,bold,rounded" fillcolor="#D9EDD7" URL="#kel-10" tooltip="Pay with a saved card or hosted Checkout after you say yes. Both merged; live test-mode payment pending."];
   k9  [label="KEL-9 Final check\nDONE" shape="box" style="filled,bold,rounded" fillcolor="#D9EDD7" URL="#kel-9" tooltip="Six-scene demo that proves it works. Merged and reviewed."];
   m1 -> k5;
   m1 -> k6;
@@ -94,9 +94,11 @@ digraph sdlc {
   k8 -> k8_appr;
 
   // KEL-10 leaves
-  k10_cards [label="Save once, pay after yes\nIN PROGRESS" fillcolor="#EDF6EC" URL="#kel-10" tooltip="Cards kept by Stripe, charged only with approval. Code merged, runs on a fake transport."];
+  k10_checkout [label="Hosted Checkout, test mode\nIN PROGRESS" fillcolor="#EDF6EC" URL="#kel-10" tooltip="Order, signature check, settlement, webhook. Merged and reviewed; live payment pending."];
+  k10_cards [label="Save once, pay after yes\nIN PROGRESS" fillcolor="#EDF6EC" URL="#kel-10" tooltip="Cards kept by the processor, charged only with approval. Code merged, runs on a fake transport."];
   k10_caps  [label="Per-buy, monthly caps\nIN PROGRESS" fillcolor="#EDF6EC" URL="#kel-10" tooltip="Spending rules that block over-limit pays. Built and tested offline."];
   k10_receipt [label="Receipt every time\nIN PROGRESS" fillcolor="#EDF6EC" URL="#kel-10" tooltip="What was done, when, and how much. Built and tested offline; live run pending."];
+  k10 -> k10_checkout;
   k10 -> k10_cards;
   k10 -> k10_caps;
   k10 -> k10_receipt;
@@ -144,8 +146,8 @@ digraph sdlc {
   surf -> s_voice;
 
   // Payments leaves (soft rose family)
-  p_stripe [label="Stripe saved cards now" fillcolor="#F9ECEC" URL="#payments" tooltip="Save once, pay after approval, receipt each time. Scaffold merged; live run waits on a test key."];
-  p_razor  [label="Razorpay later" fillcolor="#F9ECEC" URL="#payments" tooltip="No integration in this round. Later."];
+  p_stripe [label="Stripe saved cards now" fillcolor="#F9ECEC" URL="#payments" tooltip="Save once, pay after approval, receipt each time. Code merged; live run waits on a test key."];
+  p_razor  [label="Razorpay Checkout, test mode" fillcolor="#F9ECEC" URL="#payments" tooltip="Hosted Checkout plus a saved-card gateway. Merged and reviewed; live test payment pending."];
   p_bal    [label="In-app balance later" fillcolor="#F9ECEC" URL="#payments" tooltip="Topping up and ledger wait. Later."];
   pay -> p_stripe;
   pay -> p_razor;
