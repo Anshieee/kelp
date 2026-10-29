@@ -20,7 +20,7 @@ from typing import Any, Iterator
 import pytest
 
 from chat import ChatAPI, ChatService, ChatStore, Request, make_server
-from chat.api import AuthFailureTracker, SessionStore
+from chat.api import AuthFailureTracker, RateLimiter, SessionStore
 from chat.logging import configure_logging
 
 from .chatkit import MODEL, StubProvider, text_script
@@ -43,6 +43,8 @@ def _make_api(
     lockout_seconds: float = 300.0,
     idle_seconds: float = 300.0,
     csrf_token: str | None = None,
+    limiter: RateLimiter | None = None,
+    max_streams_per_owner: int = 3,
 ) -> tuple[ChatAPI, ChatStore, SessionStore, AuthFailureTracker]:
     store = ChatStore(tmp_path / "chat.db")
     service = ChatService(
@@ -64,6 +66,8 @@ def _make_api(
         sessions=sessions,
         auth_failures=failures,
         cookie_secure=True,
+        limiter=limiter,
+        max_streams_per_owner=max_streams_per_owner,
     )
     return api, store, sessions, failures
 
@@ -447,6 +451,153 @@ def test_lockout_after_repeated_failures_and_expiry(tmp_path: Path) -> None:
         now[0] += 11
         assert tracker.status("hashed-identity") == (0, None)
         assert len(failures) >= 1
+    finally:
+        api.close()
+        store.close()
+
+
+def test_sessions_share_one_owner_rate_limit_budget(tmp_path: Path) -> None:
+    """M1: the budget is keyed on the owner, not on the credential.
+
+    Two sessions minted from the same root token are the same owner, so the
+    second tab cannot spend a second bucket.
+    """
+
+    limiter = RateLimiter(
+        {
+            "auth": (600.0, 100.0),
+            "chat": (600.0, 100.0),
+            "upload": (600.0, 100.0),
+            "read": (60.0, 1.0),
+            "admin": (600.0, 100.0),
+        }
+    )
+    api, store, _sessions, _failures = _make_api(tmp_path, limiter=limiter)
+    try:
+        _first, first_id, _first_csrf = _sign_in(api)
+        # Sign-in is itself a read-class request, so clear the budget after
+        # minting both sessions: the assertions are about the sessions only.
+        limiter.reset()
+        _second, second_id, _second_csrf = _sign_in(api)
+        limiter.reset()
+
+        opened = api.handle(
+            _request("GET", "/api/threads", cookie=_cookie_header(first_id))
+        )
+        assert opened.status == 200, opened.body
+
+        shared = api.handle(
+            _request("GET", "/api/threads", cookie=_cookie_header(second_id))
+        )
+        assert shared.status == 429
+        assert _body(shared)["error"]["details"]["class"] == "read"
+
+        # The root bearer is the same owner and the same bucket.
+        bearer = api.handle(_request("GET", "/api/threads", bearer=ROOT_TOKEN))
+        assert bearer.status == 429
+    finally:
+        api.close()
+        store.close()
+
+
+def test_stream_cap_is_shared_by_every_session(tmp_path: Path) -> None:
+    """M1: the per-owner stream cap counts slots, not credentials."""
+
+    api, store, _sessions, _failures = _make_api(
+        tmp_path, max_streams_per_owner=1
+    )
+    try:
+        created = api.handle(
+            _request("POST", "/api/threads", bearer=ROOT_TOKEN, body=b"{}")
+        )
+        assert created.status == 201, created.body
+        thread_id = _body(created)["thread"]["id"]
+        _first, first_id, _first_csrf = _sign_in(api)
+        _second, second_id, _second_csrf = _sign_in(api)
+
+        path = f"/api/threads/{thread_id}/stream"
+        opened = api.handle(_request("GET", path, cookie=_cookie_header(first_id)))
+        assert opened.status == 200, opened.body
+        assert opened.stream is not None
+        try:
+            refused = api.handle(
+                _request("GET", path, cookie=_cookie_header(second_id))
+            )
+            assert refused.status == 429
+            assert (
+                _body(refused)["error"]["details"]["reason"] == "stream_capacity"
+            )
+        finally:
+            opened.stream.close()
+    finally:
+        api.close()
+        store.close()
+
+
+def test_sign_in_failure_is_logged_counted_and_can_lock_out(
+    tmp_path: Path,
+) -> None:
+    """M2: a wrong bearer on sign-in goes through ``_reject_auth``.
+
+    A valid session cookie authorizes the route, so without this the wrong
+    bearer would be a bare 401 with no ``auth_failed`` record, no count, and
+    no lockout.
+    """
+
+    stream = io.StringIO()
+    configure_logging(level="warning", secret_values=(), stream=stream, enabled=True)
+    now = [1_000_000.0]
+    api, store, _sessions, _failures = _make_api(
+        tmp_path, clock=lambda: now[0], attempts=3, lockout_seconds=60.0
+    )
+    secret = "wrong-bearer-for-sign-in"
+    try:
+        _response, session_id, csrf = _sign_in(api)
+        authorized = {
+            "cookie": _cookie_header(session_id, csrf),
+            "csrf": csrf,
+            "origin": "http://localhost",
+            "host": "localhost",
+        }
+
+        def attempt() -> Any:
+            return api.handle(
+                _request("POST", "/api/auth/session", bearer=secret, **authorized)
+            )
+
+        first = attempt()
+        assert first.status == 401
+        records = [
+            json.loads(line)
+            for line in stream.getvalue().splitlines()
+            if line.strip()
+        ]
+        auth_records = [r for r in records if r["event"] == "auth_failed"]
+        assert len(auth_records) == 1
+        assert auth_records[0]["outcome"] == "rejected"
+        assert auth_records[0]["count"] == 1
+        assert auth_records[0]["status"] == 401
+        assert len(auth_records[0]["identity_hash"]) == 32
+        assert secret not in stream.getvalue()
+
+        # The cookie that authorized the wrapper does not erase the presented
+        # bearer's debt, so the failures accumulate into a lockout.
+        assert attempt().status == 401
+        locked = attempt()
+        assert locked.status == 429
+        assert _body(locked)["error"]["code"] == "rate_limited"
+        assert locked.headers["Retry-After"].isdigit()
+        assert attempt().status == 429
+
+        # The lockout expires; the next wrong bearer is a plain 401 again.
+        now[0] += 61
+        assert attempt().status == 401
+
+        # A correct bearer still mints a session through the same cookie.
+        minted = api.handle(
+            _request("POST", "/api/auth/session", bearer=ROOT_TOKEN, **authorized)
+        )
+        assert minted.status == 201, minted.body
     finally:
         api.close()
         store.close()

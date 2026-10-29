@@ -923,8 +923,11 @@ KEL-8 adds a network surface to a private assistant; these are requirements, not
 ### 12.1 Rate limits and concurrency (KEL-17)
 
 The limiter runs in front of dispatch, before routing or body work. Every
-authenticated request costs one token from its route class, keyed by client
-identity; a presented token is hashed and never retained as a key.
+authenticated request costs one token from its route class. The key is the
+owner, not the credential: this is a single-owner app, so the root bearer
+token and every session minted from it share one bucket and a second tab
+cannot open a second allowance. With auth disabled the peer address is the
+key, and a presented token is hashed and never retained as a key.
 
 | Class | Routes | Default per minute / burst |
 |---|---|---|
@@ -942,7 +945,9 @@ identity; a presented token is hashed and never retained as a key.
   burst of bad credentials cannot spend the owner's chat or read budget. A
   successful authentication clears that peer's failure debt, and a key that
   goes idle is discarded (default 300 s; `KELP_RATE_LIMIT_IDLE_SECONDS`), so
-  the map is bounded and a quiet client starts from a full bucket.
+  the map is bounded and a quiet client starts from a full bucket. A rejected
+  `POST /api/auth/session` counts against the presented bearer even when a
+  session cookie authorized the route (§12.2).
 - A global turn cap and a per-owner stream cap sit alongside the token
   buckets. Exceeding either returns `429 rate_limited` with
   `details.reason = "turn_capacity"` or `"stream_capacity"` and a short
@@ -1011,6 +1016,10 @@ Cookie rules:
   `KELP_AUTH_FAILURE_MAX_KEYS` and idles out; after
   `KELP_AUTH_LOCKOUT_ATTEMPTS` failures that identity gets a
   `429 rate_limited` with `Retry-After` for `KELP_AUTH_LOCKOUT_SECONDS`.
+- A wrong bearer on `POST /api/auth/session` follows the same path even when a
+  session cookie authorized the request: it is logged, counted, and can lock
+  that bearer out. The cookie that admitted the route does not reset the
+  presented credential's failure debt.
 
 ---
 

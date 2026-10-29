@@ -117,6 +117,11 @@ _DEFAULT_AUTH_LOCKOUT_SECONDS = 300.0
 _DEFAULT_AUTH_FAILURE_IDLE_SECONDS = 300.0
 _DEFAULT_AUTH_FAILURE_MAX_KEYS = 4096
 _EPOCH_COOKIE_DATE = "Thu, 01 Jan 1970 00:00:00 GMT"
+#: The app has exactly one owner, so every authenticated credential — the root
+#: bearer token and every session minted from it — maps to this one limiter
+#: key. Deriving the key from the credential would give each session its own
+#: bucket and let a second tab double the owner's allowance.
+OWNER_IDENTITY = "owner"
 _DEFAULT_MAX_CONCURRENT_TURNS = 4
 _DEFAULT_MAX_STREAMS_PER_OWNER = 3
 _MAX_CONCURRENT_TURNS_ENV = "KELP_MAX_CONCURRENT_TURNS"
@@ -652,11 +657,12 @@ def _presented_token(request: Request) -> str | None:
 
 
 def _client_identity(request: Request) -> str:
-    """A stable, non-secret limiter key.
+    """A stable, non-secret limiter key for an unauthenticated caller.
 
-    A presented token is hashed, never retained: the map must not become a
-    secondary store of the owner token. With auth disabled the peer address is
-    the identity, which also makes per-client tests possible.
+    Authorized traffic is keyed on the owner instead
+    (:meth:`ChatAPI._limiter_identity`), so this is the fallback for a
+    deployment with auth disabled. A presented token is hashed, never
+    retained: the map must not become a secondary store of the owner token.
     """
 
     token = _presented_token(request)
@@ -1493,7 +1499,7 @@ class ChatAPI:
             if self._authorized_for(request):
                 route = _classify_route(request.method, segments)
                 allowed, retry_after = self.limiter.consume(
-                    route, _client_identity(request)
+                    route, self._limiter_identity(request)
                 )
                 # A successful login clears accumulated failure debt for this
                 # peer without touching the owner's route budget.
@@ -1514,6 +1520,21 @@ class ChatAPI:
         except Exception:  # noqa: BLE001 - observability/limits never break traffic
             log("rate_limit_error", level="warning", status="error")
             return None
+
+    def _limiter_identity(self, request: Request) -> str:
+        """The limiter key for an already-authorized request.
+
+        This is a single-owner app, so the root bearer token and every session
+        cookie minted from it are the same principal: all of them share one
+        constant key, which is what makes the per-owner budget really per
+        owner. With auth disabled there is no owner to name, so the peer
+        address remains the key and distinct callers keep distinct buckets.
+        """
+
+        auth = self._authenticate(request)
+        if auth.ok and auth.via != "disabled":
+            return OWNER_IDENTITY
+        return _client_identity(request)
 
     def _limiter_exposition(self) -> str:
         """Prometheus gauges for the two concurrency caps, appended to /metrics."""
@@ -1679,7 +1700,7 @@ class ChatAPI:
     def _stream(self, request: Request, thread_id: str) -> Response:
         if self.service.store.get_thread(thread_id) is None:
             raise ChatError("unknown_thread", status=404)
-        owner = _client_identity(request)
+        owner = self._limiter_identity(request)
         if not self._stream_slots.acquire(owner):
             return self._busy_response(
                 class_name="streams",
@@ -1927,7 +1948,11 @@ class ChatAPI:
         if not auth.ok:
             self._reject_auth(request)
             raise ChatError("unauthorized", status=401)
-        self.auth_failures.clear(_auth_failure_identity(request))
+        if not _is_sign_in(request):
+            # A sign-in authenticates its own bearer separately, so the cookie
+            # that let the wrapper through must not erase the debt of the
+            # credential the request actually presented.
+            self.auth_failures.clear(_auth_failure_identity(request))
         if request.method.upper() in _MUTATING and not self._csrf_ok(request, auth):
             raise ChatError("csrf_failed", status=403)
 
@@ -2115,9 +2140,13 @@ class ChatAPI:
         Requiring the bearer here is the point: a cookie is never sufficient
         to create another cookie, so a stolen session cannot extend itself
         indefinitely or survive a root-token rotation by minting a replacement.
+        A wrong bearer is a rejected credential like any other: it is logged,
+        counted, and can lock the identity out, even when the request also
+        carries a session cookie that authorized the route.
         """
 
         if not self._bearer_authorized(request):
+            self._reject_auth(request)
             raise ChatError("unauthorized", status=401)
         session_id, csrf_token, record = self.sessions.create()
         response = _json_response(
