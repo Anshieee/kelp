@@ -1,0 +1,63 @@
+# systemd wrapper for the Compose deployment (KEL-16, M2-F).
+#
+# systemd owns boot and stop; Compose owns the process. The image already
+# restarts a crashed server (`restart: unless-stopped`) and its HEALTHCHECK
+# marks a wedged one unhealthy, so this unit stays deliberately thin.
+#
+# The unit never builds. The release tag lives in /opt/kelp/.env as KELP_IMAGE
+# (written after the one-off `docker build` in docs/DEPLOY.md §4), and is loaded
+# here so `--no-build` still finds the image. Both env files are shared with the
+# non-systemd path, with different jobs:
+#
+#   /opt/kelp/.env     Compose interpolation (KELP_IMAGE, KELP_PUBLISH_PORT).
+#                      Optional for `docker compose` itself, explicit here so the
+#                      unit has the same view as the shell.
+#   deploy/kelp.env    Container environment: secrets and runtime config, read
+#                      by the Compose `env_file:` directive, never by systemd.
+#
+# Install:
+#   sudo install -m 0644 deploy/kelp.service /etc/systemd/system/kelp.service
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now kelp.service
+#
+# Logs:    docker compose -f /opt/kelp/docker-compose.yml logs --tail=100 kelp
+# Stop:    sudo systemctl stop kelp.service   (SIGTERM, 30s grace, turns settle)
+
+[Unit]
+Description=KELP private assistant (Docker Compose, single replica)
+Documentation=file:/opt/kelp/docs/DEPLOY.md
+Requires=docker.service
+After=docker.service network-online.target
+Wants=network-online.target
+# Never let a failed start loop forever against a missing env file.
+StartLimitIntervalSec=300
+StartLimitBurst=3
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+WorkingDirectory=/opt/kelp
+Environment=COMPOSE_PROJECT_NAME=kelp
+# `-` keeps the unit startable before the first deployment; the ExecStartPre
+# below still refuses to run without a tag.
+EnvironmentFile=-/opt/kelp/.env
+
+# Fail before Compose touches the project. `--no-build` cannot build a missing
+# image, so say why instead of letting it surface as a pull error. Two checks:
+# the variable must be set (it comes from the EnvironmentFile above), and the
+# tag must exist on this host.
+ExecStartPre=/bin/sh -c 'test -n "${KELP_IMAGE}" || { echo "kelp: KELP_IMAGE is unset; build first (docs/DEPLOY.md section 4)" >&2; exit 1; }'
+ExecStartPre=/usr/bin/docker image inspect ${KELP_IMAGE}
+
+# `up -d` waits for the container to start, not for readiness; the runbook's
+# smoke step is what proves a healthy deployment.
+ExecStart=/usr/bin/docker compose up -d --no-build --remove-orphans
+ExecStop=/usr/bin/docker compose down
+TimeoutStartSec=180
+TimeoutStopSec=60
+# docker compose talks to the daemon over /var/run/docker.sock.
+Restart=no
+UMask=0022
+
+[Install]
+WantedBy=multi-user.target

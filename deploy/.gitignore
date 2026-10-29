@@ -1,0 +1,5 @@
+# Runtime env files (KEL-16) hold secrets; only the template is tracked.
+# Patterns are relative to this directory.
+kelp.env
+*.env
+!kelp.env.example

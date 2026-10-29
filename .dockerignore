@@ -1,0 +1,66 @@
+# Build context for the KELP image.
+#
+# Keep the context small and secret-free: no VCS metadata, no local state, no
+# environment files. The Dockerfile copies only chat/, kernel/, openshell/,
+# skills/, payments/, and deploy/healthcheck.py, so everything here is belt and
+# braces against an accidental `COPY .` later.
+#
+# Patterns use `**/` for anything that can appear below the root: Docker matches
+# the full relative path, so a bare `*.log` would only catch a root-level file.
+
+# Version control and local tooling
+.git/
+.gitignore
+.gitattributes
+.github/
+.netlify/
+
+# Secrets and environment files: never sent to the daemon or copied into the
+# image, at any depth. `payments/.env.example` and `deploy/*.env.example` are
+# tracked templates, so they are excluded explicitly as well as by pattern.
+**/.env
+**/.env.*
+deploy/*.env
+deploy/*.env.example
+payments/.env.example
+
+# Runtime state (database, artifacts, audit, usage, index, logs)
+var/
+logs/
+**/*.log
+**/*.db
+**/*.db-wal
+**/*.db-shm
+**/*.db.lock
+**/*.jsonl
+data/
+backups/
+
+# Tests, fixtures, evals, and demos are not part of the runtime image
+tests/
+demo/
+evals/
+pytest.ini
+.pytest_cache/
+.coverage
+coverage/
+htmlcov/
+**/__pycache__/
+**/*.py[cod]
+
+# Docs and the published tracker site
+docs/
+netlify/
+README.md
+**/*.md
+LICENSE
+
+# Local environments and build output
+.venv/
+venv/
+node_modules/
+dist/
+build/
+.cache/
+.mypy_cache/
+.ruff_cache/
