@@ -11,9 +11,9 @@ that goes with it is [`sdlc-mindmap.svg`](sdlc-mindmap.svg), with a PNG fallback
 site embeds a copy of the SVG directly in the page, so every box there can be clicked; that copy
 and these two files must be updated together.
 
-What this snapshot rests on: `main` is at `793569c`, all **669 tests pass**, and the repository is
-public. KEL-5 through KEL-10 are merged, reviewed, and done; KEL-11, KEL-12, KEL-13, KEL-14, and
-KEL-15 are merged and reviewed too, and carry M2. KEL-10, payments, carries both its paths: the
+What this snapshot rests on: `main` is at `3f4d6cc`, all **734 tests pass**, and the repository is
+public. KEL-5 through KEL-10 are merged, reviewed, and done; KEL-11, KEL-12, KEL-13, KEL-14, KEL-15,
+and KEL-16 are merged and reviewed too, and close M2. KEL-10, payments, carries both its paths: the
 Stripe saved-card scaffold, the Razorpay gateway, and the Razorpay hosted Checkout.
 
 KEL-10 closed on **owner confirmation on 30 October 2026** (Assume-Done). The code paths are merged
@@ -42,7 +42,16 @@ KEL-15 then made answer quality measurable, merged on 30 October 2026. It is one
 replays recorded model turns with the network blocked, scores 26 versioned cases across retrieval,
 tool choice, approvals, restart recovery, and multi-turn history, and exits non-zero when a gate is
 missed. It merged at `793569c` from `kel-15` (head `225f7c0`) and added 22 tests, taking the suite from
-647 to **669**. Still in M2: the deploy on the Nebius GPU.
+647 to **669**.
+
+KEL-16 then closed M2 on 30 October 2026. It is the deploy slice: one two-stage image that runs as a
+non-root user on a read-only filesystem, one Compose file that runs a named image and never builds or
+pulls, one systemd unit that refuses to start without that tag, a stdlib health probe, and a
+seventeen-section runbook from a bare VM to a working turn and back down again. It merged at
+`3f4d6cc` from `kel-16` (head `a63d49a`) and added 65 tests, taking the suite from 669 to **734**.
+No application code changed. Nothing was deployed to Nebius: every command in the runbook was run
+locally against the image on 30 October 2026 and the measured results are recorded there, while the
+end-to-end pass on a real host by someone other than the author is still owed.
 
 ## How to read the labels
 
@@ -63,13 +72,13 @@ snapshot date.
 
 ## The map
 
-![Mind map of the delivery: milestones M0 to M4, work items KEL-5 to KEL-14, product surfaces, payments, and design.](sdlc-mindmap.svg)
+![Mind map of the delivery: milestones M0 to M4, work items KEL-5 to KEL-16, product surfaces, payments, and design.](sdlc-mindmap.svg)
 
 The same map in words, in case the image does not load:
 
 - **Milestones** — five stages, M0 to M4.
-- **The work** — eleven work items, KEL-5 to KEL-15: all eleven done, M1 closed, and M2 under way
-  with five pieces merged.
+- **The work** — twelve work items, KEL-5 to KEL-16: all twelve done, and M1 and M2 closed, with the
+  six M2 pieces merged.
 - **Surfaces** — where you talk to the assistant: dashboard first, Telegram next, WhatsApp and voice memos later.
 - **Money** — saved cards through Stripe and hosted Checkout through Razorpay, both merged and closed out; an in-app balance later.
 - **Design** — the screen plan is written, and so is the chat spec. The chat surface code is merged; the drawing file and the browser screen are next.
@@ -88,17 +97,17 @@ promise that full-vision scope lands this week. Scope is cumulative: M2 includes
 |---|---|---|---|
 | **M0 Foundation** | 30 Oct 2026 | IN PROGRESS | The repo (public), the docs, the tests, the standard development setup, model and provider chosen, and a written list of what could go wrong. The repo, docs, tests, and skill contract are in. Still open: the automated checks, the development setup, and the threat model. |
 | **M1 Prototype** | 30 Oct 2026 | COMPLETE | The end-to-end story: ask, get an answer with sources, read a file, approve an action, pay with a saved card, watch the six-scene demo. All six work items live here, and all six are done: KEL-5 to KEL-9 were merged earlier, and KEL-10 closed on owner confirmation on 30 October 2026. |
-| **M2 Polished MVP** | 30 Oct 2026 | IN PROGRESS | Survives ordinary use: picks up after a restart, self-checks, better search over your documents, an honest account of what it did, repeatable quality measurements, and a deploy on the Nebius GPU. Done so far: KEL-11, the serve entrypoint; KEL-12, health and readiness; KEL-13, real document search with citations; KEL-14, structured logs and metrics; KEL-15, the eval harness that measures answer quality. The GPU deploy remains. |
+| **M2 Polished MVP** | 30 Oct 2026 | COMPLETE | Survives ordinary use: picks up after a restart, self-checks, better search over your documents, an honest account of what it did, repeatable quality measurements, and a deploy a stranger can repeat. All six work items are done: KEL-11, the serve entrypoint; KEL-12, health and readiness; KEL-13, real document search with citations; KEL-14, structured logs and metrics; KEL-15, the eval harness that measures answer quality; KEL-16, the image and runbook. The runbook's end-to-end pass on a real Nebius host is still to be done. |
 | **M3 Hardening** | 30 Oct 2026 | TO COME | The privacy and cost promises hold under pressure: who sees what, where keys live, caps on traffic, a retention rule, and a spend ceiling. |
 | **M4 Full vision** | 30 Oct 2026 | TO COME | More devices, work the assistant starts on its own, abilities added by others, and team sharing. A direction, not a deadline. |
 
-## The eleven work items
+## The twelve work items
 
 KEL-5 feeds KEL-6 and KEL-7. Those two feed KEL-8. KEL-7 also feeds KEL-10. KEL-8 comes before the
-demo, KEL-9. All eleven are done. KEL-10, payments, closed M1 on owner confirmation on 30 October
+demo, KEL-9. All twelve are done. KEL-10, payments, closed M1 on owner confirmation on 30 October
 2026: both of its paths were merged and reviewed earlier, and the live step was taken on the owner's
-word. KEL-11 then opened M2 with the serve entrypoint, and KEL-12, KEL-13, KEL-14, and KEL-15 followed
-with health checks, real document search, observability, and the eval harness.
+word. KEL-11 then opened M2 with the serve entrypoint, and KEL-12, KEL-13, KEL-14, KEL-15, and KEL-16
+followed with health checks, real document search, observability, the eval harness, and the deploy.
 
 ### KEL-5 — Skill contracts — DONE
 
@@ -140,7 +149,7 @@ price is counted per chunk.
 - Merge: [`d3c763e`](https://github.com/Anshieee/kelp/commit/d3c763e) (branch [`kel-6`](https://github.com/Anshieee/kelp/tree/kel-6), head `4c72afc`)
 
 Status detail: merged into `main` at `d3c763e`. The kernel suite is 43 tests — 25 for the loop and
-18 for the streaming client — and passes with the rest of the 669. The review written up in
+18 for the streaming client — and passes with the rest of the 734. The review written up in
 [`docs/REVIEW_KEL6_KEL7.md`](REVIEW_KEL6_KEL7.md) signed off, and KEL-8 built on top of it.
 
 ### KEL-7 — Approval gate — DONE
@@ -183,7 +192,7 @@ showing where an answer came from, and approval requests shown in the conversati
 Status detail: merged into `main` at `e0bbb72`. The chat surface is in: named threads that can be
 reopened, an append-only stream of events, a card for each tool step, approvals shown in the
 conversation over the KEL-7 gate, artifacts, and a cooperative cancel token so Stop works. The chat
-suite is 86 tests, part of the 669. The spec is on `main` at 1,164 lines; the review fixes that
+suite is 86 tests, part of the 734. The spec is on `main` at 1,164 lines; the review fixes that
 shaped it landed at `56b0785`:
 
 - **Honest dependencies (M1).** The web search, GitHub read, and document handlers are still stubs.
@@ -337,8 +346,10 @@ with its completed steps kept, fails tool blocks stuck in `running` or `waiting_
 `error.code = "interrupted"`, and expires approvals whose waiter died with the process — recording
 the same `approval_resolved` and `approval_expired` audit entries a normal decision would, with no
 command text or secret values. Two review findings were fixed before the merge: in-flight turns are
-settled on shutdown rather than abandoned, and `--check` is a true dry run. Still in M2: the
-dashboard's Retry and Resume buttons, better search, quality measurements, and the Nebius GPU deploy.
+settled on shutdown rather than abandoned, and `--check` is a true dry run. Still in M2 at that
+point: the dashboard's Retry and Resume buttons, better search, quality measurements, and the
+deploy. The last three of those arrived as KEL-13, KEL-15, and KEL-16; the Retry and Resume
+buttons are still open.
 
 ### KEL-12 — Health and readiness — DONE
 
@@ -510,6 +521,56 @@ tool output on deterministic stubs. And the regression compare reads the most re
 for the same dataset version under the gitignored `var/evals`, so a clean checkout gates on the
 thresholds alone while a working tree also catches a drop against the previous run.
 
+### KEL-16 — Deploy — DONE
+
+One image, one Compose file, one systemd unit, one probe, and one runbook. The image is built in two
+stages: dependencies come from `pyproject.toml` into a venv, and only that venv is copied into a
+slim runtime that runs as `10001:10001`, keeps its root filesystem read-only, drops every capability,
+and declares `/data` as its only writable volume. Its `HEALTHCHECK` is a standard-library probe so
+the image needs no `curl`. `docker-compose.yml` runs a named image and never builds or pulls: it
+requires `KELP_IMAGE` with no default, publishes on loopback only, and caps the container at 1 GiB
+and 2 CPUs. `deploy/kelp.service` starts the same project at boot, checks the tag and its image
+before Compose runs, and so turns a pruned tag into a loud failure instead of a silent rebuild. The
+runbook, [`docs/DEPLOY.md`](DEPLOY.md), is seventeen sections from a bare VM to a working turn: build,
+first deploy, TLS through a reverse proxy, health and readiness, the `/data` layout, backup and
+restore, the single-replica rule, rollout and rollback, smoke steps, cost, troubleshooting, a secret
+checklist, and the verification record.
+
+*Why it matters:* a deploy is where a tested repository becomes something a person can use, and where
+every shortcut shows up — a secret baked into a layer, a container running as root, a second writer
+on the same database, a reboot that leaves the service down, or a startup that quietly builds a
+different image than the one that was tested. Each of those is closed on purpose here, and the
+runbook records what was measured rather than what was hoped.
+
+*Plain words:* a **container image** is one sealed copy of the app with its libraries inside. A
+**tag** is the image's name and version. **Compose** is the short file that says how to run it.
+**systemd** is the part of Linux that starts things at boot. A **reverse proxy** is the small server
+in front that adds HTTPS. A **read-only root filesystem** means the app cannot rewrite its own code.
+
+- Linear: https://linear.app/kelp-ai/issue/KEL-16/m2-f-nebius-deploy-dockerfile-gpu-runbook-restart-policy
+- Runbook: [`docs/DEPLOY.md`](DEPLOY.md)
+- Image: [`Dockerfile`](../Dockerfile), with [`.dockerignore`](../.dockerignore)
+- Runtime: [`docker-compose.yml`](../docker-compose.yml),
+  [`deploy/kelp.service`](../deploy/kelp.service), [`deploy/healthcheck.py`](../deploy/healthcheck.py)
+- Env templates: [`deploy/kelp.env.example`](../deploy/kelp.env.example) and
+  [`deploy/compose.env.example`](../deploy/compose.env.example)
+- Tests: [`tests/test_deploy_assets.py`](../tests/test_deploy_assets.py) and
+  [`tests/test_deploy_healthcheck.py`](../tests/test_deploy_healthcheck.py)
+- Merge: [`3f4d6cc`](https://github.com/Anshieee/kelp/commit/3f4d6cc) (branch
+  [`kel-16`](https://github.com/Anshieee/kelp/tree/kel-16), head `a63d49a`)
+
+Status detail: merged into `main` at `3f4d6cc`, adding 65 tests to a suite of 734 — 40 asset checks
+and 25 probe checks — with no application code changed. Four review fixes rode on top. The unit runs
+`up -d --no-build` and fails before Compose starts when `KELP_IMAGE` is unset or its image is absent.
+Section 12.3 gained the build-host venv line, so the offline smoke step runs on a fresh host. Only
+`docker compose config -q` appears in the runbook, because the bare form prints the tokens. The asset
+tests pin all of it, including that no deploy step builds through Compose. Two honest gaps. Nothing
+was deployed to Nebius: the image build, boot to healthy, the read-only and non-root checks, restart
+persistence, backup, and restore were executed locally against `kelp:9b1c863` on 30 October 2026 and
+are recorded with their measured times, but the end-to-end pass on a real host by someone who did not
+write the runbook is still owed. And the image is CPU-only by design: the model is a hosted service,
+so the "GPU" in the milestone title belongs to that host, not to this container.
+
 ## Decisions that shape the map
 
 ### Surfaces
@@ -546,7 +607,7 @@ thresholds alone while a working tree also catches a drop against the previous r
 ### GitHub
 
 - Repository (public): https://github.com/Anshieee/kelp
-- Shared copy of the code: https://github.com/Anshieee/kelp/tree/main — head `793569c`
+- Shared copy of the code: https://github.com/Anshieee/kelp/tree/main — head `3f4d6cc`
 - All branches: https://github.com/Anshieee/kelp/branches
   - `kel-5` — merged (`b8de92f`)
   - `kel-6` — merged at `d3c763e`; branch head `4c72afc`
@@ -562,9 +623,10 @@ thresholds alone while a working tree also catches a drop against the previous r
   - `kel-13` — merged at `7ad39b7`; branch head `66ddd70`
   - `kel-14` — merged at `38130fb`; branch head `38c3162`
   - `kel-15` — merged at `793569c`; branch head `225f7c0`
+  - `kel-16` — merged at `3f4d6cc`; branch head `a63d49a`
 - Change history: https://github.com/Anshieee/kelp/commits/main
 - Pull requests: https://github.com/Anshieee/kelp/pulls
-- Tests: 669 pass on `main` (`python -m pytest`); `make demo` plays all six beats, and
+- Tests: 734 pass on `main` (`python -m pytest`); `make demo` plays all six beats, and
   `make eval` passes offline with the network blocked
 
 ### Linear
@@ -582,7 +644,8 @@ thresholds alone while a working tree also catches a drop against the previous r
   [KEL-12](https://linear.app/kelp-ai/issue/KEL-12/m2-b-health-and-readiness-healthz-readyz-with-dependency-checks),
   [KEL-13](https://linear.app/kelp-ai/issue/KEL-13/m2-c-retrieval-real-docsanswer-with-pdfcsv-chunking-ranking-citations),
   [KEL-14](https://linear.app/kelp-ai/issue/KEL-14/m2-d-observability-structured-json-logs-prometheus-metrics),
-  [KEL-15](https://linear.app/kelp-ai/issue/KEL-15/m2-e-eval-harness-make-eval-offline-and-make-eval-live)
+  [KEL-15](https://linear.app/kelp-ai/issue/KEL-15/m2-e-eval-harness-make-eval-offline-and-make-eval-live),
+  [KEL-16](https://linear.app/kelp-ai/issue/KEL-16/m2-f-nebius-deploy-dockerfile-gpu-runbook-restart-policy)
 
 ### Docs and code
 
@@ -593,6 +656,7 @@ thresholds alone while a working tree also catches a drop against the previous r
 - Kernel design: [`docs/KERNEL.md`](https://github.com/Anshieee/kelp/blob/main/docs/KERNEL.md) (main)
 - Approval gate design: [`docs/OPENSHELL.md`](https://github.com/Anshieee/kelp/blob/main/docs/OPENSHELL.md) (main)
 - Chat surface spec: [`docs/CHAT_SPEC.md`](https://github.com/Anshieee/kelp/blob/main/docs/CHAT_SPEC.md) (main, review fixes at `56b0785`)
+- Deploy runbook: [`docs/DEPLOY.md`](DEPLOY.md)
 - Code review for KEL-6 and KEL-7: [`docs/REVIEW_KEL6_KEL7.md`](REVIEW_KEL6_KEL7.md)
 - ADR 0001, one document skill: [`docs/adr/0001-docs-answer-single-skill.md`](adr/0001-docs-answer-single-skill.md)
 - Screen plan: [`docs/frontend-scope-simple.md`](frontend-scope-simple.md)

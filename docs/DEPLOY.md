@@ -1,11 +1,12 @@
 # Deploy the KELP assistant (KEL-16, M2-F)
 
-- **Status:** implemented, 30 October 2026
-- **Branch:** `kel-16`, cut from `origin/main` at `e08b027`
+- **Status:** implemented, merged into `main` at `3f4d6cc`, 30 October 2026
+- **Branch:** `kel-16` (head `a63d49a`), cut from `origin/main` at `e08b027`
 - **Scope:** one container image, one Compose service, one systemd wrapper, one
   health probe, one `/data` volume. No application code changed.
 - **Tests:** `tests/test_deploy_healthcheck.py` (25 cases) and
-  `tests/test_deploy_assets.py` (40 cases); full suite 712 passed
+  `tests/test_deploy_assets.py` (40 cases); full suite 712 passed on the branch
+  and 734 on `main` after the merge, which added KEL-15's 22 eval tests
 - **Not in scope:** evals, chat/turn logic, payments, the tracker site, and any
   actual server. Nothing here was deployed to Nebius; every command below was
   executed locally against this image and is reported with its measured time.
@@ -671,9 +672,10 @@ if the VM is also the checkout you tested; otherwise record the numbers from the
 build host next to the commit, and treat the VM as proven by §12.1 and §12.2.
 
 Measured on the verification host: **68 passed in 0.74 s** for the
-retrieval/answer suites and **712 passed in 12.82 s** for the full suite. Record
-both numbers next to the commit in the release note; a drop means the deploy is
-not the code you tested.
+retrieval/answer suites and **712 passed in 12.82 s** for the full suite on the
+`kel-16` branch; `main` after the merge reports **734 passed in 15.02 s**,
+because it also carries KEL-15's eval tests. Record both numbers next to the
+commit in the release note; a drop means the deploy is not the code you tested.
 
 ---
 
@@ -776,8 +778,8 @@ sends the token as a header and never prints it.
 
 - **No HA.** One replica, one writer (see §10).
 - **No automatic TLS.** Caddy/nginx does it; the image speaks HTTP only.
-- **No eval harness.** §12.3 runs the existing offline quality suites; a
-  dedicated repeatable eval is a separate milestone item.
+- **No dedicated eval run in the image.** §12.3 runs the offline quality suites
+  on the build host; the repeatable eval harness is KEL-15, outside the container.
 - **No schema migrations.** `CREATE TABLE IF NOT EXISTS` only, so rollback safety
   depends on the backup, not a down-migration.
 - **No remote state.** SQLite is a local file by design; do not put it on NFS.
@@ -810,7 +812,7 @@ sends the token as a header and never prints it.
 | Backup | tar of `/data` into a host backup dir | archive with numeric owners | 1 s |
 | Restore | fresh volume + `tar --numeric-owner` | 2 threads / 2 turns, uid 10001 | < 1 s |
 | Offline eval | `pytest tests/test_docs_answer*.py` | 68 passed | 0.74 s |
-| Full suite | `python -m pytest` | 712 passed | 12.82 s |
+| Full suite | `python -m pytest` | 712 passed on the branch; 734 on `main` after the merge | 12.82 s / 15.02 s |
 | Asset tests | `pytest tests/test_deploy_assets.py` | 40 passed | 0.12 s |
 | Probe tests | `pytest tests/test_deploy_healthcheck.py` | 25 passed | 4.08 s |
 
