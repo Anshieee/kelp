@@ -102,8 +102,15 @@ no default: the process refuses to start without them (`missing_api_key` or
 | Variable | Required | Default in image | Secret | What it does |
 |---|---|---|---|---|
 | `NEBIUS_API_KEY` | **yes** | — | **yes** | Token Factory key, server-side only |
-| `KELP_AUTH_TOKEN` | **yes** | — | **yes** | Owner bearer token for every `/api/*` call except `/api/healthz` |
-| `KELP_CSRF_TOKEN` | no | unset | **yes** | Checked as `X-CSRF-Token` on mutations; unset falls back to same-origin |
+| `KELP_AUTH_TOKEN` | **yes** | — | **yes** | Root owner bearer token for every `/api/*` call except `/api/healthz`; also the credential that mints a browser session |
+| `KELP_CSRF_TOKEN` | no | unset | **yes** | Static header token for **bearer** mutations. Session cookies use a per-session double-submit pair instead (§11.1) |
+| `KELP_SESSION_TTL_SECONDS` | no | `2592000` | no | Session lifetime from last use (30-day rolling); minimum `60` |
+| `KELP_SESSION_MAX` | no | `1024` | no | Maximum live sessions; oldest idle session is evicted |
+| `KELP_SESSION_COOKIE_SECURE` | no | `1` | no | `0` only for a loopback HTTP development run; keep `1` in production |
+| `KELP_AUTH_LOCKOUT_ATTEMPTS` | no | `10` | no | Failures per hashed identity before a `429` lockout; `0` disables the lockout |
+| `KELP_AUTH_LOCKOUT_SECONDS` | no | `300` | no | Lockout duration; emitted as `Retry-After` |
+| `KELP_AUTH_FAILURE_IDLE_SECONDS` | no | `300` | no | Idle-out for an auth-failure record |
+| `KELP_AUTH_FAILURE_MAX_KEYS` | no | `4096` | no | Bound on the hashed auth-failure map |
 | `NEBIUS_TOKEN_FACTORY_BASE_URL` | no | `https://api.tokenfactory.nebius.com/v1` | no | Provider endpoint |
 | `KELP_PRIMARY_MODEL` | no | `nvidia/Nemotron-3_5-Super-VL` | no | Conversational model |
 | `KELP_BACKGROUND_MODEL` | no | `nvidia/Nemotron-3_5-Lightning` | no | Titles, summaries, compaction |
@@ -646,6 +653,89 @@ tags is the fast path.
 
 Keep at least the previous tag (`docker image ls kelp`). Prune old tags only
 after a new release has survived a day.
+
+### 11.1 Owner sessions and credential rotation
+
+The root `KELP_AUTH_TOKEN` stays server-side and is the recovery credential.
+Browsers exchange it for an opaque server-side session; the session cookie is
+`HttpOnly; Secure; SameSite=Lax`, rolls forward 30 days on each authenticated
+response, and never contains the root token. Sessions live only in this
+process, so **a restart logs every browser out** and the bearer token still
+works. No session secret is written to the database, logs, or audit trail.
+
+**Sign in (the bearer is used only for this exchange and is never the cookie):**
+
+```bash
+# umask keeps the transient response files private; read the token from the
+# protected env file, never from a command line.
+umask 077
+set -a; . deploy/kelp.env; set +a
+headers=$(mktemp)
+body=$(mktemp)
+curl -sS -D "$headers" -o "$body" \
+  -X POST "https://kelp.example.com/api/auth/session" \
+  -H "Authorization: Bearer ${KELP_AUTH_TOKEN}"
+grep -i '^set-cookie:' "$headers"   # session=...; HttpOnly; Secure; SameSite=Lax
+python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["session"]["csrf_token"])' "$body"
+rm -f "$headers" "$body"
+```
+
+The JSON body returns `session.expires_at` and the readable CSRF half. A
+browser receives both cookies from the same response; a script that manages
+cookies itself must send the `csrf` cookie and the matching `X-CSRF-Token`
+header on mutations, plus an `Origin` matching the public host. `SESSION_COOKIE`
+below is the `session` cookie value and `CSRF_TOKEN` is the `csrf` cookie value
+(or the value printed above).
+
+**Revoke one session or every session:**
+
+```bash
+# Presented session: requires the csrf cookie + header and a same-origin Origin.
+curl -sS -X DELETE "https://kelp.example.com/api/auth/session" \
+  -H "Origin: https://kelp.example.com" \
+  -H "X-CSRF-Token: ${CSRF_TOKEN}" \
+  -H "Cookie: session=${SESSION_COOKIE}; csrf=${CSRF_TOKEN}"
+
+# Every session (bearer path; no cookie needed).
+curl -sS -X DELETE "https://kelp.example.com/api/auth/sessions" \
+  -H "Authorization: Bearer ${KELP_AUTH_TOKEN}"
+```
+
+Both responses clear the cookies (`Max-Age=0`) and take effect immediately,
+including for an open SSE stream on the next auth check.
+
+**Rotate `KELP_AUTH_TOKEN` (or `KELP_CSRF_TOKEN`):**
+
+1. Generate a new random value on the host; do not paste it into a ticket or a
+   shell history line:
+   `python3 -c 'import secrets; print(secrets.token_urlsafe(48))'`.
+2. Revoke every existing session **before** changing the secret, using the
+   current value from `deploy/kelp.env`:
+   `curl -sS -X DELETE .../api/auth/sessions -H "Authorization: Bearer ${KELP_AUTH_TOKEN}"`.
+3. Put the new value in `deploy/kelp.env` (`KELP_AUTH_TOKEN=...`) and keep mode
+   `0600`. Never commit the file.
+4. Restart the one container: `docker compose up -d --no-build` (or
+   `docker compose restart kelp`). A restart alone also drops every session,
+   but the explicit revoke makes the intent auditable and covers a rolling
+   process that has not restarted yet.
+5. Confirm readiness with the new token:
+   `python3 deploy/healthcheck.py --ready` (reads `deploy/kelp.env`).
+6. Confirm the old token now gets `401 unauthorized`, then remove the old value
+   from any password manager entry and keep only the new one.
+
+`KELP_CSRF_TOKEN` rotation has the same steps; because session cookies use the
+per-session double-submit pair, an old static token cannot mutate a
+cookie-authenticated request in any case.
+
+**If a session is suspected stolen:** call `DELETE /api/auth/sessions` with the
+bearer token, restart if the bearer itself may be exposed, then rotate both
+secrets. `auth_failed` lines (event `auth_failed`, hashed `identity_hash`,
+`outcome`, `count`) are the signal to inspect; they never contain the token,
+cookie, or peer address.
+
+**Local HTTP only:** set `KELP_SESSION_COOKIE_SECURE=0` for a loopback
+`http://127.0.0.1` development run. Never set it on the public deployment;
+without `Secure`, a cookie can cross a plaintext hop.
 
 ---
 

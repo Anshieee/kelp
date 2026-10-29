@@ -39,7 +39,14 @@ from openshell.audit import AuditLog, SecretScrubber
 from skills.errors import SkillManifestError
 from skills.loader import SkillRegistry
 
-from .api import ChatAPI, HealthProbe, make_server
+from .api import (
+    SESSION_SECURE_ENV,
+    AuthFailureTracker,
+    ChatAPI,
+    HealthProbe,
+    SessionStore,
+    make_server,
+)
 from .artifacts import ArtifactRegistry
 from .logging import configure_logging, log
 from .metrics import LoggedUsageStore, Metrics
@@ -133,6 +140,13 @@ def _parse_port(raw: str) -> int:
             "invalid_config", f"{PORT_ENV} must be an integer between 0 and 65535."
         )
     return port
+
+
+def _flag(source: Mapping[str, str], name: str, default: bool) -> bool:
+    raw = source.get(name)
+    if raw is None:
+        return default
+    return str(raw).strip().lower() not in {"", "0", "false", "no", "off", "disabled"}
 
 
 def _mkdir_private(directory: Path) -> None:
@@ -539,6 +553,11 @@ def build_app(
             csrf_token=config.csrf_token,
             health=HealthProbe.from_service(service, audit=audit),
             metrics=metrics,
+            # Sessions are deliberately process-local: a restart invalidates
+            # every cookie and the root bearer token remains the recovery path.
+            sessions=SessionStore.from_env(source),
+            auth_failures=AuthFailureTracker.from_env(source),
+            cookie_secure=_flag(source, SESSION_SECURE_ENV, True),
         )
         return Application(
             config=config,

@@ -20,11 +20,13 @@ import json
 import math
 import os
 import re
+import secrets
 import sqlite3
 import tempfile
 import threading
 import time
 from dataclasses import dataclass, field
+from email.utils import formatdate
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any, Callable, Iterator, Mapping
@@ -44,12 +46,14 @@ from .service import ChatService
 from .stream import IDLE_SECONDS, sse_frames
 
 __all__ = [
+    "AuthFailureTracker",
     "ChatAPI",
     "HealthProbe",
     "LoopRunner",
     "RateLimiter",
     "Request",
     "Response",
+    "SessionStore",
     "TokenBucket",
     "make_server",
     "serve",
@@ -89,6 +93,35 @@ _DEFAULT_RATE_LIMIT_MAX_KEYS = 4096
 #: After this long without a failure, an auth bucket is discarded; the next
 #: attempt starts with a full bucket. This also bounds the failure map.
 _AUTH_IDLE_SECONDS = 300.0
+
+# -- owner sessions and failure bounds (KEL-19 M3-E) ----------------------
+#
+# The cookie carries an opaque 256-bit session id; the store keeps its SHA-256,
+# never the raw value. A restart drops every session, so the root bearer token
+# (or a fresh sign-in) is always the recovery path. The CSRF cookie is the
+# readable half of a per-session double-submit pair; the session cookie is
+# HttpOnly and the pair is never logged.
+SESSION_COOKIE = "session"
+CSRF_COOKIE = "csrf"
+SESSION_TTL_ENV = "KELP_SESSION_TTL_SECONDS"
+SESSION_MAX_ENV = "KELP_SESSION_MAX"
+SESSION_SECURE_ENV = "KELP_SESSION_COOKIE_SECURE"
+AUTH_LOCKOUT_ATTEMPTS_ENV = "KELP_AUTH_LOCKOUT_ATTEMPTS"
+AUTH_LOCKOUT_SECONDS_ENV = "KELP_AUTH_LOCKOUT_SECONDS"
+AUTH_FAILURE_IDLE_ENV = "KELP_AUTH_FAILURE_IDLE_SECONDS"
+AUTH_FAILURE_MAX_KEYS_ENV = "KELP_AUTH_FAILURE_MAX_KEYS"
+_DEFAULT_SESSION_TTL_SECONDS = 30 * 24 * 60 * 60
+_DEFAULT_SESSION_MAX = 1024
+_DEFAULT_AUTH_LOCKOUT_ATTEMPTS = 10
+_DEFAULT_AUTH_LOCKOUT_SECONDS = 300.0
+_DEFAULT_AUTH_FAILURE_IDLE_SECONDS = 300.0
+_DEFAULT_AUTH_FAILURE_MAX_KEYS = 4096
+_EPOCH_COOKIE_DATE = "Thu, 01 Jan 1970 00:00:00 GMT"
+#: The app has exactly one owner, so every authenticated credential — the root
+#: bearer token and every session minted from it — maps to this one limiter
+#: key. Deriving the key from the credential would give each session its own
+#: bucket and let a second tab double the owner's allowance.
+OWNER_IDENTITY = "owner"
 _DEFAULT_MAX_CONCURRENT_TURNS = 4
 _DEFAULT_MAX_STREAMS_PER_OWNER = 3
 _MAX_CONCURRENT_TURNS_ENV = "KELP_MAX_CONCURRENT_TURNS"
@@ -130,6 +163,9 @@ class Response:
     headers: dict[str, str] = field(default_factory=dict)
     body: bytes = b""
     stream: Iterator[str] | None = None
+    #: ``Set-Cookie`` values, kept separate because a header mapping cannot hold
+    #: two cookies and ``Set-Cookie`` must never be comma-folded.
+    cookies: list[str] = field(default_factory=list)
 
 
 class LoopRunner:
@@ -621,11 +657,12 @@ def _presented_token(request: Request) -> str | None:
 
 
 def _client_identity(request: Request) -> str:
-    """A stable, non-secret limiter key.
+    """A stable, non-secret limiter key for an unauthenticated caller.
 
-    A presented token is hashed, never retained: the map must not become a
-    secondary store of the owner token. With auth disabled the peer address is
-    the identity, which also makes per-client tests possible.
+    Authorized traffic is keyed on the owner instead
+    (:meth:`ChatAPI._limiter_identity`), so this is the fallback for a
+    deployment with auth disabled. A presented token is hashed, never
+    retained: the map must not become a secondary store of the owner token.
     """
 
     token = _presented_token(request)
@@ -901,6 +938,387 @@ class _Lease:
             pass
 
 
+def _secret_hash(value: str) -> str:
+    """One-way stable key for a credential or peer identity."""
+
+    return hashlib.sha256(value.encode("utf-8", "surrogatepass")).hexdigest()
+
+
+@dataclass
+class _Session:
+    """A server-side owner session. Only hashes are used for lookup."""
+
+    id_hash: str
+    csrf_hash: str
+    #: Retained only so a rolling response can re-issue the readable half of
+    #: the double-submit pair. It never authenticates a request by itself.
+    csrf_token: str = field(repr=False)
+    created_at: float = 0.0
+    last_seen: float = 0.0
+    expires_at: float = 0.0
+
+
+class SessionStore:
+    """Bounded, in-process owner sessions with 30-day rolling expiry.
+
+    The raw session id exists only in the client's cookie and in the response
+    that minted it. Lookup keys are SHA-256 digests, so a memory dump of this
+    store cannot be replayed as a login. Expired records are pruned on every
+    lookup/create, and the oldest record is evicted when the cap is reached;
+    both operations are O(n) only when the map is already over a bound.
+    """
+
+    def __init__(
+        self,
+        *,
+        ttl: float = _DEFAULT_SESSION_TTL_SECONDS,
+        max_entries: int = _DEFAULT_SESSION_MAX,
+        clock: Callable[[], float] | None = None,
+    ):
+        self.ttl = max(60.0, float(ttl))
+        self.max_entries = max(1, int(max_entries))
+        # Resolve at construction, not at class definition, so a test can
+        # monkeypatch ``time.time`` before building the store.
+        self._clock = time.time if clock is None else clock
+        self._sessions: dict[str, _Session] = {}
+        self._lock = threading.Lock()
+
+    @classmethod
+    def from_env(cls, source: Mapping[str, str] | None = None) -> "SessionStore":
+        env = os.environ if source is None else source
+        return cls(
+            ttl=_env_number(env, SESSION_TTL_ENV, _DEFAULT_SESSION_TTL_SECONDS, minimum=60.0),
+            max_entries=_env_int(env, SESSION_MAX_ENV, _DEFAULT_SESSION_MAX, minimum=1),
+        )
+
+    def now(self) -> float:
+        return self._clock()
+
+    def create(self) -> tuple[str, str, _Session]:
+        """Mint a session and return ``(session_id, csrf_token, record)``."""
+
+        now = self._clock()
+        session_id = secrets.token_urlsafe(32)
+        csrf_token = secrets.token_urlsafe(32)
+        record = _Session(
+            id_hash=_secret_hash(session_id),
+            csrf_hash=_secret_hash(csrf_token),
+            csrf_token=csrf_token,
+            created_at=now,
+            last_seen=now,
+            expires_at=now + self.ttl,
+        )
+        with self._lock:
+            self._prune_locked(now)
+            self._sessions[record.id_hash] = record
+            self._enforce_max_locked()
+        return session_id, csrf_token, record
+
+    def lookup(self, session_id: str, *, now: float | None = None) -> _Session | None:
+        """Return a live session without changing its expiry."""
+
+        if not session_id:
+            return None
+        moment = self._clock() if now is None else now
+        key = _secret_hash(session_id)
+        with self._lock:
+            record = self._sessions.get(key)
+            if record is None:
+                return None
+            if record.expires_at <= moment:
+                del self._sessions[key]
+                return None
+            return record
+
+    def touch(self, record: _Session, *, now: float | None = None) -> _Session | None:
+        """Roll one session's expiry forward, if it is still present and live."""
+
+        moment = self._clock() if now is None else now
+        with self._lock:
+            current = self._sessions.get(record.id_hash)
+            if current is None:
+                return None
+            if current.expires_at <= moment:
+                del self._sessions[current.id_hash]
+                return None
+            current.last_seen = moment
+            current.expires_at = moment + self.ttl
+            return current
+
+    def csrf_matches(self, record: _Session, token: str) -> bool:
+        if not token:
+            return False
+        return hmac.compare_digest(record.csrf_hash, _secret_hash(token))
+
+    def revoke(self, session_id: str) -> bool:
+        if not session_id:
+            return False
+        key = _secret_hash(session_id)
+        with self._lock:
+            return self._sessions.pop(key, None) is not None
+
+    def revoke_all(self) -> int:
+        with self._lock:
+            count = len(self._sessions)
+            self._sessions.clear()
+            return count
+
+    def prune(self, *, now: float | None = None) -> int:
+        moment = self._clock() if now is None else now
+        with self._lock:
+            return self._prune_locked(moment)
+
+    def _prune_locked(self, now: float) -> int:
+        expired = [key for key, record in self._sessions.items() if record.expires_at <= now]
+        for key in expired:
+            del self._sessions[key]
+        return len(expired)
+
+    def _enforce_max_locked(self) -> None:
+        while len(self._sessions) > self.max_entries:
+            oldest = min(
+                self._sessions.items(), key=lambda item: (item[1].last_seen, item[0])
+            )[0]
+            del self._sessions[oldest]
+
+    def __len__(self) -> int:
+        self.prune()
+        return len(self._sessions)
+
+
+@dataclass
+class _FailureRecord:
+    count: int
+    first_at: float
+    last_at: float
+    locked_until: float = 0.0
+
+
+class AuthFailureTracker:
+    """Bounded per-identity failure counter and short lockout.
+
+    Keys are already-hashed identities (a credential digest or a peer digest);
+    no token, cookie value, or IP address is retained. Idle records and expired
+    lockouts are dropped on access, and the oldest record is evicted when the
+    cap is reached, so a flood of distinct bad credentials cannot grow the map.
+    """
+
+    def __init__(
+        self,
+        *,
+        attempts: int = _DEFAULT_AUTH_LOCKOUT_ATTEMPTS,
+        lockout_seconds: float = _DEFAULT_AUTH_LOCKOUT_SECONDS,
+        idle_seconds: float = _DEFAULT_AUTH_FAILURE_IDLE_SECONDS,
+        max_entries: int = _DEFAULT_AUTH_FAILURE_MAX_KEYS,
+        clock: Callable[[], float] | None = None,
+    ):
+        self.attempts = max(0, int(attempts))
+        self.lockout_seconds = max(1.0, float(lockout_seconds))
+        self.idle_seconds = max(1.0, float(idle_seconds))
+        self.max_entries = max(1, int(max_entries))
+        self._clock = time.time if clock is None else clock
+        self._records: dict[str, _FailureRecord] = {}
+        self._lock = threading.Lock()
+
+    @classmethod
+    def from_env(cls, source: Mapping[str, str] | None = None) -> "AuthFailureTracker":
+        env = os.environ if source is None else source
+        return cls(
+            attempts=_env_int(
+                env,
+                AUTH_LOCKOUT_ATTEMPTS_ENV,
+                _DEFAULT_AUTH_LOCKOUT_ATTEMPTS,
+                minimum=0,
+            ),
+            lockout_seconds=_env_number(
+                env,
+                AUTH_LOCKOUT_SECONDS_ENV,
+                _DEFAULT_AUTH_LOCKOUT_SECONDS,
+                minimum=1.0,
+            ),
+            idle_seconds=_env_number(
+                env,
+                AUTH_FAILURE_IDLE_ENV,
+                _DEFAULT_AUTH_FAILURE_IDLE_SECONDS,
+                minimum=1.0,
+            ),
+            max_entries=_env_int(
+                env,
+                AUTH_FAILURE_MAX_KEYS_ENV,
+                _DEFAULT_AUTH_FAILURE_MAX_KEYS,
+                minimum=1,
+            ),
+        )
+
+    def status(self, identity: str) -> tuple[int, float | None]:
+        """Return ``(failure_count, remaining_lockout_seconds)``."""
+
+        now = self._clock()
+        with self._lock:
+            self._prune_locked(now)
+            record = self._records.get(identity)
+            if record is None:
+                return 0, None
+            if record.locked_until > now:
+                return record.count, record.locked_until - now
+            if record.locked_until:
+                # The lockout has run its course; the next attempt starts clean.
+                del self._records[identity]
+                return 0, None
+            return record.count, None
+
+    def record(self, identity: str) -> tuple[int, float | None]:
+        """Increment one identity and return ``(count, remaining_lockout)``."""
+
+        now = self._clock()
+        with self._lock:
+            self._prune_locked(now)
+            record = self._records.get(identity)
+            if record is None:
+                record = _FailureRecord(count=0, first_at=now, last_at=now)
+                self._records[identity] = record
+                self._enforce_max_locked()
+            record.count += 1
+            record.last_at = now
+            if self.attempts and record.count >= self.attempts:
+                record.locked_until = now + self.lockout_seconds
+                return record.count, self.lockout_seconds
+            return record.count, None
+
+    def clear(self, identity: str) -> None:
+        with self._lock:
+            self._records.pop(identity, None)
+
+    def _prune_locked(self, now: float) -> None:
+        stale = []
+        for key, record in self._records.items():
+            lock_expired = bool(record.locked_until) and record.locked_until <= now
+            idle = now - record.last_at > self.idle_seconds
+            if lock_expired or (idle and not record.locked_until):
+                stale.append(key)
+        for key in stale:
+            del self._records[key]
+
+    def _enforce_max_locked(self) -> None:
+        while len(self._records) > self.max_entries:
+            oldest = min(
+                self._records.items(), key=lambda item: (item[1].last_at, item[0])
+            )[0]
+            del self._records[oldest]
+
+    def __len__(self) -> int:
+        with self._lock:
+            return len(self._records)
+
+
+@dataclass(frozen=True)
+class _AuthResult:
+    ok: bool
+    via: str = "none"
+    session: _Session | None = None
+    session_id: str | None = field(default=None, repr=False)
+
+
+class _AuthLocked(Exception):
+    """Raised after too many failures; carries a usable ``Retry-After``."""
+
+    def __init__(self, retry_after: float):
+        self.retry_after = retry_after
+        super().__init__("authentication locked out")
+
+
+def _auth_failure_identity(request: Request) -> str:
+    """A hashed failure key: credential digest when presented, else peer digest.
+
+    The raw bearer token, cookie, and client address stay out of the tracker
+    and out of the ``auth_failed`` record. Hashing the peer too keeps the log
+    free of an address that could identify a person.
+    """
+
+    token = _presented_token(request)
+    seed = f"credential:{token}" if token else f"peer:{_client_address(request)}"
+    return _secret_hash(seed)[:32]
+
+
+def _cookie_header(
+    name: str,
+    value: str,
+    *,
+    ttl: float,
+    secure: bool,
+    http_only: bool,
+    now: float | None = None,
+) -> str:
+    """Build one RFC 6265 ``Set-Cookie`` value.
+
+    ``Max-Age`` is authoritative for modern clients; ``Expires`` keeps older
+    ones aligned. ``Secure`` is on by default and can be disabled only for a
+    loopback HTTP development run.
+    """
+
+    seconds = max(0, int(ttl))
+    moment = time.time() if now is None else now
+    expires = formatdate(moment + seconds, usegmt=True)
+    parts = [
+        f"{name}={value}",
+        "Path=/",
+        f"Max-Age={seconds}",
+        f"Expires={expires}",
+        "SameSite=Lax",
+    ]
+    if secure:
+        parts.append("Secure")
+    if http_only:
+        parts.append("HttpOnly")
+    return "; ".join(parts)
+
+
+def _clear_cookie_header(name: str, *, secure: bool, http_only: bool) -> str:
+    parts = [f"{name}=", "Path=/", "Max-Age=0", f"Expires={_EPOCH_COOKIE_DATE}", "SameSite=Lax"]
+    if secure:
+        parts.append("Secure")
+    if http_only:
+        parts.append("HttpOnly")
+    return "; ".join(parts)
+
+
+def _is_sign_in(request: Request) -> bool:
+    if request.method.upper() != "POST":
+        return False
+    try:
+        path = unquote(urlsplit(request.path).path)
+    except ValueError:  # pragma: no cover - urlsplit rarely raises here
+        return False
+    return [segment for segment in path.split("/") if segment] == [
+        "api",
+        "auth",
+        "session",
+    ]
+
+
+def _same_origin(request: Request) -> bool:
+    """True only for a browser origin that matches the request ``Host``.
+
+    A missing or unparsable ``Origin`` is not same-origin. The comparison is on
+    ``scheme://host:port``; a reverse proxy must preserve the incoming ``Host``
+    header for this to hold.
+    """
+
+    origin = request.header("origin")
+    if not origin:
+        return False
+    host = request.header("host") or ""
+    if not host:
+        return False
+    try:
+        parsed = urlsplit(origin)
+    except ValueError:
+        return False
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+        return False
+    return hmac.compare_digest(parsed.netloc, host)
+
+
 class ChatAPI:
     def __init__(
         self,
@@ -916,6 +1334,9 @@ class ChatAPI:
         limiter: RateLimiter | None = None,
         max_concurrent_turns: int | None = None,
         max_streams_per_owner: int | None = None,
+        sessions: SessionStore | None = None,
+        auth_failures: AuthFailureTracker | None = None,
+        cookie_secure: bool | None = None,
     ):
         self.service = service
         self.auth_token = auth_token
@@ -926,6 +1347,19 @@ class ChatAPI:
         self.metrics = metrics or get_metrics()
         self.limiter = limiter or RateLimiter.from_env()
         source = os.environ
+        self.sessions = (
+            SessionStore.from_env(source) if sessions is None else sessions
+        )
+        self.auth_failures = (
+            AuthFailureTracker.from_env(source)
+            if auth_failures is None
+            else auth_failures
+        )
+        self.cookie_secure = (
+            _env_enabled(source.get(SESSION_SECURE_ENV), True)
+            if cookie_secure is None
+            else bool(cookie_secure)
+        )
         self._turn_slots = _Capacity(
             _env_int(
                 source,
@@ -994,6 +1428,16 @@ class ChatAPI:
                 reset_request_id(token)
 
     def _dispatch(self, request: Request) -> Response:
+        response = self._dispatch_inner(request)
+        # A successful cookie-authenticated response carries the rolled pair.
+        # A failed response must not extend the session that just failed CSRF.
+        try:
+            self._roll_session_cookie(request, response)
+        except Exception:  # noqa: BLE001 - a cookie refresh never breaks a response
+            log("session_roll_failed", level="warning", status="error")
+        return response
+
+    def _dispatch_inner(self, request: Request) -> Response:
         try:
             path = unquote(urlsplit(request.path).path)
             segments = [segment for segment in path.split("/") if segment]
@@ -1007,6 +1451,10 @@ class ChatAPI:
             if len(segments) < 1 or segments[0] != "api":
                 raise ChatError("not_found", status=404, message="Unknown endpoint.")
             return self._route(request, segments[1:])
+        except _AuthLocked as exc:
+            return _rate_limited_response(
+                exc.retry_after, class_name="auth", reason="locked"
+            )
         except ChatError as exc:
             return _json_response(exc.status, exc.to_body())
         except ArtifactError as exc:
@@ -1051,7 +1499,7 @@ class ChatAPI:
             if self._authorized_for(request):
                 route = _classify_route(request.method, segments)
                 allowed, retry_after = self.limiter.consume(
-                    route, _client_identity(request)
+                    route, self._limiter_identity(request)
                 )
                 # A successful login clears accumulated failure debt for this
                 # peer without touching the owner's route budget.
@@ -1072,6 +1520,21 @@ class ChatAPI:
         except Exception:  # noqa: BLE001 - observability/limits never break traffic
             log("rate_limit_error", level="warning", status="error")
             return None
+
+    def _limiter_identity(self, request: Request) -> str:
+        """The limiter key for an already-authorized request.
+
+        This is a single-owner app, so the root bearer token and every session
+        cookie minted from it are the same principal: all of them share one
+        constant key, which is what makes the per-owner budget really per
+        owner. With auth disabled there is no owner to name, so the peer
+        address remains the key and distinct callers keep distinct buckets.
+        """
+
+        auth = self._authenticate(request)
+        if auth.ok and auth.via != "disabled":
+            return OWNER_IDENTITY
+        return _client_identity(request)
 
     def _limiter_exposition(self) -> str:
         """Prometheus gauges for the two concurrency caps, appended to /metrics."""
@@ -1118,6 +1581,8 @@ class ChatAPI:
         head = segments[0]
         method = request.method.upper()
 
+        if head == "auth":
+            return self._auth(request, method, segments[1:])
         if head == "threads":
             return self._threads(request, method, segments[1:])
         if head == "turns":
@@ -1235,7 +1700,7 @@ class ChatAPI:
     def _stream(self, request: Request, thread_id: str) -> Response:
         if self.service.store.get_thread(thread_id) is None:
             raise ChatError("unknown_thread", status=404)
-        owner = _client_identity(request)
+        owner = self._limiter_identity(request)
         if not self._stream_slots.acquire(owner):
             return self._busy_response(
                 class_name="streams",
@@ -1479,38 +1944,243 @@ class ChatAPI:
     # -- auth --------------------------------------------------------------
 
     def _authorize(self, request: Request) -> None:
-        if not self._authorized_for(request):
+        auth = self._authenticate(request)
+        if not auth.ok:
+            self._reject_auth(request)
             raise ChatError("unauthorized", status=401)
-        if request.method.upper() in _MUTATING and not self._csrf_ok(request):
+        if not _is_sign_in(request):
+            # A sign-in authenticates its own bearer separately, so the cookie
+            # that let the wrapper through must not erase the debt of the
+            # credential the request actually presented.
+            self.auth_failures.clear(_auth_failure_identity(request))
+        if request.method.upper() in _MUTATING and not self._csrf_ok(request, auth):
             raise ChatError("csrf_failed", status=403)
 
-    def _authorized_for(self, request: Request) -> bool:
+    def _reject_auth(self, request: Request) -> None:
+        """Count one rejection and emit exactly one ``auth_failed`` record.
+
+        The record carries a hashed identity, a reason code, and a count. It
+        never carries the presented bearer token, cookie value, or IP.
+        """
+
+        identity = _auth_failure_identity(request)
+        count, remaining = self.auth_failures.status(identity)
+        if remaining is not None:
+            log(
+                "auth_failed",
+                level="warning",
+                outcome="locked",
+                reason="lockout",
+                count=count,
+                status=429,
+                identity_hash=identity,
+            )
+            raise _AuthLocked(remaining)
+        count, remaining = self.auth_failures.record(identity)
+        if remaining is not None:
+            log(
+                "auth_failed",
+                level="warning",
+                outcome="locked",
+                reason="lockout",
+                count=count,
+                status=429,
+                identity_hash=identity,
+            )
+            raise _AuthLocked(remaining)
+        log(
+            "auth_failed",
+            level="warning",
+            outcome="rejected",
+            reason="bad_credentials",
+            count=count,
+            status=401,
+            identity_hash=identity,
+        )
+
+    def _authenticate(self, request: Request, *, fresh: bool = False) -> _AuthResult:
+        """Resolve and cache the credential for one request.
+
+        ``fresh`` forces a second store lookup, which the stream's auth check
+        uses so a revoke or expiry closes an open SSE connection. The cached
+        result keeps the limiter and dispatch from doing the same lookup twice.
+        """
+
+        cached = getattr(request, "_kelp_auth", None)
+        if cached is not None and not fresh:
+            return cached
+        result = self._authenticate_uncached(request)
+        request._kelp_auth = result  # type: ignore[attr-defined]
+        return result
+
+    def _authenticate_uncached(self, request: Request) -> _AuthResult:
         if not self.auth_token:
-            return True
+            return _AuthResult(True, "disabled")
+        if self._bearer_authorized(request):
+            return _AuthResult(True, "bearer")
+        session_id = _parse_cookies(request.header("cookie")).get(SESSION_COOKIE) or ""
+        if not session_id:
+            return _AuthResult(False)
+        record = self.sessions.lookup(session_id)
+        if record is None:
+            return _AuthResult(False)
+        return _AuthResult(True, "cookie", record, session_id)
+
+    def _authorized_for(self, request: Request) -> bool:
+        return self._authenticate(request, fresh=True).ok
+
+    def _bearer_authorized(self, request: Request) -> bool:
+        if not self.auth_token:
+            return False
         header = request.header("authorization") or ""
         prefix = "Bearer "
-        if header.startswith(prefix) and hmac.compare_digest(
-            header[len(prefix) :], self.auth_token
-        ):
-            return True
-        cookies = _parse_cookies(request.header("cookie"))
-        session = cookies.get("session")
-        return bool(session) and hmac.compare_digest(session, self.auth_token)
+        if not header.startswith(prefix):
+            return False
+        return hmac.compare_digest(header[len(prefix) :], self.auth_token)
 
-    def _csrf_ok(self, request: Request) -> bool:
+    def _csrf_ok(self, request: Request, auth: _AuthResult) -> bool:
+        """One mutation gate with different rules for ambient and explicit auth.
+
+        A cookie is ambient: the browser attaches it to a cross-site request,
+        so the cookie path requires a matching ``Origin`` **and** the
+        per-session double-submit pair (``csrf`` cookie plus
+        ``X-CSRF-Token``). An explicit bearer token is not ambient: it keeps
+        the existing static-token or same-origin check, and a bearer sign-in
+        needs neither because it already proves possession of the root token.
+        """
+
+        if request.method.upper() not in _MUTATING:
+            return True
+        if auth.via == "cookie":
+            if not _same_origin(request):
+                return False
+            header = request.header("x-csrf-token") or ""
+            cookie = _parse_cookies(request.header("cookie")).get(CSRF_COOKIE) or ""
+            if not header or not cookie or not hmac.compare_digest(header, cookie):
+                return False
+            return auth.session is not None and self.sessions.csrf_matches(
+                auth.session, header
+            )
+        if _is_sign_in(request) and auth.via == "bearer":
+            return True
         if self.csrf_token:
             supplied = request.header("x-csrf-token") or ""
             return hmac.compare_digest(supplied, self.csrf_token)
-        origin = request.header("origin")
-        if not origin:
-            # Non-browser local calls without a configured token (§12 minimum).
+        if not request.header("origin"):
+            # Non-browser local calls with an explicit bearer token or with auth
+            # disabled: there is no ambient credential to protect.
             return True
-        host = request.header("host") or ""
-        try:
-            parsed = urlsplit(origin)
-        except ValueError:
-            return False
-        return bool(host) and parsed.netloc == host
+        return _same_origin(request)
+
+    def _roll_session_cookie(self, request: Request, response: Response) -> None:
+        if not 200 <= response.status < 400:
+            return
+        auth = self._authenticate(request)
+        if auth.session is None or auth.session_id is None:
+            return
+        if any(
+            cookie.split(";", 1)[0].startswith(f"{SESSION_COOKIE}=")
+            for cookie in response.cookies
+        ):
+            return
+        updated = self.sessions.touch(auth.session)
+        if updated is None:
+            return
+        response.cookies.extend(
+            self._session_cookies(auth.session_id, updated.csrf_token)
+        )
+
+    def _session_cookies(self, session_id: str, csrf_token: str) -> list[str]:
+        ttl = self.sessions.ttl
+        now = self.sessions.now()
+        return [
+            _cookie_header(
+                SESSION_COOKIE,
+                session_id,
+                ttl=ttl,
+                secure=self.cookie_secure,
+                http_only=True,
+                now=now,
+            ),
+            _cookie_header(
+                CSRF_COOKIE,
+                csrf_token,
+                ttl=ttl,
+                secure=self.cookie_secure,
+                http_only=False,
+                now=now,
+            ),
+        ]
+
+    def _clear_auth_cookies(self) -> list[str]:
+        return [
+            _clear_cookie_header(
+                SESSION_COOKIE, secure=self.cookie_secure, http_only=True
+            ),
+            _clear_cookie_header(
+                CSRF_COOKIE, secure=self.cookie_secure, http_only=False
+            ),
+        ]
+
+    # -- auth routes -------------------------------------------------------
+
+    def _auth(self, request: Request, method: str, rest: list[str]) -> Response:
+        if len(rest) == 1 and rest[0] == "session":
+            if method == "POST":
+                return self._sign_in(request)
+            if method == "DELETE":
+                return self._revoke_current(request)
+        if len(rest) == 1 and rest[0] == "sessions" and method == "DELETE":
+            return self._revoke_all()
+        raise ChatError("not_found", status=404, message="Unknown endpoint.")
+
+    def _sign_in(self, request: Request) -> Response:
+        """Mint a session from the root bearer token.
+
+        Requiring the bearer here is the point: a cookie is never sufficient
+        to create another cookie, so a stolen session cannot extend itself
+        indefinitely or survive a root-token rotation by minting a replacement.
+        A wrong bearer is a rejected credential like any other: it is logged,
+        counted, and can lock the identity out, even when the request also
+        carries a session cookie that authorized the route.
+        """
+
+        if not self._bearer_authorized(request):
+            self._reject_auth(request)
+            raise ChatError("unauthorized", status=401)
+        session_id, csrf_token, record = self.sessions.create()
+        response = _json_response(
+            201,
+            {
+                "ok": True,
+                "session": {
+                    "expires_at": int(record.expires_at),
+                    "csrf_token": csrf_token,
+                },
+            },
+        )
+        response.cookies.extend(self._session_cookies(session_id, csrf_token))
+        return response
+
+    def _revoke_current(self, request: Request) -> Response:
+        auth = self._authenticate(request)
+        if auth.session_id is None:
+            raise ChatError(
+                "invalid_request",
+                status=400,
+                message="A session cookie is required.",
+                user_fixable=True,
+            )
+        revoked = self.sessions.revoke(auth.session_id)
+        response = _json_response(200, {"ok": True, "revoked": 1 if revoked else 0})
+        response.cookies.extend(self._clear_auth_cookies())
+        return response
+
+    def _revoke_all(self) -> Response:
+        revoked = self.sessions.revoke_all()
+        response = _json_response(200, {"ok": True, "revoked": revoked})
+        response.cookies.extend(self._clear_auth_cookies())
+        return response
 
     # -- body parsing ------------------------------------------------------
 
@@ -1837,6 +2507,8 @@ class _Handler(BaseHTTPRequestHandler):
             if name.lower() == "content-length" and response.stream is not None:
                 continue
             self.send_header(name, value)
+        for cookie in response.cookies:
+            self.send_header("Set-Cookie", cookie)
         if response.stream is None and "content-length" not in names:
             self.send_header("Content-Length", str(len(response.body)))
         if close and "connection" not in names:
