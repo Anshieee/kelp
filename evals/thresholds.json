@@ -1,0 +1,24 @@
+{
+  "version": 1,
+  "description": "KEL-15 release gates. Offline runs gate on these values and on the previous matching run; live runs are labelled diagnostics and never change the offline exit code.",
+  "metrics": {
+    "pass_rate": {"min": 0.95},
+    "citation_precision": {"min": 0.95},
+    "tool_accuracy": {"min": 0.95},
+    "approval_correctness": {"min": 1.0},
+    "error_rate": {"max": 0.0},
+    "p95_latency_ms": {"max": 5000}
+  },
+  "min_task_count": 20,
+  "max_task_count": 30,
+  "offline_max_duration_ms": 60000,
+  "require_deterministic": true,
+  "regression_tolerance": {
+    "pass_rate": 0.0,
+    "citation_precision": 0.02,
+    "tool_accuracy": 0.0,
+    "approval_correctness": 0.0,
+    "error_rate": 0.0,
+    "p95_latency_ms": 500
+  }
+}

@@ -1,6 +1,7 @@
 DEMO_STATE ?= var/demo
+EVAL_ARGS ?=
 
-.PHONY: demo serve check-serve test clean-demo
+.PHONY: demo serve check-serve test eval clean-demo
 
 demo:
 	python -m demo --state "$(DEMO_STATE)"
@@ -16,6 +17,11 @@ check-serve:
 
 test:
 	python -m pytest
+
+# Offline eval is deterministic, network-blocked, and under 60s. Pass
+# EVAL_ARGS="--live" for the labelled, opt-in provider run.
+eval:
+	python -m evals $(EVAL_ARGS)
 
 clean-demo:
 	rm -rf "$(DEMO_STATE)"

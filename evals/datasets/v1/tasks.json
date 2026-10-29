@@ -1,0 +1,530 @@
+{
+  "dataset_version": "1.0.0",
+  "created": "2026-10-30",
+  "description": "KEL-15 M2-E offline evaluation set: retrieval correctness, tool selection, approval gate behaviour, restart/resume invariants, and multi-turn continuity. Every task is deterministic and local; live mode replaces only the provider.",
+  "tasks": [
+    {
+      "id": "EV-001",
+      "category": "retrieval",
+      "scenario": "retrieval",
+      "name": "CSV total revenue with row citations",
+      "prompt": "What is the total revenue across all regions?",
+      "artifact_token": "evalretrieval001",
+      "doc": {
+        "kind": "csv",
+        "filename": "sales_q3.csv",
+        "content": "region,product,units,revenue\nNorth,GPU cluster,12,48000\nSouth,Storage tier,30,15000\nEast,Inference API,20,64000\nWest,Support plan,7,9000\n"
+      },
+      "expect": {
+        "artifact_kind": "csv",
+        "answer_contains": ["136,000"],
+        "citation_locators": ["row 2", "row 3", "row 4", "row 5"]
+      }
+    },
+    {
+      "id": "EV-002",
+      "category": "retrieval",
+      "scenario": "retrieval",
+      "name": "CSV maximum with the winning row named",
+      "prompt": "What is the maximum available GPUs?",
+      "artifact_token": "evalretrieval002",
+      "doc": {
+        "kind": "csv",
+        "filename": "inventory.csv",
+        "content": "warehouse,sku,available,reserved\nBerlin,H200,24,6\nBerlin,H100,10,2\nOslo,H200,18,4\nOslo,L40S,40,0\n"
+      },
+      "expect": {
+        "artifact_kind": "csv",
+        "answer_contains": ["40", "Row 5"],
+        "citation_locators": ["row 2", "row 3", "row 4", "row 5"]
+      }
+    },
+    {
+      "id": "EV-003",
+      "category": "retrieval",
+      "scenario": "retrieval",
+      "name": "CSV row match keeps only the critical ticket",
+      "prompt": "Which ticket is critical?",
+      "artifact_token": "evalretrieval003",
+      "doc": {
+        "kind": "csv",
+        "filename": "tickets.csv",
+        "content": "ticket,priority,owner,status\nT-1001,critical,Alice,open\nT-1002,high,Bob,closed\nT-1003,normal,Carol,open\n"
+      },
+      "expect": {
+        "artifact_kind": "csv",
+        "answer_contains": ["T-1001", "Alice"],
+        "citation_locators": ["row 2"]
+      }
+    },
+    {
+      "id": "EV-004",
+      "category": "retrieval",
+      "scenario": "retrieval",
+      "name": "CSV row lookup by ticket id",
+      "prompt": "Who owns ticket T-2003?",
+      "artifact_token": "evalretrieval004",
+      "doc": {
+        "kind": "csv",
+        "filename": "owners.csv",
+        "content": "ticket,priority,owner,status\nT-2001,critical,Alice,open\nT-2002,high,Bob,closed\nT-2003,normal,Carol,open\nT-2004,low,Dave,closed\n"
+      },
+      "expect": {
+        "artifact_kind": "csv",
+        "answer_contains": ["Carol", "T-2003"],
+        "citation_locators": ["row 4"]
+      }
+    },
+    {
+      "id": "EV-005",
+      "category": "retrieval",
+      "scenario": "retrieval",
+      "name": "PDF page citation for a support target",
+      "prompt": "What is the production support response target?",
+      "artifact_token": "evalretrieval005",
+      "doc": {
+        "kind": "pdf",
+        "filename": "handbook.pdf",
+        "pages": [
+          ["Nebius platform overview.", "The platform runs on NVIDIA GPUs."],
+          ["Support.", "Production support response target is 30 minutes."],
+          ["Billing.", "Invoices are issued on the first day of each month."]
+        ]
+      },
+      "expect": {
+        "artifact_kind": "pdf",
+        "answer_contains": ["30 minutes"],
+        "citation_locators": ["page 2"]
+      }
+    },
+    {
+      "id": "EV-006",
+      "category": "retrieval",
+      "scenario": "retrieval",
+      "name": "PDF page citation for the refund window",
+      "prompt": "What is the refund window?",
+      "artifact_token": "evalretrieval006",
+      "doc": {
+        "kind": "pdf",
+        "filename": "returns.pdf",
+        "pages": [
+          ["Shipping.", "Orders ship within two business days."],
+          ["Returns.", "The refund window is 30 days from purchase."],
+          ["Warranty.", "Hardware warranty coverage lasts 24 months."]
+        ]
+      },
+      "expect": {
+        "artifact_kind": "pdf",
+        "answer_contains": ["30 days"],
+        "citation_locators": ["page 2"]
+      }
+    },
+    {
+      "id": "EV-007",
+      "category": "retrieval",
+      "scenario": "retrieval",
+      "name": "PDF ranking prefers the sentence with both query terms",
+      "prompt": "Which model has the lowest latency?",
+      "artifact_token": "evalretrieval007",
+      "doc": {
+        "kind": "pdf",
+        "filename": "models.pdf",
+        "pages": [
+          ["Nemotron Lightning has the lowest p95 latency at 180 milliseconds."],
+          ["Nemotron Super balances quality and throughput."],
+          ["H200 costs 2.49 dollars per GPU-hour."],
+          ["The service runs in the Frankfurt region."]
+        ]
+      },
+      "expect": {
+        "artifact_kind": "pdf",
+        "answer_contains": ["180 milliseconds"],
+        "citation_locators": ["page 1"]
+      }
+    },
+    {
+      "id": "EV-008",
+      "category": "tool",
+      "scenario": "tool_turn",
+      "name": "Selects web.search with a fresh query",
+      "prompt": "Search the web for the latest Nebius GPU pricing.",
+      "fixture": "provider_v1",
+      "expect": {
+        "tool_calls": [
+          {
+            "name": "web.search",
+            "arguments": {
+              "query": "latest Nebius GPU pricing",
+              "max_results": 5,
+              "freshness": "week"
+            }
+          }
+        ],
+        "final_contains": ["latest Nebius GPU pricing"]
+      }
+    },
+    {
+      "id": "EV-009",
+      "category": "tool",
+      "scenario": "tool_turn",
+      "name": "Selects github.read for a specific issue",
+      "prompt": "Show me issue 15 in Anshieee/kelp.",
+      "fixture": "provider_v1",
+      "expect": {
+        "tool_calls": [
+          {
+            "name": "github.read",
+            "arguments": {
+              "kind": "issue",
+              "repo": "Anshieee/kelp",
+              "number": 15
+            }
+          }
+        ],
+        "final_contains": ["open"]
+      }
+    },
+    {
+      "id": "EV-010",
+      "category": "tool",
+      "scenario": "tool_turn",
+      "name": "Selects docs.answer for an attached CSV",
+      "prompt": "Use the attached CSV to tell me the total revenue.",
+      "fixture": "provider_v1",
+      "artifact_token": "evaltool010",
+      "doc": {
+        "kind": "csv",
+        "filename": "revenue.csv",
+        "content": "region,product,units,revenue\nNorth,GPU cluster,12,48000\nSouth,Storage tier,30,15000\nEast,Inference API,20,64000\nWest,Support plan,7,9000\n"
+      },
+      "expect": {
+        "tool_calls": [
+          {
+            "name": "docs.answer",
+            "arguments": {
+              "artifact": "{{artifact}}",
+              "kind": "csv",
+              "question": "What is the total revenue across all regions?"
+            }
+          }
+        ],
+        "tool_output_contains": ["136,000"],
+        "final_contains": ["136,000"]
+      }
+    },
+    {
+      "id": "EV-011",
+      "category": "tool",
+      "scenario": "tool_turn",
+      "name": "Selects docs.answer for an attached PDF",
+      "prompt": "Ask the attached PDF about the support response target.",
+      "fixture": "provider_v1",
+      "artifact_token": "evaltool011",
+      "doc": {
+        "kind": "pdf",
+        "filename": "handbook.pdf",
+        "pages": [
+          ["Nebius platform overview.", "The platform runs on NVIDIA GPUs."],
+          ["Support.", "Production support response target is 30 minutes."]
+        ]
+      },
+      "expect": {
+        "tool_calls": [
+          {
+            "name": "docs.answer",
+            "arguments": {
+              "artifact": "{{artifact}}",
+              "kind": "pdf",
+              "question": "What is the production support response target?"
+            }
+          }
+        ],
+        "tool_output_contains": ["30 minutes"],
+        "final_contains": ["30 minutes"]
+      }
+    },
+    {
+      "id": "EV-012",
+      "category": "tool",
+      "scenario": "tool_turn",
+      "name": "Chooses two tools for a two-part request",
+      "prompt": "Search the web for Postgres 17 release notes and read the README from Anshieee/kelp.",
+      "fixture": "provider_v1",
+      "expect": {
+        "tool_calls": [
+          {
+            "name": "web.search",
+            "arguments": {
+              "query": "Postgres 17 release notes"
+            }
+          },
+          {
+            "name": "github.read",
+            "arguments": {
+              "kind": "file",
+              "repo": "Anshieee/kelp",
+              "path": "README.md",
+              "ref": "main"
+            }
+          }
+        ],
+        "final_contains": ["release notes", "README"]
+      }
+    },
+    {
+      "id": "EV-013",
+      "category": "tool",
+      "scenario": "tool_turn",
+      "name": "Preserves optional search limits",
+      "prompt": "Search the web for Nebius news from the past week, at most 3 results.",
+      "fixture": "provider_v1",
+      "expect": {
+        "tool_calls": [
+          {
+            "name": "web.search",
+            "arguments": {
+              "query": "Nebius news",
+              "max_results": 3,
+              "freshness": "week"
+            }
+          }
+        ],
+        "final_contains": ["Nebius"]
+      }
+    },
+    {
+      "id": "EV-014",
+      "category": "approval",
+      "scenario": "approval_approve",
+      "name": "Approve runs a write tool exactly once",
+      "prompt": "Schedule a weekday summary every morning at 8am.",
+      "fixture": "provider_v1",
+      "expect": {
+        "tool_calls": [
+          {
+            "name": "schedule.create",
+            "arguments": {
+              "title": "Weekday summary",
+              "prompt": "Summarize open issues each weekday morning.",
+              "schedule": {"kind": "cron", "expr": "0 8 * * 1-5"},
+              "timezone": "Europe/Berlin"
+            }
+          }
+        ],
+        "approval": {
+          "decision": "approve",
+          "status": "consumed",
+          "executions": 1,
+          "effects": ["write"]
+        }
+      }
+    },
+    {
+      "id": "EV-015",
+      "category": "approval",
+      "scenario": "approval_deny",
+      "name": "Deny blocks the handler and closes the card",
+      "prompt": "Schedule a nightly digest.",
+      "fixture": "provider_v1",
+      "expect": {
+        "tool_calls": [
+          {
+            "name": "schedule.create",
+            "arguments": {
+              "title": "Nightly digest",
+              "prompt": "Summarize the day.",
+              "schedule": {"kind": "cron", "expr": "0 22 * * *"},
+              "timezone": "UTC"
+            }
+          }
+        ],
+        "approval": {
+          "decision": "deny",
+          "status": "denied",
+          "executions": 0,
+          "effects": ["write"]
+        }
+      }
+    },
+    {
+      "id": "EV-016",
+      "category": "approval",
+      "scenario": "approval_redaction",
+      "name": "Approval cards never echo a configured secret",
+      "prompt": "Schedule a task using eval-sentinel-1234 without showing it.",
+      "fixture": "provider_v1",
+      "secret_sentinel": "eval-sentinel-1234",
+      "expect": {
+        "approval": {
+          "decision": "deny",
+          "status": "denied",
+          "executions": 0,
+          "effects": ["write"],
+          "secret_absent": "eval-sentinel-1234"
+        }
+      }
+    },
+    {
+      "id": "EV-017",
+      "category": "approval",
+      "scenario": "approval_expired",
+      "name": "An expired approval cannot be approved",
+      "prompt": "Approve a card that has passed its expiry.",
+      "expect": {
+        "approval": {
+          "decision": "approve",
+          "status": "expired",
+          "executions": 0
+        }
+      }
+    },
+    {
+      "id": "EV-018",
+      "category": "approval",
+      "scenario": "approval_replay",
+      "name": "A consumed approval cannot be replayed",
+      "prompt": "Schedule a digest and then replay the approval.",
+      "fixture": "provider_v1",
+      "expect": {
+        "tool_calls": [
+          {
+            "name": "schedule.create",
+            "arguments": {
+              "title": "Replay digest",
+              "prompt": "Summarize the day twice?",
+              "schedule": {"kind": "cron", "expr": "0 9 * * *"},
+              "timezone": "UTC"
+            }
+          }
+        ],
+        "approval": {
+          "decision": "approve",
+          "status": "consumed",
+          "executions": 1,
+          "effects": ["write"],
+          "replay_code": "already_used"
+        }
+      }
+    },
+    {
+      "id": "EV-019",
+      "category": "restart_resume",
+      "scenario": "recovery_running_turn",
+      "name": "Boot recovery closes a running turn as interrupted",
+      "prompt": "Simulate a process crash mid-turn.",
+      "expect": {
+        "recovery": {
+          "closed_turns": 1,
+          "message_status": "interrupted",
+          "turn_reason": "interrupted",
+          "usage_persisted": false
+        }
+      }
+    },
+    {
+      "id": "EV-020",
+      "category": "restart_resume",
+      "scenario": "recovery_running_tools_and_approval",
+      "name": "Boot recovery fails running tools and expires approvals",
+      "prompt": "Simulate a crash with an in-flight tool and a pending approval.",
+      "expect": {
+        "recovery": {
+          "failed_tool_calls": 1,
+          "expired_approvals": 1,
+          "tool_status": "failed",
+          "tool_error": "interrupted",
+          "approval_status": "expired",
+          "events": ["turn_finished", "approval_resolved"]
+        }
+      }
+    },
+    {
+      "id": "EV-021",
+      "category": "restart_resume",
+      "scenario": "recovery_idempotent",
+      "name": "Boot recovery is idempotent on a second boot",
+      "prompt": "Run recovery twice against the same database.",
+      "expect": {
+        "recovery": {
+          "second_closed_turns": 0,
+          "second_failed_tool_calls": 0,
+          "second_expired_approvals": 0,
+          "single_turn_finished": true,
+          "single_approval_resolved": true
+        }
+      }
+    },
+    {
+      "id": "EV-022",
+      "category": "restart_resume",
+      "scenario": "resume_retry",
+      "name": "Resume reuses the user message and supersedes the failed answer",
+      "prompt": "Explain the deploy plan.",
+      "fixture": "provider_v1",
+      "expect": {
+        "assistant_contains": ["Recovered answer"],
+        "retry": {"same_user_message": true, "superseded": true, "provider_requests": 2}
+      }
+    },
+    {
+      "id": "EV-023",
+      "category": "multi_turn",
+      "scenario": "multi_turn_two",
+      "name": "Two turns append to the same thread history",
+      "prompt": "My name is Ada.",
+      "followup": "What is my name?",
+      "fixture": "provider_v1",
+      "expect": {
+        "assistant_contains": ["Hello Ada"],
+        "followup_contains": ["Ada"],
+        "message_count": 4,
+        "provider_requests": 2
+      }
+    },
+    {
+      "id": "EV-024",
+      "category": "multi_turn",
+      "scenario": "multi_turn_idempotent",
+      "name": "A repeated client turn id does not duplicate the turn",
+      "prompt": "Start once.",
+      "fixture": "provider_v1",
+      "expect": {
+        "assistant_contains": ["One answer"],
+        "message_count": 2,
+        "provider_requests": 1,
+        "idempotent": true
+      }
+    },
+    {
+      "id": "EV-025",
+      "category": "multi_turn",
+      "scenario": "multi_turn_isolation",
+      "name": "Two threads keep separate histories",
+      "prompt": "alpha",
+      "followup": "beta",
+      "fixture": "provider_v1",
+      "expect": {
+        "assistant_contains": ["Alpha answer"],
+        "followup_contains": ["Beta answer"],
+        "message_count": 2,
+        "provider_requests": 2
+      }
+    },
+    {
+      "id": "EV-026",
+      "category": "multi_turn",
+      "scenario": "multi_turn_title",
+      "name": "A follow-up does not overwrite the auto title",
+      "prompt": "Draft the weekly report",
+      "followup": "Make it shorter",
+      "fixture": "provider_v1",
+      "expect": {
+        "assistant_contains": ["Draft ready"],
+        "followup_contains": ["Shortened"],
+        "message_count": 4,
+        "provider_requests": 2,
+        "title_stable": true
+      }
+    }
+  ]
+}

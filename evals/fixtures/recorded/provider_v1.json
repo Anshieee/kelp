@@ -1,0 +1,213 @@
+{
+  "fixture_version": 1,
+  "recorded_at": "2026-10-30T00:00:00Z",
+  "provider": "recorded://synthetic",
+  "model": "nvidia/Nemotron-3_5-Super-VL",
+  "notes": "Hand-maintained deterministic replays for the offline KEL-15 dataset. They are not captured production traffic and contain no credentials.",
+  "tasks": {
+    "EV-008": {
+      "turns": [
+        [
+          {"type": "tool_call", "index": 0, "call_id": "call_web_1", "name": "web.search", "arguments": {"query": "latest Nebius GPU pricing", "max_results": 5, "freshness": "week"}},
+          {"type": "usage", "input_tokens": 180, "output_tokens": 42},
+          {"type": "stream_end", "finish_reason": "tool_calls"}
+        ],
+        [
+          {"type": "text", "text": "I found the latest Nebius GPU pricing for you."},
+          {"type": "usage", "input_tokens": 240, "output_tokens": 14},
+          {"type": "stream_end", "finish_reason": "stop"}
+        ]
+      ]
+    },
+    "EV-009": {
+      "turns": [
+        [
+          {"type": "tool_call", "index": 0, "call_id": "call_github_1", "name": "github.read", "arguments": {"kind": "issue", "repo": "Anshieee/kelp", "number": 15}},
+          {"type": "usage", "input_tokens": 160, "output_tokens": 30},
+          {"type": "stream_end", "finish_reason": "tool_calls"}
+        ],
+        [
+          {"type": "text", "text": "Issue 15 is open."},
+          {"type": "usage", "input_tokens": 210, "output_tokens": 8},
+          {"type": "stream_end", "finish_reason": "stop"}
+        ]
+      ]
+    },
+    "EV-010": {
+      "turns": [
+        [
+          {"type": "tool_call", "index": 0, "call_id": "call_docs_csv", "name": "docs.answer", "arguments": {"artifact": "{{artifact}}", "kind": "csv", "question": "What is the total revenue across all regions?"}},
+          {"type": "usage", "input_tokens": 220, "output_tokens": 48},
+          {"type": "stream_end", "finish_reason": "tool_calls"}
+        ],
+        [
+          {"type": "text", "text": "The total revenue is 136,000."},
+          {"type": "usage", "input_tokens": 320, "output_tokens": 12},
+          {"type": "stream_end", "finish_reason": "stop"}
+        ]
+      ]
+    },
+    "EV-011": {
+      "turns": [
+        [
+          {"type": "tool_call", "index": 0, "call_id": "call_docs_pdf", "name": "docs.answer", "arguments": {"artifact": "{{artifact}}", "kind": "pdf", "question": "What is the production support response target?"}},
+          {"type": "usage", "input_tokens": 210, "output_tokens": 46},
+          {"type": "stream_end", "finish_reason": "tool_calls"}
+        ],
+        [
+          {"type": "text", "text": "The production support response target is 30 minutes."},
+          {"type": "usage", "input_tokens": 300, "output_tokens": 14},
+          {"type": "stream_end", "finish_reason": "stop"}
+        ]
+      ]
+    },
+    "EV-012": {
+      "turns": [
+        [
+          {"type": "tool_call", "index": 0, "call_id": "call_multi_web", "name": "web.search", "arguments": {"query": "Postgres 17 release notes"}},
+          {"type": "tool_call", "index": 1, "call_id": "call_multi_read", "name": "github.read", "arguments": {"kind": "file", "repo": "Anshieee/kelp", "path": "README.md", "ref": "main"}},
+          {"type": "usage", "input_tokens": 260, "output_tokens": 74},
+          {"type": "stream_end", "finish_reason": "tool_calls"}
+        ],
+        [
+          {"type": "text", "text": "Here are the release notes and the README."},
+          {"type": "usage", "input_tokens": 420, "output_tokens": 12},
+          {"type": "stream_end", "finish_reason": "stop"}
+        ]
+      ]
+    },
+    "EV-013": {
+      "turns": [
+        [
+          {"type": "tool_call", "index": 0, "call_id": "call_web_limits", "name": "web.search", "arguments": {"query": "Nebius news", "max_results": 3, "freshness": "week"}},
+          {"type": "usage", "input_tokens": 170, "output_tokens": 36},
+          {"type": "stream_end", "finish_reason": "tool_calls"}
+        ],
+        [
+          {"type": "text", "text": "Here is the Nebius news."},
+          {"type": "usage", "input_tokens": 220, "output_tokens": 9},
+          {"type": "stream_end", "finish_reason": "stop"}
+        ]
+      ]
+    },
+    "EV-014": {
+      "turns": [
+        [
+          {"type": "tool_call", "index": 0, "call_id": "call_schedule_approve", "name": "schedule.create", "arguments": {"title": "Weekday summary", "prompt": "Summarize open issues each weekday morning.", "schedule": {"kind": "cron", "expr": "0 8 * * 1-5"}, "timezone": "Europe/Berlin"}},
+          {"type": "usage", "input_tokens": 200, "output_tokens": 58},
+          {"type": "stream_end", "finish_reason": "tool_calls"}
+        ],
+        [
+          {"type": "text", "text": "Scheduled."},
+          {"type": "usage", "input_tokens": 280, "output_tokens": 5},
+          {"type": "stream_end", "finish_reason": "stop"}
+        ]
+      ]
+    },
+    "EV-015": {
+      "turns": [
+        [
+          {"type": "tool_call", "index": 0, "call_id": "call_schedule_deny", "name": "schedule.create", "arguments": {"title": "Nightly digest", "prompt": "Summarize the day.", "schedule": {"kind": "cron", "expr": "0 22 * * *"}, "timezone": "UTC"}},
+          {"type": "usage", "input_tokens": 190, "output_tokens": 52},
+          {"type": "stream_end", "finish_reason": "tool_calls"}
+        ],
+        [
+          {"type": "text", "text": "Understood."},
+          {"type": "usage", "input_tokens": 260, "output_tokens": 4},
+          {"type": "stream_end", "finish_reason": "stop"}
+        ]
+      ]
+    },
+    "EV-016": {
+      "turns": [
+        [
+          {"type": "tool_call", "index": 0, "call_id": "call_schedule_secret", "name": "schedule.create", "arguments": {"title": "Secret-safe digest", "prompt": "Use eval-sentinel-1234 but never echo it.", "schedule": {"kind": "cron", "expr": "0 7 * * *"}, "timezone": "UTC"}},
+          {"type": "usage", "input_tokens": 210, "output_tokens": 56},
+          {"type": "stream_end", "finish_reason": "tool_calls"}
+        ],
+        [
+          {"type": "text", "text": "Denied."},
+          {"type": "usage", "input_tokens": 270, "output_tokens": 3},
+          {"type": "stream_end", "finish_reason": "stop"}
+        ]
+      ]
+    },
+    "EV-018": {
+      "turns": [
+        [
+          {"type": "tool_call", "index": 0, "call_id": "call_schedule_replay", "name": "schedule.create", "arguments": {"title": "Replay digest", "prompt": "Summarize the day twice?", "schedule": {"kind": "cron", "expr": "0 9 * * *"}, "timezone": "UTC"}},
+          {"type": "usage", "input_tokens": 195, "output_tokens": 50},
+          {"type": "stream_end", "finish_reason": "tool_calls"}
+        ],
+        [
+          {"type": "text", "text": "Scheduled."},
+          {"type": "usage", "input_tokens": 270, "output_tokens": 4},
+          {"type": "stream_end", "finish_reason": "stop"}
+        ]
+      ]
+    },
+    "EV-022": {
+      "turns": [
+        [
+          {"type": "failure", "code": "provider_timeout", "message": "Recorded provider timeout.", "retryable": true}
+        ],
+        [
+          {"type": "text", "text": "Recovered answer."},
+          {"type": "usage", "input_tokens": 130, "output_tokens": 6},
+          {"type": "stream_end", "finish_reason": "stop"}
+        ]
+      ]
+    },
+    "EV-023": {
+      "turns": [
+        [
+          {"type": "text", "text": "Hello Ada."},
+          {"type": "usage", "input_tokens": 120, "output_tokens": 6},
+          {"type": "stream_end", "finish_reason": "stop"}
+        ],
+        [
+          {"type": "text", "text": "Your name is Ada."},
+          {"type": "usage", "input_tokens": 160, "output_tokens": 8},
+          {"type": "stream_end", "finish_reason": "stop"}
+        ]
+      ]
+    },
+    "EV-024": {
+      "turns": [
+        [
+          {"type": "text", "text": "One answer."},
+          {"type": "usage", "input_tokens": 110, "output_tokens": 4},
+          {"type": "stream_end", "finish_reason": "stop"}
+        ]
+      ]
+    },
+    "EV-025": {
+      "turns": [
+        [
+          {"type": "text", "text": "Alpha answer."},
+          {"type": "usage", "input_tokens": 110, "output_tokens": 4},
+          {"type": "stream_end", "finish_reason": "stop"}
+        ],
+        [
+          {"type": "text", "text": "Beta answer."},
+          {"type": "usage", "input_tokens": 115, "output_tokens": 4},
+          {"type": "stream_end", "finish_reason": "stop"}
+        ]
+      ]
+    },
+    "EV-026": {
+      "turns": [
+        [
+          {"type": "text", "text": "Draft ready."},
+          {"type": "usage", "input_tokens": 118, "output_tokens": 4},
+          {"type": "stream_end", "finish_reason": "stop"}
+        ],
+        [
+          {"type": "text", "text": "Shortened."},
+          {"type": "usage", "input_tokens": 150, "output_tokens": 3},
+          {"type": "stream_end", "finish_reason": "stop"}
+        ]
+      ]
+    }
+  }
+}
