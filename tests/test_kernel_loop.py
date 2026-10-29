@@ -12,6 +12,7 @@ import pytest
 from kernel import (
     AgentLoop,
     CallableToolExecutor,
+    CancelToken,
     InMemoryUsageStore,
     KernelConfig,
     JsonlUsageStore,
@@ -268,6 +269,143 @@ def test_wall_clock_budget_is_enforced() -> None:
     assert result[-1].reason == "budget"
 
 
+class _ManualClock:
+    """Monotonic clock a test advances explicitly."""
+
+    def __init__(self) -> None:
+        self.value = 0.0
+
+    def __call__(self) -> float:
+        return self.value
+
+
+class _ApprovalWaitingExecutor:
+    """Pretends each call spent ``wait_seconds`` blocked on an approval."""
+
+    def __init__(self, clock: _ManualClock, wait_seconds: float) -> None:
+        self._clock = clock
+        self._wait_seconds = wait_seconds
+        self.waited: dict[str, int] = {}
+
+    async def execute(self, call: ToolCall) -> Mapping[str, Any]:
+        self._clock.value += self._wait_seconds
+        self.waited[call.call_id] = int(self._wait_seconds * 1000)
+        return {"ok": True}
+
+    def approval_wait_ms(self, call_id: str) -> int:
+        return self.waited.pop(call_id, 0)
+
+
+def test_approval_wait_does_not_consume_the_wall_budget() -> None:
+    # §14.2: a 60 s approval wait inside a 120 s budget must not stop the turn,
+    # and duration_ms must still report the real 60 s the person experienced.
+    clock = _ManualClock()
+    executor = _ApprovalWaitingExecutor(clock, wait_seconds=60.0)
+    loop, _provider = build(
+        [tool_script("shell.exec", {"cmd": "echo hi"}), text_script("all done")],
+        budget=TurnBudget(max_steps=10, max_wall_seconds=120),
+        executor=executor,
+        time_fn=clock,
+    )
+    result = collect(loop, [{"role": "user", "content": "run"}])
+
+    finished = [e for e in result if e.kind == "tool_call_finished"][0]
+    assert finished.waited_ms == 60_000
+    assert finished.duration_ms == 60_000
+    assert result[-1].reason == "stop"
+    assert result[-1].message == "all done"
+    assert result[-1].duration_ms == 60_000
+    assert not [e for e in result if e.kind == "error"]
+
+
+def test_approval_wait_beyond_the_budget_still_completes() -> None:
+    # The old behaviour stopped this turn at the next step boundary because the
+    # 90 s wait was counted as 90 s of budget.
+    clock = _ManualClock()
+    executor = _ApprovalWaitingExecutor(clock, wait_seconds=90.0)
+    loop, _provider = build(
+        [tool_script("shell.exec", {}), text_script("after approval")],
+        budget=TurnBudget(max_steps=10, max_wall_seconds=60),
+        executor=executor,
+        time_fn=clock,
+    )
+    result = collect(loop, [{"role": "user", "content": "run"}])
+
+    assert result[-1].reason == "stop"
+    assert result[-1].message == "after approval"
+    assert result[-1].duration_ms == 90_000
+    assert [e for e in result if e.kind == "tool_call_finished"][0].waited_ms == 90_000
+
+
+def test_time_after_the_approval_still_counts_against_the_budget() -> None:
+    # Pausing must not become an exemption: work that is slow for any other
+    # reason still hits max_wall_seconds.
+    clock = _ManualClock()
+
+    class SlowTool:
+        async def execute(self, call: ToolCall) -> Mapping[str, Any]:
+            clock.value += 70.0
+            return {"ok": True}
+
+    loop, provider = build(
+        [tool_script("stub.tool", {}), text_script("never")],
+        budget=TurnBudget(max_steps=10, max_wall_seconds=50),
+        executor=SlowTool(),
+        time_fn=clock,
+    )
+    result = collect(loop, [{"role": "user", "content": "slow"}])
+
+    errors = [e for e in result if e.kind == "error"]
+    assert errors[0].details == {"limit": "max_wall_seconds"}
+    assert result[-1].reason == "budget"
+    assert len(provider.requests) == 1
+    finished = [e for e in result if e.kind == "tool_call_finished"][0]
+    assert finished.waited_ms == 0
+
+
+def test_registry_executor_reports_and_consumes_approval_wait() -> None:
+    clock = _ManualClock()
+
+    class FakeRegistry:
+        async def invoke(
+            self, name: str, arguments: Any, *, approval: Any, **kwargs: Any
+        ) -> dict[str, Any]:
+            assert approval is not None
+            return {"ok": await approval(object())}
+
+    async def gate(_request: Any) -> bool:
+        clock.value += 45.0
+        return True
+
+    executor = RegistryToolExecutor(
+        FakeRegistry(),  # type: ignore[arg-type]
+        approval=gate,
+        time_fn=clock,
+    )
+    result = asyncio.run(executor.execute(ToolCall("call_7", "shell.exec", {})))
+    assert result == {"ok": True}
+    assert executor.approval_wait_ms("call_7") == 45_000
+    # The wait is consumed so a later call with the same id cannot inherit it.
+    assert executor.approval_wait_ms("call_7") == 0
+
+
+def test_registry_executor_without_approval_reports_no_wait() -> None:
+    class FakeRegistry:
+        def __init__(self) -> None:
+            self.approval: Any = "unset"
+
+        async def invoke(self, name: str, arguments: Any, *, approval: Any, **kwargs: Any) -> dict[str, Any]:
+            self.approval = approval
+            return {"ok": True}
+
+    registry = FakeRegistry()
+    executor = RegistryToolExecutor(registry)  # type: ignore[arg-type]
+    result = asyncio.run(executor.execute(ToolCall("call_8", "web.search", {})))
+    assert result == {"ok": True}
+    assert registry.approval is None
+    assert executor.approval_wait_ms("call_8") == 0
+
+
 def test_provider_failure_mid_stream_is_visible_and_session_stays_usable() -> None:
     failing = [
         TextDelta("par"),
@@ -413,6 +551,73 @@ def test_budget_validation() -> None:
         TurnBudget(max_tool_calls=-1)
     with pytest.raises(ValueError):
         TurnBudget(max_wall_seconds=0)
+
+
+def test_cancel_token_before_the_turn_ends_it_without_an_error() -> None:
+    store = InMemoryUsageStore()
+    token = CancelToken()
+    token.cancel()
+    loop, provider = build([text_script("never")], store=store)
+
+    result = collect(loop, [{"role": "user", "content": "hi"}], cancel=token)
+
+    assert kinds(result) == ["turn_started", "turn_finished"]
+    assert result[-1].reason == "cancelled"
+    assert result[-1].message is None
+    assert provider.requests == []
+    assert store.records[0].outcome == "cancelled"
+
+
+def test_cancel_between_provider_chunks_keeps_the_partial_text() -> None:
+    token = CancelToken()
+    store = InMemoryUsageStore()
+
+    class CancellingProvider:
+        async def stream(self, request: ChatRequest) -> Any:
+            yield TextDelta("partial")
+            token.cancel()
+            yield TextDelta("after cancel")
+            yield UsageReport(1, 1, 2)
+            yield StreamEnd("stop")
+
+    loop = AgentLoop(
+        provider=CancellingProvider(),
+        config=KernelConfig(api_key="test-key"),
+        usage_store=store,
+        model=MODEL,
+    )
+    result = collect(loop, [{"role": "user", "content": "hi"}], cancel=token)
+
+    assert kinds(result) == ["turn_started", "token_delta", "turn_finished"]
+    assert result[1].text == "partial"
+    assert result[-1].reason == "cancelled"
+    assert store.records[0].outcome == "cancelled"
+
+
+def test_cancel_during_a_tool_call_stops_before_the_next_model_step() -> None:
+    token = CancelToken()
+
+    async def executor(call: ToolCall) -> Mapping[str, Any]:
+        token.cancel()
+        return {"ok": True, "output": {}}
+
+    loop, provider = build(
+        [tool_script("stub.tool", {"n": 1}), text_script("never")],
+        executor=CallableToolExecutor(executor),
+    )
+    result = collect(loop, [{"role": "user", "content": "go"}], cancel=token)
+
+    assert kinds(result) == [
+        "turn_started",
+        "usage_updated",
+        "tool_call_started",
+        "tool_call_finished",
+        "turn_finished",
+    ]
+    assert result[-1].reason == "cancelled"
+    assert result[-1].tool_calls == 1
+    assert len(provider.requests) == 1
+    assert not [event for event in result if event.kind == "error"]
 
 
 async def _ok() -> Mapping[str, Any]:
