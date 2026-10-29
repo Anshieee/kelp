@@ -23,6 +23,7 @@ import pytest
 from payments.razorpay_checkout import (
     CHECKOUT_CALLBACK_ENV,
     CHECKOUT_NAME_ENV,
+    CHECKOUT_PAYMENT_METHOD_ID,
     CHECKOUT_URL_ENV,
     WEBHOOK_SECRET_ENV,
     RazorpayCheckout,
@@ -67,6 +68,9 @@ class CheckoutTransport:
         self.payment_currency: str | None = None
         self.payment_order_id: str | None = None
         self.payment_last4: str | None = "4242"
+        # Optional interleaving hook: runs after the local reservation but
+        # before the provider order exists, i.e. inside the race window.
+        self.on_order: Any = None
         self._orders: dict[str, Mapping[str, Any]] = {}
         self._by_order: dict[str, Mapping[str, Any]] = {}
         self._seq = 0
@@ -97,6 +101,8 @@ class CheckoutTransport:
                 "receipt": receipt,
             }
         )
+        if self.on_order is not None:
+            self.on_order()
         if self.order_error is not None:
             raise self.order_error
         existing = self._orders.get(idempotency_key)
@@ -416,6 +422,125 @@ def test_a_checkout_order_cannot_also_be_charged_to_a_saved_card(
     assert transport.payments == []
 
 
+def test_the_reservation_is_the_checkout_claim(transport: CheckoutTransport) -> None:
+    checkout = make_checkout(transport=transport)
+    wallet = checkout.wallet
+    claims: list[tuple[str | None, dict[str, Any] | None]] = []
+
+    def inspect_claim() -> None:
+        proposal = wallet.ledger.find_proposal_by_key("race-key-1")
+        assert proposal is not None
+        claims.append(
+            (
+                proposal.payment_method_id,
+                wallet.ledger.find_checkout_for_proposal(proposal.id),
+            )
+        )
+
+    transport.on_order = inspect_claim
+    create_order(checkout, key="race-key-1")
+
+    # The claim is written by the reservation transaction, before the provider
+    # order is registered, and it is not a saved-card id.
+    assert len(claims) == 1
+    claimed_id, row = claims[0]
+    assert claimed_id == CHECKOUT_PAYMENT_METHOD_ID
+    assert row is None
+
+
+def test_a_saved_card_approval_racing_a_checkout_create_is_refused(
+    transport: CheckoutTransport,
+) -> None:
+    wallet = make_wallet(transport=transport)
+    wallet.ledger.add_card(Card("pm_rzpvisa4242", "visa", "4242", 12, 2030, True))
+    checkout = make_checkout(transport=transport, wallet=wallet)
+    outcomes: list[str] = []
+
+    def race_approval() -> None:
+        # The checkout create has reserved and claimed the order but has not
+        # registered the provider order yet: exactly the window where a
+        # saved-card approval used to see a payable, unowned order.
+        proposal = wallet.ledger.find_proposal_by_key("race-key-1")
+        assert proposal is not None
+        assert wallet.ledger.find_checkout_for_proposal(proposal.id) is None
+        try:
+            wallet.approve(proposal.id, payment_method_id="pm_rzpvisa4242")
+        except WalletError as exc:
+            outcomes.append(exc.code)
+        else:  # pragma: no cover - the fix makes this unchargeable
+            outcomes.append("charged")
+
+    transport.on_order = race_approval
+    created = create_order(checkout, key="race-key-1")
+
+    assert outcomes == ["already_decided"]
+    assert transport.payments == []
+    assert created["proposal"]["status"] == "approved"
+    assert created["proposal"].get("receipt") is None
+    assert wallet.limits("usd")["reserved_cents"] == 1500
+
+
+def test_an_order_reserved_for_a_card_cannot_start_a_checkout(
+    transport: CheckoutTransport,
+) -> None:
+    wallet = make_wallet(transport=transport)
+    checkout = make_checkout(transport=transport, wallet=wallet)
+    proposal, _ = wallet.propose(1500, idempotency_key="card-key-1")
+    since, reserved_since, sweep_before = wallet._windows()  # noqa: SLF001
+    approved, outcome = wallet.ledger.decide(
+        proposal.id,
+        decision="approve",
+        payment_method_id="pm_rzpvisa4242",
+        monthly_cap_cents=wallet.caps.monthly_cents,
+        monthly_since=since,
+        approved_since=reserved_since,
+        expire_before=sweep_before,
+    )
+    assert outcome == "approved" and approved is not None
+
+    with pytest.raises(WalletError) as caught:
+        checkout.create(1500, idempotency_key="card-key-1")
+
+    assert caught.value.code == "already_decided"
+    assert transport.orders == []
+
+
+def test_a_definitive_error_does_not_fail_a_registered_checkout(
+    transport: CheckoutTransport,
+) -> None:
+    wallet = make_wallet(transport=transport)
+    checkout = make_checkout(transport=transport, wallet=wallet)
+
+    def concurrent_registration() -> None:
+        # A concurrent create registered its provider order first; this
+        # attempt then got a definitive error from Razorpay.
+        proposal = wallet.ledger.find_proposal_by_key("race-key-2")
+        assert proposal is not None
+        wallet.ledger.register_checkout_order(
+            provider="razorpay",
+            provider_order_id="order_race0001",
+            proposal_id=proposal.id,
+            receipt=proposal.id,
+        )
+
+    transport.on_order = concurrent_registration
+    transport.order_error = RazorpayGatewayError(
+        "Razorpay rejected the request (400).", code="BAD_REQUEST_ERROR"
+    )
+
+    with pytest.raises(WalletError) as caught:
+        create_order(checkout, key="race-key-2")
+
+    assert caught.value.code == "payment_failed"
+    assert caught.value.retryable is False
+    stored = wallet.ledger.find_proposal_by_key("race-key-2")
+    assert stored is not None
+    # The registered checkout order is still payable: its reservation and its
+    # local row were not retired by this attempt's error.
+    assert stored.status == "approved"
+    assert wallet.limits("usd")["reserved_cents"] == 1500
+
+
 def test_create_rejects_an_unsupported_currency(transport: CheckoutTransport) -> None:
     checkout = make_checkout(transport=transport)
     with pytest.raises(WalletError) as caught:
@@ -606,6 +731,38 @@ def test_a_different_payment_cannot_settle_a_paid_order(
 
     assert caught.value.code == "already_decided"
     assert checkout.wallet.limits("usd")["spent_cents"] == 1500
+
+
+def test_a_paid_order_without_a_checkout_payment_is_never_a_receipt(
+    transport: CheckoutTransport,
+) -> None:
+    checkout = make_checkout(transport=transport)
+    created = create_order(checkout)
+    proposal_id = created["proposal"]["id"]
+    order_id = created["checkout"]["order_id"]
+    # The proposal was settled by some other payer (a saved card, or a row
+    # written before a crash) while the checkout row still has no provider
+    # payment id. That money does not belong to this callback.
+    checkout.wallet.ledger.mark_paid(
+        proposal_id, payment_intent_id="pi_rzp_other", card_last4="1111"
+    )
+    payment_id = "pay_test0001"
+
+    with pytest.raises(WalletError) as caught:
+        checkout.confirm(
+            razorpay_order_id=order_id,
+            razorpay_payment_id=payment_id,
+            razorpay_signature=signature_for(order_id, payment_id),
+        )
+
+    assert caught.value.code == "already_decided"
+    assert caught.value.status == 409
+    assert transport.fetch_calls == []
+    stored = checkout.wallet.ledger.get_proposal(proposal_id)
+    assert stored is not None
+    assert stored.receipt is not None  # the other settlement's receipt is untouched
+    assert stored.receipt.payment_intent_id == "pi_rzp_other"
+    assert checkout.wallet.limits("usd")["reserved_cents"] == 0
 
 
 def test_amount_mismatch_is_not_a_receipt(transport: CheckoutTransport) -> None:
@@ -881,6 +1038,74 @@ def test_webhook_without_any_signature_is_refused(
         checkout.handle_webhook(body)
     assert caught.value.code == "signature_invalid"
     assert checkout.wallet.limits("usd")["spent_cents"] == 0
+
+
+def test_webhook_with_a_configured_secret_ignores_a_body_signature(
+    transport: CheckoutTransport,
+) -> None:
+    checkout = make_checkout(transport=transport)  # webhook secret configured
+    created = create_order(checkout)
+    order_id = created["checkout"]["order_id"]
+    payment_id = "pay_test0001"
+    event = webhook_event(order_id, payment_id)
+    # A per-payment signature that would be accepted by the no-secret path.
+    event["razorpay_signature"] = signature_for(order_id, payment_id)
+    body = json.dumps(event).encode("utf-8")
+
+    with pytest.raises(WalletError) as caught:
+        checkout.handle_webhook(body)
+
+    assert caught.value.code == "signature_invalid"
+    assert caught.value.status == 401
+    assert transport.fetch_calls == []
+    assert checkout.wallet.limits("usd")["spent_cents"] == 0
+    assert checkout.wallet.limits("usd")["reserved_cents"] == 1500
+
+
+def test_webhook_with_an_empty_signature_header_is_refused(
+    transport: CheckoutTransport,
+) -> None:
+    checkout = make_checkout(transport=transport)
+    created = create_order(checkout)
+    order_id = created["checkout"]["order_id"]
+    payment_id = "pay_test0001"
+    event = webhook_event(order_id, payment_id)
+    event["razorpay_signature"] = signature_for(order_id, payment_id)
+    body = json.dumps(event).encode("utf-8")
+
+    # An empty header is the same as a missing one: the body signature is not
+    # a fallback while a webhook secret is configured.
+    with pytest.raises(WalletError) as caught:
+        checkout.handle_webhook(body, signature="")
+
+    assert caught.value.code == "signature_invalid"
+    assert caught.value.status == 401
+    assert transport.fetch_calls == []
+    assert checkout.wallet.limits("usd")["spent_cents"] == 0
+
+
+def test_webhook_never_returns_a_receipt_for_a_paid_order_without_a_payment(
+    transport: CheckoutTransport,
+) -> None:
+    checkout = make_checkout(transport=transport)
+    created = create_order(checkout)
+    proposal_id = created["proposal"]["id"]
+    order_id = created["checkout"]["order_id"]
+    checkout.wallet.ledger.mark_paid(
+        proposal_id, payment_intent_id="pi_rzp_other", card_last4="1111"
+    )
+    payment_id = "pay_test0001"
+    body, signature = sign_webhook(webhook_event(order_id, payment_id))
+
+    with pytest.raises(WalletError) as caught:
+        checkout.handle_webhook(body, signature=signature)
+
+    assert caught.value.code == "already_decided"
+    assert caught.value.status == 409
+    assert transport.fetch_calls == []
+    stored = checkout.wallet.ledger.get_proposal(proposal_id)
+    assert stored is not None and stored.receipt is not None
+    assert stored.receipt.payment_intent_id == "pi_rzp_other"
 
 
 def test_webhook_for_an_unknown_order_is_acknowledged_but_ignored(

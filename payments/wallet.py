@@ -1779,6 +1779,18 @@ class Wallet:
                 message="That order is being paid through Checkout.",
             )
 
+        if decision == "approve" and _claimed_by_another_payer(
+            current.payment_method_id
+        ):
+            # Hosted Checkout claims its reservation with a non-``pm_``
+            # marker inside the reservation transaction, before the provider
+            # order is registered. Treating that marker as a card would fall
+            # back to the default card and charge a second time.
+            raise WalletError(
+                "already_decided",
+                message="That order is being paid through Checkout.",
+            )
+
         if decision == "deny":
             since, reserved_since, sweep_before = self._windows()
             proposal, outcome = self.ledger.decide(
@@ -1816,6 +1828,13 @@ class Wallet:
             # A previous attempt answered the order but never produced a
             # receipt (for example, the process stopped). Resume the same
             # charge with the same per-order idempotency key.
+            if _claimed_by_another_payer(current.payment_method_id):
+                # Same guard as above, repeated at the resume branch so the
+                # resume path can never treat a Checkout claim as a card id.
+                raise WalletError(
+                    "already_decided",
+                    message="That order is being paid through Checkout.",
+                )
             resume_card = self._select_card(
                 current.payment_method_id or payment_method_id
             )
@@ -1928,6 +1947,20 @@ class Wallet:
         if card is None:
             raise WalletError("no_saved_card", user_fixable=True)
         return card
+
+
+def _claimed_by_another_payer(payment_method_id: str | None) -> bool:
+    """True when an approved order is held by something other than a card.
+
+    Saved-card approvals always store a ``pm_...`` id. Hosted Checkout stores a
+    provider marker instead, so any other non-empty value means "not yours".
+    """
+
+    if payment_method_id is None:
+        return False
+    if not isinstance(payment_method_id, str):
+        return True
+    return _PAYMENT_METHOD_RE.match(payment_method_id) is None
 
 
 def _validate_amount(amount_cents: int) -> int:

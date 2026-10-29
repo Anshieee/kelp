@@ -22,10 +22,16 @@ The flow:
    currency match the reserved order, and only then writes ``paid`` plus a
    receipt in one transaction.
 4. :meth:`RazorpayCheckout.handle_webhook` does the same settlement for a
-   server-to-server event. A webhook is authenticated either by the
-   ``X-Razorpay-Signature`` HMAC over the raw body (``RAZORPAY_WEBHOOK_SECRET``)
-   or, when no webhook secret is set, by a per-payment ``razorpay_signature``
-   checked with ``RAZORPAY_KEY_SECRET``.
+   server-to-server event. When ``RAZORPAY_WEBHOOK_SECRET`` is configured the
+   ``X-Razorpay-Signature`` HMAC over the raw body is the only accepted
+   authentication and the header is required; only when no webhook secret is
+   set may a per-payment ``razorpay_signature`` in the event (checked with
+   ``RAZORPAY_KEY_SECRET``) be used instead.
+
+Reserving the order *is* claiming it for Checkout: the reservation is written
+with ``payment_method_id=CHECKOUT_PAYMENT_METHOD_ID`` in the same transaction
+that checks the cap, so a saved-card approval racing the same order is refused
+instead of charging a second time.
 
 Security boundaries, the same as the rest of the wallet:
 
@@ -86,6 +92,7 @@ from .wallet import (
 __all__ = [
     "CHECKOUT_CALLBACK_ENV",
     "CHECKOUT_NAME_ENV",
+    "CHECKOUT_PAYMENT_METHOD_ID",
     "CHECKOUT_URL_ENV",
     "WEBHOOK_SECRET_ENV",
     "RazorpayCheckout",
@@ -103,6 +110,11 @@ CHECKOUT_CALLBACK_ENV = "RAZORPAY_CHECKOUT_CALLBACK_URL"
 CHECKOUT_URL_ENV = "RAZORPAY_CHECKOUT_URL"
 
 PROVIDER = "razorpay"
+# The reservation a hosted Checkout writes is its claim on the order. It is
+# deliberately *not* a ``pm_...`` card id: the saved-card flow only accepts
+# card ids, so it refuses to charge an order held by Checkout even if the
+# provider-order mapping has not been registered yet.
+CHECKOUT_PAYMENT_METHOD_ID = "checkout:razorpay"
 DEFAULT_CHECKOUT_NAME = "Kelp"
 MAX_JSON_BYTES = 256 * 1024
 
@@ -328,7 +340,10 @@ class RazorpayCheckout:
         if existing is not None:
             return self._result(proposal, existing, created=False)
 
-        if proposal.status == "approved" and proposal.payment_method_id:
+        if proposal.status == "approved" and proposal.payment_method_id not in (
+            None,
+            CHECKOUT_PAYMENT_METHOD_ID,
+        ):
             # Reserved by the saved-card flow: a hosted Checkout would be a
             # second payment for the same receipt.
             raise WalletError(
@@ -357,7 +372,11 @@ class RazorpayCheckout:
         except RazorpayGatewayError as exc:
             reason = redact_checkout_text(exc.code or "payment_failed")[:200]
             if not exc.retryable:
-                self.wallet.ledger.mark_failed(proposal.id, reason=reason)
+                # Never retire an order that already has a registered checkout
+                # order: the provider order exists, so failing the local row
+                # would strand a payable receipt (and release its reservation).
+                if self.wallet.ledger.find_checkout_for_proposal(proposal.id) is None:
+                    self.wallet.ledger.mark_failed(proposal.id, reason=reason)
                 raise WalletError(
                     "payment_failed",
                     retryable=False,
@@ -397,7 +416,13 @@ class RazorpayCheckout:
         return self._result(proposal, row, created=True)
 
     def _reserve(self, proposal: Proposal) -> Proposal:
-        """Move a pending order to ``approved``, reserving its amount."""
+        """Move a pending order to ``approved``, reserving and claiming it.
+
+        The claim (``payment_method_id=CHECKOUT_PAYMENT_METHOD_ID``) is written
+        by the same ``decide`` transaction that checks the cap, so a saved-card
+        approval racing this create either sees the claim and refuses, or wins
+        the transaction and is seen here.
+        """
 
         # ``Wallet`` owns the reservation arithmetic; reuse its windows rather
         # than reimplementing cap dates here.
@@ -405,7 +430,7 @@ class RazorpayCheckout:
         reserved, outcome = self.wallet.ledger.decide(
             proposal.id,
             decision="approve",
-            payment_method_id=None,
+            payment_method_id=CHECKOUT_PAYMENT_METHOD_ID,
             monthly_cap_cents=self.wallet.caps.monthly_cents,
             monthly_since=since,
             approved_since=reserved_since,
@@ -413,6 +438,21 @@ class RazorpayCheckout:
         )
         if outcome == "missing":
             raise WalletError("unknown_proposal")
+        if outcome == "conflict":
+            # Another answer won the race inside the reservation transaction.
+            # A concurrent create for the same key is fine (the provider
+            # idempotency key deduplicates); any other payer is a conflict.
+            if (
+                reserved is not None
+                and reserved.status == "approved"
+                and reserved.payment_method_id
+                in (None, CHECKOUT_PAYMENT_METHOD_ID)
+            ):
+                return reserved
+            raise WalletError(
+                "already_decided",
+                message="That order is being paid by another method.",
+            )
         if outcome == "blocked":
             paid, held = self.wallet.ledger.spend_breakdown(
                 proposal.currency, since=since, approved_since=reserved_since
@@ -504,7 +544,13 @@ class RazorpayCheckout:
         if proposal is None:  # pragma: no cover - row is consistent
             raise WalletError("unknown_proposal")
         if proposal.status == "paid":
-            return self._settled_result(proposal, idempotent=True)
+            # Paid without a checkout payment id on the row: another
+            # settlement (a saved card, or a half-written row) owns the money.
+            # Returning a receipt here would attribute it to this callback.
+            raise WalletError(
+                "already_decided",
+                message="That order was paid outside this checkout.",
+            )
         if not _settleable(proposal):
             raise WalletError(
                 "already_decided",
@@ -698,10 +744,12 @@ class RazorpayCheckout:
         """Verify a Razorpay webhook and settle its payment.
 
         The raw body is what the webhook signature covers, so it is verified
-        before any field is trusted for settlement. If no webhook secret is
-        configured, a per-payment ``razorpay_signature`` in the event may be
-        used instead; in both cases the payment is fetched from Razorpay and
-        compared with the reserved order before the ledger is written.
+        before any field is trusted for settlement. When a webhook secret is
+        configured the ``X-Razorpay-Signature`` header is required and is the
+        only accepted authentication; only with no webhook secret may a
+        per-payment ``razorpay_signature`` in the event be used instead. In
+        both cases the payment is fetched from Razorpay and compared with the
+        reserved order before the ledger is written.
         """
 
         raw = body.encode("utf-8") if isinstance(body, str) else body
@@ -727,19 +775,31 @@ class RazorpayCheckout:
             )
 
         entity = _payment_entity(event)
-        if signature:
-            if not self._webhook_secret:
+        header = signature.strip() if isinstance(signature, str) else ""
+        if self._webhook_secret:
+            # A configured webhook secret is the only accepted authentication.
+            # The per-payment signature inside the body is *not* a fallback:
+            # anyone who can post a body can also set that field. A missing or
+            # empty header is therefore an invalid signature, not a hint to
+            # try another scheme.
+            if not header:
                 raise WalletError(
-                    "not_configured",
-                    message="Razorpay webhooks aren't configured yet.",
+                    "signature_invalid",
+                    status=401,
+                    message="That webhook signature is not valid.",
                 )
-            if not verify_webhook_signature(self._webhook_secret, raw, signature):
+            if not verify_webhook_signature(self._webhook_secret, raw, header):
                 raise WalletError(
                     "signature_invalid",
                     status=401,
                     message="That webhook signature is not valid.",
                 )
         else:
+            if header:
+                raise WalletError(
+                    "not_configured",
+                    message="Razorpay webhooks aren't configured yet.",
+                )
             config = self._require_config()
             if entity is None:
                 raise WalletError(
@@ -809,11 +869,12 @@ class RazorpayCheckout:
         if proposal is None:  # pragma: no cover
             return {"handled": False, "event": event_name, "reason": "unknown_order"}
         if proposal.status == "paid":
-            return {
-                "handled": True,
-                "event": event_name,
-                **self._settled_result(proposal, idempotent=True),
-            }
+            # Paid with no checkout payment recorded: another settlement owns
+            # the money, so this event must not be answered with a receipt.
+            raise WalletError(
+                "already_decided",
+                message="That order was paid outside this checkout.",
+            )
         if not _settleable(proposal):
             return {
                 "handled": False,

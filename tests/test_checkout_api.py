@@ -284,6 +284,25 @@ def test_confirm_rejects_an_unknown_order(api: CheckoutAPI) -> None:
     assert payload(response)["error"]["code"] == "unknown_proposal"
 
 
+def test_confirm_on_an_order_paid_elsewhere_is_a_409(api: CheckoutAPI) -> None:
+    created = create(api)
+    order_id = created["checkout"]["order_id"]
+    # Another payer settled the proposal while the checkout row kept no
+    # provider payment id: the callback must not mint a receipt for it.
+    api.checkout.wallet.ledger.mark_paid(
+        created["proposal"]["id"],
+        payment_intent_id="pi_rzp_other",
+        card_last4="1111",
+    )
+
+    response = settle(api, order_id)
+
+    assert response.status == 409
+    body = payload(response)
+    assert body["error"]["code"] == "already_decided"
+    assert "receipt" not in body
+
+
 # -- webhook ---------------------------------------------------------------
 
 
@@ -339,6 +358,22 @@ def test_webhook_without_a_signature_is_401(api: CheckoutAPI) -> None:
     response = webhook_call(api, body, None)
 
     assert response.status == 401
+
+
+def test_webhook_with_an_empty_signature_header_is_401(api: CheckoutAPI) -> None:
+    created = create(api)
+    order_id = created["checkout"]["order_id"]
+    payment_id = "pay_test0001"
+    event = webhook_event(order_id, payment_id)
+    # Even a per-payment signature in the body is not accepted as a fallback
+    # when the webhook secret is configured and the header is empty.
+    event["razorpay_signature"] = signature_for(order_id, payment_id)
+    body = json.dumps(event).encode("utf-8")
+
+    response = webhook_call(api, body, "")
+
+    assert response.status == 401
+    assert payload(response)["error"]["code"] == "signature_invalid"
 
 
 def test_webhook_replay_is_200_and_idempotent(api: CheckoutAPI) -> None:
