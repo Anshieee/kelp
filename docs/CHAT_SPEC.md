@@ -4,7 +4,8 @@
 - **Branch:** `kel-8` (from `main` at `daf3b14`, after KEL-6 + KEL-7 merged)
 - **Builds on:** `docs/KERNEL.md` (loop, events, budgets, usage), `docs/OPENSHELL.md`
   (policy, approvals, audit), `docs/SKILL_SPEC.md` v1.0 (manifests, envelopes)
-- **Design brief:** `docs/frontend-scope-simple.md` (screens 1-5 and 13)
+- **Design brief:** `docs/frontend-scope-simple.md` (screens 1-5 and 13; screen 4, the
+  GitHub sweep, is specified here as `SweepCard` in §6.1)
 - **Gate:** decision **Q15** — no UI is built until the Figma file is ready. This document
   is what Figma and the eventual frontend slice work from. It describes behaviour and
   contracts; it does not draw anything.
@@ -29,8 +30,9 @@ In scope for KEL-8 (P0-2):
 | 4 | Inline approvals | KEL-7 approval objects rendered in the thread with approve / deny and a rationale; the turn blocks until answered |
 | 5 | Artifact cards | PDF and CSV results as inline preview cards with open/download, plus the textual answer |
 | 6 | Source chips | Chips under an answer, derived from tool output, not from model prose |
-| 7 | Thread list, rename, resume | Thread list, rename, reopen, reconnect mid-stream without duplicate messages |
-| 8 | Error states | Provider, budget, tool, and approval failures as plain-language states with retry |
+| 7 | GitHub sweep card | Wider card per `github.read` sweep (contiguous same-repo calls): repo, item count, short item list (`SweepCard`, §6.1) |
+| 8 | Thread list, rename, reopen | Thread list, rename, reopen, reconnect mid-stream without duplicate messages |
+| 9 | Error states | Provider, budget, tool, and approval failures as plain-language states with retry |
 
 Out of scope (unchanged from the plan):
 
@@ -50,6 +52,8 @@ These are not built yet either, and KEL-8 acceptance depends on them:
 | Dependency | State | Effect on KEL-8 |
 |---|---|---|
 | `docs.answer` handler | stub (`SkillNotImplementedError`) | No real PDF/CSV artifact until a handler exists. The demo path needs a fixture-backed handler or a recorded model fixture. |
+| `web.search` handler | stub (`SkillNotImplementedError`) | No live results or web source chips. The demo path needs a fixture-backed handler or a recorded success envelope; a failed stub yields only the failed-search chip (§9.1). |
+| `github.read` handler | stub (`SkillNotImplementedError`) | No real sweeps or GitHub source chips. Same fixture requirement: a recorded envelope must satisfy the manifest output schema and the §6.1 card shape. |
 | Cancellation in `run_turn` | absent | "Stop" needs the kernel delta in §14.1 |
 | Approval wait vs. wall-clock budget | approval wait counts against `max_wall_seconds` | A 10-minute approval can never finish inside a 120 s budget; see §14.2 |
 | Durable chat store | absent (KEL-6 persists usage only) | Resume and non-duplication need §13 |
@@ -64,7 +68,8 @@ These are not built yet either, and KEL-8 acceptance depends on them:
 | **Thread** / **session** | One conversation. The two words are synonyms; the product says "thread". | `ses_<32 hex>` |
 | **Turn** | One user message plus everything the assistant does in response. | `turn_<32 hex>` |
 | **Message** | A user or assistant item in a thread. | `msg_<32 hex>` |
-| **Block** | A part of an assistant message: text, tool call, artifact, approval. | index within message |
+| **Block** | A part of a message: text, tool call, artifact, approval (assistant), attachment (user). | index within message |
+| **Attachment** | A file the person uploaded and attached to a user message; it becomes an artifact with the same handle. | `artifact:<8-128 chars>` |
 | **Tool call** | One model-requested tool invocation and its envelope. | `call_<provider id>` |
 | **Approval** | A KEL-7 approval object awaiting a human decision. | `apr_<32 hex>` |
 | **Artifact** | A stored PDF or CSV with an opaque handle. | `artifact:<8-128 chars>` |
@@ -101,6 +106,43 @@ the same stream. Cards are never floated or reordered to the end of the message.
   "Working…" state key off it.
 
 ### 3.2 Message record (as served to the client)
+
+A user message carries text and `attachment` blocks; an assistant message carries text,
+tool-call, artifact, and approval blocks. Both use the same record and block ordering.
+
+```json
+{
+  "id": "msg_5e02…",
+  "thread_id": "ses_8f3c…",
+  "role": "user",
+  "turn_id": "turn_91c4…",
+  "status": "complete",
+  "created_at": "2026-10-29T09:12:03.980Z",
+  "updated_at": "2026-10-29T09:12:03.980Z",
+  "blocks": [
+    {
+      "type": "attachment",
+      "attachment": {
+        "handle": "artifact:q3report01",
+        "name": "q3-report.pdf",
+        "kind": "pdf",
+        "mime": "application/pdf",
+        "size_bytes": 1843200,
+        "status": "attached",
+        "open_url": "/api/artifacts/artifact:q3report01/content"
+      }
+    },
+    { "type": "text", "text": "Summarise this and give me revenue by region." }
+  ],
+  "sources": []
+}
+```
+
+Attachment blocks appear only on user messages, before the text they introduce, and only
+after the upload is accepted (`attached`). The uploading, rejected (type/size), and failed
+states are composer-chip states (§16.1) and are never persisted as message content. The
+handles on the message must match the turn's `attachment_handles` (§5.1); a mismatch is
+`400 invalid_message`.
 
 ```json
 {
@@ -171,6 +213,9 @@ Statuses:
 | `error` | `turn_finished` with `reason: "error"`, or a provider/tool failure that ended the turn | Failed |
 | `stopped` | Human pressed Stop | Done, with "Stopped" note |
 | `interrupted` | Server died mid-turn and the turn was closed on restart | Failed, "That didn't work" + Resume |
+
+A user message is `pending` from acceptance until its turn starts, then `complete`; the
+terminal failure statuses describe the assistant message, not the user bubble.
 
 `sources` is message-level, not a block: chips render under the whole answer, deduped by
 `(kind, url)` or `(kind, handle, locator)` and ordered by first appearance (§9).
@@ -280,8 +325,9 @@ the model-facing copy stays hash-only per `SKILL_SPEC.md` §8.3.
 
 1. First send in a new conversation: `POST /api/threads` creates the thread (server id).
    Then `POST /api/threads/{id}/turns` with text and optional `attachment_handles`.
-2. Server validates (non-empty, ≤ 8,000 chars after trim; ≤ 5 attachments), stores the
-   user message, creates the assistant message, assigns `turn_id`, returns `202`.
+2. Server validates (non-empty, ≤ 8,000 characters after trim — code points, not bytes;
+   ≤ 5 attachments), stores the user message, creates the assistant message, assigns
+   `turn_id`, returns `202`.
 3. The turn starts asynchronously; the client is already tailing the stream and receives
    `message_created` → `turn_started` → deltas.
 4. On completion the composer re-enables. On failure it re-enables with a retry action.
@@ -367,6 +413,11 @@ Argument summary rules (server-side, deterministic, no model involvement):
    name looks secret-like (`*token*`, `*key*`, `*secret*`, `*password*`, `*credential*`).
 4. Empty arguments → the label alone.
 
+`shell.exec` is not a KEL-5 skill: it is the OpenShell gate's exec tool. Its card is created
+from the gate approval, `effects` include `execute`, and its `command` is the argv list from
+that approval (`OPENSHELL.md` §2) — never a shell string and never a manifest field. Every
+`shell.exec` card is `waiting_approval` before it can be `running`.
+
 Status mapping from the loop:
 
 | Kernel signal | Card status | Figma state |
@@ -385,6 +436,51 @@ duration.
 
 Cards are read-only. There is no "re-run this tool" in the prototype; retry is per turn
 (§5.4). A settled card never animates.
+
+### 6.1 `SweepCard` (`github.read`)
+
+The design brief's GitHub sweep (screen 4) is a wider card, but it is still derived from
+ordinary `github.read` tool calls. On the wire the block stays `type: "tool_call"` with
+`tool: "github.read"`; `SweepCard` is a renderer variant keyed by that tool, not a new block
+kind, event, or endpoint. Its expanded state is the `ToolCallCard` expanded region plus the
+item summary below, so the two components cannot drift. A sweep is the contiguous run of
+`github.read` calls in one message that share `repo` and `kind`: the first call anchors the
+card, the rest contribute rows and keep their own `call_id` (order is unchanged, §3.3).
+
+```json
+{
+  "type": "tool_call",
+  "call_id": "call_b7",
+  "tool": "github.read",
+  "status": "done",
+  "detail": {
+    "arguments": { "kind": "issue", "repo": "Anshieee/nebius-nvidia" },
+    "sweep": {
+      "repo": "Anshieee/nebius-nvidia",
+      "kind": "issue",
+      "count": 12,
+      "items": [
+        { "number": 12, "title": "Wire the approval card", "state": "open",
+          "url": "https://github.com/…" }
+      ],
+      "truncated": true
+    }
+  }
+}
+```
+
+- `repo` and `kind` echo the validated arguments; the repo is the manifest allowlist entry.
+- `count` is the number of items the sweep found: the number of `github.read` results in the
+  run, or `repo.open_issues_count` when `kind: "repo"` reports one.
+- `items` is capped at 5 on the card (`truncated: true` beyond); `count` remains the full
+  total. The client never pages GitHub itself.
+- States: `scanning` (`tool_call_started`, `running`), `found` (≥1 item), `empty`
+  (`ok: true`, zero items), `failed` (envelope `ok: false`; §11 copy). `empty` is a normal
+  result, not an error: "Nothing matched in {repo}." A failed sweep keeps the repo name and
+  uses the owning turn's retry (§5.4), not a card-local button.
+- Read-only by manifest (`SKILL_SPEC.md` §12.2): a sweep never offers comment/label/merge
+  actions. Anything that would write is an approval card (§7).
+- Item URLs follow the chip link rules (§9.2); item title and body render as text only.
 
 ---
 
@@ -481,10 +577,14 @@ POST /api/approvals/{approval_id}/decision
 | Recorded | `200` | `{ "ok": true, "approval": {…status…}, "executed": false }` |
 | Unknown id | `404` | `error.code = "unknown_approval"` |
 | Already decided (same decision) | `200` | current approval, `idempotent: true` |
-| Conflicting decision (already approved, or no longer pending) | `409` | `error.code = "not_approved"` |
+| Conflicting decision: approve after `denied`, deny after `approved`, or any decision on an approval that is not `pending` | `409` | `error.code = "not_approved"` |
 | Expired | `409` | `error.code = "expired"` |
 | Consumed | `409` | `error.code = "already_used"` |
 
+- Approve-after-deny and deny-after-approve are conflicts, not state changes: the first
+  decision is final for that approval object (`not_approved`, HTTP `409`), the stored status is
+  unchanged, and another attempt needs a new approval object. The UI keeps the card's existing
+  state and never offers the opposite button.
 - For a skill-runtime approval, the decision resolves the awaiting hook: approve → the
   loader runs the handler exactly once and the call continues in the same turn; deny → the
   loader returns its `approval_denied` envelope, the card goes `blocked`, and the turn
@@ -571,8 +671,12 @@ CSV cards also carry a server-rendered preview so the client never parses the fi
   Cell values are strings, server-truncated to 60 chars; the client must not compute
   sums or formats from them — the numeric answer belongs to the text answer.
 - PDF preview is page 1 only, rendered by the browser from the `content` endpoint inside a
-  sandboxed iframe (`#page=1&toolbar=0`). No server-side rasteriser in the prototype; a
-  thumbnail endpoint is a deferred enhancement, not a KEL-8 dependency.
+  sandboxed iframe (`#page=1&toolbar=0`; `sandbox` without `allow-same-origin` or navigation
+  permissions, so the framed document can neither reach the app's DOM nor navigate the tab).
+  `content` is the one route exempt from the app's frame-denying headers (§12): it is
+  `SAMEORIGIN`-frameable so the preview works, and it cannot frame the app. No server-side
+  rasteriser in the prototype; a thumbnail endpoint is a deferred enhancement, not a KEL-8
+  dependency.
 - "Open" opens `open_url` in a new tab (`rel="noopener"`); "Download" uses
   `Content-Disposition: attachment` and the stored original name, filename-sanitised.
 
@@ -582,11 +686,14 @@ CSV cards also carry a server-rendered preview so the client never parses the fi
 |---|---|---|
 | `POST /api/attachments` (multipart, field `file`) | `{ ok, artifact }` | ≤ 20 MB, PDF (`%PDF-` magic) or CSV (UTF-8 text, comma/semicolon header), scanned for NUL bytes; opaque id on disk, original name only in metadata |
 | `GET /api/artifacts/{handle}` | card metadata | 404 for unknown/expired/deleted |
-| `GET /api/artifacts/{handle}/content` | bytes | `Content-Type` from the allowlist only; `X-Content-Type-Options: nosniff`; `Content-Disposition: inline` or `attachment` with `?download=1`; supports `Range` for PDFs; `ETag` = content hash |
+| `GET /api/artifacts/{handle}/content` | bytes | `Content-Type` from the allowlist only; `X-Content-Type-Options: nosniff`; `Content-Disposition: inline` or `attachment` with `?download=1`; supports `Range` for PDFs; `ETag` = content hash; the only route allowed in an iframe: `X-Frame-Options: SAMEORIGIN` + CSP `frame-ancestors 'self'`, never `DENY` (§12) |
 | `GET /api/artifacts/{handle}/preview?rows=20` | `{ columns, rows, total_rows, truncated }` | CSV only; 415 for PDF |
 
 Access control: an artifact is readable only within its owning thread's session and only
 while the thread exists. The handle is opaque, but opacity is not authorisation.
+`artifacts.thread_id` is `NULL` at upload and is set exactly once, under the same transaction,
+when a turn attaches the handle to its user message; until then the upload is visible only to
+the owner's composer, and a handle already bound to another thread behaves as unknown (`404`).
 
 ### 8.4 Failure states
 
@@ -616,8 +723,9 @@ Sources come from tool envelopes, server-side:
 Rules:
 
 - Maximum 8 chips per message, deduped by `(kind, url)` or `(kind, handle, locator)`,
-  first appearance wins. Extra sources are counted, not dropped silently: "and 4 more"
-  expands within the chip row (a `+N` chip), never a separate screen.
+  first appearance wins. Extra sources are counted, not dropped silently: one `+{n} more`
+  chip (§16.2) in the same row, which expands in place — never a separate screen and never a
+  second overflow label.
 - Order = first mention. Do not sort by model preference or relevance score.
 - A failed search (`ok: false`, `timeout`) yields one failed chip:
   `{kind:"web", status:"failed", title:"Web search failed"}` so the person can see that
@@ -724,13 +832,18 @@ One error renderer for everything. Codes are internal; the person sees one sente
 | `provider_unavailable` | "The model service is unavailable right now." | Try again |
 | `provider_rejected` | "The model service refused that request." | none |
 | `provider_unreachable` | "Can't reach the model service." | Try again |
+| `provider_error` | "The model service returned an error it didn't explain." | Try again |
 | `turn_budget_exceeded` | "That answer got too long." | Continue |
 | `invalid_arguments` | "The assistant asked for something the tool can't do." | none |
+| `invalid_tool_arguments` | "The assistant's tool request couldn't be read." | Try again |
 | `invalid_output` | "The tool sent back something unexpected." | none |
 | `timeout` (tool) | "That step took too long." | Try again |
 | `handler_error` | "That step failed." | Try again |
+| `tool_error` | "A tool crashed while running." | Try again |
+| `no_tool_executor` | "This tool isn't available in this build." | none |
 | `missing_secret` | "A tool isn't configured yet." | none |
 | `not_implemented` | "This tool isn't finished yet." | none |
+| `approval_required` | "This step is waiting for your approval." | Open the approval card (never an error banner) |
 | `approval_denied` | "You said no. Nothing ran." | none |
 | `expired` | "That approval expired. Nothing ran." | Ask again |
 | `already_used` | "That was already used. Nothing ran twice." | none |
@@ -738,6 +851,11 @@ One error renderer for everything. Codes are internal; the person sees one sente
 | `unknown_skill` | "The assistant tried a tool that doesn't exist." | none |
 | `turn_in_progress` | "Still answering. Wait or press Stop." | none |
 | `rate_limited` | "Too many requests. Wait a moment." | Try again |
+| *(any unlisted code)* | "Something went wrong." | Try again |
+
+`invalid_tool_output` (kernel `loop._execute`) is the same failure as `invalid_output`; both
+render the one sentence. An unlisted code is never shown: the catch-all row is the whole
+contract, so a new code cannot leak a stack trace or provider payload to the person.
 
 Stop and interruption are turn `reason` values, not error codes: `cancelled` renders
 "Stopped" (§5.3), `interrupted` renders "The server restarted while answering." with
@@ -765,8 +883,8 @@ KEL-8 adds a network surface to a private assistant; these are requirements, not
 | SSE | Same-origin only; no `Access-Control-Allow-Origin: *`; no `EventSource` with credentials in a URL; stream disconnects on auth expiry. |
 | XSS | Model text renders as text (no `dangerouslySetInnerHTML`, no Markdown HTML). Chip URLs restricted to http/https. Artifact content served with `nosniff` and a fixed content-type allowlist, and downloaded filenames sanitised. |
 | Path traversal | Artifact resolution is registry-lookup only, never `join(user_input)`. Handles are looked up, then the stored path is used. Symlinks are rejected; the target must resolve inside `${WORKSPACE}/var/artifacts`. |
-| CSRF / clickjacking | SameSite cookies + CSRF token; `X-Frame-Options: DENY` and CSP `frame-ancestors 'none'` on app pages. |
-| DoS | Per-thread concurrency limit 1; body limits (message 8 KB, decision 1 KB, upload 20 MB); one stream per tab, idle-closed at 5 min; a global cap on concurrent streams per owner. |
+| CSRF / clickjacking | SameSite cookies + CSRF token. Frame denial is scoped to **app HTML routes only**: `X-Frame-Options: DENY` and CSP `frame-ancestors 'none'` there. `/api/*` responses are not framed and carry no frame headers, except `/api/artifacts/{handle}/content`, which is exempt from `DENY` and served with `X-Frame-Options: SAMEORIGIN` + CSP `frame-ancestors 'self'`, `nosniff`, and an allowlist `Content-Type`; it is only ever embedded by the app's sandboxed preview iframe (§8.2), so the preview works without making the app frameable. |
+| DoS | Per-thread concurrency limit 1; body limits (message 8,000 characters after trim — the same character count as §5.1, not 8 KB; decision body 1 KB; upload 20 MB); one stream per tab, idle-closed at 5 min; a global cap on concurrent streams per owner. |
 | Logs | Request logs contain ids, status, and duration — no message text, no arguments, no provider bodies. |
 | Audit | Approval decisions and executions come from KEL-7's audit log; the chat layer does not duplicate it. |
 | Retention | Messages and artifacts live under `var/` and are deletable per thread; nothing is uploaded to a third party beyond the tools' declared hosts. |
@@ -787,8 +905,8 @@ turns        (id PK, thread_id, user_message_id, assistant_message_id, state, re
               started_at, finished_at, budget_json, usage_json, client_turn_id UNIQUE)
 approvals    (id PK, thread_id, turn_id, call_id, source, status, payload_json,
               requested_at, expires_at, decided_at, consumed_at)
-artifacts    (handle PK, thread_id, name, kind, mime, size_bytes, sha256, storage_path,
-              created_at, deleted_at)
+artifacts    (handle PK, thread_id NULL until attached, name, kind, mime, size_bytes, sha256,
+              storage_path, created_at, deleted_at)
 ```
 
 Invariants:
@@ -799,6 +917,8 @@ Invariants:
   lose the last ≤ 250 ms of text but must never lose a user message, a decision, or a
   finished turn.
 - `client_turn_id` is unique per thread, giving the idempotent send.
+- `artifacts.thread_id` starts `NULL` and is claimed by exactly one attaching turn; attachment
+  handles are immutable and never re-pointed to another thread.
 - Deleting a thread cascades to messages, events, approvals, and artifacts.
 - The wire log is retained for the life of the thread (prototype); compaction is a later
   slice.
@@ -838,12 +958,15 @@ them and does not quietly work around them.
 
 ### 14.2 D2 — Approval wait vs. wall clock (KEL-6 + KEL-8)
 
-`run_turn` measures `max_wall_seconds` with `time()` and checks it between steps. A tool
-call that awaits a human for up to 600 s therefore always blows the 120 s budget. Needed:
+`run_turn` measures elapsed time with `time.monotonic()` (the injectable `time_fn`, which
+defaults to `time.monotonic`) and checks `max_wall_seconds` between steps. No wall-clock
+`time()` read is involved, so an NTP or manual clock change can neither shorten nor extend a
+turn. A tool call that awaits a human for up to 600 s therefore still blows the 120 s budget.
+Needed:
 
-- either the loop subtracts time spent awaiting approval (accumulate `waited_ms` and
-  expose it on `ToolCallFinished`, so the turn's `duration_ms` stays honest), or the
-  executor reports the wait and the loop pauses the budget clock;
+- either the loop subtracts time spent awaiting approval **on that same monotonic clock**
+  (accumulate `waited_ms` and expose it on `ToolCallFinished`, so the turn's `duration_ms`
+  stays honest), or the executor reports the wait and the loop pauses the budget clock;
 - the approval wait must not be counted against the skill's `timeout_ms` either — already
   true in the loader (`SKILL_SPEC.md` §8.3), so only the turn budget needs the fix;
 - when the approval expires and the hook returns `False`, the envelope is
@@ -929,6 +1052,8 @@ Draw only these states; nothing else in the API changes what is on screen.
 | Thread | `GET /threads/{id}` + stream | loading, empty, streaming, complete, error, stopped, interrupted |
 | Composer | `POST /threads/{id}/turns` | idle, typing, sending, disabled (turn active), rate-limited, send-failed |
 | Tool card | stream only | running, waiting_approval, done, failed, blocked, expired; collapsed + expanded |
+| Sweep card | stream only | scanning, found, empty, failed |
+| Attachment chip | `POST /attachments` | uploading, attached, rejected (type/size), failed; removable before send |
 | Approval card | `GET /approvals/{id}` + decision | pending, approved, consumed, denied, expired; expiring soon |
 | Artifact card | `GET /artifacts/{handle}` | PDF: preview loaded / failed; CSV: rows / empty / failed |
 | Source chips | stream only | 1, 3, many (wraps), failed, +N overflow |
@@ -947,9 +1072,11 @@ Per Q15, no implementation starts until these exist. This section is the checkli
 |---|---|---|
 | `Thread` | empty (first run), populated, streaming, long (scrolled), narrow 390 px | Assistant text column max 760 px on desktop |
 | `UserMessage` | normal, sending, failed (Resend) | Right-aligned per design brief |
+| `AttachmentChip` | uploading (progress), attached, rejected (type or size), failed upload | Name + size; removable before send; same chip in the composer tray and the user bubble |
 | `AssistantMessage` | streaming, complete, stopped, failed, interrupted, superseded | Failed keeps partial text + cards |
 | `TextBlock` | streaming (caret), complete | Caret stops on `turn_finished` |
 | `ToolCallCard` | collapsed/expanded × running, waiting_approval, done, failed, blocked, expired | Collapsed = label · summary · status · duration |
+| `SweepCard` | scanning, found, empty, failed | Wider card per `github.read` sweep: repo, count, up to 5 items, "+N"; expanded form of the same `ToolCallCard` (§6.1) |
 | `ApprovalCard` | pending, approved, consumed, denied, expired, expiring-soon | Approve/Deny visible, never in a menu; one warning colour |
 | `ArtifactCardPDF` | loading preview, page-1 preview, preview failed, deleted | Open + Download |
 | `ArtifactCardCSV` | collapsed (5 rows), expanded (20 rows / scroll), empty table, failed | Column headers, monospace numerals, "showing 5 of 1,840 rows" |
