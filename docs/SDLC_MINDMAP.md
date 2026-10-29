@@ -11,10 +11,11 @@ that goes with it is [`sdlc-mindmap.svg`](sdlc-mindmap.svg), with a PNG fallback
 site embeds a copy of the SVG directly in the page, so every box there can be clicked; that copy
 and these two files must be updated together.
 
-What this snapshot rests on: `main` is at `3f4d6cc`, all **734 tests pass**, and the repository is
+What this snapshot rests on: `main` is at `8884a5d`, all **775 tests pass**, and the repository is
 public. KEL-5 through KEL-10 are merged, reviewed, and done; KEL-11, KEL-12, KEL-13, KEL-14, KEL-15,
-and KEL-16 are merged and reviewed too, and close M2. KEL-10, payments, carries both its paths: the
-Stripe saved-card scaffold, the Razorpay gateway, and the Razorpay hosted Checkout.
+and KEL-16 are merged and reviewed too, and close M2. KEL-17 and KEL-18 then opened M3 and are
+merged and reviewed: abuse resistance and spend ceilings. KEL-10, payments, carries both its paths:
+the Stripe saved-card scaffold, the Razorpay gateway, and the Razorpay hosted Checkout.
 
 KEL-10 closed on **owner confirmation on 30 October 2026** (Assume-Done). The code paths are merged
 and the suite is green; the order path was proven earlier against the Razorpay test API. The one
@@ -53,6 +54,15 @@ No application code changed. Nothing was deployed to Nebius: every command in th
 locally against the image on 30 October 2026 and the measured results are recorded there, while the
 end-to-end pass on a real host by someone other than the author is still owed.
 
+KEL-17 and KEL-18 opened **M3 Hardening** on 30 October 2026, after M2 closed. KEL-17 is abuse
+resistance: five rate-limiter classes with their own budgets, a request body ceiling checked before a
+byte is read, and two concurrency caps in front of the expensive work. It merged at `b48e113` from
+`kel-17` (head `1e8d378`) and added 15 tests, taking the suite from 734 to **749**. KEL-18 is spend
+guardrails: day and month dollar ceilings computed from the persisted usage records, exactly one
+warning per window at 80%, and a hard stop at 100% that refuses before any provider call. It merged
+at `8884a5d` from `kel-18` (head `544a545`) and added 26 tests, taking the suite from 749 to **775**.
+M3 is in progress: the who-sees-what item, key handling, and the retention rule are still open.
+
 ## How to read the labels
 
 | Label | What it means |
@@ -72,13 +82,13 @@ snapshot date.
 
 ## The map
 
-![Mind map of the delivery: milestones M0 to M4, work items KEL-5 to KEL-16, product surfaces, payments, and design.](sdlc-mindmap.svg)
+![Mind map of the delivery: milestones M0 to M4, work items KEL-5 to KEL-18, product surfaces, payments, and design.](sdlc-mindmap.svg)
 
 The same map in words, in case the image does not load:
 
 - **Milestones** — five stages, M0 to M4.
-- **The work** — twelve work items, KEL-5 to KEL-16: all twelve done, and M1 and M2 closed, with the
-  six M2 pieces merged.
+- **The work** — fourteen work items, KEL-5 to KEL-18: all fourteen are done, M1 and M2 are closed,
+  and M3 is in progress with two of its pieces merged — traffic caps and spend ceilings.
 - **Surfaces** — where you talk to the assistant: dashboard first, Telegram next, WhatsApp and voice memos later.
 - **Money** — saved cards through Stripe and hosted Checkout through Razorpay, both merged and closed out; an in-app balance later.
 - **Design** — the screen plan is written, and so is the chat spec. The chat surface code is merged; the drawing file and the browser screen are next.
@@ -98,16 +108,17 @@ promise that full-vision scope lands this week. Scope is cumulative: M2 includes
 | **M0 Foundation** | 30 Oct 2026 | IN PROGRESS | The repo (public), the docs, the tests, the standard development setup, model and provider chosen, and a written list of what could go wrong. The repo, docs, tests, and skill contract are in. Still open: the automated checks, the development setup, and the threat model. |
 | **M1 Prototype** | 30 Oct 2026 | COMPLETE | The end-to-end story: ask, get an answer with sources, read a file, approve an action, pay with a saved card, watch the six-scene demo. All six work items live here, and all six are done: KEL-5 to KEL-9 were merged earlier, and KEL-10 closed on owner confirmation on 30 October 2026. |
 | **M2 Polished MVP** | 30 Oct 2026 | COMPLETE | Survives ordinary use: picks up after a restart, self-checks, better search over your documents, an honest account of what it did, repeatable quality measurements, and a deploy a stranger can repeat. All six work items are done: KEL-11, the serve entrypoint; KEL-12, health and readiness; KEL-13, real document search with citations; KEL-14, structured logs and metrics; KEL-15, the eval harness that measures answer quality; KEL-16, the image and runbook. The runbook's end-to-end pass on a real Nebius host is still to be done. |
-| **M3 Hardening** | 30 Oct 2026 | TO COME | The privacy and cost promises hold under pressure: who sees what, where keys live, caps on traffic, a retention rule, and a spend ceiling. |
+| **M3 Hardening** | 30 Oct 2026 | IN PROGRESS | The privacy and cost promises hold under pressure: who sees what, where keys live, caps on traffic, a retention rule, and a spend ceiling. Two pieces are in: KEL-17, the traffic, body, and concurrency caps, and KEL-18, the spend ceilings. Still open: who sees what, key handling, and the retention rule. |
 | **M4 Full vision** | 30 Oct 2026 | TO COME | More devices, work the assistant starts on its own, abilities added by others, and team sharing. A direction, not a deadline. |
 
-## The twelve work items
+## The fourteen work items
 
 KEL-5 feeds KEL-6 and KEL-7. Those two feed KEL-8. KEL-7 also feeds KEL-10. KEL-8 comes before the
-demo, KEL-9. All twelve are done. KEL-10, payments, closed M1 on owner confirmation on 30 October
-2026: both of its paths were merged and reviewed earlier, and the live step was taken on the owner's
-word. KEL-11 then opened M2 with the serve entrypoint, and KEL-12, KEL-13, KEL-14, KEL-15, and KEL-16
-followed with health checks, real document search, observability, the eval harness, and the deploy.
+demo, KEL-9. The first twelve are done. KEL-10, payments, closed M1 on owner confirmation on 30
+October 2026: both of its paths were merged and reviewed earlier, and the live step was taken on the
+owner's word. KEL-11 then opened M2 with the serve entrypoint, and KEL-12, KEL-13, KEL-14, KEL-15,
+and KEL-16 followed with health checks, real document search, observability, the eval harness, and
+the deploy. KEL-17 and KEL-18 opened M3 the same day, with abuse resistance and spend ceilings.
 
 ### KEL-5 — Skill contracts — DONE
 
@@ -149,7 +160,7 @@ price is counted per chunk.
 - Merge: [`d3c763e`](https://github.com/Anshieee/kelp/commit/d3c763e) (branch [`kel-6`](https://github.com/Anshieee/kelp/tree/kel-6), head `4c72afc`)
 
 Status detail: merged into `main` at `d3c763e`. The kernel suite is 43 tests — 25 for the loop and
-18 for the streaming client — and passes with the rest of the 734. The review written up in
+18 for the streaming client — and passes with the rest of the 775. The review written up in
 [`docs/REVIEW_KEL6_KEL7.md`](REVIEW_KEL6_KEL7.md) signed off, and KEL-8 built on top of it.
 
 ### KEL-7 — Approval gate — DONE
@@ -192,7 +203,7 @@ showing where an answer came from, and approval requests shown in the conversati
 Status detail: merged into `main` at `e0bbb72`. The chat surface is in: named threads that can be
 reopened, an append-only stream of events, a card for each tool step, approvals shown in the
 conversation over the KEL-7 gate, artifacts, and a cooperative cancel token so Stop works. The chat
-suite is 86 tests, part of the 734. The spec is on `main` at 1,164 lines; the review fixes that
+suite is 86 tests, part of the 775. The spec is on `main` at 1,164 lines; the review fixes that
 shaped it landed at `56b0785`:
 
 - **Honest dependencies (M1).** The web search, GitHub read, and document handlers are still stubs.
@@ -571,6 +582,103 @@ are recorded with their measured times, but the end-to-end pass on a real host b
 write the runbook is still owed. And the image is CPU-only by design: the model is a hosted service,
 so the "GPU" in the milestone title belongs to that host, not to this container.
 
+### KEL-17 — Abuse resistance — DONE
+
+The public surface refuses to be a free amplifier. Five named limiter classes carry their own
+budgets: `auth` for signing in, `chat` for starting a turn and its stream, `upload` for document
+ingest, `read` for lists and detail, and `admin` for metrics and readiness. Each is set from
+`KELP_RATE_LIMIT_<CLASS>_RPM` and `_BURST`, and charged to the owner session when there is one and
+to the client address otherwise — the `auth` class counts failed attempts per peer address only, so a
+good credential is never charged — and one client's burst cannot spend another's budget. Over budget
+is always `429` with the stable `rate_limited` code and an integer `Retry-After` of at least one
+second, so the client's existing rate-limited state renders it with no special case. A request whose
+declared `Content-Length` is over the route ceiling is refused before a byte of body is read; a
+request that declares both `Content-Length` and `Transfer-Encoding` is refused as ambiguous instead
+of trusting one of them; and a chunked body with no length is counted as it arrives and cut off at
+the cap. Two concurrency caps sit in front of the expensive work: `KELP_MAX_CONCURRENT_TURNS` for
+turns in flight, and `KELP_MAX_STREAMS_PER_OWNER` so one client cannot hold every stream. A slot is
+held only while the work is active — a retried turn takes one exactly like a fresh send and gives it
+back when it finalizes or fails — and a restart starts both counts at zero.
+
+*Why it matters:* an assistant that calls a paid model is a place where one careless client, or one
+script pointed at the wrong port, can cost real money and starve everyone else. Caps make the
+failure mode "come back in a second" instead of "the box is out of memory and the bill is a
+surprise".
+
+*Plain words:* a **rate limit** is a cap on how many requests arrive in a set time. A **burst** is
+how many may arrive at once before the steady rate applies. A **body ceiling** is the largest request
+the server will read. A **semaphore** is a counter that lets only so many jobs run at once, and
+**concurrency** is how many things are happening at the same moment.
+
+- Linear: https://linear.app/kelp-ai/issue/KEL-17/m3-a-abuse-resistance-rate-limits-body-ceiling-concurrency-caps
+- HTTP surface: [`chat/api.py`](https://github.com/Anshieee/kelp/blob/main/chat/api.py)
+- Error codes: [`chat/errors.py`](https://github.com/Anshieee/kelp/blob/main/chat/errors.py)
+- Config: [`docs/DEPLOY.md`](DEPLOY.md), sections 3.1 and 12.1
+- Tests: [`tests/test_rate_limit.py`](https://github.com/Anshieee/kelp/blob/main/tests/test_rate_limit.py)
+- Merge: [`b48e113`](https://github.com/Anshieee/kelp/commit/b48e113) (branch
+  [`kel-17`](https://github.com/Anshieee/kelp/tree/kel-17), head `1e8d378`)
+
+Status detail: merged into `main` at `b48e113`, adding 15 tests to a suite of 749. The review fixed
+two must-fix bugs before the merge. A retried turn queues fresh work, so it now takes a global turn
+slot exactly like a send and returns it when the retry finalizes, or immediately if the call raises
+or the cap refuses it. And the HTTP adapter refuses a request carrying both `Content-Length` and
+`Transfer-Encoding` rather than picking one. Three honest gaps against the written issue. The issue
+asks for `503` when the concurrency queue is full; what ships is `429 rate_limited` with
+`details.reason` of `turn_capacity` and a `Retry-After`, which keeps one "come back later" shape
+instead of two. The issue asks for counters `rate_limited_total{class}` and
+`rejected_body_too_large_total`; what ships on `/metrics` is `kelp_limiter_in_use`,
+`kelp_limiter_capacity`, and `kelp_limiter_saturation` per class, so current pressure is visible but
+the count of refusals over time is not. And a body over the ceiling on a JSON route reports
+`400 invalid_request`, matching the existing JSON body path, while only uploads report the named
+`413 upload_too_large`. Limiting is per process: that is the single-node design the issue scoped, and
+distributed limiting across hosts stays out of scope.
+
+### KEL-18 — Spend guardrails — DONE
+
+Two ceilings in dollars, `KELP_SPEND_CAP_DAY_USD` and `KELP_SPEND_CAP_MONTH_USD`, both enforced from
+the persisted usage records. Every check re-reads `usage.jsonl` for the current window — the UTC
+calendar day, or the UTC calendar month — so the figure is a query over what was actually spent and a
+restart never resets a cap. Crossing 80% of a ceiling produces exactly one `spend_cap_warning` log
+line and audit entry per window, deduped by a marker in a small sidecar file, so a restart inside the
+same window does not warn again and a busy hour does not warn a hundred times. At 100% the next
+model-bound request is refused with `402` and the stable `spend_cap_reached` code, naming the window,
+the reason, and when it resets, before the turn row, its messages, or any provider call exist.
+Read-only and purely local paths keep working. A model with no price is never silently free: `block`
+is the default and refuses new turns while an unpriced record sits in a capped window, `count_as`
+charges `KELP_SPEND_UNKNOWN_PRICE_USD` instead, a torn usage line counts as unpriced rather than
+free, and an unreadable usage file fails closed as `usage_unavailable`. A malformed cap value fails
+startup with `invalid_config` rather than quietly meaning "unlimited".
+
+*Why it matters:* a cost ceiling that is a cached counter drifts, and one that is checked after the
+provider call has already spent the money. Reading the real records and stopping before the call is
+what makes the ceiling a promise instead of a dashboard.
+
+*Plain words:* a **ceiling** is the most you are willing to spend in a period. A **window** is that
+period — here a UTC day or a UTC month. **Fail closed** means refusing to work when the answer is
+unknown, rather than guessing in the expensive direction. An **unpriced model** is one with no entry
+in the price list, so its cost cannot be computed.
+
+- Linear: https://linear.app/kelp-ai/issue/KEL-18/m3-c-spend-guardrails-dailymonthly-usd-ceilings-with-a-hard-stop
+- Guard: [`kernel/usage.py`](https://github.com/Anshieee/kelp/blob/main/kernel/usage.py)
+- Gating path: [`chat/service.py`](https://github.com/Anshieee/kelp/blob/main/chat/service.py)
+- Metrics: [`chat/metrics.py`](https://github.com/Anshieee/kelp/blob/main/chat/metrics.py)
+- Runbook, caps and the provider-side checklist: [`docs/DEPLOY.md`](DEPLOY.md), sections 13.1 and 13.2
+- Tests: [`tests/test_spend_caps.py`](https://github.com/Anshieee/kelp/blob/main/tests/test_spend_caps.py)
+- Merge: [`8884a5d`](https://github.com/Anshieee/kelp/commit/8884a5d) (branch
+  [`kel-18`](https://github.com/Anshieee/kelp/tree/kel-18), head `544a545`)
+
+Status detail: merged into `main` at `8884a5d`, adding 26 tests to a suite of 775, including the
+boundary at exactly the ceiling and the reset into a new window. The review fixed one must-fix bug
+before the merge: the day and month gauges were only written when a turn was gated, so a scrape right
+after a turn showed the pre-turn total until the next send; they are now republished from the
+persisted records when a turn settles, and refreshed on each scrape. Two honest gaps. The issue asks
+`/readyz` to list any unpriced model in use; what ships is a readiness check on the usage path, with
+the unpriced count on `/metrics` as `spend_unknown_price_records` and the mode in the 402 details, so
+an operator sees the fact on a scrape but not on the readiness answer. And the issue asks for a
+written procedure for adding a provider or model; the runbook's section 13.2 is a deploy checklist
+that names the price entry and the provider-side cap, which is a deploy step rather than a general
+recipe for a new provider.
+
 ## Decisions that shape the map
 
 ### Surfaces
@@ -607,7 +715,7 @@ so the "GPU" in the milestone title belongs to that host, not to this container.
 ### GitHub
 
 - Repository (public): https://github.com/Anshieee/kelp
-- Shared copy of the code: https://github.com/Anshieee/kelp/tree/main — head `3f4d6cc`
+- Shared copy of the code: https://github.com/Anshieee/kelp/tree/main — head `8884a5d`
 - All branches: https://github.com/Anshieee/kelp/branches
   - `kel-5` — merged (`b8de92f`)
   - `kel-6` — merged at `d3c763e`; branch head `4c72afc`
@@ -624,9 +732,11 @@ so the "GPU" in the milestone title belongs to that host, not to this container.
   - `kel-14` — merged at `38130fb`; branch head `38c3162`
   - `kel-15` — merged at `793569c`; branch head `225f7c0`
   - `kel-16` — merged at `3f4d6cc`; branch head `a63d49a`
+  - `kel-17` — merged at `b48e113`; branch head `1e8d378`
+  - `kel-18` — merged at `8884a5d`; branch head `544a545`
 - Change history: https://github.com/Anshieee/kelp/commits/main
 - Pull requests: https://github.com/Anshieee/kelp/pulls
-- Tests: 734 pass on `main` (`python -m pytest`); `make demo` plays all six beats, and
+- Tests: 775 pass on `main` (`python -m pytest`); `make demo` plays all six beats, and
   `make eval` passes offline with the network blocked
 
 ### Linear
@@ -645,7 +755,9 @@ so the "GPU" in the milestone title belongs to that host, not to this container.
   [KEL-13](https://linear.app/kelp-ai/issue/KEL-13/m2-c-retrieval-real-docsanswer-with-pdfcsv-chunking-ranking-citations),
   [KEL-14](https://linear.app/kelp-ai/issue/KEL-14/m2-d-observability-structured-json-logs-prometheus-metrics),
   [KEL-15](https://linear.app/kelp-ai/issue/KEL-15/m2-e-eval-harness-make-eval-offline-and-make-eval-live),
-  [KEL-16](https://linear.app/kelp-ai/issue/KEL-16/m2-f-nebius-deploy-dockerfile-gpu-runbook-restart-policy)
+  [KEL-16](https://linear.app/kelp-ai/issue/KEL-16/m2-f-nebius-deploy-dockerfile-gpu-runbook-restart-policy),
+  [KEL-17](https://linear.app/kelp-ai/issue/KEL-17/m3-a-abuse-resistance-rate-limits-body-ceiling-concurrency-caps),
+  [KEL-18](https://linear.app/kelp-ai/issue/KEL-18/m3-c-spend-guardrails-dailymonthly-usd-ceilings-with-a-hard-stop)
 
 ### Docs and code
 

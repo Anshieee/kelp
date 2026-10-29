@@ -25,7 +25,7 @@ digraph sdlc {
   m0   [label="M0 Foundation\nIN PROGRESS" shape="box" style="filled,bold,rounded" fontsize="15" penwidth="2" fillcolor="#D6E6F7" URL="#m0" tooltip="Stage 0: shared code, docs, checks, risk list. In progress."];
   m1   [label="M1 Prototype\nCOMPLETE" shape="box" style="filled,bold,rounded" fontsize="15" penwidth="2" fillcolor="#D9EDD7" URL="#m1" tooltip="Stage 1: ask, answer, approve, pay, demo. Every work item done."];
   m2   [label="M2 Polished MVP\nCOMPLETE" shape="box" style="filled,bold,rounded" fontsize="15" penwidth="2" fillcolor="#FCEFC7" URL="#m2" tooltip="Stage 2: survives ordinary use. Serve entry, health checks, restart recovery, real document search, observability, repeatable quality measurements, and the deploy assets and runbook are done."];
-  m3   [label="M3 Hardening\nTO COME" shape="box" style="filled,bold,rounded" fontsize="15" penwidth="2" fillcolor="#F0DCC8" URL="#m3" tooltip="Stage 3: privacy and cost promises hold. Agreed, not started."];
+  m3   [label="M3 Hardening\nIN PROGRESS" shape="box" style="filled,bold,rounded" fontsize="15" penwidth="2" fillcolor="#F0DCC8" URL="#m3" tooltip="Stage 3: privacy and cost promises hold. Abuse resistance and spend ceilings are done; privacy rules, key handling, and retention are open."];
   m4   [label="M4 Full vision\nTO COME" shape="box" style="filled,bold,rounded" fontsize="15" penwidth="2" fillcolor="#DDD8EF" URL="#m4" tooltip="Stage 4: more devices and sharing. Direction, not a deadline."];
   surf [label="Surfaces" shape="box" style="filled,bold,rounded" fontsize="15" penwidth="2" fillcolor="#CDE9E4" URL="#surfaces" tooltip="Where you talk to the assistant: screen now, phone apps later."];
   pay  [label="Payments" shape="box" style="filled,bold,rounded" fontsize="15" penwidth="2" fillcolor="#F2D8D8" URL="#payments" tooltip="How money moves: Stripe saved cards and Razorpay Checkout, both merged and closed out. Balance later."];
@@ -140,12 +140,20 @@ digraph sdlc {
   m2 -> m2_quality;
   m2 -> m2_deploy;
 
+  // M3 work items (KEL-17 onwards; soft peach family)
+  k17 [label="KEL-17 Abuse caps\nDONE" shape="box" style="filled,bold,rounded" fillcolor="#F0DCC8" URL="#kel-17" tooltip="Five limiter classes, a body ceiling checked before the read, and two concurrency caps. Merged and reviewed."];
+  k18 [label="KEL-18 Spend ceilings\nDONE" shape="box" style="filled,bold,rounded" fillcolor="#F0DCC8" URL="#kel-18" tooltip="Day and month dollar caps computed from persisted usage, one warning at 80%, a hard stop at 100%. Merged and reviewed."];
+  m3 -> k17;
+  m3 -> k18;
+
   // M3 leaves (soft peach family)
   m3_who  [label="Who sees what\nTO COME" fillcolor="#FAEEE2" URL="#m3" tooltip="Privacy rules plus keys kept apart. Not started."];
-  m3_rate [label="Traffic caps, keep rules\nTO COME" fillcolor="#FAEEE2" URL="#m3" tooltip="Limits on use and how long data stays. Not started."];
-  m3_cost [label="Spend ceiling\nTO COME" fillcolor="#FAEEE2" URL="#m3" tooltip="Ceiling on model cost per turn and month. Not started."];
+  m3_rate [label="Traffic and body caps\nDONE" fillcolor="#FAEEE2" URL="#kel-17" tooltip="Five limiter classes, a body ceiling read before the body, and two concurrency caps. Merged and reviewed."];
+  m3_retain [label="Retention rule\nTO COME" fillcolor="#FAEEE2" URL="#m3" tooltip="How long data is kept before it is deleted. Not started."];
+  m3_cost [label="Spend ceilings\nDONE" fillcolor="#FAEEE2" URL="#kel-18" tooltip="Day and month dollar ceilings from persisted usage, one warning at 80%, a hard stop at 100%. Merged and reviewed."];
   m3 -> m3_who;
   m3 -> m3_rate;
+  m3 -> m3_retain;
   m3 -> m3_cost;
 
   // M4 leaves (soft lavender family)
