@@ -25,7 +25,7 @@ digraph sdlc {
   m0   [label="M0 Foundation\nIN PROGRESS" shape="box" style="filled,bold,rounded" fontsize="15" penwidth="2" fillcolor="#D6E6F7" URL="#m0" tooltip="Stage 0: shared code, docs, checks, risk list. In progress."];
   m1   [label="M1 Prototype\nCOMPLETE" shape="box" style="filled,bold,rounded" fontsize="15" penwidth="2" fillcolor="#D9EDD7" URL="#m1" tooltip="Stage 1: ask, answer, approve, pay, demo. Every work item done."];
   m2   [label="M2 Polished MVP\nCOMPLETE" shape="box" style="filled,bold,rounded" fontsize="15" penwidth="2" fillcolor="#FCEFC7" URL="#m2" tooltip="Stage 2: survives ordinary use. Serve entry, health checks, restart recovery, real document search, observability, repeatable quality measurements, and the deploy assets and runbook are done."];
-  m3   [label="M3 Hardening\nIN PROGRESS" shape="box" style="filled,bold,rounded" fontsize="15" penwidth="2" fillcolor="#F0DCC8" URL="#m3" tooltip="Stage 3: privacy and cost promises hold. Abuse resistance, spend ceilings, invoke-time policy, and retention are done; who sees what and the privacy review are open."];
+  m3   [label="M3 Hardening\nCOMPLETE" shape="box" style="filled,bold,rounded" fontsize="15" penwidth="2" fillcolor="#F0DCC8" URL="#m3" tooltip="Stage 3: privacy and cost promises hold. Abuse resistance, spend ceilings, invoke-time policy, retention, owner sign-in, and the written privacy review are all done."];
   m4   [label="M4 Full vision\nTO COME" shape="box" style="filled,bold,rounded" fontsize="15" penwidth="2" fillcolor="#DDD8EF" URL="#m4" tooltip="Stage 4: more devices and sharing. Direction, not a deadline."];
   surf [label="Surfaces" shape="box" style="filled,bold,rounded" fontsize="15" penwidth="2" fillcolor="#CDE9E4" URL="#surfaces" tooltip="Where you talk to the assistant: screen now, phone apps later."];
   pay  [label="Payments" shape="box" style="filled,bold,rounded" fontsize="15" penwidth="2" fillcolor="#F2D8D8" URL="#payments" tooltip="How money moves: Stripe saved cards and Razorpay Checkout, both merged and closed out. Balance later."];
@@ -145,22 +145,28 @@ digraph sdlc {
   k18 [label="KEL-18 Spend ceilings\nDONE" shape="box" style="filled,bold,rounded" fillcolor="#F0DCC8" URL="#kel-18" tooltip="Day and month dollar caps computed from persisted usage, one warning at 80%, a hard stop at 100%. Merged and reviewed."];
   k20 [label="KEL-20 Skill policy\nDONE" shape="box" style="filled,bold,rounded" fillcolor="#F0DCC8" URL="#kel-20" tooltip="Every skill call is checked against its declared effects, paths, hosts, and repos, and a deny is final. Merged and reviewed."];
   k21 [label="KEL-21 Retention\nDONE" shape="box" style="filled,bold,rounded" fillcolor="#F0DCC8" URL="#kel-21" tooltip="Hard delete, orphan sweep, space reclaimed, and a written clock per data class. Merged and reviewed."];
+  k19 [label="KEL-19 Owner sign-in\nDONE" shape="box" style="filled,bold,rounded" fillcolor="#F0DCC8" URL="#kel-19" tooltip="A session cookie, CSRF on every change, an auth trail, and a lockout after repeated failures. Merged and reviewed."];
+  k22 [label="KEL-22 Privacy review\nDONE" shape="box" style="filled,bold,rounded" fillcolor="#F0DCC8" URL="#kel-22" tooltip="Every outbound recipient named in writing, one content-free egress row per call, and an exec boundary stated plainly. Merged and reviewed."];
   m3 -> k17;
   m3 -> k18;
   m3 -> k20;
   m3 -> k21;
+  m3 -> k19;
+  m3 -> k22;
 
   // M3 leaves (soft peach family)
-  m3_who  [label="Who sees what\nTO COME" fillcolor="#FAEEE2" URL="#m3" tooltip="Privacy rules plus keys kept apart. Not started."];
+  m3_who  [label="Who sees what\nDONE" fillcolor="#FAEEE2" URL="#kel-19" tooltip="Sign-in gates every route, keys stay server-side, and a wrong credential is counted and locked out. Merged and reviewed."];
   m3_rate [label="Traffic and body caps\nDONE" fillcolor="#FAEEE2" URL="#kel-17" tooltip="Five limiter classes, a body ceiling read before the body, and two concurrency caps. Merged and reviewed."];
   m3_policy [label="Checked at every call\nDONE" fillcolor="#FAEEE2" URL="#kel-20" tooltip="Declared effects and scopes are enforced when a skill runs, not just described. Merged and reviewed."];
   m3_retain [label="Retention rule\nDONE" fillcolor="#FAEEE2" URL="#kel-21" tooltip="What you delete is gone, and every data class has a stated clock. Merged and reviewed."];
   m3_cost [label="Spend ceilings\nDONE" fillcolor="#FAEEE2" URL="#kel-18" tooltip="Day and month dollar ceilings from persisted usage, one warning at 80%, a hard stop at 100%. Merged and reviewed."];
+  m3_privacy [label="Privacy review written\nDONE" fillcolor="#FAEEE2" URL="#kel-22" tooltip="Every recipient named, every egress counted without content, and no command path in this build. Merged and reviewed."];
   m3 -> m3_who;
   m3 -> m3_rate;
   m3 -> m3_policy;
   m3 -> m3_retain;
   m3 -> m3_cost;
+  m3 -> m3_privacy;
 
   // M4 leaves (soft lavender family)
   m4_dev  [label="More devices\nLATER" fillcolor="#ECE9F7" URL="#m4" tooltip="Same assistant in more places. Later."];

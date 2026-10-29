@@ -11,11 +11,13 @@ that goes with it is [`sdlc-mindmap.svg`](sdlc-mindmap.svg), with a PNG fallback
 site embeds a copy of the SVG directly in the page, so every box there can be clicked; that copy
 and these two files must be updated together.
 
-What this snapshot rests on: `main` is at `25584f8`, all **845 tests pass**, and the repository is
+What this snapshot rests on: `main` is at `f2fa77f`, all **896 tests pass**, and the repository is
 public. KEL-5 through KEL-10 are merged, reviewed, and done; KEL-11, KEL-12, KEL-13, KEL-14, KEL-15,
-and KEL-16 are merged and reviewed too, and close M2. KEL-17, KEL-18, KEL-20, and KEL-21 then opened
-M3 and are merged and reviewed: abuse resistance, spend ceilings, invoke-time policy, and retention. KEL-10, payments, carries both its paths:
-the Stripe saved-card scaffold, the Razorpay gateway, and the Razorpay hosted Checkout.
+and KEL-16 are merged and reviewed too, and close M2. KEL-17, KEL-18, KEL-20, KEL-21, KEL-19, and
+KEL-22 then carried M3 to completion and are merged and reviewed: abuse resistance, spend ceilings,
+invoke-time policy, retention, owner sign-in, and the written privacy review. KEL-10, payments,
+carries both its paths: the Stripe saved-card scaffold, the Razorpay gateway, and the Razorpay
+hosted Checkout.
 
 KEL-10 closed on **owner confirmation on 30 October 2026** (Assume-Done). The code paths are merged
 and the suite is green; the order path was proven earlier against the Razorpay test API. The one
@@ -73,8 +75,19 @@ KEL-21 then closed the retention gap, merged on 30 October 2026. It is hard dele
 clock: deleting a thread purges its rows in one transaction and unlinks its files, an orphan sweep
 removes what a crash left behind, `VACUUM` returns the pages, and audit and usage records rotate by
 size, age, and segment count against one table in `chat/retention.py`. It merged at `25584f8` from
-`kel-21` (head `4f96577`) and added 18 tests, taking the suite from 827 to **845**. M3 is still in
-progress: owner sign-in, KEL-19, and the written privacy review, KEL-22, are open.
+`kel-21` (head `4f96577`) and added 18 tests, taking the suite from 827 to **845**.
+
+KEL-19 and KEL-22 then closed M3, both merged on 30 October 2026. KEL-19 is owner sign-in: the root
+bearer is exchanged once for an opaque server-side session whose id lives only in an `HttpOnly`,
+`Secure`, `SameSite=Lax` cookie, every browser mutation needs a matching `Origin` and a double-submit
+CSRF token, every rejected credential writes one `auth_failed` record with a hashed identity, and
+repeated failures lock that identity out. It merged at `b5d7196` from `kel-19` (head `5fdc1f8`) and
+added 17 tests, taking the suite from 845 to **862**. KEL-22 is the written privacy review:
+`docs/PRIVACY.md` names every outbound recipient and what each receives, `openshell/egress_ledger.py`
+writes one content-free `egress` row per outbound call into the existing audit trail, and the exec
+boundary is settled by removing the promise rather than wiring a gate. It merged at `f2fa77f` from
+`kel-22` (head `824522b`) and added 34 tests, taking the suite from 862 to **896**. With that every
+work item in M3 is done and the milestone is complete.
 
 ## How to read the labels
 
@@ -95,14 +108,13 @@ snapshot date.
 
 ## The map
 
-![Mind map of the delivery: milestones M0 to M4, work items KEL-5 to KEL-21, product surfaces, payments, and design.](sdlc-mindmap.svg)
+![Mind map of the delivery: milestones M0 to M4, work items KEL-5 to KEL-22, product surfaces, payments, and design.](sdlc-mindmap.svg)
 
 The same map in words, in case the image does not load:
 
 - **Milestones** — five stages, M0 to M4.
-- **The work** — sixteen work items, KEL-5 to KEL-21, with KEL-19 not used yet: all sixteen are
-  done, M1 and M2 are closed, and M3 is in progress with four of its pieces merged — traffic caps,
-  spend ceilings, invoke-time policy, and retention.
+- **The work** — eighteen work items, KEL-5 to KEL-22: all eighteen are done, M1, M2, and M3 are
+  complete, and M4 is the only stage still to come.
 - **Surfaces** — where you talk to the assistant: dashboard first, Telegram next, WhatsApp and voice memos later.
 - **Money** — saved cards through Stripe and hosted Checkout through Razorpay, both merged and closed out; an in-app balance later.
 - **Design** — the screen plan is written, and so is the chat spec. The chat surface code is merged; the drawing file and the browser screen are next.
@@ -122,10 +134,10 @@ promise that full-vision scope lands this week. Scope is cumulative: M2 includes
 | **M0 Foundation** | 30 Oct 2026 | IN PROGRESS | The repo (public), the docs, the tests, the standard development setup, model and provider chosen, and a written list of what could go wrong. The repo, docs, tests, and skill contract are in. Still open: the automated checks, the development setup, and the threat model. |
 | **M1 Prototype** | 30 Oct 2026 | COMPLETE | The end-to-end story: ask, get an answer with sources, read a file, approve an action, pay with a saved card, watch the six-scene demo. All six work items live here, and all six are done: KEL-5 to KEL-9 were merged earlier, and KEL-10 closed on owner confirmation on 30 October 2026. |
 | **M2 Polished MVP** | 30 Oct 2026 | COMPLETE | Survives ordinary use: picks up after a restart, self-checks, better search over your documents, an honest account of what it did, repeatable quality measurements, and a deploy a stranger can repeat. All six work items are done: KEL-11, the serve entrypoint; KEL-12, health and readiness; KEL-13, real document search with citations; KEL-14, structured logs and metrics; KEL-15, the eval harness that measures answer quality; KEL-16, the image and runbook. The runbook's end-to-end pass on a real Nebius host is still to be done. |
-| **M3 Hardening** | 30 Oct 2026 | IN PROGRESS | The privacy and cost promises hold under pressure: who sees what, where keys live, caps on traffic, a retention rule, and a spend ceiling. Four pieces are in: KEL-17, the traffic, body, and concurrency caps; KEL-18, the spend ceilings; KEL-20, the policy enforced at every skill call; and KEL-21, the retention rule. Still open: who sees what, which is KEL-19, owner sign-in, and the written privacy review, KEL-22. |
+| **M3 Hardening** | 30 Oct 2026 | COMPLETE | The privacy and cost promises hold under pressure: who sees what, where keys live, caps on traffic, a retention rule, a spend ceiling, and a written privacy review. All six pieces are done: KEL-17, the traffic, body, and concurrency caps; KEL-18, the spend ceilings; KEL-19, owner sign-in with a session cookie, CSRF, and lockout; KEL-20, the policy enforced at every skill call; KEL-21, the retention rule; and KEL-22, the written privacy review with the egress ledger and the exec-boundary decision. |
 | **M4 Full vision** | 30 Oct 2026 | TO COME | More devices, work the assistant starts on its own, abilities added by others, and team sharing. A direction, not a deadline. |
 
-## The sixteen work items
+## The eighteen work items
 
 KEL-5 feeds KEL-6 and KEL-7. Those two feed KEL-8. KEL-7 also feeds KEL-10. KEL-8 comes before the
 demo, KEL-9. The first twelve are done. KEL-10, payments, closed M1 on owner confirmation on 30
@@ -133,7 +145,8 @@ October 2026: both of its paths were merged and reviewed earlier, and the live s
 owner's word. KEL-11 then opened M2 with the serve entrypoint, and KEL-12, KEL-13, KEL-14, KEL-15,
 and KEL-16 followed with health checks, real document search, observability, the eval harness, and
 the deploy. KEL-17 and KEL-18 opened M3 the same day, with abuse resistance and spend ceilings, and
-KEL-20 and KEL-21 followed it with invoke-time policy and retention.
+KEL-20 and KEL-21 followed it with invoke-time policy and retention, then KEL-19 and KEL-22 closed
+it with owner sign-in and the written privacy review.
 
 ### KEL-5 — Skill contracts — DONE
 
@@ -175,7 +188,7 @@ price is counted per chunk.
 - Merge: [`d3c763e`](https://github.com/Anshieee/kelp/commit/d3c763e) (branch [`kel-6`](https://github.com/Anshieee/kelp/tree/kel-6), head `4c72afc`)
 
 Status detail: merged into `main` at `d3c763e`. The kernel suite is 43 tests — 25 for the loop and
-18 for the streaming client — and passes with the rest of the 845. The review written up in
+18 for the streaming client — and passes with the rest of the 896. The review written up in
 [`docs/REVIEW_KEL6_KEL7.md`](REVIEW_KEL6_KEL7.md) signed off, and KEL-8 built on top of it.
 
 ### KEL-7 — Approval gate — DONE
@@ -218,7 +231,7 @@ showing where an answer came from, and approval requests shown in the conversati
 Status detail: merged into `main` at `e0bbb72`. The chat surface is in: named threads that can be
 reopened, an append-only stream of events, a card for each tool step, approvals shown in the
 conversation over the KEL-7 gate, artifacts, and a cooperative cancel token so Stop works. The chat
-suite is 86 tests, part of the 845. The spec is on `main` at 1,164 lines; the review fixes that
+suite is 86 tests, part of the 896. The spec is on `main` at 1,164 lines; the review fixes that
 shaped it landed at `56b0785`:
 
 - **Honest dependencies (M1).** The web search, GitHub read, and document handlers are still stubs.
@@ -807,6 +820,114 @@ pretending a timer exists. And the request logs are bounded by size, not by age,
 container log driver is configured that way; a day-based claim would need a change in both the
 Compose file and the runbook.
 
+### KEL-19 — Owner sign-in — DONE
+
+The root bearer token is a server-side secret and a recovery credential, not a browser credential.
+`POST /api/auth/session` exchanges it once for an opaque session id: the raw id exists only in the
+client's cookie, and the server stores its SHA-256, so a copy of the running state is not a set of
+working sessions. The `session` cookie is `Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=2592000`
+and rolls forward 30 days on each authenticated response. A readable `csrf` cookie carries the second
+half: a cookie-authenticated `POST`, `PATCH`, `PUT`, or `DELETE` must send an `Origin` that matches
+`Host` and an `X-CSRF-Token` equal to that cookie, and a request with no `Origin` is refused even when
+the pair matches, which closes the non-browser cross-site shape a bare token check accepts. Sessions
+are process-local and bounded by `KELP_SESSION_MAX`, with the oldest idle one evicted when the cap is
+reached; `DELETE /api/auth/session` revokes the presented session, and `DELETE /api/auth/sessions`
+revokes every session and is the bearer path used before a credential rotation.
+
+Failures are counted, not just rejected. Every rejected credential writes exactly one structured
+`auth_failed` record carrying the outcome (`rejected` or `locked`), the reason, the count, the status,
+and a truncated SHA-256 of the identity; the token, the cookie, and the peer address never appear in
+the trail. The counter map is bounded by `KELP_AUTH_FAILURE_MAX_KEYS` and idles out, and after
+`KELP_AUTH_LOCKOUT_ATTEMPTS` failures that identity gets `429` with a `Retry-After` for
+`KELP_AUTH_LOCKOUT_SECONDS`. `KELP_SESSION_COOKIE_SECURE=0` exists only for a loopback HTTP
+development run; production keeps `Secure` on.
+
+*Why it matters:* one shared token pasted into a browser is a credential any script on the page can
+read and nothing can revoke without breaking every device. A short-lived server-side session, a
+second proof on every change, and a lockout turn "only the owner is in here" from a claim into
+something an operator can check and revoke.
+
+*Plain words:* a **session** is a temporary pass the server can cancel, where the long-lived token is
+the master key. **HttpOnly** means page scripts cannot read the cookie. **CSRF** is a forged request
+that borrows your cookie, and a second token plus a matching `Origin` is how the server tells a real
+form from a forged one. A **lockout** is a cool-off after too many wrong tries.
+
+- Linear: https://linear.app/kelp-ai/issue/KEL-19/m3-e-owner-auth-session-cookie-csrf-auth-audit-trail
+- Sessions, CSRF, and the failure counter: [`chat/api.py`](https://github.com/Anshieee/kelp/blob/main/chat/api.py)
+- Routes, cookie rules, and the auth record: [`docs/CHAT_SPEC.md`](CHAT_SPEC.md), section 12.2
+- Sign in, revoke, and rotate: [`docs/DEPLOY.md`](DEPLOY.md), section 11.1
+- Tests: [`tests/test_auth_sessions.py`](https://github.com/Anshieee/kelp/blob/main/tests/test_auth_sessions.py)
+- Merge: [`b5d7196`](https://github.com/Anshieee/kelp/commit/b5d7196) (branch
+  [`kel-19`](https://github.com/Anshieee/kelp/tree/kel-19), head `5fdc1f8`)
+
+Status detail: merged into `main` at `b5d7196`, adding 17 tests to a suite of 845, taking it to 862.
+The review fixed two things before the merge. Rate and stream limits are keyed on the single owner
+identity rather than the presented credential, so the root bearer and every session minted from it
+share one route bucket and one per-owner stream cap; previously a second tab minted its own key and
+could double the allowance, while with auth disabled the peer address stays the key so distinct
+callers remain independent. And a failed `POST /api/auth/session` now goes through the same rejection
+path as any other bad credential, so a wrong bearer is logged, counted, and can be locked out even
+when a valid session cookie admitted the request; the cookie that opened the wrapper no longer clears
+the debt of the credential actually presented. Two honest limits. Sessions live in the process, so a
+restart signs every browser out and the bearer token is the recovery path; that is the documented
+trade for persisting no session secret anywhere. And sign-in is a bearer exchange rather than a
+password form, so the root token remains the thing to protect, rotate, and keep out of tickets.
+
+### KEL-22 — Privacy review — DONE
+
+`docs/PRIVACY.md` is the written position the owner can audit. It names every outbound recipient —
+Token Factory for models, Tavily for search, GitHub for reads, Stripe and Razorpay for money, plus an
+`unlisted` bucket for an operator-supplied base URL — and for each one states what it receives, what
+it does not, and why; it then lists where each data class sits on the machine and points at the
+retention table in the runbook instead of restating it, so there is one clock and not two.
+
+Beside the document, `openshell/egress_ledger.py` writes one `egress` row per outbound call:
+recipient, purpose, request and response byte counts, and outcome. The API has no field that can hold
+a body, query, path, header, file name, or prompt; the recipient must be a known id; the purpose must
+be a short lowercase token; and a host that is not a domain name or IP literal is stored as
+`unresolved`, so a URL carrying a path or query cannot smuggle text into the trail. Rows are written
+through the existing audit log, which means they inherit its `0600` mode, mandatory scrubbing,
+rotation, and the 30-day audit retention row rather than adding a second file and a second clock. The
+ledger is wired at the three real egress paths: the provider client, the skill egress chokepoint, and
+the readiness probe. A denial or a transport error writes a zero-response row, so a refused attempt
+stays visible without pretending traffic happened.
+
+The exec boundary is settled by removing the promise rather than wiring a gate. `build_app` never
+constructs an `ExecGate`, and `shell.exec` is not a model-facing tool, so an exec card that said "It
+runs once" was describing a run that never happens. `cards.EXEC_AVAILABLE` now drives that copy, and
+a test fails if the flag is flipped without the wiring, so the claim cannot drift back.
+
+*Why it matters:* "it is private" is an assertion until someone can list the recipients and check
+them against the code. The ledger answers the other half of the question — for every byte that did
+leave, who received it and how much — without becoming a second copy of the content it describes. A
+review that only states intentions is worse than none, because it reads like evidence.
+
+*Plain words:* **egress** is data leaving the machine. A **ledger** here is a list of what left and to
+whom, kept as counts so it cannot leak the text itself. An **exec boundary** is the line between the
+assistant suggesting a command and the machine running one.
+
+- Linear: https://linear.app/kelp-ai/issue/KEL-22/m3-f-privacy-review-privacymd-egress-ledger-exec-boundary-decision
+- Review: [`docs/PRIVACY.md`](PRIVACY.md)
+- Ledger: [`openshell/egress_ledger.py`](../openshell/egress_ledger.py)
+- Provider calls and the readiness probe: [`kernel/provider.py`](../kernel/provider.py)
+- Tests: [`tests/test_privacy.py`](https://github.com/Anshieee/kelp/blob/main/tests/test_privacy.py)
+- Merge: [`f2fa77f`](https://github.com/Anshieee/kelp/commit/f2fa77f) (branch
+  [`kel-22`](https://github.com/Anshieee/kelp/tree/kel-22), head `824522b`)
+
+Status detail: merged into `main` at `f2fa77f`, adding 34 tests to a suite of 862, taking it to 896.
+The review settled five findings before the merge. The ledger validates a stored host against a
+hostname and IP grammar and records `unresolved` for anything else, covering the host-writing path as
+well as the main one. A non-2xx readiness probe is recorded as `provider_error` with its HTTP status
+instead of counting as a completed call. The exec invariant is checked by parsing the app builder with
+`ast` and by running it with `ExecGate.__init__` booby-trapped, because a comment mentioning the gate
+had been enough to pass the earlier check. The completeness test globs every module under `chat/`,
+`kernel/`, `skills/`, `openshell/`, and `payments/` instead of a hand-kept file list, and a new test
+binds the recipient table in the review to `RECIPIENTS` in the code in both directions. And the review
+no longer claims every ledger row carries a status and a turn id; it states which call sites supply
+them, because absent beats invented. One honest limit: the ledger counts the calls the code makes
+through its own doors, and the socket guard from KEL-20 is cooperative, so a call made from outside
+the process or from a child process is stopped at the deployment boundary, not here.
+
 ## Decisions that shape the map
 
 ### Surfaces
@@ -843,7 +964,7 @@ Compose file and the runbook.
 ### GitHub
 
 - Repository (public): https://github.com/Anshieee/kelp
-- Shared copy of the code: https://github.com/Anshieee/kelp/tree/main — head `25584f8`
+- Shared copy of the code: https://github.com/Anshieee/kelp/tree/main — head `f2fa77f`
 - All branches: https://github.com/Anshieee/kelp/branches
   - `kel-5` — merged (`b8de92f`)
   - `kel-6` — merged at `d3c763e`; branch head `4c72afc`
@@ -864,9 +985,11 @@ Compose file and the runbook.
   - `kel-18` — merged at `8884a5d`; branch head `544a545`
   - `kel-20` — merged at `223964c`; branch head `1f9423e`
   - `kel-21` — merged at `25584f8`; branch head `4f96577`
+  - `kel-19` — merged at `b5d7196`; branch head `5fdc1f8`
+  - `kel-22` — merged at `f2fa77f`; branch head `824522b`
 - Change history: https://github.com/Anshieee/kelp/commits/main
 - Pull requests: https://github.com/Anshieee/kelp/pulls
-- Tests: 845 pass on `main` (`python -m pytest`); `make demo` plays all six beats, and
+- Tests: 896 pass on `main` (`python -m pytest`); `make demo` plays all six beats, and
   `make eval` passes offline with the network blocked
 
 ### Linear
@@ -889,7 +1012,9 @@ Compose file and the runbook.
   [KEL-17](https://linear.app/kelp-ai/issue/KEL-17/m3-a-abuse-resistance-rate-limits-body-ceiling-concurrency-caps),
   [KEL-18](https://linear.app/kelp-ai/issue/KEL-18/m3-c-spend-guardrails-dailymonthly-usd-ceilings-with-a-hard-stop),
   [KEL-20](https://linear.app/kelp-ai/issue/KEL-20/m3-d-enforce-declared-effects-and-scopes-at-invoke-time),
-  [KEL-21](https://linear.app/kelp-ai/issue/KEL-21/m3-b-retention-purge-hard-delete-orphan-sweep-log-rotation)
+  [KEL-21](https://linear.app/kelp-ai/issue/KEL-21/m3-b-retention-purge-hard-delete-orphan-sweep-log-rotation),
+  [KEL-19](https://linear.app/kelp-ai/issue/KEL-19/m3-e-owner-auth-session-cookie-csrf-auth-audit-trail),
+  [KEL-22](https://linear.app/kelp-ai/issue/KEL-22/m3-f-privacy-review-privacymd-egress-ledger-exec-boundary-decision)
 
 ### Docs and code
 
