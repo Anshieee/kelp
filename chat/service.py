@@ -235,6 +235,18 @@ class ChatService:
             )
         return state
 
+    def publish_spend_metrics(self, now: datetime | None = None) -> SpendState | None:
+        """Republish the spend gauges without ever failing the caller's work.
+
+        A settling turn must finish even if its accounting cannot be read; the
+        next gate and the next scrape retry from the persisted records.
+        """
+
+        try:
+            return self.refresh_spend_metrics(now)
+        except Exception:  # noqa: BLE001 - accounting is not traffic
+            return None
+
     def _refuse_if_over_spend(self, *, action: str) -> None:
         """Gate a new turn on the persisted day/month spend.
 
@@ -1281,6 +1293,11 @@ class ChatService:
         self._metrics.add_tokens("output", state.model, state.output_tokens)
         if state.estimated_cost_usd is not None:
             self._metrics.add_cost(state.estimated_cost_usd)
+        # The turn's usage record is already on disk (the kernel persists it
+        # before ``TurnFinished``), so republish the day/month totals here: a
+        # scrape after the turn must show the spend it just added, not the
+        # total from before it (KEL-18 review M1).
+        self.publish_spend_metrics()
         log(
             "turn_finished",
             request_id=request_id,

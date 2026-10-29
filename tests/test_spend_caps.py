@@ -523,3 +523,66 @@ def test_retry_is_gated_by_the_same_cap(tmp_path: Path) -> None:
     # The refused retry created no new turn.
     latest = store.latest_turn(thread["id"])
     assert latest["id"] == payload["turn_id"]
+
+
+# -- gauge freshness (review M1) -------------------------------------------
+
+
+def get_metrics_body(api: ChatAPI) -> dict[str, float]:
+    response = api.handle(
+        Request(
+            "GET",
+            "/api/metrics",
+            {},
+            {"authorization": "Bearer tok"},
+            b"",
+        )
+    )
+    assert response.status == 200
+    return samples(response.body.decode())
+
+
+def test_metrics_scrape_after_one_turn_shows_spend_without_a_second_send(
+    tmp_path: Path,
+) -> None:
+    service, _, provider, _, _, metrics = make_capped_service(
+        tmp_path, SpendCaps(day_usd=1.0), []
+    )
+    api = ChatAPI(service, auth_token="tok", csrf_token="csrf", metrics=metrics)
+    thread = service.create_thread("Budget")
+    payload, _ = asyncio.run(
+        service.send(thread["id"], text="hi", client_turn_id="ct-1234abcd")
+    )
+    asyncio.run(service.wait_for_turn(payload["turn_id"]))
+    # Exactly one provider call: the scrape below must not need a second send
+    # to move the gauge.
+    assert len(provider.requests) == 1
+
+    rendered = get_metrics_body(api)
+    used = rendered['spend_used_usd{window="day"}']
+    assert used > 0.0
+    # 10 priced input tokens at $0.30/M + 5 output at $0.90/M.
+    assert used == pytest.approx(7.5e-06)
+    assert rendered['spend_used_usd{window="month"}'] == pytest.approx(7.5e-06)
+
+
+def test_metrics_scrape_republishes_from_records_without_a_new_turn(
+    tmp_path: Path,
+) -> None:
+    """A scrape is current even when the settling turn ran in another process."""
+
+    service, _, provider, usage, _, metrics = make_capped_service(
+        tmp_path, SpendCaps(day_usd=1.0), [0.0]
+    )
+    api = ChatAPI(service, auth_token="tok", csrf_token="csrf", metrics=metrics)
+    service.create_thread("Budget")
+    # Prime the guard's file cache with the seeded record.
+    assert get_metrics_body(api)['spend_used_usd{window="day"}'] == 0.0
+
+    # Spend arrives on disk from outside this service: no turn, no gate, so
+    # only the scrape can publish it.
+    usage.record(usage_record(0.25, turn_id="turn_elsewhere"))
+    rendered = get_metrics_body(api)
+    assert rendered['spend_used_usd{window="day"}'] == pytest.approx(0.25)
+    assert rendered['spend_cap_ratio{window="day"}'] == pytest.approx(0.25)
+    assert provider.requests == []
