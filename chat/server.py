@@ -34,12 +34,14 @@ from typing import Any, Mapping, Sequence
 
 from kernel import JsonlUsageStore, KernelConfig, TokenFactoryClient
 from openshell.approvals import ApprovalStore
-from openshell.audit import AuditLog
+from openshell.audit import AuditLog, SecretScrubber
 from skills.errors import SkillManifestError
 from skills.loader import SkillRegistry
 
 from .api import ChatAPI, HealthProbe, make_server
 from .artifacts import ArtifactRegistry
+from .logging import configure_logging
+from .metrics import LoggedUsageStore, Metrics
 from .recovery import RecoveryReport, settle_interrupted
 from .service import ChatService
 from .store import ChatStore
@@ -66,6 +68,7 @@ AUTH_TOKEN_ENV = "KELP_AUTH_TOKEN"
 CSRF_TOKEN_ENV = "KELP_CSRF_TOKEN"
 WORKSPACE_ROOT_ENV = "KELP_WORKSPACE_ROOT"
 SKILL_ROOT_ENV = "KELP_SKILL_ROOT"
+LOG_LEVEL_ENV = "KELP_LOG_LEVEL"
 
 DEFAULT_DB_PATH = "var/chat.db"
 DEFAULT_ARTIFACT_DIR = "var/workspace/var/artifacts"
@@ -448,15 +451,17 @@ def build_app(
     runtime_provider = provider
     try:
         store = ChatStore(config.db_path)
-        audit = AuditLog(
-            config.audit_path,
-            secret_values=(
-                config.kernel.api_key,
-                config.auth_token,
-                config.csrf_token,
-            ),
-        )
         registry = SkillRegistry.load(config.skill_root)
+        secrets = _service_secrets(registry, config, source)
+        secret_values = tuple(dict.fromkeys(secrets.values()))
+        # Redaction and level are process-wide: one scrubber source for logs,
+        # metrics labels, and the audit trail.
+        configure_logging(
+            level=_text(source, LOG_LEVEL_ENV) or "info",
+            secret_values=secret_values,
+        )
+        metrics = Metrics(scrubber=SecretScrubber(secret_values))
+        audit = AuditLog(config.audit_path, secret_values=secret_values)
         if runtime_provider is None:
             runtime_provider = TokenFactoryClient(config.kernel)
         service = ChatService(
@@ -465,20 +470,26 @@ def build_app(
             registry=registry,
             artifacts=ArtifactRegistry(store, config.artifact_dir),
             approvals=ApprovalStore(),
-            usage_store=JsonlUsageStore(config.usage_path),
+            usage_store=LoggedUsageStore(JsonlUsageStore(config.usage_path)),
             model=config.kernel.primary_model,
             config=config.kernel,
-            secrets=_service_secrets(registry, config, source),
+            secrets=secrets,
             workspace_root=str(config.workspace_root),
             tools=_tool_specs(registry),
+            audit=audit,
+            metrics=metrics,
         )
         # Exactly one recovery pass, before the API can accept a request.
         recovery = settle_interrupted(service, store, audit)
+        recovered = len(recovery.closed_turns) + len(recovery.expired_approvals)
+        if recovered:
+            metrics.add_recoveries(recovered)
         api = ChatAPI(
             service,
             auth_token=config.auth_token,
             csrf_token=config.csrf_token,
             health=HealthProbe.from_service(service, audit=audit),
+            metrics=metrics,
         )
         return Application(
             config=config,

@@ -40,6 +40,9 @@ class UsageRecord:
     finished_at: str
     duration_ms: int
     outcome: str
+    #: Correlated HTTP request that produced the turn (KEL-14). ``None`` for
+    #: turns started outside an HTTP request (CLI, tests, recovery).
+    request_id: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)

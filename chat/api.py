@@ -30,6 +30,14 @@ from urllib.parse import parse_qs, unquote, urlsplit
 
 from .artifacts import ArtifactError, MAX_UPLOAD_BYTES
 from .errors import ChatError
+from .logging import (
+    is_valid_request_id,
+    log,
+    new_request_id,
+    reset_request_id,
+    set_request_id,
+)
+from .metrics import Metrics, PROMETHEUS_CONTENT_TYPE, get_metrics
 from .service import ChatService
 from .stream import IDLE_SECONDS, sse_frames
 
@@ -394,6 +402,61 @@ def _commit_id() -> str:
     return "unknown"
 
 
+def _request_id_for(request: Request) -> str:
+    """Use a caller's id only when it is inert; otherwise mint a fresh one."""
+
+    supplied = request.header("x-request-id")
+    if is_valid_request_id(supplied):
+        return supplied
+    return new_request_id()
+
+
+_DYNAMIC_ROUTE_HEADS = frozenset({"threads", "turns", "approvals", "artifacts"})
+_STATIC_ROUTE_HEADS = frozenset(
+    {"health", "healthz", "readyz", "metrics", "attachments"}
+)
+_ROUTE_ACTIONS = frozenset(
+    {
+        "stream",
+        "turns",
+        "stop",
+        "retry",
+        "decision",
+        "preview",
+        "content",
+    }
+)
+
+
+def _route_label(path: str) -> str:
+    """A bounded route label for metrics: ids are replaced, not recorded."""
+
+    try:
+        clean = unquote(urlsplit(path).path)
+    except ValueError:  # pragma: no cover - urlsplit rarely raises here
+        return "/api/other"
+    segments = [segment for segment in clean.split("/") if segment]
+    if not segments:
+        return "/"
+    if segments[0] != "api":
+        return "/other"
+    if len(segments) == 1:
+        return "/api"
+    head = segments[1]
+    if head in _STATIC_ROUTE_HEADS:
+        return f"/api/{head}" if len(segments) == 2 else "/api/other"
+    if head in _DYNAMIC_ROUTE_HEADS:
+        if len(segments) == 2:
+            return f"/api/{head}"
+        label = f"/api/{head}/{{id}}"
+        if len(segments) == 4 and segments[3] in _ROUTE_ACTIONS:
+            label = f"{label}/{segments[3]}"
+        elif len(segments) > 4:
+            return "/api/other"
+        return label
+    return "/api/other"
+
+
 class ChatAPI:
     def __init__(
         self,
@@ -405,6 +468,7 @@ class ChatAPI:
         stream_idle: float = IDLE_SECONDS,
         max_upload: int = MAX_UPLOAD_BYTES,
         health: HealthProbe | None = None,
+        metrics: Metrics | None = None,
     ):
         self.service = service
         self.auth_token = auth_token
@@ -412,6 +476,7 @@ class ChatAPI:
         self.stream_idle = stream_idle
         self.max_upload = max_upload
         self.health = health or HealthProbe.from_service(service)
+        self.metrics = metrics or get_metrics()
         self._owns_runner = runner is None
         self.runner = runner or LoopRunner()
 
@@ -422,6 +487,46 @@ class ChatAPI:
     # -- dispatch ----------------------------------------------------------
 
     def handle(self, request: Request) -> Response:
+        """Dispatch one request, stamping the id and access metrics.
+
+        Every response — success, 4xx, 5xx, stream or JSON — carries
+        ``X-Request-Id``. The id is either a validated caller value or a fresh
+        opaque one, and is bound to the context so a turn, its tool calls, its
+        audit entries, and its usage record all report the same value.
+        """
+
+        request_id = _request_id_for(request)
+        token = set_request_id(request_id)
+        started = time.perf_counter()
+        response: Response | None = None
+        status = 500
+        try:
+            response = self._dispatch(request)
+            status = response.status
+            return response
+        finally:
+            duration = max(0.0, time.perf_counter() - started)
+            route = _route_label(request.path)
+            method = request.method.upper()
+            try:
+                self.metrics.observe_http(method, route, status, duration)
+                log(
+                    "http_request",
+                    level="error" if status >= 500 else "info",
+                    request_id=request_id,
+                    method=method,
+                    route=route,
+                    status=status,
+                    duration_ms=int(round(duration * 1000)),
+                )
+            except Exception:  # noqa: BLE001 - observability never breaks traffic
+                pass
+            finally:
+                if response is not None:
+                    response.headers.setdefault("X-Request-Id", request_id)
+                reset_request_id(token)
+
+    def _dispatch(self, request: Request) -> Response:
         try:
             path = unquote(urlsplit(request.path).path)
             segments = [segment for segment in path.split("/") if segment]
@@ -493,6 +598,20 @@ class ChatAPI:
                 raise ChatError("not_found", status=404, message="Unknown endpoint.")
             payload, ready = self.health.readiness(runner=self.runner)
             return _json_response(200 if ready else 503, payload)
+        if head == "metrics":
+            if len(segments) != 1 or method != "GET":
+                raise ChatError("not_found", status=404, message="Unknown endpoint.")
+            # Reached only through ``handle``, which has already authorized it.
+            body = self.metrics.render().encode("utf-8")
+            return Response(
+                status=200,
+                headers={
+                    "Content-Type": PROMETHEUS_CONTENT_TYPE,
+                    "Content-Length": str(len(body)),
+                    "Cache-Control": "no-store",
+                },
+                body=body,
+            )
         raise ChatError("not_found", status=404, message="Unknown endpoint.")
 
     @staticmethod
@@ -564,6 +683,10 @@ class ChatAPI:
         if self.service.store.get_thread(thread_id) is None:
             raise ChatError("unknown_thread", status=404)
         after = _after_param(request)
+        if after > 0:
+            # A resume asks for a position it already had: the browser is
+            # reconnecting, not opening a fresh stream.
+            self.metrics.inc_sse_reconnect()
         frames = sse_frames(
             self.service.store,
             self.service.bus,
@@ -942,8 +1065,30 @@ class _Handler(BaseHTTPRequestHandler):
             pass
 
     def log_message(self, format: str, *args: Any) -> None:
-        # Request line only: ids, status, duration. No bodies, no arguments.
-        super().log_message(format, *args)
+        """Silence the stdlib access log; the JSON sink already has this request.
+
+        :meth:`ChatAPI.handle` emits exactly one structured ``http_request``
+        line per request with a validated request id, a normalised route, and
+        scrubbed values. ``BaseHTTPRequestHandler`` would print a second,
+        unredacted line to stderr, which both doubles the record and escapes
+        the JSON contract, so this is deliberately a no-op.
+        """
+
+        return None
+
+    def log_error(self, format: str, *args: Any) -> None:
+        """Route protocol errors to the JSON sink instead of raw stderr.
+
+        The stdlib message is built from the request line, so it is not
+        interpolated: only the fixed event and level are logged. Any detail
+        would be unvalidated request text and the access line already carries
+        the route and status.
+        """
+
+        try:
+            log("http_error", level="warning", status="error")
+        except Exception:  # noqa: BLE001 - logging must never break a connection
+            return
 
 
 def make_server(

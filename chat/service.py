@@ -11,6 +11,7 @@ the turn exactly once. Approvals come from two places and share one card:
 from __future__ import annotations
 
 import asyncio
+import re
 import time
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
@@ -26,6 +27,7 @@ from kernel import (
 from kernel import events as kernel_events
 from kernel.usage import UsageStore
 from openshell.approvals import ApprovalStore
+from openshell.audit import AuditLog
 from openshell.errors import (
     ApprovalAlreadyUsed,
     ApprovalDenied,
@@ -39,6 +41,8 @@ from skills.loader import SkillRegistry
 from . import cards
 from .artifacts import HANDLE_RE, ArtifactError, ArtifactRegistry
 from .errors import ChatError
+from .logging import current_request_id, log
+from .metrics import Metrics, get_metrics
 from .store import APPROVAL_TRANSITIONS, ChatStore, iso_now, new_id
 from .stream import EventBus
 
@@ -67,6 +71,52 @@ _HARD_CANCEL_RETRY = 0.25
 _HARD_CANCEL_ATTEMPTS = 40
 _APPROVAL_POLL_SECONDS = 0.05
 
+#: A tool name and an error code reach logs, audit entries, and metric labels.
+#: Both are bounded so a model-authored string cannot create unbounded label
+#: cardinality or a multi-kilobyte log line; a name outside the offered set
+#: collapses to one fixed bucket instead of becoming its own series.
+_MAX_TOOL_NAME_CHARS = 64
+_MAX_ERROR_CODE_CHARS = 64
+_UNKNOWN_TOOL = "unknown"
+#: Error codes are internal tokens (``provider_error``, ``RuntimeError``). A
+#: provider-authored value that does not look like one is replaced by the fixed
+#: ``unknown`` bucket: the code reaches audit and log sinks, and only a
+#: verified shape belongs there. A leading underscore is allowed so a private
+#: exception class still logs as its class name.
+_ERROR_CODE_RE = re.compile(r"[A-Za-z0-9_][A-Za-z0-9._:-]*")
+
+
+def _declared_tool_name(spec: Any) -> str | None:
+    """Read the tool name from a model-facing spec or a plain declaration."""
+
+    if not isinstance(spec, Mapping):
+        return None
+    name = spec.get("name")
+    if not isinstance(name, str):
+        function = spec.get("function")
+        name = function.get("name") if isinstance(function, Mapping) else None
+    if not isinstance(name, str):
+        return None
+    name = name.strip()
+    return name or None
+
+
+def _shorten(value: str, limit: int) -> str:
+    return value if len(value) <= limit else value[:limit]
+
+
+def _error_code(value: Any) -> str | None:
+    """A bounded, inert error code, or ``None`` when the value is unusable."""
+
+    if not isinstance(value, str):
+        return None
+    code = value.strip()
+    if not code:
+        return None
+    if not _ERROR_CODE_RE.fullmatch(code):
+        return "unknown"
+    return _shorten(code, _MAX_ERROR_CODE_CHARS)
+
 
 @dataclass
 class _TurnState:
@@ -87,6 +137,9 @@ class _TurnState:
     usage_persisted: bool = False
     finished: bool = False
     started_mono: float = 0.0
+    #: Last kernel or executor error code seen for this turn, used only for
+    #: logs and audit (never for a metric label).
+    error_code: str | None = None
 
 
 class ChatService:
@@ -108,6 +161,8 @@ class ChatService:
         now: Callable[[], datetime] | None = None,
         approval_ttl_seconds: float = 600.0,
         tools: Sequence[Mapping[str, Any]] = (),
+        audit: AuditLog | None = None,
+        metrics: Metrics | None = None,
     ):
         self.store = store
         self.bus = EventBus()
@@ -121,6 +176,8 @@ class ChatService:
         self._provider = provider
         self._registry = registry
         self._usage_store = usage_store
+        self._audit = audit
+        self._metrics = metrics or get_metrics()
         self._budget = budget or TurnBudget()
         self._model = model or (config or KernelConfig.from_env()).primary_model
         self._secrets = dict(secrets or {})
@@ -131,6 +188,12 @@ class ChatService:
         self._tool_executor_factory = tool_executor_factory
         self._approval_ttl = float(approval_ttl_seconds)
         self._tools = list(tools)
+        #: Names the model was actually offered. Anything else in a tool-call
+        #: event is model-authored and is bucketed as ``unknown`` for every
+        #: observability sink.
+        self._offered_tools = frozenset(
+            name for name in (_declared_tool_name(spec) for spec in self._tools) if name
+        )
         self._tasks: dict[str, asyncio.Task[Any]] = {}
         self._cancel: dict[str, CancelToken] = {}
         self._done: dict[str, asyncio.Event] = {}
@@ -139,6 +202,34 @@ class ChatService:
         self._waiting_approval: dict[str, str] = {}
         self._live_blocks: dict[str, list[dict[str, Any]]] = {}
         self._closing = False
+
+    # -- audit -------------------------------------------------------------
+
+    def _record_audit(self, event: str, **fields: Any) -> None:
+        """Audit without ever failing a turn: accounting is not traffic."""
+
+        if self._audit is None:
+            return
+        try:
+            self._audit.record(event, **fields)
+        except Exception:  # noqa: BLE001 - a full disk must not end a turn
+            return
+
+    # -- observability labels ---------------------------------------------
+
+    def _observable_tool(self, name: Any) -> str:
+        """The tool name as logs, audit, and metric labels may carry it.
+
+        Tool-call names come from the model, not from the operator. A name that
+        was not offered collapses to one fixed bucket so a crafted or mistyped
+        name cannot mint a new metric series, and every value is length-capped
+        before it is written anywhere. A service built without model-facing
+        specs therefore labels every call ``unknown``: it cannot verify one.
+        """
+
+        if isinstance(name, str) and name in self._offered_tools:
+            return _shorten(name, _MAX_TOOL_NAME_CHARS)
+        return _UNKNOWN_TOOL
 
     # -- threads -----------------------------------------------------------
 
@@ -577,13 +668,30 @@ class ChatService:
                 self._finalize(
                     state, reason, duration_ms=self._elapsed(state)
                 )
-        except Exception:  # noqa: BLE001 - a turn never escapes to the caller
+        except Exception as exc:  # noqa: BLE001 - a turn never escapes to the caller
             if not state.finished:
                 self._abandon_turn_approvals(state)
+                # Only the exception's class name is logged. ``str(exc)`` can
+                # carry a prompt, a URL with a token in it, or a provider body,
+                # and the logging contract forbids free text.
+                log(
+                    "turn_crashed",
+                    request_id=current_request_id(),
+                    thread_id=state.thread_id,
+                    turn=state.turn["id"],
+                    error_code=_error_code(type(exc).__name__),
+                    status="error",
+                    step=state.steps,
+                )
                 self._emit_error(
                     state, "provider_error", retryable=True, details=None, step=state.steps
                 )
-                self._finalize(state, "error", duration_ms=self._elapsed(state))
+                self._finalize(
+                    state,
+                    "error",
+                    duration_ms=self._elapsed(state),
+                    error_code="provider_error",
+                )
         finally:
             self._live_blocks.pop(state.assistant_id, None)
             self._waiting_approval.pop(turn_id, None)
@@ -649,6 +757,15 @@ class ChatService:
         if isinstance(event, kernel_events.ToolCallStarted):
             state.steps = max(state.steps, event.step)
             state.text_open = False
+            tool_name = self._observable_tool(event.name)
+            log(
+                "tool_call_started",
+                thread_id=state.thread_id,
+                turn=state.turn["id"],
+                tool=tool_name,
+                status="started",
+                step=event.step,
+            )
             effects = self._effects_for(event.name)
             redacted = cards.redact_arguments(
                 event.arguments, secrets=self._secret_values
@@ -692,6 +809,7 @@ class ChatService:
         if isinstance(event, kernel_events.ToolCallFinished):
             state.steps = max(state.steps, event.step)
             state.tool_calls += 1
+            tool_name = self._observable_tool(event.name)
             block = self._tool_block(state, event.call_id)
             if block is None:  # pragma: no cover - started always precedes
                 block = {
@@ -708,12 +826,14 @@ class ChatService:
                 }
                 state.blocks.append(block)
             block["status"] = "done" if event.ok else "failed"
+            error_code: str | None = None
             if not event.ok:
                 code = (
                     event.error.get("code")
                     if isinstance(event.error, Mapping)
                     else None
                 )
+                error_code = _error_code(code)
                 if code == "approval_denied":
                     block["status"] = "blocked"
                 elif code in {"expired", "approval_expired"}:
@@ -756,6 +876,38 @@ class ChatService:
             cards.apply_sweeps(state.blocks)
             if block.get("approval_id"):
                 self._settle_approval(state, block["approval_id"], executed=True)
+            tool_status = str(
+                block.get("status") or ("done" if event.ok else "failed")
+            )
+            # Error codes stay out of metric labels: they are request-scoped
+            # diagnostics and would multiply the series without bound.
+            self._metrics.observe_tool(tool_name, tool_status)
+            if event.waited_ms > 0:
+                self._metrics.observe_approval_wait(event.waited_ms / 1000.0)
+            request_id = current_request_id()
+            log(
+                "tool_call",
+                request_id=request_id,
+                thread_id=state.thread_id,
+                turn=state.turn["id"],
+                tool=tool_name,
+                status=tool_status,
+                error_code=error_code,
+                duration_ms=event.duration_ms,
+                step=event.step,
+            )
+            audit_extra: dict[str, Any] = {}
+            if error_code is not None:
+                audit_extra["error_code"] = error_code
+            self._record_audit(
+                "tool_call",
+                turn_id=state.turn["id"],
+                request_id=request_id,
+                tool=tool_name,
+                outcome=tool_status,
+                duration_ms=event.duration_ms,
+                extra=audit_extra,
+            )
             self._flush(state, force=True)
             self._emit(
                 state.thread_id,
@@ -918,6 +1070,34 @@ class ChatService:
         details: Mapping[str, Any] | None,
         step: int,
     ) -> None:
+        # The code is a stable, internal token; it is safe (and useful) to keep
+        # in logs and audit. It never becomes a metric label, and the message
+        # text is generated copy, not provider output.
+        error_code = _error_code(code)
+        if error_code is not None:
+            # Last error wins, so a fatal failure after a recovered one is the
+            # code the finished turn reports.
+            state.error_code = error_code
+        request_id = current_request_id()
+        log(
+            "turn_error",
+            request_id=request_id,
+            thread_id=state.thread_id,
+            turn=state.turn["id"],
+            error_code=error_code,
+            status="error",
+            step=step,
+        )
+        audit_extra: dict[str, Any] = {}
+        if error_code is not None:
+            audit_extra["error_code"] = error_code
+        self._record_audit(
+            "turn_error",
+            turn_id=state.turn["id"],
+            request_id=request_id,
+            outcome="error",
+            extra=audit_extra,
+        )
         self._emit(
             state.thread_id,
             "error",
@@ -933,10 +1113,23 @@ class ChatService:
             },
         )
 
-    def _finalize(self, state: _TurnState, reason: str, *, duration_ms: int) -> None:
+    def _finalize(
+        self,
+        state: _TurnState,
+        reason: str,
+        *,
+        duration_ms: int,
+        error_code: str | None = None,
+    ) -> None:
         if state.finished:
             return
         state.finished = True
+        # An explicit code wins. Otherwise only an ``error`` end inherits the
+        # turn's last code: a recovered mid-turn error must not label a turn
+        # that went on to finish normally.
+        code = _error_code(error_code)
+        if code is None and reason == "error":
+            code = state.error_code
         status = MESSAGE_STATUS_BY_REASON.get(reason, "error")
         self.store.update_message(state.user_id, status="complete")
         self._mark_running_tools(
@@ -958,6 +1151,33 @@ class ChatService:
             reason=reason,
             finished_at=iso_now(self._now()),
             usage=usage,
+        )
+        request_id = current_request_id()
+        self._metrics.observe_turn(reason, max(0.0, duration_ms / 1000.0))
+        self._metrics.add_tokens("input", state.model, state.input_tokens)
+        self._metrics.add_tokens("output", state.model, state.output_tokens)
+        if state.estimated_cost_usd is not None:
+            self._metrics.add_cost(state.estimated_cost_usd)
+        log(
+            "turn_finished",
+            request_id=request_id,
+            thread_id=state.thread_id,
+            turn=state.turn["id"],
+            status=reason,
+            error_code=code,
+            duration_ms=duration_ms,
+            model=state.model,
+        )
+        audit_extra: dict[str, Any] = {"thread_id": state.thread_id}
+        if code is not None:
+            audit_extra["error_code"] = code
+        self._record_audit(
+            "turn_finished",
+            turn_id=state.turn["id"],
+            request_id=request_id,
+            outcome=reason,
+            duration_ms=duration_ms,
+            extra=audit_extra,
         )
         self._emit(
             state.thread_id,
@@ -1012,6 +1232,24 @@ class ChatService:
         )
         self.store.save_approval(card)
         self._attach_approval(state, card)
+        request_id = current_request_id()
+        log(
+            "approval_requested",
+            request_id=request_id,
+            thread_id=state.thread_id,
+            turn=state.turn["id"],
+            tool=request.tool,
+            approval_id=approval_id,
+            status="pending",
+        )
+        self._record_audit(
+            "approval_requested",
+            turn_id=state.turn["id"],
+            request_id=request_id,
+            tool=request.tool,
+            decision="pending",
+            argument_hash=request.argument_hash,
+        )
         waiter = asyncio.Event()
         loop = asyncio.get_running_loop()
         self._waiters[approval_id] = waiter
@@ -1352,6 +1590,32 @@ class ChatService:
                 loop.call_soon_threadsafe(waiter.set)
             else:  # pragma: no cover - defensive
                 waiter.set()
+        request_id = current_request_id()
+        log(
+            "approval_resolved",
+            request_id=request_id,
+            thread_id=updated.get("thread_id"),
+            turn=updated.get("turn_id"),
+            tool=updated.get("tool"),
+            approval_id=approval_id,
+            status=status,
+        )
+        self._record_audit(
+            "approval_resolved",
+            turn_id=(
+                str(updated["turn_id"])
+                if updated.get("turn_id") is not None
+                else None
+            ),
+            request_id=request_id,
+            tool=(
+                str(updated["tool"])
+                if updated.get("tool") is not None
+                else None
+            ),
+            decision=status,
+            outcome=status,
+        )
         return updated, True
 
     def _apply_resolution_to_blocks(
