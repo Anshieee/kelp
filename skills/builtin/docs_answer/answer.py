@@ -1,23 +1,25 @@
 """Answer assembly: turn ranked chunks into an answer plus citations.
 
 The answer is extractive and deterministic: sentences (PDF) or rows (CSV) are
-copied from the artifact, never paraphrased, and every citation's ``text`` is a
-verbatim slice of the cited page or row. Nothing here reads the network or the
-caller's secrets.
+copied from the artifact, never paraphrased. A citation's ``text`` is the cited
+page or row with whitespace collapsed and clipped to :data:`CLIP_CHARS`
+characters — an excerpt, not a whole span, and marked with ``…`` when it was
+cut. It is derived only from the artifact, so no caller input can appear in it;
+a secret that was itself pasted into the document is handled by the handler's
+best-effort scrub on the way out, not here. Nothing here reads the network or
+the caller's secrets.
 """
 
 from __future__ import annotations
 
-import re
 from typing import Any, Sequence
 
-from .chunking import Chunk, sentences
+from .chunking import Chunk, clip_text as _clip, sentences
 from .extract import CsvTable, numeric_value
 from .retrieval import ScoredChunk, tokenize
 
 __all__ = ["csv_answer", "pdf_answer"]
 
-_SNIPPET_CHARS = 280
 _MAX_SENTENCES = 3
 _MAX_PDF_CITATIONS = 8
 _MAX_CSV_MATCHES = 5
@@ -31,14 +33,6 @@ _AGGREGATES = {
     "maximum": ("maximum", "max", "highest", "largest", "most"),
     "total": ("total", "sum", "summed", "combined", "altogether"),
 }
-
-
-def _clip(text: str, limit: int = _SNIPPET_CHARS) -> str:
-    text = " ".join(text.split())
-    if len(text) <= limit:
-        return text
-    cut = text[: limit + 1].rsplit(" ", 1)[0]
-    return (cut or text[:limit]).rstrip(",;:") + "…"
 
 
 def _format_amount(value: float) -> str:
@@ -114,7 +108,7 @@ def pdf_answer(
             fallback = [" ".join(selected[0].chunk.text.split())]
         picked = [(selected[0].chunk, fallback[0])]
 
-    answer = " ".join(_clip(sentence, _SNIPPET_CHARS) for _, sentence in picked)
+    answer = " ".join(_clip(sentence) for _, sentence in picked)
 
     citations: list[dict[str, str]] = []
     seen_locations: set[tuple[str, str]] = set()
@@ -135,7 +129,14 @@ def pdf_answer(
 
 
 def _row_text(row: Sequence[str]) -> str:
-    return ",".join(row)
+    """A row as it is quoted in answers and citations: clipped, never raw.
+
+    A spreadsheet cell can hold megabytes. Quoting one row verbatim would put
+    the whole cell in the response, so the excerpt is clipped exactly like a
+    CSV chunk.
+    """
+
+    return _clip(",".join(row))
 
 
 def _aggregate_answer(

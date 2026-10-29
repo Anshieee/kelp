@@ -10,6 +10,7 @@ locators, argument/security failures, the output-schema contract, and the
 from __future__ import annotations
 
 import asyncio
+import csv
 import json
 import socket
 import time
@@ -18,8 +19,8 @@ from pathlib import Path
 
 import pytest
 
-from skills.builtin.docs_answer import embeddings
-from skills.builtin.docs_answer.chunking import chunk_csv, chunk_pdf
+from skills.builtin.docs_answer import embeddings, extract as extract_module
+from skills.builtin.docs_answer.chunking import CLIP_CHARS, chunk_csv, chunk_pdf
 from skills.builtin.docs_answer.handler import run
 from skills.builtin.docs_answer.extract import extract_pdf, numeric_value, read_csv
 from skills.builtin.docs_answer.retrieval import (
@@ -121,6 +122,21 @@ def ask(context: SkillContext, kind: str, question: str, **extra: object) -> dic
     return dict(asyncio.run(run(arguments, context)))
 
 
+def make_pdf_from_objects(bodies: dict[int, bytes]) -> bytes:
+    """Assemble a PDF from explicit object bodies (content streams included)."""
+
+    out = bytearray(b"%PDF-1.4\n")
+    for number in sorted(bodies):
+        out += f"{number} 0 obj\n".encode("ascii") + bodies[number] + b"\nendobj\n"
+    out += b"trailer\n<< /Root 1 0 R >>\n%%EOF\n"
+    return bytes(out)
+
+
+def stream_object(payload: bytes, extra: bytes = b"") -> bytes:
+    head = b"<< /Length %d%s >>\nstream\n" % (len(payload), extra)
+    return head + payload + b"\nendstream"
+
+
 # ---------------------------------------------------------------------------
 # PDF extraction
 # ---------------------------------------------------------------------------
@@ -171,6 +187,148 @@ def test_flate_stream_expansion_is_bounded() -> None:
         + b"\nendstream"
     )
     assert _decode_stream(body) is None
+
+
+def test_total_decompression_budget_stops_the_third_page(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Per-stream caps alone would let every page through; the document-wide
+    # budget is what makes a many-small-bombs PDF finite.
+    monkeypatch.setattr(extract_module, "_TOTAL_DECOMPRESSED_BYTES", 60)
+    pages = extract_pdf(make_pdf([["Alpha"], ["Beta"], ["Gamma"]], compress=False))
+
+    assert pages[0] == ["Alpha"]
+    # The remaining allowance cannot cover another stream, so later pages stay
+    # empty instead of being decoded anyway.
+    assert pages[1] == []
+    assert pages[2] == []
+
+
+def test_a_rejected_bomb_still_spends_the_document_budget(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from skills.builtin.docs_answer.extract import _decode_stream
+
+    monkeypatch.setattr(extract_module, "_MAX_DECOMPRESSED_BYTES", 512)
+    payload = zlib.compress(b"\0" * (2 * 1024 * 1024), 9)
+    body = (
+        b"<< /Length %d /Filter /FlateDecode >>\nstream\n" % len(payload)
+        + payload
+        + b"\nendstream"
+    )
+    budget = [1024]
+
+    # The stream is refused (it would exceed the per-stream cap) but the bytes
+    # it did inflate are charged, so the bomb cannot be retried for free.
+    assert _decode_stream(body, budget=budget) is None
+    assert budget[0] == 1024 - 512
+
+
+def test_inline_image_payload_is_never_read_as_text() -> None:
+    # The image bytes spell out a complete text operator and a sentence. If the
+    # scanner tokenises them, they become a fabricated citation.
+    injected = b"\xff\x00(Injected secret pricing) Tj (more injected) Tj "
+    content = (
+        b"BT /F1 12 Tf 72 720 Td (Real page text) Tj ET\n"
+        b"q 100 0 0 100 0 0 cm BI /W 4 /H 4 /BPC 8 /CS /G ID " + injected + b" EI Q\n"
+    )
+    data = make_pdf_from_objects(
+        {
+            1: b"<< /Type /Catalog /Pages 2 0 R >>",
+            2: b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+            3: b"<< /Type /Page /Parent 2 0 R /Contents 4 0 R >>",
+            4: stream_object(content),
+        }
+    )
+
+    pages = extract_pdf(data)
+
+    assert pages == [["Real page text"]]
+    assert "Injected" not in json.dumps(pages)
+
+
+def test_inline_image_asked_about_returns_no_fabricated_answer(tmp_path: Path) -> None:
+    injected = b"\xff\x00(The injected secret answer is 42.) Tj "
+    content = (
+        b"BT /F1 12 Tf 72 720 Td (Real page text) Tj ET\n"
+        b"q BI /W 4 /H 4 /BPC 8 /CS /G ID " + injected + b" EI Q\n"
+    )
+    data = make_pdf_from_objects(
+        {
+            1: b"<< /Type /Catalog /Pages 2 0 R >>",
+            2: b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+            3: b"<< /Type /Page /Parent 2 0 R /Contents 4 0 R >>",
+            4: stream_object(content),
+        }
+    )
+    context, _ = workspace(tmp_path, {"abcdefgh1234.pdf": data})
+
+    output = ask(context, "pdf", "injected secret answer")
+
+    assert "Injected" not in json.dumps(output)
+    assert "42" not in output["answer"]
+    assert output["answer"] == "Real page text"
+    assert [citation["locator"] for citation in output["citations"]] == ["page 1"]
+
+
+def test_form_xobject_text_is_followed_in_place() -> None:
+    page_content = (
+        b"BT /F1 12 Tf 72 720 Td (Before form) Tj ET "
+        b"q /Fm0 Do Q BT (After form) Tj ET"
+    )
+    form_content = b"BT /F1 12 Tf 72 700 Td (Inside form) Tj ET"
+    compressed = zlib.compress(form_content)
+    data = make_pdf_from_objects(
+        {
+            1: b"<< /Type /Catalog /Pages 2 0 R >>",
+            2: b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+            3: (
+                b"<< /Type /Page /Parent 2 0 R "
+                b"/Resources << /XObject << /Fm0 5 0 R >> >> /Contents 4 0 R >>"
+            ),
+            4: stream_object(page_content),
+            5: stream_object(
+                compressed,
+                b" /Type /XObject /Subtype /Form /BBox [0 0 612 792] "
+                b"/Resources << >> /Filter /FlateDecode",
+            ),
+        }
+    )
+
+    assert extract_pdf(data) == [["Before form", "Inside form", "After form"]]
+
+
+def test_form_xobject_nesting_stops_at_the_depth_cap() -> None:
+    forms: dict[int, bytes] = {}
+    for level in range(1, 6):
+        content = b"BT (Level %d) Tj ET" % level
+        if level < 5:
+            content += b" /Fm%d Do" % (level + 1)
+            resources = b" /Resources << /XObject << /Fm%d %d 0 R >> >>" % (
+                level + 1,
+                level + 11,
+            )
+        else:
+            resources = b" /Resources << >>"
+        forms[level + 10] = stream_object(
+            content,
+            b" /Type /XObject /Subtype /Form /BBox [0 0 612 792]" + resources,
+        )
+    bodies: dict[int, bytes] = {
+        1: b"<< /Type /Catalog /Pages 2 0 R >>",
+        2: b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+        3: (
+            b"<< /Type /Page /Parent 2 0 R "
+            b"/Resources << /XObject << /Fm1 11 0 R >> >> /Contents 4 0 R >>"
+        ),
+        4: stream_object(b"BT (Page) Tj ET /Fm1 Do"),
+        **forms,
+    }
+
+    lines = extract_pdf(make_pdf_from_objects(bodies))[0]
+
+    assert lines[0] == "Page"
+    assert lines[1:] == ["Level 1", "Level 2", "Level 3", "Level 4"]
 
 
 def test_oversized_artifact_is_refused_before_reading(tmp_path: Path) -> None:
@@ -256,6 +414,85 @@ def test_csv_numeric_cells() -> None:
     assert numeric_value("12%") == 12.0
     assert numeric_value("n/a") is None
     assert numeric_value("") is None
+
+
+def test_csv_parse_errors_become_a_plain_value_error() -> None:
+    previous = csv.field_size_limit()
+    csv.field_size_limit(4)
+    try:
+        with pytest.raises(ValueError) as caught:
+            read_csv(b"region,revenue\nemea,412300\n")
+    finally:
+        csv.field_size_limit(previous)
+
+    # Fixed sentence: the raw csv.Error text is kept only as the cause, so it
+    # can never surface to a caller.
+    assert str(caught.value) == "CSV could not be parsed"
+    assert isinstance(caught.value.__cause__, csv.Error)
+
+
+def test_csv_parse_error_on_the_answer_path_is_user_fixable(
+    tmp_path: Path,
+) -> None:
+    context, _ = workspace(tmp_path, {"abcdefgh1234.csv": b"region,revenue\nemea,412300\n"})
+    ask(context, "csv", "total revenue")  # warm the index while parsing works
+
+    previous = csv.field_size_limit()
+    csv.field_size_limit(4)
+    try:
+        # The cached index still loads; the re-parse behind the answer does not.
+        with pytest.raises(SkillHandlerError) as caught:
+            ask(context, "csv", "total revenue")
+    finally:
+        csv.field_size_limit(previous)
+
+    assert caught.value.code == "handler_error"
+    assert caught.value.user_fixable is True
+    assert "could not be answered" in caught.value.message
+    assert "field larger" not in caught.value.message
+
+
+def test_oversized_csv_cells_are_clipped_in_chunks_and_citations(
+    tmp_path: Path,
+) -> None:
+    note = " ".join(["revenue"] * 13000)
+    assert 100 * 1024 < len(note) < 128 * 1024  # ~100 KiB, still one legal cell
+    data = ("id,note\n1," + note + "\n").encode()
+    context, root = workspace(tmp_path, {"abcdefgh1234.csv": data})
+
+    output = ask(context, "csv", "revenue")
+
+    assert output["citations"], output
+    citation = output["citations"][0]
+    assert citation["locator"] == "row 2"
+    assert len(citation["text"]) <= CLIP_CHARS + 1
+    assert citation["text"].endswith("…")
+    # The 100 KiB cell must not reach the response or blow the token budget.
+    assert len(output["answer"]) <= CLIP_CHARS + 16
+    assert token_count(output["answer"]) < 200
+
+    payload = json.loads(next((root / "var" / "index").rglob("*.json")).read_text())
+    assert payload["chunks"]
+    for chunk in payload["chunks"]:
+        assert len(chunk["text"]) <= CLIP_CHARS + 1
+    assert token_count(" ".join(chunk["text"] for chunk in payload["chunks"])) < 1200
+
+
+def test_csv_cell_over_the_parser_limit_is_a_plain_fixable_error(
+    tmp_path: Path,
+) -> None:
+    # Beyond csv's field limit there is no row to clip; the request must fail
+    # with one sentence, not leak the parser's exception text.
+    data = ("id,note\n1," + "x" * 200_000 + "\n").encode()
+    context, _ = workspace(tmp_path, {"abcdefgh1234.csv": data})
+
+    with pytest.raises(SkillHandlerError) as caught:
+        ask(context, "csv", "note")
+
+    assert caught.value.code == "handler_error"
+    assert caught.value.user_fixable is True
+    assert "could not be read" in caught.value.message
+    assert "field larger" not in caught.value.message
 
 
 def test_csv_total_names_rows_and_quotes_them(tmp_path: Path) -> None:
@@ -486,6 +723,8 @@ def test_registry_envelope_validates_against_the_output_schema(tmp_path: Path) -
         ({"artifact": "nope", "kind": "pdf", "question": "q"}, "/artifact"),
         ({"artifact": "artifact:../../etc/passwd", "kind": "pdf", "question": "q"}, "/artifact"),
         ({"artifact": HANDLE, "kind": "xlsx", "question": "q"}, "/kind"),
+        ({"artifact": HANDLE, "kind": {}, "question": "q"}, "/kind"),
+        ({"artifact": HANDLE, "kind": ["pdf"], "question": "q"}, "/kind"),
         ({"artifact": HANDLE, "kind": "pdf", "question": "   "}, "/question"),
         ({"artifact": HANDLE, "kind": "pdf", "question": "q" * 1001}, "/question"),
         ({"artifact": HANDLE, "kind": "pdf", "question": "q", "max_rows": 0}, "/max_rows"),

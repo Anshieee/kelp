@@ -4,7 +4,9 @@ A chunk is the unit that gets scored and cited. Everything here is a pure
 function of the artifact bytes and the chunk parameters, so rebuilding an index
 produces byte-identical JSON. Chunk text never leaves the workspace and is
 never recombined with caller input; locators are derived only from source
-positions.
+positions. CSV row text is clipped (:func:`clip_text`) before it is chunked, so
+one oversized cell cannot dominate the token budget, and the answer builder
+clips with the same helper so a citation and its chunk always agree.
 """
 
 from __future__ import annotations
@@ -17,12 +19,14 @@ from .extract import CsvTable
 
 __all__ = [
     "Chunk",
+    "CLIP_CHARS",
     "CSV_CHUNK_ROWS",
     "MAX_CHUNK_CHARS",
     "chunk_csv",
     "chunk_pdf",
     "chunk_to_dict",
     "chunk_from_dict",
+    "clip_text",
 ]
 
 #: Chunk size target. Small enough that a top-5 selection fits a 1.2k-token
@@ -32,8 +36,27 @@ MAX_CHUNK_CHARS = 900
 CHUNK_OVERLAP_CHARS = 140
 #: CSV rows per chunk; rows stay individually addressable inside a chunk.
 CSV_CHUNK_ROWS = 12
+#: Longest row excerpt that may reach a chunk or a citation. One 100 KiB cell
+#: would otherwise blow the token budget and dominate the response, so every
+#: row is clipped to this many characters (a ``…`` marks the cut).
+CLIP_CHARS = 280
 
 _SENTENCE_SPLIT = re.compile(r"(?<=[.!?])\s+")
+
+
+def clip_text(text: str, limit: int = CLIP_CHARS) -> str:
+    """Collapse whitespace and cut to ``limit`` characters on a word boundary.
+
+    The result is always derived from ``text`` and never contains anything the
+    source did not: it is an excerpt, not a summary. The trailing ``…`` says a
+    cut happened, so a reader never mistakes an excerpt for the whole span.
+    """
+
+    text = " ".join(text.split())
+    if len(text) <= limit:
+        return text
+    cut = text[: limit + 1].rsplit(" ", 1)[0]
+    return (cut or text[:limit]).rstrip(",;:") + "…"
 
 
 @dataclass(frozen=True)
@@ -179,7 +202,9 @@ def chunk_csv(table: CsvTable) -> list[Chunk]:
 
     for index, row in enumerate(table.rows):
         number = index + 2  # row 1 is the header
-        text = ",".join(cell for cell in row)
+        # Clip per row, not per chunk: this row's excerpt is also what a
+        # citation will quote, so the two can never disagree.
+        text = clip_text(",".join(cell for cell in row))
         if group and (len(group) >= CSV_CHUNK_ROWS or size + len(text) + 1 > MAX_CHUNK_CHARS):
             flush()
         group.append((number, text))

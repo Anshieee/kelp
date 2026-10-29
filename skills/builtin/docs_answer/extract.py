@@ -4,15 +4,22 @@ Stdlib only, no network, no subprocesses. Two readers:
 
 * :func:`extract_pdf` walks the PDF object table, resolves the page tree and each
   page's ``/Contents`` streams (including objects packed into an ``/ObjStm``),
-  inflates FlateDecode streams, and replays the text operators so every line
-  keeps the page it came from. Pages are returned in document order, so
-  ``page N`` is a stable citation locator.
+  inflates FlateDecode streams, follows ``Form`` XObjects to a fixed depth, and
+  replays the text operators so every line keeps the page it came from. Inline
+  images (``BI … ID … EI``) are skipped whole: their bytes are opaque, so a
+  ``Tj`` that happens to appear inside them is never read as text. Pages are
+  returned in document order, so ``page N`` is a stable citation locator.
 * :func:`read_csv` yields a header plus logical records. Row ``N`` is the
-  record's 1-based physical line number (the header is row 1), matching the
+  1-based *record* number in file order: the header is row 1, so the first data
+  record is row 2. Records are counted after blank lines are dropped, so a blank
+  line or a quoted multi-line field does not shift the numbering. That is the
   citation convention in ``docs/CHAT_SPEC.md`` §8.1.
 
 Both readers are deliberately forgiving about syntax and strict about output:
-undecodable content is skipped, never guessed.
+undecodable content is skipped, never guessed. Byte budgets bound the total
+work: :data:`MAX_ARTIFACT_BYTES` for the file, ``_MAX_DECOMPRESSED_BYTES`` for
+one stream, and ``_TOTAL_DECOMPRESSED_BYTES`` for the whole document — so a
+crafted PDF with many small bombs cannot expand without limit.
 """
 
 from __future__ import annotations
@@ -37,6 +44,14 @@ MAX_ARTIFACT_BYTES = 64 * 1024 * 1024
 #: Ceiling on one inflated content stream, so a crafted ``/FlateDecode`` bomb
 #: cannot expand a small upload into unbounded memory.
 _MAX_DECOMPRESSED_BYTES = 32 * 1024 * 1024
+#: Ceiling on everything one document may inflate in total. A per-stream cap
+#: alone is not enough: a PDF with a thousand small bombs would each pass it.
+_TOTAL_DECOMPRESSED_BYTES = 96 * 1024 * 1024
+#: How deep ``Form`` XObjects may nest before the walk stops. Real documents
+#: stay at one or two levels; the cap keeps a cyclic document finite.
+_MAX_FORM_DEPTH = 4
+#: How far ``/Resources`` may be inherited up a ``/Parent`` chain.
+_MAX_RESOURCE_DEPTH = 8
 
 _OBJ_RE = re.compile(rb"(?<![0-9])(\d+)\s+(\d+)\s+obj\b(.*?)endobj", re.DOTALL)
 _STREAM_RE = re.compile(rb"stream\r?\n(.*?)\r?\nendstream", re.DOTALL)
@@ -49,6 +64,17 @@ _REF_RE = re.compile(rb"([0-9]+)\s+[0-9]+\s+R")
 _FLATE_RE = re.compile(rb"/Filter\s*(\[[^\]]*\]|/[A-Za-z0-9]+)")
 _FIRST_RE = re.compile(rb"/First\s+([0-9]+)")
 _N_RE = re.compile(rb"/N\s+([0-9]+)")
+_PARENT_RE = re.compile(rb"/Parent\s+([0-9]+\s+[0-9]+\s+R)")
+_XOBJECT_RE = re.compile(rb"/XObject\s*<<(.*?)>>", re.DOTALL)
+_XOBJECT_REF_RE = re.compile(rb"/XObject\s+([0-9]+\s+[0-9]+\s+R)")
+_FORM_SUBTYPE_RE = re.compile(rb"/Subtype\s*/Form(?![A-Za-z])")
+_NAME_REF_RE = re.compile(rb"(/[^\s/\[\]<>(){}%]+)\s+([0-9]+\s+[0-9]+\s+R)")
+# ``ID`` ends the inline-image dictionary and is followed by exactly one
+# whitespace byte before the opaque payload.
+_INLINE_ID_RE = re.compile(rb"(?<![A-Za-z0-9])ID\s")
+# ``EI`` stands alone between delimiters; the payload itself may contain the
+# bytes "EI", so the first whitespace-delimited match ends the image.
+_INLINE_EI_RE = re.compile(rb"\sEI(?=[\s]|$)")
 
 # Literal strings nest at most a couple of levels in practice; two levels keeps
 # the scanner linear instead of backtracking on malformed input.
@@ -105,8 +131,13 @@ def _header(body: bytes) -> bytes:
     return body if index < 0 else body[:index]
 
 
-def _decode_stream(body: bytes) -> bytes | None:
-    """Return the inflated payload for one object body, or ``None``."""
+def _decode_stream(body: bytes, *, budget: list[int] | None = None) -> bytes | None:
+    """Return the inflated payload for one object body, or ``None``.
+
+    ``budget`` is a one-element list holding the bytes the *document* may still
+    inflate; every successful decode pays into it. ``None`` means "this call
+    stands alone" and only the per-stream cap applies.
+    """
 
     match = _STREAM_RE.search(body)
     if match is None:
@@ -114,24 +145,59 @@ def _decode_stream(body: bytes) -> bytes | None:
     raw = match.group(1)
     filters = _FLATE_RE.search(_header(body))
     if filters is None:
+        if budget is not None:
+            if len(raw) > budget[0]:
+                return None
+            budget[0] -= len(raw)
         return raw
     declared = filters.group(1)
     if b"FlateDecode" not in declared and b"/Fl" not in declared:
         # Unsupported filter (image codecs, LZW, ...): not text we can read.
         return None
+    allowance = _MAX_DECOMPRESSED_BYTES
+    if budget is not None:
+        allowance = min(allowance, budget[0])
+    if allowance <= 0:
+        return None
     inflater = zlib.decompressobj()
     try:
         # ``max_length`` caps expansion; a truncated or bomb-sized stream is
         # either partially decoded or rejected, never fully materialised.
-        payload = inflater.decompress(raw, _MAX_DECOMPRESSED_BYTES)
+        payload = inflater.decompress(raw, allowance)
     except zlib.error:
         return None
+    # Charge even a rejected (partially decoded) stream: the work was done, and
+    # charging it is what makes repeated bombs exhaust the document budget.
+    if budget is not None:
+        budget[0] -= len(payload)
     if inflater.unconsumed_tail:
         return None
     return payload
 
 
-def _objects(data: bytes) -> dict[int, bytes]:
+def _skip_inline_image(stream: bytes, start: int) -> int | None:
+    """Offset just past an inline image whose ``BI`` ended at ``start``.
+
+    Everything between ``ID`` and the closing whitespace-delimited ``EI`` is
+    opaque binary. Tokens inside it must never reach the text replay: image
+    bytes routinely contain ``(``, ``Tj`` and worse, and reading them would put
+    fabricated sentences into a citation.
+
+    Returns ``None`` when no ``ID`` follows (so this was not an inline image),
+    and ``len(stream)`` when the image is unterminated — nothing after an
+    unclosed payload can be trusted.
+    """
+
+    identifier = _INLINE_ID_RE.search(stream, start)
+    if identifier is None:
+        return None
+    end = _INLINE_EI_RE.search(stream, identifier.end())
+    if end is None:
+        return len(stream)
+    return end.end()
+
+
+def _objects(data: bytes, *, budget: list[int] | None = None) -> dict[int, bytes]:
     """Map object number -> body, expanding ``/ObjStm`` containers in place."""
 
     objects: dict[int, bytes] = {}
@@ -141,7 +207,7 @@ def _objects(data: bytes) -> dict[int, bytes]:
     for body in list(objects.values()):
         if _OBJSTM_TYPE_RE.search(_header(body)) is None:
             continue
-        payload = _decode_stream(body)
+        payload = _decode_stream(body, budget=budget)
         first = _FIRST_RE.search(_header(body))
         count = _N_RE.search(_header(body))
         if payload is None or first is None or count is None:
@@ -224,8 +290,22 @@ def _string_value(token: bytes) -> str:
     return ""
 
 
-def _page_lines(stream: bytes) -> list[str]:
-    """Replay a content stream and return its lines in reading order."""
+def _page_lines(
+    stream: bytes,
+    *,
+    objects: dict[int, bytes] | None = None,
+    xobjects: dict[str, int] | None = None,
+    depth: int = 0,
+    seen: frozenset[int] = frozenset(),
+    budget: list[int] | None = None,
+) -> list[str]:
+    """Replay a content stream and return its lines in reading order.
+
+    ``objects``/``xobjects`` let ``Do`` descend into a ``Form`` XObject, whose
+    own text operators belong at that exact position in the page. The walk stops
+    at :data:`_MAX_FORM_DEPTH` and never revisits a form it is already inside, so
+    a self-referencing document cannot loop.
+    """
 
     lines: list[str] = []
     parts: list[str] = []
@@ -233,6 +313,7 @@ def _page_lines(stream: bytes) -> list[str]:
     array: list[bytes] | None = None
     space = False
     last_y: float | None = None
+    resume = 0
 
     def flush() -> None:
         nonlocal parts, space
@@ -260,6 +341,8 @@ def _page_lines(stream: bytes) -> list[str]:
             return None
 
     for match in _TOKEN_RE.finditer(stream):
+        if match.start() < resume:
+            continue
         token = match.group(0)
         if token.startswith(b"%"):
             continue
@@ -272,6 +355,14 @@ def _page_lines(stream: bytes) -> list[str]:
                 array = None
             else:
                 array.append(token)
+            continue
+        if token == b"BI":
+            # Inline image: the payload is opaque, so skip to the ``EI`` that
+            # closes it instead of tokenising binary bytes as text operators.
+            skipped = _skip_inline_image(stream, match.end())
+            if skipped is not None:
+                resume = skipped
+                operands = []
             continue
         if token.startswith((b"(", b"<", b"/")):
             operands.append(token)
@@ -320,6 +411,40 @@ def _page_lines(stream: bytes) -> list[str]:
                 last_y = y
         elif token == b"T*":
             flush()
+        elif token == b"Do":
+            name = next(
+                (
+                    operand
+                    for operand in reversed(operands)
+                    if isinstance(operand, bytes) and operand.startswith(b"/")
+                ),
+                None,
+            )
+            if name is not None and objects is not None and xobjects is not None:
+                reference = xobjects.get(name[1:].decode("latin-1"))
+                if (
+                    reference is not None
+                    and reference not in seen
+                    and depth < _MAX_FORM_DEPTH
+                ):
+                    form = objects.get(reference)
+                    payload = (
+                        _decode_stream(form, budget=budget) if form is not None else None
+                    )
+                    if payload is not None:
+                        # The form's text belongs here, in stream order.
+                        flush()
+                        lines.extend(
+                            _page_lines(
+                                payload,
+                                objects=objects,
+                                xobjects=_xobject_map(objects, form),
+                                depth=depth + 1,
+                                seen=seen | {reference},
+                                budget=budget,
+                            )
+                        )
+                        last_y = None
         elif token == b"ET":
             flush()
             last_y = None
@@ -371,6 +496,57 @@ def _page_order(objects: dict[int, bytes]) -> list[int]:
     ]
 
 
+def _xobject_map(
+    objects: dict[int, bytes], body: bytes, *, depth: int = 0
+) -> dict[str, int]:
+    """Name -> object number for the ``Form`` XObjects reachable from ``body``.
+
+    ``/Resources`` may be inline, an indirect dictionary, or inherited from a
+    ``/Parent``; all three are followed. Image XObjects are dropped: they hold
+    no text operators, and their bytes are not text.
+    """
+
+    header = _header(body)
+    inner: bytes | None = None
+    match = _XOBJECT_RE.search(header)
+    if match is not None:
+        inner = match.group(1)
+    else:
+        ref = _XOBJECT_REF_RE.search(header)
+        if ref is not None:
+            numbers = _REF_RE.findall(ref.group(1))
+            target = objects.get(int(numbers[0])) if numbers else None
+            if target is not None:
+                nested = _XOBJECT_RE.search(_header(target))
+                if nested is not None:
+                    inner = nested.group(1)
+
+    if inner is None:
+        if depth >= _MAX_RESOURCE_DEPTH:
+            return {}
+        parent = _PARENT_RE.search(header)
+        if parent is None:
+            return {}
+        numbers = _REF_RE.findall(parent.group(1))
+        target = objects.get(int(numbers[0])) if numbers else None
+        if target is None:
+            return {}
+        return _xobject_map(objects, target, depth=depth + 1)
+
+    mapping: dict[str, int] = {}
+    for name, reference in _NAME_REF_RE.findall(inner):
+        numbers = _REF_RE.findall(reference)
+        if not numbers:
+            continue
+        target = objects.get(int(numbers[0]))
+        if target is None:
+            continue
+        if _FORM_SUBTYPE_RE.search(_header(target)) is None:
+            continue
+        mapping[name[1:].decode("latin-1")] = int(numbers[0])
+    return mapping
+
+
 def _contents(objects: dict[int, bytes], page: int) -> list[bytes]:
     """Content-stream object bodies for one page, in stream order."""
 
@@ -405,16 +581,27 @@ def extract_pdf(data: bytes) -> list[list[str]]:
     if len(data) > MAX_ARTIFACT_BYTES:
         raise ValueError("artifact is larger than the reader allows")
 
-    objects = _objects(data)
+    # One budget for the whole document: object streams, page content and the
+    # Form XObjects they pull in all pay into the same allowance.
+    budget = [_TOTAL_DECOMPRESSED_BYTES]
+    objects = _objects(data, budget=budget)
     order = _page_order(objects)
 
     pages: list[list[str]] = []
     for page in order:
         lines: list[str] = []
+        xobjects = _xobject_map(objects, objects.get(page, b""))
         for stream in _contents(objects, page):
-            payload = _decode_stream(stream)
+            payload = _decode_stream(stream, budget=budget)
             if payload is not None:
-                lines.extend(_page_lines(payload))
+                lines.extend(
+                    _page_lines(
+                        payload,
+                        objects=objects,
+                        xobjects=xobjects,
+                        budget=budget,
+                    )
+                )
         pages.append(lines)
 
     if not pages:
@@ -424,9 +611,9 @@ def extract_pdf(data: bytes) -> list[list[str]]:
         for _, body in sorted(objects.items()):
             if _STREAM_RE.search(body) is None:
                 continue
-            payload = _decode_stream(body)
+            payload = _decode_stream(body, budget=budget)
             if payload is not None:
-                fallback.extend(_page_lines(payload))
+                fallback.extend(_page_lines(payload, objects=objects, budget=budget))
         if not fallback:
             raise ValueError("PDF has no readable text")
         pages = [fallback]
@@ -447,7 +634,14 @@ def _sniff_delimiter(sample: str) -> str:
 
 
 def read_csv(data: bytes) -> CsvTable:
-    """Parse CSV bytes into a header and records; row 1 is the header."""
+    """Parse CSV bytes into a header and records; row 1 is the header.
+
+    Every failure surfaces as ``ValueError`` with a fixed message: the caller
+    turns that into one user-facing sentence, so the raw exception (which can
+    quote file content) never escapes. ``csv.Error`` is included — a malformed
+    quote, a NUL byte, or a cell past the parser's field limit must not become
+    an unhandled 500.
+    """
 
     if len(data) > MAX_ARTIFACT_BYTES:
         raise ValueError("artifact is larger than the reader allows")
@@ -459,7 +653,10 @@ def read_csv(data: bytes) -> CsvTable:
     first = next((line for line in text.splitlines() if line.strip()), "")
     delimiter = _sniff_delimiter(first)
     reader = csv.reader(io.StringIO(text), delimiter=delimiter)
-    rows = [[cell.strip() for cell in row] for row in reader]
+    try:
+        rows = [[cell.strip() for cell in row] for row in reader]
+    except csv.Error as exc:
+        raise ValueError("CSV could not be parsed") from exc
     rows = [row for row in rows if any(cell for cell in row)]
     if not rows:
         raise ValueError("CSV is empty")

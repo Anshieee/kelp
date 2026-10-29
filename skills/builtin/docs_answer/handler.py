@@ -18,8 +18,12 @@ Per invocation:
 Parsing and scoring are CPU-bound, so they run in a worker thread: a large PDF
 must not stall the event loop for every other session. The handler never
 receives paths, never writes outside the workspace, never stores the question
-or a secret in the index, and never emits a citation that is not a verbatim
-slice of the artifact.
+or a secret in the index. Answers and citations are excerpts copied from the
+artifact (whitespace collapsed, clipped to a fixed budget, ``…`` when cut) — they
+are never paraphrased or synthesised. Every outgoing string additionally passes
+through :meth:`SkillContext.scrub`, which is best-effort substring redaction of
+the values this invocation was given; it is a defence in depth, not a promise
+that arbitrary file content is safe to show.
 """
 
 from __future__ import annotations
@@ -65,7 +69,7 @@ def _validate(arguments: Mapping[str, Any]) -> tuple[str, str, str, int]:
         raise _invalid("/artifact", "artifact must be an artifact:<id> handle.")
 
     kind = arguments.get("kind")
-    if kind not in KINDS:
+    if not isinstance(kind, str) or kind not in KINDS:
         raise _invalid("/kind", 'kind must be "pdf" or "csv".')
 
     question = arguments.get("question")
@@ -110,7 +114,13 @@ def _query_vector(index: Mapping[str, Any], question: str) -> list[float] | None
 def _csv_table(path: Any) -> CsvTable:
     # The index is a cache of derived text; the source rows are authoritative
     # for aggregates, so parse once more from disk (still local, still small).
-    return read_csv(path.read_bytes())
+    # A parse fault (including ``csv.Error``, already normalised to ValueError by
+    # ``read_csv``) must reach the caller as one plain sentence, never as a raw
+    # exception that could quote file content.
+    try:
+        return read_csv(path.read_bytes())
+    except OSError as exc:
+        raise ValueError("CSV content is no longer readable") from exc
 
 
 def _answer(

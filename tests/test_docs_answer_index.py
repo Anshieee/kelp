@@ -8,6 +8,8 @@ permissions, and the "no secrets, no questions" rule.
 from __future__ import annotations
 
 import asyncio
+import csv
+import hashlib
 import json
 import os
 import socket
@@ -17,6 +19,7 @@ from pathlib import Path
 import pytest
 
 from skills.builtin.docs_answer import embeddings
+from skills.builtin.docs_answer import index as index_module
 from skills.builtin.docs_answer.chunking import chunk_from_dict, chunk_to_dict
 from skills.builtin.docs_answer.handler import run
 from skills.builtin.docs_answer.index import (
@@ -293,3 +296,139 @@ def test_chunk_payload_round_trips(tmp_path: Path) -> None:
 
     first = payload["chunks"][0]
     assert chunk_to_dict(chunk_from_dict(first)) == first
+
+
+# ---------------------------------------------------------------------------
+# one read per build, and no writes outside the workspace
+# ---------------------------------------------------------------------------
+
+
+def test_ensure_index_reads_the_artifact_exactly_once(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    context, root = workspace(tmp_path, {"abcdefgh1234.csv": _table_csv()})
+    path = artifact_path(context, HANDLE, "csv")
+
+    reads: list[Path] = []
+    original = index_module._artifact_bytes
+
+    def counting(target: Path) -> bytes:
+        reads.append(target)
+        return original(target)
+
+    def second_read(*args: object, **kwargs: object) -> str:
+        raise AssertionError("the artifact must not be hashed from a second read")
+
+    monkeypatch.setattr(index_module, "_artifact_bytes", counting)
+    monkeypatch.setattr(index_module, "artifact_sha256", second_read)
+
+    result = ensure_index(root, handle=HANDLE, kind="csv", path=path)
+
+    assert reads == [path]
+    # The recorded digest describes the bytes that were chunked.
+    assert result.payload["artifact"]["sha256"] == hashlib.sha256(
+        path.read_bytes()
+    ).hexdigest()
+    assert result.payload["artifact"]["size"] == len(path.read_bytes())
+
+
+def test_ensure_index_refuses_a_symlinked_token_directory(tmp_path: Path) -> None:
+    context, root = workspace(tmp_path, {"abcdefgh1234.csv": _table_csv()})
+    path = artifact_path(context, HANDLE, "csv")
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    index_root(root).mkdir(parents=True)
+    (index_root(root) / "abcdefgh1234").symlink_to(outside)
+
+    with pytest.raises(ValueError):
+        ensure_index(root, handle=HANDLE, kind="csv", path=path)
+
+    assert list(outside.iterdir()) == []
+
+
+def test_ensure_index_refuses_a_symlinked_kind_directory(tmp_path: Path) -> None:
+    context, root = workspace(tmp_path, {"abcdefgh1234.csv": _table_csv()})
+    path = artifact_path(context, HANDLE, "csv")
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    token_dir = index_root(root) / "abcdefgh1234"
+    token_dir.mkdir(parents=True)
+    (token_dir / "csv").symlink_to(outside)
+
+    with pytest.raises(ValueError):
+        ensure_index(root, handle=HANDLE, kind="csv", path=path)
+
+    assert list(outside.iterdir()) == []
+
+
+def test_index_root_symlink_escape_is_refused(tmp_path: Path) -> None:
+    context, root = workspace(tmp_path, {"abcdefgh1234.csv": _table_csv()})
+    path = artifact_path(context, HANDLE, "csv")
+    outside = tmp_path / "outside_index"
+    outside.mkdir()
+    (root / "var" / "index").symlink_to(outside)
+
+    with pytest.raises(ValueError):
+        ensure_index(root, handle=HANDLE, kind="csv", path=path)
+    assert prune_indexes(root) == []
+    assert list(outside.iterdir()) == []
+
+
+def test_prune_does_not_delete_through_a_symlinked_token_directory(
+    tmp_path: Path,
+) -> None:
+    _, root = workspace(tmp_path, {})
+    index_root(root).mkdir(parents=True)
+    outside = tmp_path / "outside_data"
+    (outside / "csv").mkdir(parents=True)
+    (outside / "csv" / "keep.json").write_text("{}")
+    (index_root(root) / "abcdefgh1234").symlink_to(outside)
+
+    assert prune_indexes(root) == []
+
+    assert (outside / "csv" / "keep.json").is_file()
+
+
+def test_prune_does_not_run_through_a_symlinked_index_root(tmp_path: Path) -> None:
+    _, root = workspace(tmp_path, {})
+    outside = tmp_path / "outside_index"
+    (outside / "abcdefgh1234" / "csv").mkdir(parents=True)
+    (outside / "abcdefgh1234" / "csv" / "keep.json").write_text("{}")
+    (root / "var" / "index").symlink_to(outside)
+
+    assert prune_indexes(root) == []
+
+    assert (outside / "abcdefgh1234" / "csv" / "keep.json").is_file()
+
+
+def test_remove_index_unlinks_a_symlink_without_touching_its_target(
+    tmp_path: Path,
+) -> None:
+    _, root = workspace(tmp_path, {})
+    index_root(root).mkdir(parents=True)
+    outside = tmp_path / "outside_data"
+    outside.mkdir()
+    (outside / "keep.json").write_text("keep")
+    (index_root(root) / "abcdefgh1234").symlink_to(outside)
+
+    assert remove_index(root, HANDLE) is True
+
+    assert not (index_root(root) / "abcdefgh1234").is_symlink()
+    assert (outside / "keep.json").read_text() == "keep"
+
+
+def test_index_build_normalises_csv_parser_errors(tmp_path: Path) -> None:
+    context, root = workspace(tmp_path, {"abcdefgh1234.csv": _table_csv()})
+    path = artifact_path(context, HANDLE, "csv")
+
+    previous = csv.field_size_limit()
+    csv.field_size_limit(4)
+    try:
+        with pytest.raises(ValueError) as caught:
+            ensure_index(root, handle=HANDLE, kind="csv", path=path)
+    finally:
+        csv.field_size_limit(previous)
+
+    assert str(caught.value) == "CSV could not be parsed"
+    # A failed build leaves no partial index behind.
+    assert _index_files(root) == []

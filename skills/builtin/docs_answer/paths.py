@@ -37,7 +37,7 @@ def artifact_path(context: Any, handle: str, kind: str) -> Path:
 
     if not isinstance(handle, str) or not HANDLE_RE.match(handle):
         raise ValueError("artifact handle is not valid")
-    if kind not in KINDS:
+    if not isinstance(kind, str) or kind not in KINDS:
         raise ValueError("unsupported artifact kind")
 
     root = (Path(context.workspace_root) / "var" / "artifacts").resolve()
