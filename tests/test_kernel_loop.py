@@ -12,6 +12,7 @@ import pytest
 from kernel import (
     AgentLoop,
     CallableToolExecutor,
+    CancelToken,
     InMemoryUsageStore,
     KernelConfig,
     JsonlUsageStore,
@@ -413,6 +414,73 @@ def test_budget_validation() -> None:
         TurnBudget(max_tool_calls=-1)
     with pytest.raises(ValueError):
         TurnBudget(max_wall_seconds=0)
+
+
+def test_cancel_token_before_the_turn_ends_it_without_an_error() -> None:
+    store = InMemoryUsageStore()
+    token = CancelToken()
+    token.cancel()
+    loop, provider = build([text_script("never")], store=store)
+
+    result = collect(loop, [{"role": "user", "content": "hi"}], cancel=token)
+
+    assert kinds(result) == ["turn_started", "turn_finished"]
+    assert result[-1].reason == "cancelled"
+    assert result[-1].message is None
+    assert provider.requests == []
+    assert store.records[0].outcome == "cancelled"
+
+
+def test_cancel_between_provider_chunks_keeps_the_partial_text() -> None:
+    token = CancelToken()
+    store = InMemoryUsageStore()
+
+    class CancellingProvider:
+        async def stream(self, request: ChatRequest) -> Any:
+            yield TextDelta("partial")
+            token.cancel()
+            yield TextDelta("after cancel")
+            yield UsageReport(1, 1, 2)
+            yield StreamEnd("stop")
+
+    loop = AgentLoop(
+        provider=CancellingProvider(),
+        config=KernelConfig(api_key="test-key"),
+        usage_store=store,
+        model=MODEL,
+    )
+    result = collect(loop, [{"role": "user", "content": "hi"}], cancel=token)
+
+    assert kinds(result) == ["turn_started", "token_delta", "turn_finished"]
+    assert result[1].text == "partial"
+    assert result[-1].reason == "cancelled"
+    assert store.records[0].outcome == "cancelled"
+
+
+def test_cancel_during_a_tool_call_stops_before_the_next_model_step() -> None:
+    token = CancelToken()
+
+    async def executor(call: ToolCall) -> Mapping[str, Any]:
+        token.cancel()
+        return {"ok": True, "output": {}}
+
+    loop, provider = build(
+        [tool_script("stub.tool", {"n": 1}), text_script("never")],
+        executor=CallableToolExecutor(executor),
+    )
+    result = collect(loop, [{"role": "user", "content": "go"}], cancel=token)
+
+    assert kinds(result) == [
+        "turn_started",
+        "usage_updated",
+        "tool_call_started",
+        "tool_call_finished",
+        "turn_finished",
+    ]
+    assert result[-1].reason == "cancelled"
+    assert result[-1].tool_calls == 1
+    assert len(provider.requests) == 1
+    assert not [event for event in result if event.kind == "error"]
 
 
 async def _ok() -> Mapping[str, Any]:

@@ -12,6 +12,7 @@ Contract highlights (KEL-6 / P0-1):
 from __future__ import annotations
 
 import json
+import threading
 import time
 import uuid
 from dataclasses import dataclass
@@ -37,12 +38,33 @@ if TYPE_CHECKING:  # pragma: no cover - typing only
 __all__ = [
     "AgentLoop",
     "CallableToolExecutor",
+    "CancelToken",
     "RegistryToolExecutor",
     "ToolExecutor",
     "TurnBudget",
 ]
 
 MAX_TOOL_CONTENT_CHARS = 20_000
+
+
+class CancelToken:
+    """Cooperative stop signal for one turn.
+
+    The dashboard sets it from the Stop endpoint; the loop checks it between
+    provider chunks and between steps, so partial text and settled cards stay
+    exactly as streamed. Cancellation is never an error.
+    """
+
+    def __init__(self) -> None:
+        self._event = threading.Event()
+
+    def cancel(self) -> None:
+        self._event.set()
+
+    @property
+    def cancelled(self) -> bool:
+        return self._event.is_set()
+
 
 
 @dataclass(frozen=True)
@@ -142,6 +164,7 @@ class AgentLoop:
         turn_id: str | None = None,
         session_id: str | None = None,
         model: str | None = None,
+        cancel: CancelToken | None = None,
     ) -> AsyncIterator[events._Event]:
         budget = self._budget
         model = model or self._model
@@ -169,6 +192,10 @@ class AgentLoop:
         )
 
         while True:
+            if cancel is not None and cancel.cancelled:
+                reason = "cancelled"
+                break
+
             if steps >= budget.max_steps:
                 reason = "budget"
                 yield _budget_error(
@@ -211,8 +238,12 @@ class AgentLoop:
             pending: dict[int, ToolCall] = {}
             failure: ProviderFailure | None = None
             finish_reason = "stop"
+            cancelled = False
 
             async for event in self._provider.stream(request):
+                if cancel is not None and cancel.cancelled:
+                    cancelled = True
+                    break
                 if isinstance(event, TextDelta):
                     content_parts.append(event.text)
                     yield events.TokenDelta(text=event.text, step=steps)
@@ -240,6 +271,10 @@ class AgentLoop:
                     break
                 elif isinstance(event, StreamEnd):
                     finish_reason = event.finish_reason
+
+            if cancelled:
+                reason = "cancelled"
+                break
 
             if failure is not None:
                 reason = "error"
@@ -284,6 +319,9 @@ class AgentLoop:
 
             budget_exceeded = False
             for call in calls:
+                if cancel is not None and cancel.cancelled:
+                    cancelled = True
+                    break
                 if tool_calls_made >= budget.max_tool_calls:
                     budget_exceeded = True
                     break
@@ -320,6 +358,10 @@ class AgentLoop:
                         "content": _tool_content(result),
                     }
                 )
+
+            if cancelled:
+                reason = "cancelled"
+                break
 
             if budget_exceeded:
                 reason = "budget"

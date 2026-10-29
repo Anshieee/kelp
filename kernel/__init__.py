@@ -36,7 +36,14 @@ from .events import (
     TurnStarted,
     UsageUpdated,
 )
-from .loop import AgentLoop, CallableToolExecutor, RegistryToolExecutor, ToolExecutor, TurnBudget
+from .loop import (
+    AgentLoop,
+    CallableToolExecutor,
+    CancelToken,
+    RegistryToolExecutor,
+    ToolExecutor,
+    TurnBudget,
+)
 from .provider import (
     ChatRequest,
     ProviderFailure,
@@ -53,6 +60,7 @@ __all__ = [
     "API_KEY_ENV",
     "AgentLoop",
     "CallableToolExecutor",
+    "CancelToken",
     "ChatRequest",
     "DEFAULT_BACKGROUND_MODEL",
     "DEFAULT_PRIMARY_MODEL",

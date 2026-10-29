@@ -103,7 +103,7 @@ class TurnFinished(_Event):
     kind: ClassVar[str] = "turn_finished"
 
     turn_id: str
-    reason: str  # stop | length | budget | error
+    reason: str  # stop | length | budget | error | cancelled
     steps: int
     tool_calls: int
     input_tokens: int
