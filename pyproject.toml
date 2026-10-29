@@ -3,7 +3,7 @@ name = "nebius-assistant"
 version = "0.0.0"
 description = "Always-On Private Assistant: local-first agent kernel, skill contracts, dashboard"
 requires-python = ">=3.11"
-dependencies = ["jsonschema>=4.20,<5"]
+dependencies = ["jsonschema>=4.20,<5", "httpx>=0.27,<1"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

@@ -14,6 +14,9 @@ __pycache__/
 logs/
 *.log
 
+# Runtime state (usage records, scheduler, artifacts). Never commit.
+var/
+
 # Model weights (use Git LFS only if a binary is truly unavoidable)
 *.gguf
 *.safetensors
