@@ -11,9 +11,9 @@ that goes with it is [`sdlc-mindmap.svg`](sdlc-mindmap.svg), with a PNG fallback
 site embeds a copy of the SVG directly in the page, so every box there can be clicked; that copy
 and these two files must be updated together.
 
-What this snapshot rests on: `main` is at `7ad39b7`, all **616 tests pass**, and the repository is
-public. KEL-5 through KEL-10 are merged, reviewed, and done; KEL-11, KEL-12, and KEL-13 are merged
-and reviewed too, and carry M2. KEL-10, payments, carries both its paths: the Stripe saved-card
+What this snapshot rests on: `main` is at `38130fb`, all **647 tests pass**, and the repository is
+public. KEL-5 through KEL-10 are merged, reviewed, and done; KEL-11, KEL-12, KEL-13, and KEL-14 are
+merged and reviewed too, and carry M2. KEL-10, payments, carries both its paths: the Stripe saved-card
 scaffold, the Razorpay gateway, and the Razorpay hosted Checkout.
 
 KEL-10 closed on **owner confirmation on 30 October 2026** (Assume-Done). The code paths are merged
@@ -31,8 +31,13 @@ readiness: a fast liveness answer, a readiness answer that names each dependency
 probes that leak no secrets. It merged at `66228bc` from `kel-12` (head `2c94e0e`) and added 38
 tests. KEL-13 is real document search: PDF and CSV ingestion, chunking, hybrid ranking, and answers
 quoted with page and row citations. It merged at `7ad39b7` from `kel-13` (head `66ddd70`) and added
-68 tests. With the two of them in, the suite went from 510 to **616**. Still in M2: repeatable
-quality measurements and the deploy on the Nebius GPU.
+68 tests. With the two of them in, the suite went from 510 to **616**.
+
+KEL-14 then made the service observable, merged on 30 October 2026. It is one request id per call,
+JSON log lines with a fixed field list and every string scrubbed, and a Prometheus registry behind
+an authenticated route. It merged at `38130fb` from `kel-14` (head `38c3162`) and added 31 tests,
+taking the suite from 616 to **647**. Still in M2: repeatable quality measurements and the deploy on
+the Nebius GPU.
 
 ## How to read the labels
 
@@ -53,13 +58,13 @@ snapshot date.
 
 ## The map
 
-![Mind map of the delivery: milestones M0 to M4, work items KEL-5 to KEL-13, product surfaces, payments, and design.](sdlc-mindmap.svg)
+![Mind map of the delivery: milestones M0 to M4, work items KEL-5 to KEL-14, product surfaces, payments, and design.](sdlc-mindmap.svg)
 
 The same map in words, in case the image does not load:
 
 - **Milestones** — five stages, M0 to M4.
-- **The work** — nine work items, KEL-5 to KEL-13: all nine done, M1 closed, and M2 under way with
-  three pieces merged.
+- **The work** — ten work items, KEL-5 to KEL-14: all ten done, M1 closed, and M2 under way with
+  four pieces merged.
 - **Surfaces** — where you talk to the assistant: dashboard first, Telegram next, WhatsApp and voice memos later.
 - **Money** — saved cards through Stripe and hosted Checkout through Razorpay, both merged and closed out; an in-app balance later.
 - **Design** — the screen plan is written, and so is the chat spec. The chat surface code is merged; the drawing file and the browser screen are next.
@@ -78,17 +83,17 @@ promise that full-vision scope lands this week. Scope is cumulative: M2 includes
 |---|---|---|---|
 | **M0 Foundation** | 30 Oct 2026 | IN PROGRESS | The repo (public), the docs, the tests, the standard development setup, model and provider chosen, and a written list of what could go wrong. The repo, docs, tests, and skill contract are in. Still open: the automated checks, the development setup, and the threat model. |
 | **M1 Prototype** | 30 Oct 2026 | COMPLETE | The end-to-end story: ask, get an answer with sources, read a file, approve an action, pay with a saved card, watch the six-scene demo. All six work items live here, and all six are done: KEL-5 to KEL-9 were merged earlier, and KEL-10 closed on owner confirmation on 30 October 2026. |
-| **M2 Polished MVP** | 30 Oct 2026 | IN PROGRESS | Survives ordinary use: picks up after a restart, self-checks, better search over your documents, repeatable quality measurements, and a deploy on the Nebius GPU. Done so far: KEL-11, the serve entrypoint; KEL-12, health and readiness; KEL-13, real document search with citations. Measurements and the GPU deploy remain. |
+| **M2 Polished MVP** | 30 Oct 2026 | IN PROGRESS | Survives ordinary use: picks up after a restart, self-checks, better search over your documents, an honest account of what it did, repeatable quality measurements, and a deploy on the Nebius GPU. Done so far: KEL-11, the serve entrypoint; KEL-12, health and readiness; KEL-13, real document search with citations; KEL-14, structured logs and metrics. Measurements and the GPU deploy remain. |
 | **M3 Hardening** | 30 Oct 2026 | TO COME | The privacy and cost promises hold under pressure: who sees what, where keys live, caps on traffic, a retention rule, and a spend ceiling. |
 | **M4 Full vision** | 30 Oct 2026 | TO COME | More devices, work the assistant starts on its own, abilities added by others, and team sharing. A direction, not a deadline. |
 
-## The nine work items
+## The ten work items
 
 KEL-5 feeds KEL-6 and KEL-7. Those two feed KEL-8. KEL-7 also feeds KEL-10. KEL-8 comes before the
-demo, KEL-9. All nine are done. KEL-10, payments, closed M1 on owner confirmation on 30 October
+demo, KEL-9. All ten are done. KEL-10, payments, closed M1 on owner confirmation on 30 October
 2026: both of its paths were merged and reviewed earlier, and the live step was taken on the owner's
-word. KEL-11 then opened M2 with the serve entrypoint, and KEL-12 and KEL-13 followed with health
-checks and real document search.
+word. KEL-11 then opened M2 with the serve entrypoint, and KEL-12, KEL-13, and KEL-14 followed with
+health checks, real document search, and observability.
 
 ### KEL-5 — Skill contracts — DONE
 
@@ -130,7 +135,7 @@ price is counted per chunk.
 - Merge: [`d3c763e`](https://github.com/Anshieee/kelp/commit/d3c763e) (branch [`kel-6`](https://github.com/Anshieee/kelp/tree/kel-6), head `4c72afc`)
 
 Status detail: merged into `main` at `d3c763e`. The kernel suite is 43 tests — 25 for the loop and
-18 for the streaming client — and passes with the rest of the 616. The review written up in
+18 for the streaming client — and passes with the rest of the 647. The review written up in
 [`docs/REVIEW_KEL6_KEL7.md`](REVIEW_KEL6_KEL7.md) signed off, and KEL-8 built on top of it.
 
 ### KEL-7 — Approval gate — DONE
@@ -173,7 +178,7 @@ showing where an answer came from, and approval requests shown in the conversati
 Status detail: merged into `main` at `e0bbb72`. The chat surface is in: named threads that can be
 reopened, an append-only stream of events, a card for each tool step, approvals shown in the
 conversation over the KEL-7 gate, artifacts, and a cooperative cancel token so Stop works. The chat
-suite is 86 tests, part of the 616. The spec is on `main` at 1,164 lines; the review fixes that
+suite is 86 tests, part of the 647. The spec is on `main` at 1,164 lines; the review fixes that
 shaped it landed at `56b0785`:
 
 - **Honest dependencies (M1).** The web search, GitHub read, and document handlers are still stubs.
@@ -406,6 +411,54 @@ rejected bomb. Retention is deliberately lazy: deleting an artifact does not del
 spot, but the next question prunes the orphaned entry, and `remove_index` is the explicit hook for a
 caller that needs an instant guarantee.
 
+### KEL-14 — Observability — DONE
+
+Every request gets one id, and that id follows the work: the response carries it, and so does every
+log line the request produces. Logs are one JSON object per line on stdout with a fixed, small field
+list — request id, thread, turn, tool, status, method, route, duration, model, tokens, cost, outcome,
+error code — and every string value passes through the secret scrubber the audit trail already uses.
+Free text is dropped, not truncated, so a prompt, a document, a tool argument, or an answer cannot
+reach the log by naming a field. Metrics are a small Prometheus registry served as text at
+`/api/metrics`, behind the same authentication as the rest of the API: HTTP requests and latency,
+turns and their duration, tokens and cost, tool calls by name and status, approval wait, stream
+resumes, and boot recoveries. Labels are scrubbed and length-capped, and a model-authored tool name is
+resolved against the tools actually offered before it can become a label.
+
+*Why it matters:* when a turn goes wrong, the useful question is which request, which turn, which
+tool or model call, and how long it took. An id that follows the work and a counter that moves answer
+it; a log full of payload text answers it by leaking the thing the service is trusted with.
+
+*Plain words:* a **request id** is a short label on one call so every line about it can be found
+together. A **JSON log line** is a log entry written as labelled fields instead of a sentence, so a
+machine can filter it. **Prometheus** is a common way to publish numbers a monitor can scrape, and a
+**histogram** is a set of buckets showing how long things usually take. A **label** is a tag on a
+number, and keeping labels bounded stops the number of series from exploding.
+
+- Linear: https://linear.app/kelp-ai/issue/KEL-14/m2-d-observability-structured-json-logs-prometheus-metrics
+- Logging: [`chat/logging.py`](https://github.com/Anshieee/kelp/blob/main/chat/logging.py) (main)
+- Metrics: [`chat/metrics.py`](https://github.com/Anshieee/kelp/blob/main/chat/metrics.py)
+- HTTP surface: [`chat/api.py`](https://github.com/Anshieee/kelp/blob/main/chat/api.py)
+- Correlation: [`chat/service.py`](https://github.com/Anshieee/kelp/blob/main/chat/service.py)
+- Wiring: [`chat/server.py`](https://github.com/Anshieee/kelp/blob/main/chat/server.py)
+- Tests: [`tests/test_logging.py`](https://github.com/Anshieee/kelp/blob/main/tests/test_logging.py) and
+  [`tests/test_metrics.py`](https://github.com/Anshieee/kelp/blob/main/tests/test_metrics.py)
+- Merge: [`38130fb`](https://github.com/Anshieee/kelp/commit/38130fb) (branch
+  [`kel-14`](https://github.com/Anshieee/kelp/tree/kel-14), head `38c3162`)
+
+Status detail: merged into `main` at `38130fb`, adding 31 tests to a suite of 647 — 11 for the logging
+contract and 20 for the metrics registry, the route, and the correlation path. The review fixed three
+behaviour bugs and four smaller ones before the merge. A histogram keeps a per-key observation total,
+so a value above the largest finite bucket still lands in `+Inf` and in `_count` instead of being
+dropped, and a non-finite value is refused rather than poisoning `_sum`. An unknown or crafted tool
+name collapses to one fixed bucket, so it can neither mint a metric series nor inject a second log
+line. Error codes are threaded into the tool-call log and audit entries and the turn-finished path,
+shape-checked and kept out of labels, and the turn catch-all records only the exception type name.
+Request ids are matched in full, so a trailing newline is rejected and an invalid id is never echoed.
+Usage rows from the JSONL and in-memory stores are normalised to one shape, and the usage line says
+whether the cost and the reported usage are known. JSON is emitted with non-finite numbers refused,
+and the stock HTTP request logger is silenced, so the structured access line is the only record and
+no unredacted request line reaches stderr.
+
 ## Decisions that shape the map
 
 ### Surfaces
@@ -442,7 +495,7 @@ caller that needs an instant guarantee.
 ### GitHub
 
 - Repository (public): https://github.com/Anshieee/kelp
-- Shared copy of the code: https://github.com/Anshieee/kelp/tree/main — head `7ad39b7`
+- Shared copy of the code: https://github.com/Anshieee/kelp/tree/main — head `38130fb`
 - All branches: https://github.com/Anshieee/kelp/branches
   - `kel-5` — merged (`b8de92f`)
   - `kel-6` — merged at `d3c763e`; branch head `4c72afc`
@@ -456,9 +509,10 @@ caller that needs an instant guarantee.
   - `kel-11` — merged at `33994ab`; branch head `46ba746`
   - `kel-12` — merged at `66228bc`; branch head `2c94e0e`
   - `kel-13` — merged at `7ad39b7`; branch head `66ddd70`
+  - `kel-14` — merged at `38130fb`; branch head `38c3162`
 - Change history: https://github.com/Anshieee/kelp/commits/main
 - Pull requests: https://github.com/Anshieee/kelp/pulls
-- Tests: 616 pass on `main` (`python -m pytest`); `make demo` plays all six beats
+- Tests: 647 pass on `main` (`python -m pytest`); `make demo` plays all six beats
 
 ### Linear
 
@@ -473,7 +527,8 @@ caller that needs an instant guarantee.
   [KEL-10](https://linear.app/kelp-ai/issue/KEL-10/wallet-stripe-saved-cards-setupintent-attach-list-propose-approve),
   [KEL-11](https://linear.app/kelp-ai/issue/KEL-11/m2-a-serve-entrypoint-boot-graceful-shutdown-restartresume),
   [KEL-12](https://linear.app/kelp-ai/issue/KEL-12/m2-b-health-and-readiness-healthz-readyz-with-dependency-checks),
-  [KEL-13](https://linear.app/kelp-ai/issue/KEL-13/m2-c-retrieval-real-docsanswer-with-pdfcsv-chunking-ranking-citations)
+  [KEL-13](https://linear.app/kelp-ai/issue/KEL-13/m2-c-retrieval-real-docsanswer-with-pdfcsv-chunking-ranking-citations),
+  [KEL-14](https://linear.app/kelp-ai/issue/KEL-14/m2-d-observability-structured-json-logs-prometheus-metrics)
 
 ### Docs and code
 
