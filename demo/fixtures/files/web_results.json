@@ -1,0 +1,23 @@
+{
+  "backend": "fixture",
+  "results": [
+    {
+      "title": "Nebius AI Cloud pricing",
+      "url": "https://nebius.com/prices",
+      "snippet": "On-demand NVIDIA H200 capacity is listed at $2.49 per GPU-hour.",
+      "published_at": "2026-10-01"
+    },
+    {
+      "title": "Nebius raises capacity in eu-north-1",
+      "url": "https://nebius.com/blog/eu-north-1-capacity",
+      "snippet": "Additional H200 and L40S capacity is available in the eu-north-1 region.",
+      "published_at": "2026-09-24"
+    },
+    {
+      "title": "Reserved vs spot GPU billing",
+      "url": "https://nebius.com/docs/billing/gpu",
+      "snippet": "Reserved capacity is billed monthly; spot capacity is billed per minute.",
+      "published_at": "2026-08-30"
+    }
+  ]
+}

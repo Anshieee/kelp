@@ -1,0 +1,35 @@
+{
+  "repo": {
+    "full_name": "Anshieee/nebius-nvidia",
+    "description": "Always-On Private Assistant prototype (demo fixture).",
+    "default_branch": "main",
+    "private": false,
+    "html_url": "https://github.com/Anshieee/nebius-nvidia",
+    "open_issues_count": 4
+  },
+  "issue": {
+    "number": 12,
+    "title": "Demo: resume a thread after the server is killed",
+    "state": "open",
+    "html_url": "https://github.com/Anshieee/nebius-nvidia/issues/12",
+    "labels": ["area/ux", "phase/prototype"],
+    "body": "A turn killed mid-stream must come back as interrupted, with no duplicate user message."
+  },
+  "pull_request": {
+    "number": 34,
+    "title": "feat(chat): KEL-8 dashboard chat surface",
+    "state": "closed",
+    "merged": true,
+    "html_url": "https://github.com/Anshieee/nebius-nvidia/pull/34",
+    "head": "kel-8-build",
+    "base": "main",
+    "body": "Threads, SSE, cards, approvals, artifacts."
+  },
+  "file": {
+    "path": "README.md",
+    "ref": "main",
+    "content": "# Nebius assistant\n\nLocal-first agent kernel with skill contracts.\n",
+    "encoding": "utf-8",
+    "size": 66
+  }
+}
