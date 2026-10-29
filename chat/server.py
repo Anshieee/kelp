@@ -9,12 +9,14 @@
   ``ChatAPI``;
 * run boot recovery exactly once, before the socket starts accepting;
 * serve the authenticated ``/api/*`` surface until ``SIGTERM`` / ``SIGINT``;
-* close the HTTP server, event loop, database, and lock on the way out.
+* cancel and settle in-flight turns as ``interrupted`` (§10.4), then close the
+  HTTP server, event loop, database, and lock.
 
 ``--check`` validates the same configuration and skill registry without
-opening the database or binding a port. Errors are one line, never include a
-secret value, and exit non-zero so a supervisor can fail fast. The process
-refuses to start when another live process holds the database lock.
+opening the database, binding a port, or creating any directory: the tree is
+left byte-identical. Errors are one line, never include a secret value, and
+exit non-zero so a supervisor can fail fast. The process refuses to start when
+another live process holds the database lock.
 """
 
 from __future__ import annotations
@@ -74,6 +76,8 @@ DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 8765
 _AUDIT_FILENAME = "audit.jsonl"
 _USAGE_FILENAME = "usage.jsonl"
+# Generous enough for approval unwinding, short enough to never hang a stop.
+_TURN_SHUTDOWN_SECONDS = 10.0
 
 
 class ServerError(Exception):
@@ -124,6 +128,29 @@ def _parse_port(raw: str) -> int:
             "invalid_config", f"{PORT_ENV} must be an integer between 0 and 65535."
         )
     return port
+
+
+def _mkdir_private(directory: Path) -> None:
+    """Create ``directory`` (and missing parents), setting ``0o700`` only there.
+
+    Directories that already exist keep their own mode: the server adopts a
+    pre-existing layout, it does not re-permission the owner's filesystem.
+    """
+
+    missing: list[Path] = []
+    current = directory
+    while not current.exists():
+        missing.append(current)
+        parent = current.parent
+        if parent == current:  # pragma: no cover - filesystem root
+            break
+        current = parent
+    directory.mkdir(parents=True, exist_ok=True)
+    for created in reversed(missing):
+        try:
+            os.chmod(created, 0o700)
+        except OSError:  # pragma: no cover - platform dependent
+            pass
 
 
 @dataclass(frozen=True)
@@ -203,26 +230,46 @@ class ServerConfig:
     def usage_path(self) -> Path:
         return self.usage_dir / _USAGE_FILENAME
 
-    def ensure_directories(self) -> None:
-        """Create the state layout now, with owner-only permissions."""
+    def check_layout(self) -> None:
+        """Validate the state layout without creating or modifying anything.
 
-        for directory in (
-            self.db_path.parent,
-            self.artifact_dir,
-            self.audit_dir,
-            self.usage_dir,
-            self.workspace_root,
-        ):
-            directory.mkdir(parents=True, exist_ok=True)
-            try:
-                os.chmod(directory, 0o700)
-            except OSError:  # pragma: no cover - platform dependent
-                pass
+        ``--check`` is a dry run: a supervisor can call it on a machine where
+        the server is not allowed to write yet, and it must leave the tree
+        byte-identical.
+        """
+
         if self.db_path.exists() and self.db_path.is_dir():
             raise ConfigError(
                 "invalid_config",
                 f"{DB_PATH_ENV} points at a directory, not a database file.",
             )
+        for directory in self._state_directories():
+            if directory.exists() and not directory.is_dir():
+                raise ConfigError(
+                    "invalid_config",
+                    f"{directory} exists but is not a directory.",
+                )
+
+    def _state_directories(self) -> tuple[Path, ...]:
+        return (
+            self.db_path.parent,
+            self.artifact_dir,
+            self.audit_dir,
+            self.usage_dir,
+            self.workspace_root,
+        )
+
+    def ensure_directories(self) -> None:
+        """Create the state layout now; tighten only what this call created.
+
+        A directory that already exists is the owner's: its mode is left
+        untouched, so a pre-existing ``0755`` directory stays ``0755``. Only
+        directories missing at call time are created and given ``0o700``.
+        """
+
+        self.check_layout()
+        for directory in self._state_directories():
+            _mkdir_private(directory)
 
     def __repr__(self) -> str:
         return (
@@ -255,11 +302,7 @@ class DatabaseLock:
         self._fd: int | None = None
 
     def acquire(self) -> "DatabaseLock":
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        try:
-            os.chmod(self.path.parent, 0o700)
-        except OSError:  # pragma: no cover - platform dependent
-            pass
+        _mkdir_private(self.path.parent)
         fd = os.open(self.path, os.O_RDWR | os.O_CREAT, 0o600)
         try:
             fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
@@ -311,6 +354,10 @@ class Application:
         if self._closed:
             return
         self._closed = True
+        # Turns first: cancel and await them while the loop and the store are
+        # still alive, so each one ends ``interrupted`` (§10.4) instead of
+        # vanishing with the process.
+        self._close_turns()
         if self.owns_provider and self.provider is not None:
             aclose = getattr(self.provider, "aclose", None)
             if aclose is not None:
@@ -325,6 +372,15 @@ class Application:
                 self.store.close()
             finally:
                 self.lock.release()
+
+    def _close_turns(self) -> None:
+        aclose = getattr(self.service, "aclose", None)
+        if aclose is None:  # pragma: no cover - ChatService always has aclose
+            return
+        try:
+            self.api.runner.run(aclose(), timeout=_TURN_SHUTDOWN_SECONDS)
+        except Exception:  # noqa: BLE001 - shutdown must not mask exit
+            pass
 
     def __enter__(self) -> "Application":
         return self
@@ -516,7 +572,10 @@ def main(argv: Sequence[str] | None = None, *, env: Mapping[str, str] | None = N
     parser.add_argument(
         "--check",
         action="store_true",
-        help="validate configuration and skill manifests, then exit",
+        help=(
+            "validate configuration and skill manifests, then exit "
+            "(creates no files or directories)"
+        ),
     )
     args = parser.parse_args(argv)
 
@@ -528,7 +587,8 @@ def main(argv: Sequence[str] | None = None, *, env: Mapping[str, str] | None = N
 
     if args.check:
         try:
-            config.ensure_directories()
+            # Read-only: no directory is created, no file is touched.
+            config.check_layout()
             SkillRegistry.load(config.skill_root)
         except ServerError as error:
             _emit_error(error)

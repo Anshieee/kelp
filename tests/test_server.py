@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+import hashlib
 import http.client
 import json
 import os
@@ -9,6 +11,7 @@ import re
 import select
 import signal
 import sqlite3
+import stat
 import subprocess
 import sys
 import time
@@ -38,6 +41,23 @@ class NoopProvider:
     async def stream(self, request):  # pragma: no cover - assertions protect it
         raise AssertionError("no turn should run")
         yield  # pragma: no cover - makes this an async generator
+
+
+class SlowProvider:
+    """A provider that streams long enough for a stop signal to land mid-turn."""
+
+    def __init__(self, deltas: int = 300, delay: float = 0.02):
+        self.deltas = deltas
+        self.delay = delay
+
+    async def stream(self, request):
+        from kernel.provider import StreamEnd, TextDelta, UsageReport
+
+        for index in range(self.deltas):
+            await asyncio.sleep(self.delay)
+            yield TextDelta(f"token-{index} ")
+        yield UsageReport(10, self.deltas, self.deltas + 10)
+        yield StreamEnd("stop")
 
 
 def _env(root: Path, **overrides: str) -> dict[str, str]:
@@ -117,6 +137,59 @@ def _get(port: int, path: str, token: str | None = None) -> tuple[int, bytes]:
         return response.status, response.read()
     finally:
         connection.close()
+
+
+def _post(
+    port: int,
+    path: str,
+    payload: dict[str, object],
+    *,
+    token: str | None = None,
+    csrf: str | None = None,
+) -> tuple[int, bytes]:
+    connection = http.client.HTTPConnection("127.0.0.1", port, timeout=10)
+    headers = {"Content-Type": "application/json"}
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    if csrf:
+        headers["X-CSRF-Token"] = csrf
+    try:
+        connection.request("POST", path, body=json.dumps(payload), headers=headers)
+        response = connection.getresponse()
+        return response.status, response.read()
+    finally:
+        connection.close()
+
+
+def _mode(path: Path) -> int:
+    return stat.S_IMODE(path.stat().st_mode)
+
+
+_ACCESS_LOG = re.compile(r'^127\.0\.0\.1 - - \[[^\]]+\] "[^"]*" \d{3} -$')
+
+
+def _shutdown_noise(stderr: str) -> str:
+    """``stderr`` minus the HTTP adapter's access log (one line per request)."""
+
+    return "\n".join(
+        line
+        for line in stderr.splitlines()
+        if line.strip() and not _ACCESS_LOG.match(line)
+    )
+
+
+def _tree_snapshot(root: Path) -> list[tuple[str, int, int, str]]:
+    """Every entry under ``root``: name, mode, size, content digest."""
+
+    entries: list[tuple[str, int, int, str]] = []
+    for path in sorted(root.rglob("*")):
+        relative = str(path.relative_to(root))
+        if path.is_dir():
+            entries.append((relative, _mode(path), 0, ""))
+        else:
+            digest = hashlib.sha256(path.read_bytes()).hexdigest()
+            entries.append((relative, _mode(path), path.stat().st_size, digest))
+    return entries
 
 
 def _wait_for_token(db_path: Path, timeout: float = 10.0) -> None:
@@ -251,6 +324,43 @@ def test_check_mode_is_a_dry_run_with_no_secret_output(
     assert not Path(env["KELP_DB_PATH"] + ".lock").exists()
 
 
+def test_check_mode_leaves_the_tree_byte_identical(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    env = _env(tmp_path)
+    db_dir = tmp_path / "db"
+    db_dir.mkdir()
+    db_dir.chmod(0o755)
+    (db_dir / "seed.txt").write_text("untouched", encoding="utf-8")
+    before = _tree_snapshot(tmp_path)
+
+    assert main(["--check"], env=env) == 0
+    capsys.readouterr()
+
+    assert _tree_snapshot(tmp_path) == before
+    assert not (tmp_path / "artifacts").exists()
+    assert not (tmp_path / "audit").exists()
+    assert not (tmp_path / "usage").exists()
+    assert not (tmp_path / "workspace").exists()
+    assert _mode(db_dir) == 0o755
+
+
+def test_ensure_directories_never_rechmods_existing_directories(tmp_path: Path) -> None:
+    config = ServerConfig.from_env(_env(tmp_path))
+    preexisting = [tmp_path / "db", tmp_path / "artifacts"]
+    for directory in preexisting:
+        directory.mkdir(parents=True)
+        directory.chmod(0o755)
+
+    config.ensure_directories()
+
+    for directory in preexisting:
+        assert _mode(directory) == 0o755
+    for created in ("audit", "usage", "workspace"):
+        # Only what this call created is tightened to owner-only.
+        assert _mode(tmp_path / created) == 0o700
+
+
 # -- documented command, auth, and clean SIGTERM ---------------------------
 
 
@@ -305,6 +415,191 @@ def test_sigint_closes_the_server_cleanly(tmp_path: Path) -> None:
     assert code == 0
     assert API_KEY not in out + err
     assert AUTH_TOKEN not in out + err
+
+
+def test_preexisting_directory_mode_survives_check_and_serve(tmp_path: Path) -> None:
+    """The process adopts an existing 0755 layout; it never re-permissions it."""
+
+    env = _subprocess_env(tmp_path)
+    db_dir = tmp_path / "db"
+    db_dir.mkdir()
+    db_dir.chmod(0o755)
+
+    checked = subprocess.run(
+        [sys.executable, "-m", "chat.server", "--check"],
+        cwd=ROOT,
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=20,
+    )
+    assert checked.returncode == 0, checked.stderr
+    assert _mode(db_dir) == 0o755
+    assert not (tmp_path / "audit").exists()
+
+    proc = subprocess.Popen(
+        [sys.executable, "-m", "chat.server"],
+        cwd=ROOT,
+        env=env,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        bufsize=1,
+    )
+    try:
+        line = _read_line(proc)
+        assert "listening" in line, line
+        status, _body = _get(_port_from_line(line), "/api/health", token=AUTH_TOKEN)
+        assert status == 200
+    finally:
+        code, out, err = _stop(proc)
+
+    assert code == 0
+    assert API_KEY not in out + err
+    assert _mode(db_dir) == 0o755
+    # Directories this process created are still owner-only.
+    assert _mode(tmp_path / "audit") == 0o700
+    assert _mode(tmp_path / "usage") == 0o700
+
+
+# -- shutdown settles in-flight turns (§10.4) ------------------------------
+
+CSRF_TOKEN = "csrf-token-for-shutdown-tests"
+
+_CHILD_SLOW_SERVE = r'''
+import asyncio, sys
+
+import chat.server as server
+from kernel.provider import StreamEnd, TextDelta, UsageReport
+
+
+class SlowProvider:
+    async def stream(self, request):
+        for index in range(600):
+            await asyncio.sleep(0.02)
+            yield TextDelta(f"token-{index} ")
+        yield UsageReport(10, 600, 610)
+        yield StreamEnd("stop")
+
+
+server.TokenFactoryClient = lambda config: SlowProvider()
+sys.exit(server.main([]))
+'''
+
+
+def test_application_close_cancels_an_active_turn_as_interrupted(
+    tmp_path: Path,
+) -> None:
+    env = _env(tmp_path)
+    config = ServerConfig.from_env(env)
+    app = build_app(config, provider=SlowProvider(), environ=env)
+    thread = app.service.create_thread()
+    payload, created = app.api.runner.run(
+        app.service.send(
+            thread["id"],
+            text="hold this turn open",
+            client_turn_id="ct-close",
+        )
+    )
+    assert created is True
+    _wait_for_token(config.db_path)
+
+    app.close()
+
+    # The turn task was cancelled *and* awaited: nothing is left to be
+    # destroyed when the loop closes.
+    assert app.service._tasks == {}  # noqa: SLF001 - shutdown invariant
+    turn_id = payload["turn_id"]
+
+    store = ChatStore(config.db_path)
+    try:
+        turn = store.get_turn(turn_id)
+        assert turn is not None
+        assert turn["state"] == "finished"
+        assert turn["reason"] == "interrupted"
+        message = store.get_message(payload["assistant_message_id"])
+        assert message is not None
+        assert message["status"] == "interrupted"
+        assert any(
+            block.get("type") == "text" and block.get("text")
+            for block in message["blocks"]
+        )
+        events = store.events_after(thread["id"])
+        finished = [event for event in events if event["type"] == "turn_finished"]
+        assert len(finished) == 1
+        assert finished[0]["reason"] == "interrupted"
+        assert store.list_approvals(status="pending") == []
+    finally:
+        store.close()
+
+
+def test_sigterm_mid_turn_ends_interrupted_without_destroyed_tasks(
+    tmp_path: Path,
+) -> None:
+    env = _subprocess_env(tmp_path, KELP_CSRF_TOKEN=CSRF_TOKEN)
+    script = tmp_path / "serve_slow.py"
+    script.write_text(_CHILD_SLOW_SERVE, encoding="utf-8")
+    db_path = Path(env["KELP_DB_PATH"])
+
+    proc = subprocess.Popen(
+        [sys.executable, str(script)],
+        cwd=ROOT,
+        env=env,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        bufsize=1,
+    )
+    try:
+        line = _read_line(proc)
+        assert "listening" in line, line
+        port = _port_from_line(line)
+
+        status, body = _post(
+            port, "/api/threads", {"title": "shutdown"}, token=AUTH_TOKEN, csrf=CSRF_TOKEN
+        )
+        assert status == 201, body
+        thread_id = json.loads(body)["thread"]["id"]
+
+        status, body = _post(
+            port,
+            f"/api/threads/{thread_id}/turns",
+            {"text": "hold this turn open", "client_turn_id": "ct-sigterm"},
+            token=AUTH_TOKEN,
+            csrf=CSRF_TOKEN,
+        )
+        assert status == 202, body
+        started = json.loads(body)
+        _wait_for_token(db_path)
+    finally:
+        code, out, err = _stop(proc)
+
+    assert code == 0
+    assert API_KEY not in out + err
+    assert AUTH_TOKEN not in out + err
+    # Clean stderr: no traceback, no "Task was destroyed but it is pending!",
+    # no "coroutine was never awaited" from the cancelled provider stream. The
+    # adapter's access log is noise, not a shutdown warning.
+    assert _shutdown_noise(err) == "", err
+    assert "Task was destroyed" not in out + err
+    assert "never awaited" not in out + err
+    assert "Traceback" not in out + err
+
+    store = ChatStore(db_path)
+    try:
+        turn = store.get_turn(started["turn_id"])
+        assert turn is not None
+        assert turn["state"] == "finished"
+        assert turn["reason"] == "interrupted"
+        message = store.get_message(started["assistant_message_id"])
+        assert message is not None
+        assert message["status"] == "interrupted"
+        events = store.events_after(thread_id)
+        finished = [event for event in events if event["type"] == "turn_finished"]
+        assert len(finished) == 1
+        assert finished[0]["reason"] == "interrupted"
+    finally:
+        store.close()
 
 
 def test_second_instance_refuses_the_same_database(tmp_path: Path) -> None:
