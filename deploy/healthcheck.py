@@ -19,6 +19,7 @@ The script uses only the standard library: the runtime image needs no curl.
 from __future__ import annotations
 
 import argparse
+import http.client
 import json
 import os
 import re
@@ -33,6 +34,11 @@ DEFAULT_PORT = 8765
 DEFAULT_TIMEOUT = 4.0
 #: A readiness body is small; refuse to buffer anything larger.
 MAX_BODY = 64 * 1024
+#: Everything the probe treats as "the socket answered badly", not as a crash.
+#: ``HTTPError`` is handled below as a real answer; ``HTTPException`` covers a
+#: malformed status line or a truncated chunked body, which urllib does not wrap
+#: in ``URLError`` and which would otherwise surface as a traceback.
+FETCH_ERRORS = (urllib.error.URLError, http.client.HTTPException, OSError, ValueError)
 #: Interface wildcards are not dialable; the probe talks to loopback instead.
 _WILDCARD_HOSTS = frozenset({"", "0.0.0.0", "::", "[::]", "*"})
 #: Detail codes HealthProbe emits today. Anything else is reported as unknown.
@@ -215,7 +221,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             return 2
         try:
             code, message = probe_readiness(url, token=token, timeout=timeout)
-        except (urllib.error.URLError, OSError, ValueError) as error:
+        except FETCH_ERRORS as error:
             # Type only: a URLError message can embed the URL and a hostname.
             _emit(
                 args.json,
@@ -230,7 +236,7 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     try:
         status, body = _fetch(f"{url}/api/healthz", token=None, timeout=timeout)
-    except (urllib.error.URLError, OSError, ValueError) as error:
+    except FETCH_ERRORS as error:
         _emit(
             args.json,
             False,

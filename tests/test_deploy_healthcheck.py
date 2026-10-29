@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import socket
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -75,6 +76,35 @@ def server() -> Iterator[tuple[str, type[_Handler]]]:
 def _set_response(handler: type[_Handler], status: int, body: Any) -> None:
     handler.status = status
     handler.body = body
+
+
+@pytest.fixture
+def garbage_server() -> Iterator[str]:
+    """A socket that accepts one connection and answers with a non-HTTP line."""
+
+    listener = socket.socket()
+    listener.bind(("127.0.0.1", 0))
+    listener.listen(1)
+    port = int(listener.getsockname()[1])
+
+    def serve() -> None:
+        try:
+            conn, _ = listener.accept()
+            with conn:
+                conn.recv(1024)
+                conn.sendall(b"not-http\r\n\r\n")
+        except OSError:  # the client hung up first; the test still asserts below
+            pass
+        finally:
+            listener.close()
+
+    thread = threading.Thread(target=serve, daemon=True)
+    thread.start()
+    try:
+        yield f"http://127.0.0.1:{port}"
+    finally:
+        listener.close()
+        thread.join(timeout=5)
 
 
 # -- URL construction --------------------------------------------------------
@@ -184,6 +214,30 @@ def test_live_fails_when_nothing_is_listening(capsys: pytest.CaptureFixture[str]
     assert healthcheck.main(["--live", "--url", "http://127.0.0.1:9"]) == 1
     err = capsys.readouterr().err
     assert "healthz unreachable" in err
+
+
+def test_live_survives_a_malformed_http_answer(
+    garbage_server: str, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # `http.client` raises BadStatusLine (an HTTPException, not a URLError) for
+    # this; the probe must report and exit 1 rather than die with a traceback.
+    assert healthcheck.main(["--live", "--url", garbage_server]) == 1
+    err = capsys.readouterr().err
+    assert "healthz unreachable" in err
+    assert "Traceback" not in err
+
+
+def test_ready_survives_a_malformed_http_answer(
+    garbage_server: str,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.setenv("KELP_AUTH_TOKEN", SECRET)
+
+    assert healthcheck.main(["--ready", "--url", garbage_server]) == 1
+    captured = capsys.readouterr()
+    assert "readyz unreachable" in captured.err
+    assert SECRET not in captured.out + captured.err
 
 
 # -- readiness ---------------------------------------------------------------

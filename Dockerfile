@@ -6,7 +6,12 @@
 # the `/data` volume. Build args carry the release identity that `/api/healthz`
 # and `/api/readyz` report, so a probe proves which commit is running.
 #
-#   docker build --build-arg KELP_GIT_COMMIT=$(git rev-parse --short HEAD) -t kelp:local .
+#   docker build --build-arg KELP_GIT_COMMIT=$(git rev-parse --short HEAD) -t kelp:<tag> .
+#
+# This is the only build path: `docker-compose.yml` has no `build:` section and
+# the systemd unit runs `up --no-build`, so a deploy cannot silently rebuild and
+# lose the tag it claims to run. Record the tag in `/opt/kelp/.env` afterwards
+# (docs/DEPLOY.md §4).
 #
 # Runtime contract:
 #   user/group  10001:10001 (kelp), no shell, no home outside /data

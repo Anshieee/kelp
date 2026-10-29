@@ -4,7 +4,8 @@
 - **Branch:** `kel-16`, cut from `origin/main` at `e08b027`
 - **Scope:** one container image, one Compose service, one systemd wrapper, one
   health probe, one `/data` volume. No application code changed.
-- **Tests:** `tests/test_deploy_healthcheck.py` (23 cases); full suite 670 passed
+- **Tests:** `tests/test_deploy_healthcheck.py` (25 cases) and
+  `tests/test_deploy_assets.py` (40 cases); full suite 712 passed
 - **Not in scope:** evals, chat/turn logic, payments, the tracker site, and any
   actual server. Nothing here was deployed to Nebius; every command below was
   executed locally against this image and is reported with its measured time.
@@ -40,9 +41,10 @@ service is a thin client of Token Factory, so a 2 vCPU / 4 GB VM is enough
 |---|---|
 | `Dockerfile` | Two-stage build: dependencies resolved from `pyproject.toml` into a venv, runtime is `python:3.12-slim` with no compiler, runs as `10001:10001` |
 | `.dockerignore` | Keeps secrets, state, tests, docs, and VCS metadata out of the build context |
-| `docker-compose.yml` | The supported deployment: read-only rootfs, dropped capabilities, loopback publish, 1 GiB / 2 CPU, healthcheck, log rotation |
-| `deploy/kelp.env.example` | The environment contract; copy to `deploy/kelp.env` (0600, gitignored) |
-| `deploy/kelp.service` | systemd wrapper so the deployment starts at boot |
+| `docker-compose.yml` | The supported deployment: image-only (never builds), read-only rootfs, dropped capabilities, loopback publish, 1 GiB / 2 CPU, healthcheck, log rotation. `KELP_IMAGE` is required with no default |
+| `deploy/compose.env.example` | Compose interpolation variables (`KELP_IMAGE`, `KELP_PUBLISH_PORT`); copy to `/opt/kelp/.env`, no secrets |
+| `deploy/kelp.env.example` | The container environment contract; copy to `deploy/kelp.env` (0600, gitignored) |
+| `deploy/kelp.service` | systemd wrapper so the deployment starts at boot; loads `/opt/kelp/.env`, runs `up -d --no-build`, refuses to start without the tag |
 | `deploy/healthcheck.py` | Stdlib-only probe used by `HEALTHCHECK` and the smoke steps |
 
 ---
@@ -53,6 +55,17 @@ service is a thin client of Token Factory, so a 2 vCPU / 4 GB VM is enough
   is sufficient). Open only `22`, `80`, `443`.
 - Docker Engine 24+ with the Compose v2 plugin (`docker compose version`).
   Verified against Docker 29.9.1 / Compose 5.6.0.
+- `curl` 8.2+ on the VM for the smoke steps (`--header @file`, so the owner
+  token never appears in `ps` or shell history). `python3` for the probe.
+- `/opt/kelp` is the **build host**: the one place an image is built. A host that
+  only runs the service needs Docker and the image, not a toolchain.
+- For §12.3 only, `python3-venv` and `pip` on the build host, because the image
+  deliberately ships no test dependencies:
+
+  ```bash
+  sudo apt-get install -y python3-venv    # Debian/Ubuntu, once
+  ```
+
 - Outbound HTTPS to `https://api.tokenfactory.nebius.com` (readiness probes
   `GET /models`; turns call `POST /chat/completions`).
 - A DNS name pointing at the VM, e.g. `kelp.example.com`.
@@ -66,9 +79,15 @@ The examples assume:
 
 | Path | Meaning |
 |---|---|
-| `/opt/kelp` | This repository, checked out |
-| `/etc/kelp` | Optional home for the env file if you do not keep it in `/opt/kelp/deploy` |
+| `/opt/kelp` | This repository, checked out; the Compose project directory |
+| `/opt/kelp/.env` | Compose interpolation only: `KELP_IMAGE`, `KELP_PUBLISH_PORT` (template `deploy/compose.env.example`). One path, because the systemd unit hardcodes it as `EnvironmentFile=` |
+| `deploy/kelp.env` | Container environment: secrets and runtime config, mode `0600`, gitignored |
 | `kelp-data` | Docker volume mounted at `/data` (name is pinned in the Compose file) |
+
+Two env files, two jobs: the tag is Compose's business, the secrets are the
+container's. Do not merge them — an env file listed under `env_file:` is passed
+into the container and is not used for `${…}` interpolation, so putting a tag
+there would be silently ignored.
 
 ---
 
@@ -109,9 +128,38 @@ $EDITOR deploy/kelp.env          # set NEBIUS_API_KEY and KELP_AUTH_TOKEN
 these values in `docker-compose.yml`, the `Dockerfile`, a shell history line, or
 a ticket.
 
+### 3.1 Deployment variables: `/opt/kelp/.env`
+
+Compose needs one thing the container does not: which image tag to run. That
+lives in `/opt/kelp/.env`, which Compose reads for `${…}` interpolation and the
+systemd unit reads through `EnvironmentFile=`. It holds no secret and is created
+once:
+
+```bash
+cd /opt/kelp
+sudo install -m 0644 deploy/compose.env.example /opt/kelp/.env
+sudo $EDITOR /opt/kelp/.env      # KELP_IMAGE=<tag built in §4>, KELP_PUBLISH_PORT
+```
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `KELP_IMAGE` | **none — required** | The tag to run, e.g. `kelp:1a2b3c4`. `docker-compose.yml` has no fallback and pulling is disabled, so a missing tag fails the start instead of building or fetching something else |
+| `KELP_PUBLISH_PORT` | `8765` | Host port for the loopback publish. The container always listens on `8765`; the reverse proxy targets this host port |
+
+Update `KELP_IMAGE` as part of every rollout (§11) and rollback. A tag that is
+not on the host is a start failure by design — the unit never builds.
+
+If you insist on another location, change it in **both** places or they will
+disagree: `docker compose --env-file /path/.env …` for manual runs and
+`EnvironmentFile=/path/.env` in `deploy/kelp.service` for boot. Compose's
+`env_file:` directive is unrelated to this and must keep pointing at
+`deploy/kelp.env`, which is the container's environment.
+
 ---
 
 ## 4. Build
+
+Build once, on the build host, and name it after the commit:
 
 ```bash
 cd /opt/kelp
@@ -122,10 +170,24 @@ docker build \
   -t "kelp:$TAG" .
 ```
 
-Measured: **7 s** cold on the verification box (no layer cache), **~195 MiB** on
-disk, `USER 10001:10001`. The build context resolves to **66 files / 792 KB**:
-`.dockerignore` keeps `tests/`, `evals/`, `var/`, `docs/`, `.git/`, and every env
-file out — including the tracked `payments/.env.example` template.
+Then make that tag the one the deployment runs — this line, not a Compose
+build, is what a restart picks up:
+
+```bash
+sudo sed -i "s|^KELP_IMAGE=.*|KELP_IMAGE=kelp:$TAG|" /opt/kelp/.env
+grep '^KELP_IMAGE=' /opt/kelp/.env        # kelp:<tag>
+```
+
+Measured: **6 s** cold on the verification box (`--no-cache`, 30 October 2026),
+**194.5 MiB** (`docker image inspect` size), `USER 10001:10001`. The build
+context is **656 kB** (`transferring context` on a fresh BuildKit builder, 65
+files by the `.dockerignore` filter): `.dockerignore` keeps `tests/`, `evals/`,
+`var/`, `docs/`, `.git/`, and every env file out — including the tracked
+`payments/.env.example` and `deploy/compose.env.example` templates.
+
+`docker-compose.yml` has no `build:` section, so `docker compose up` can only
+start an image that already exists (§5). That is the point: a deploy that
+silently rebuilds is a deploy whose tag means nothing.
 
 What the image deliberately does *not* contain:
 
@@ -134,27 +196,48 @@ docker image inspect "kelp:$TAG" --format '{{range .Config.Env}}{{println .}}{{e
 # PATH, LANG, PYTHON*, KELP_HOST/PORT/paths, KELP_VERSION, KELP_GIT_COMMIT — no key, no token
 ```
 
+That output is only safe to paste after the `grep` in §15 has passed, and even
+then it is unnecessary. When reporting a problem, quote the tag and the failing
+check code, never the environment.
+
 ---
 
 ## 5. First deployment
 
+`KELP_IMAGE` is already in `/opt/kelp/.env` from §3.1, and §4 pointed it at the
+tag you just built. Nothing here builds:
+
 ```bash
 cd /opt/kelp
-export TAG=$(git rev-parse --short HEAD)
-export KELP_IMAGE="kelp:$TAG"
-
-docker compose up -d
+docker compose up -d --no-build
 docker compose ps          # wait for STATUS "Up ... (healthy)"
 ```
 
 Measured: container start to `healthy` in **7 s** from `up -d` (healthcheck
 `start_period` is 40 s, so a cold first probe is never counted as a failure).
 
+Reading that status column:
+
+- `Up 3 seconds (health: starting)` means Docker is inside `start_period` — this
+  is normal for the first ~40 s and is not a failure.
+- `Up 12 seconds (healthy)` is the state you are waiting for; `(unhealthy)` after
+  the start period is a real failure (§14).
+- `docker compose ps` is a human view and its column layout is not an API. For
+  scripts and for the verification record, ask Docker directly:
+
+  ```bash
+  docker inspect --format '{{.State.Health.Status}}' kelp-kelp-1   # healthy
+  docker inspect --format '{{.State.Health.Status}} {{.RestartCount}}' kelp-kelp-1
+  ```
+
+  The container name is `<project>-<service>-1`; the project is pinned to `kelp`
+  by `name:` in the Compose file, so the name is `kelp-kelp-1` on every host.
+
 Confirm the surface from the host:
 
 ```bash
 curl -fsS http://127.0.0.1:8765/api/healthz
-# {"ok":true,"status":"ok","version":"0.0.0","commit":"e08b027",
+# {"ok":true,"status":"ok","version":"0.0.0","commit":"<tag>",
 #  "uptime_seconds":9.4,"checks":{}}
 ```
 
@@ -172,7 +255,11 @@ systemctl status kelp.service     # active (exited); Compose owns the container
 
 The unit is deliberately thin: systemd starts and stops the Compose project,
 while Compose keeps the container up (`restart: unless-stopped`) and its
-`HEALTHCHECK` reports readiness. Logs stay in `docker compose logs`:
+`HEALTHCHECK` reports readiness. It reads `KELP_IMAGE` from `/opt/kelp/.env` and
+runs `up -d --no-build`, so boot never rebuilds. Two `ExecStartPre` checks run
+first: an unset `KELP_IMAGE` fails with `kelp: KELP_IMAGE is unset`, and a tag
+that is not on the host fails with `No such image: kelp:<tag>` — a loud failure
+instead of a stale container or a surprise rebuild. Logs stay in `docker compose logs`:
 
 ```bash
 docker compose -f /opt/kelp/docker-compose.yml logs --tail=100 kelp
@@ -266,19 +353,24 @@ python3 deploy/healthcheck.py --live
 # readiness, token read from the environment (never printed)
 set -a; . deploy/kelp.env; set +a
 python3 deploy/healthcheck.py --ready
-# readyz ok (version=0.0.0 commit=e08b027)
+# readyz ok (version=0.0.0 commit=<tag>)
 
 # same through the public hostname once TLS is up
 python3 deploy/healthcheck.py --ready --url https://kelp.example.com
 ```
 
 `KELP_PORT` is the port *inside* the container. If you changed
-`KELP_PUBLISH_PORT`, probe the host side explicitly:
-`--url http://127.0.0.1:${KELP_PUBLISH_PORT}` (or the public `https://` name).
+`KELP_PUBLISH_PORT` in `/opt/kelp/.env`, probe the host side explicitly:
+`set -a; . ./.env; set +a` and then
+`--url "http://127.0.0.1:${KELP_PUBLISH_PORT}"` (or the public `https://` name).
 
 The image's `HEALTHCHECK` runs `--live` every 30 s (timeout 5 s, 3 retries,
 start period 40 s) using only the standard library — no `curl` in the image.
-`docker compose ps` therefore shows `(healthy)`/`(unhealthy)`.
+`docker compose ps` therefore shows `(healthy)`/`(unhealthy)`, and
+`(health: starting)` during the 40 s start period: the first three probes after
+boot are expected to run before the status settles, so read the column again
+before treating it as a failure. That status is Docker's view of one container,
+not readiness — `--ready` is the check that exercises SQLite and the provider.
 
 Readiness is **not** wired into Docker restart: a process that is alive but
 degraded stays up so the audit trail and in-flight turns survive. Alert on
@@ -294,7 +386,8 @@ Everything mutable is one volume, `kelp-data`, mounted at `/data`:
 | Path | Contents | Notes |
 |---|---|---|
 | `/data/chat.db` | threads, messages, blocks, events, turns, approvals | WAL mode, `synchronous=FULL`, one writer |
-| `/data/chat.db-wal`, `-shm` | SQLite WAL sidecars | Present while the server runs |
+| `/data/chat.db-wal` | write-ahead log | Exists while the database is open, and after an unclean exit. A clean close checkpoints it and deletes it, so a stopped server normally shows only `chat.db`; a `SIGKILL` can leave committed pages here, which is why a crash backup must include it |
+| `/data/chat.db-shm` | WAL shared-memory index | Exists only while a process has the database open and is deleted by the last close. It holds no committed data, so it is never part of a backup |
 | `/data/chat.db.lock` | advisory `flock` held by the live process | Second process exits `3` |
 | `/data/workspace/` | skill workspace root (`${WORKSPACE}`) | Skills cannot escape it |
 | `/data/workspace/var/artifacts/` | uploaded PDF/CSV bytes and metadata | 20 MiB per upload |
@@ -326,6 +419,13 @@ small; a stop of a few seconds is cheaper than a torn snapshot.
 
 ```bash
 cd /opt/kelp
+# TAG is re-declared here because §4's shell is gone by the time you back up.
+# Prefer the tag the deployment actually runs (KELP_IMAGE in /opt/kelp/.env);
+# fall back to the checkout you are on.
+export TAG=$(git rev-parse --short HEAD)
+set -a; . ./.env 2>/dev/null; set +a
+export IMG="${KELP_IMAGE:-kelp:$TAG}"
+
 sudo install -d -m 0700 /srv/kelp/backups
 STAMP=$(date -u +%Y%m%dT%H%M%SZ)
 
@@ -333,17 +433,23 @@ docker compose stop kelp
 sudo docker run --rm --user 0:0 \
   -v kelp-data:/data:ro \
   -v /srv/kelp/backups:/backup \
-  "kelp:$TAG" tar -C /data -czf "/backup/kelp-data-$STAMP.tar.gz" .
+  "$IMG" tar -C /data -czf "/backup/kelp-data-$STAMP.tar.gz" .
 docker compose start kelp
 ```
 
 Measured: **1 s** for the archive on the verification dataset (`chat.db` ~76 KB
 plus logs). The archive preserves numeric ownership, so uid/gid 10001 survives.
+`stop` is not cosmetic: the clean close checkpoints the WAL and removes the
+`-wal`/`-shm` sidecars (§8), so the tar is one complete database file rather
+than a `chat.db` that still depends on a journal next to it.
 
 Restore into a fresh volume (never untar over a running server):
 
 ```bash
 cd /opt/kelp
+export TAG=$(git rev-parse --short HEAD)
+set -a; . ./.env 2>/dev/null; set +a
+export IMG="${KELP_IMAGE:-kelp:$TAG}"
 ARCHIVE=/srv/kelp/backups/kelp-data-<stamp>.tar.gz
 
 docker compose down
@@ -352,15 +458,15 @@ docker volume create kelp-data
 sudo docker run --rm --user 0:0 \
   -v kelp-data:/data \
   -v /srv/kelp/backups:/backup:ro \
-  "kelp:$TAG" tar -C /data --numeric-owner -xzf "/backup/$(basename "$ARCHIVE")"
-docker compose up -d
+  "$IMG" tar -C /data --numeric-owner -xzf "/backup/$(basename "$ARCHIVE")"
+docker compose up -d --no-build
 ```
 
 Measured: restore **< 1 s**; the restored volume is `10001:10001` and the
 database opens. Verify before trusting it:
 
 ```bash
-sudo docker run --rm --user 0:0 -v kelp-data:/data:ro --entrypoint python "kelp:$TAG" -c "
+sudo docker run --rm --user 0:0 -v kelp-data:/data:ro --entrypoint python "$IMG" -c "
 import sqlite3
 c = sqlite3.connect('file:/data/chat.db?mode=ro&immutable=1', uri=True)
 print('threads', c.execute('select count(*) from threads').fetchone()[0])
@@ -368,9 +474,15 @@ print('turns',   c.execute('select count(*) from turns').fetchone()[0])
 "
 ```
 
-`immutable=1` is required for a read-only open of a WAL database with no shm
-file; without it SQLite refuses to open the file. Then finish with the §12 smoke
-so you have proven the restored service, not just the file.
+`immutable=1` is a promise, not a mode: it tells SQLite the file will never
+change and it can ignore the WAL, which is what makes a read-only open work when
+the `-shm` file cannot be created. It is only true here because the archive was
+taken from a stopped server — never point `immutable=1` at a live `/data`, or
+SQLite will read stale pages and skip locks without complaining. The safe
+alternative on a live volume is a `sqlite3` backup API copy
+(`.backup`/`VACUUM INTO`), which §9 does not need because it stops the service.
+Then finish with the §12 smoke so you have proven the restored service, not just
+the file.
 
 Keep backups off the VM (`rsync`/object storage). A volume backup on the same
 disk is not a backup.
@@ -394,7 +506,8 @@ Therefore:
 
 - Never `docker compose up --scale kelp=2`, never two VMs behind one volume,
   never a rolling deployment that starts the new replica before the old stops.
-  `docker compose up -d` recreates the container in place: stop, then start.
+  `docker compose up -d --no-build` recreates the container in place: stop, then
+  start.
 - Give shutdown room. `stop_grace_period: 30s` covers the server's 10 s turn
   settlement, so in-flight turns end `interrupted` and are resumable instead of
   vanishing with the process.
@@ -417,16 +530,21 @@ git fetch origin
 git switch --detach origin/main        # or the reviewed release commit
 export TAG=$(git rev-parse --short HEAD)
 
-# 1. build beside the running version — nothing restarts yet
+# 1. build beside the running version — nothing restarts yet, no tag changes
 docker build --build-arg KELP_GIT_COMMIT="$TAG" -t "kelp:$TAG" .
 
 # 2. back up /data (§9) before touching the database
-# 3. swap
-KELP_IMAGE="kelp:$TAG" docker compose up -d
-docker compose ps                       # (healthy)
+# 3. swap: record the new tag, then start it. No --build, no rebuild.
+sudo sed -i "s|^KELP_IMAGE=.*|KELP_IMAGE=kelp:$TAG|" /opt/kelp/.env
+docker compose up -d --no-build
+docker compose ps                       # (healthy); see §5 on reading it
 python3 deploy/healthcheck.py --ready    # token from the env file
 # 4. §12 smoke: one real turn and the offline eval summary
 ```
+
+The swap is two statements on purpose: the build and the tag change are separate,
+so a failed build cannot leave `/opt/kelp/.env` pointing at an image that does
+not exist.
 
 **Rollback**
 
@@ -436,9 +554,16 @@ export TAG=<previous-commit>
 # If this release changed the database shape, restore the pre-rollout archive
 # first (§9). The schema is currently CREATE TABLE IF NOT EXISTS with no
 # migrations, so there is no down-migration to run.
-KELP_IMAGE="kelp:$TAG" docker compose up -d
+sudo sed -i "s|^KELP_IMAGE=.*|KELP_IMAGE=kelp:$TAG|" /opt/kelp/.env
+docker compose up -d --no-build
 docker compose ps
 ```
+
+Rollback never builds either: it starts a tag that must still be on the host,
+which is why `docker image ls kelp` is a precondition, not a nicety. If the old
+image was pruned, the unit's `docker image inspect` guard (and Compose itself)
+fail with `No such image: kelp:<tag>`, and the archive restore in §9 is the only
+remaining path.
 
 Because there are no migrations yet, a rollback to an older image is safe only
 when that image understands the current schema. That is exactly why rollout
@@ -477,26 +602,37 @@ path, not just the process.
 cd /opt/kelp
 set -a; . deploy/kelp.env; set +a
 BASE=${BASE:-http://127.0.0.1:8765}
-AUTH="Authorization: Bearer $KELP_AUTH_TOKEN"
+
+# The owner token goes in a 0600 header file, never on the command line: `-H
+# "Authorization: ..."` would put it in `ps` and in shell history. curl 8.2+
+# reads headers from a file with `-H @file`.
+umask 077
+HDRS=$(mktemp)
+printf 'Authorization: Bearer %s\n' "$KELP_AUTH_TOKEN" > "$HDRS"
+trap 'rm -f "$HDRS"' EXIT
 
 THREAD=$(curl -fsS -X POST "$BASE/api/threads" \
-  -H "$AUTH" -H 'Content-Type: application/json' \
+  -H @"$HDRS" -H 'Content-Type: application/json' \
   -d '{"title":"deploy smoke"}' \
   | python3 -c 'import json,sys; print(json.load(sys.stdin)["thread"]["id"])')
 echo "thread=$THREAD"
 
 curl -fsS -X POST "$BASE/api/threads/$THREAD/turns" \
-  -H "$AUTH" -H 'Content-Type: application/json' \
+  -H @"$HDRS" -H 'Content-Type: application/json' \
   -d "{\"client_turn_id\":\"smoke-$(date +%s)\",\"text\":\"Reply with the single word: ok\"}"
 
 # Replay from the start; the stream tails until idle, so cap it.
 timeout 60 curl -N -sS "$BASE/api/threads/$THREAD/stream?after=0" \
-  -H "$AUTH" > /tmp/kelp-smoke.sse || true
+  -H @"$HDRS" > /tmp/kelp-smoke.sse || true
 
 grep -c '^event: text' /tmp/kelp-smoke.sse
 grep -A1 '^event: turn_finished' /tmp/kelp-smoke.sse | grep -o '"reason":"[a-z]*"'
 grep -A1 '^event: turn_finished' /tmp/kelp-smoke.sse | grep -o '"estimated_cost_usd":[^,}]*'
 ```
+
+The `trap` deletes the header file when the shell exits, including on `Ctrl-C`.
+If your curl predates 8.2, use `--config` with a `header = "Authorization: …"`
+line in the same 0600 file instead of `-H @`; do not fall back to argv.
 
 Expected:
 
@@ -518,15 +654,26 @@ No network, no provider key: the retrieval and answer-quality suites run from
 fixtures. This is the honest offline quality gate in this milestone (the
 dedicated eval harness is a separate work item).
 
+Run it **on the build host, outside the container**: the image excludes `tests/`
+and ships no pytest (§2). One venv, once:
+
 ```bash
 cd /opt/kelp
-python3 -m pytest tests/test_docs_answer.py tests/test_docs_answer_index.py | tail -1
-python3 -m pytest | tail -1
+python3 -m venv .venv                       # needs python3-venv (§2)
+.venv/bin/pip install -q pytest httpx jsonschema
+.venv/bin/python -m pytest tests/test_docs_answer.py tests/test_docs_answer_index.py | tail -1
+.venv/bin/python -m pytest | tail -1
 ```
 
-Measured: **68 passed in 0.37 s** for the retrieval/answer suites and
-**670 passed in 12.84 s** for the full suite. Record both numbers next to the
-commit in the release note; a drop means the deploy is not the code you tested.
+`.venv/` is gitignored and excluded from the build context, so it changes
+nothing about the image. Run the same two commands on the VM after a deploy only
+if the VM is also the checkout you tested; otherwise record the numbers from the
+build host next to the commit, and treat the VM as proven by §12.1 and §12.2.
+
+Measured on the verification host: **68 passed in 0.74 s** for the
+retrieval/answer suites and **712 passed in 12.82 s** for the full suite. Record
+both numbers next to the commit in the release note; a drop means the deploy is
+not the code you tested.
 
 ---
 
@@ -563,17 +710,20 @@ gets expensive.
 
 | Symptom | Likely cause | Fix |
 |---|---|---|
-| Container restarts, logs `missing_api_key` / `missing_auth_token`, exit 2 | Env file not read | `docker compose config` shows the merged environment; check `deploy/kelp.env` path, mode `0600`, and that names have no typos |
+| `up` fails: `KELP_IMAGE is required` / `set KELP_IMAGE to a built tag` | No `/opt/kelp/.env`, or the variable is blank | Create it from `deploy/compose.env.example` and set the tag (§3.1) |
+| `up` fails: `image kelp:<tag> is not on this host` / `pull access denied` | The tag was never built here, or was pruned. Pulling is disabled on purpose | Build it (§4) or restore the previous tag; never re-add a `build:` section to make the message go away |
+| Container restarts, logs `missing_api_key` / `missing_auth_token`, exit 2 | Env file not read | `docker compose config -q` validates the project without printing values; then check `deploy/kelp.env` exists, is mode `0600`, and the names have no typos (never paste the bare form's output — it contains the tokens) |
 | Exit 3, `database_locked` | Second replica, or an orphan process still holds the lock | `docker compose ps -a`; stop the extra container. Never delete the lock file |
 | `(unhealthy)`, `curl /api/healthz` fails | Process wedged or port not bound | `docker compose logs kelp`; `docker compose restart kelp` |
-| Healthy, but `readyz` 503 `provider=timeout` | Egress blocked, DNS broken, or key rejected | `curl -H "Authorization: Bearer $NEBIUS_API_KEY" $NEBIUS_TOKEN_FACTORY_BASE_URL/models` from the same network |
+| `(health: starting)` for the first minute | Normal: 40 s `start_period` plus a 30 s interval | Wait, then re-read `docker inspect --format '{{.State.Health.Status}}' kelp-kelp-1` |
+| Healthy, but `readyz` 503 `provider=timeout` | Egress blocked, DNS broken, or key rejected | Probe the provider from the same network with the key in a 0600 header file (`-H @file`, §12.2), not on the command line |
 | `readyz` 503 `store=unavailable` | `/data` not writable by 10001 | Recreate the volume/dir with owner `10001:10001` |
 | `401 unauthorized` on `/api/*` | Token mismatch, or the proxy strips `Authorization` | Send `Authorization: Bearer …`; check the proxy passes request headers untouched |
 | `403 csrf_failed` on a browser mutation | `Origin` and `Host` disagree behind the proxy | Forward the original `Host`; or set `KELP_CSRF_TOKEN` and send `X-CSRF-Token` |
 | Upload fails `413` | Proxy limit below the 20 MiB app cap | Raise `client_max_body_size` / Caddy `max_size` to ~24 MB |
 | Answers stall mid-stream | Proxy buffering or a read timeout under 300 s | `proxy_buffering off`, `proxy_read_timeout 300s` |
 | `touch: Read-only file system` inside the container | Something writes outside `/data` | Expected. Check `KELP_SKILL_ROOT` and any custom skill paths |
-| Restore verification: `unable to open database file` | Read-only WAL database without a shm file | Add `immutable=1` to the SQLite URI (§9) |
+| Restore verification: `unable to open database file` | Read-only WAL database without a shm file | Add `immutable=1` to the SQLite URI — only for a stopped copy (§9) |
 
 ---
 
@@ -582,6 +732,13 @@ gets expensive.
 Run these before you call a deployment done.
 
 ```bash
+cd /opt/kelp
+export TAG=$(git rev-parse --short HEAD)   # or the tag in /opt/kelp/.env
+
+# 0. The project resolves without printing its environment. `-q` is the whole
+#    point: the bare form echoes every secret it interpolates.
+docker compose config -q && echo "config ok"
+
 # 1. No secret in the image environment
 docker image inspect "kelp:$TAG" --format '{{range .Config.Env}}{{println .}}{{end}}' \
   | grep -Ei 'api_key|auth_token|csrf' && echo "LEAK" || echo "clean"
@@ -592,11 +749,21 @@ docker history --no-trunc "kelp:$TAG" | grep -Ei 'api_key|auth_token|secret' && 
 # 3. No secret in the logs (one turn's worth)
 docker compose logs --no-color kelp | grep -Ei 'bearer |api_key|auth_token' || echo "clean"
 
-# 4. Readiness carries no paths or values
+# 4. Readiness carries no paths or values (token via a 0600 header file)
 set -a; . deploy/kelp.env; set +a
-curl -sS -H "Authorization: Bearer $KELP_AUTH_TOKEN" http://127.0.0.1:8765/api/readyz \
+umask 077
+HDRS=$(mktemp)
+printf 'Authorization: Bearer %s\n' "$KELP_AUTH_TOKEN" > "$HDRS"
+curl -sS -H @"$HDRS" http://127.0.0.1:8765/api/readyz \
   | grep -Eo '"detail":"[a-z_]+"' | sort -u
+rm -f "$HDRS"
 ```
+
+**Never paste plain `compose config` output (the form without `-q`) or
+`docker inspect` output into a ticket, a chat, or a PR.** Both print the merged
+environment, and `KELP_AUTH_TOKEN` / `NEBIUS_API_KEY` are in it in clear text.
+`config -q` only validates; when something is wrong, report the tag, the failing
+check code (`provider=timeout`), and whether the file exists — not its contents.
 
 On the verification run: image env clean, layer history clean, container logs
 clean, and readiness details were `not_configured`, `timeout`, or `unavailable`
@@ -615,7 +782,7 @@ sends the token as a header and never prints it.
   depends on the backup, not a down-migration.
 - **No remote state.** SQLite is a local file by design; do not put it on NFS.
 - **Nothing was deployed.** All timings above were measured locally on 30
-  October 2026 against this branch, image `kelp:kel-16`, and a disposable
+  October 2026 against this branch, image `kelp:9b1c863`, and a disposable
   `kelp-data` volume; the volume, network, and containers were removed
   afterwards.
 
@@ -625,20 +792,33 @@ sends the token as a header and never prints it.
 
 | Check | Command | Result | Time |
 |---|---|---|---|
-| Image build | `docker build … -t kelp:kel-16 .` | 195 MiB, non-root `10001:10001`, 66-file context | 7 s |
-| Boot to healthy | `docker compose up -d`, then poll `State.Health` | `healthy`, 0 restarts | 7 s |
-| Liveness | `GET /api/healthz` | 200, `{"ok":true,...,"commit":"e08b027"}` | 1.3 ms |
+| Image build | `docker build --no-cache … -t kelp:<tag> .` | 194.5 MiB, non-root `10001:10001`, 656 kB context | 6 s |
+| Compose resolves | `docker compose config -q` (with `KELP_IMAGE`) | exit 0, no output | < 1 s |
+| Missing tag | `docker compose config -q` without `KELP_IMAGE` | exit 1, `required variable KELP_IMAGE is missing a value` | < 1 s |
+| Missing image | `KELP_IMAGE=kelp:nope docker compose up -d --no-build` | exit 1, `No such image`, no container created | < 1 s |
+| Unit guard | the two `ExecStartPre` checks, run for `""` / missing / present tag | `KELP_IMAGE is unset` / `No such image` / exit 0 | — |
+| Unit verifies | `systemd-analyze verify deploy/kelp.service` | no output, exit 0 | — |
+| Boot to healthy | `docker compose up -d --no-build`, then poll `State.Health` | `healthy`, 0 restarts | 7 s |
+| Liveness | `GET /api/healthz` | 200, `{"ok":true,...,"commit":"9b1c863"}` | 1.3 ms |
 | Readiness without token | `GET /api/readyz` | 401 `unauthorized` | — |
 | Readiness with token | `healthcheck.py --ready` | `provider=unavailable` (dummy upstream), all other checks ok | — |
 | Read-only rootfs | `touch /app/nope` in container | `Read-only file system` | — |
 | Non-root | `id` in container | `uid=10001(kelp) gid=10001(kelp)` | — |
-| State layout | `find /data` | dirs `0700`, db/lock `0600`, owner `kelp:kelp` | — |
+| State layout | `ls -ln /data` | dirs `0700`, db/lock `0600`, `-wal`/`-shm` present while running, owner `kelp:kelp` | — |
 | Single replica | second instance against the volume | exit `3`, `database_locked` | — |
 | Restart persistence | stop + `up -d`, count rows | 2 threads / 2 turns before and after | — |
 | Backup | tar of `/data` into a host backup dir | archive with numeric owners | 1 s |
 | Restore | fresh volume + `tar --numeric-owner` | 2 threads / 2 turns, uid 10001 | < 1 s |
-| Offline eval | `pytest tests/test_docs_answer*.py` | 68 passed | 0.37 s |
-| Full suite | `python -m pytest` | 670 passed | 12.84 s |
-| Unit tests | `pytest tests/test_deploy_healthcheck.py` | 23 passed | < 1 s |
+| Offline eval | `pytest tests/test_docs_answer*.py` | 68 passed | 0.74 s |
+| Full suite | `python -m pytest` | 712 passed | 12.82 s |
+| Asset tests | `pytest tests/test_deploy_assets.py` | 40 passed | 0.12 s |
+| Probe tests | `pytest tests/test_deploy_healthcheck.py` | 25 passed | 4.08 s |
+
+Re-run on 30 October 2026 for the `--no-build` change: build, compose
+resolution, both failure paths, the unit guard, boot-to-healthy, the container's
+ids and read-only rootfs, the `/data` layout, and the second-replica exit code
+were executed again against `kelp:9b1c863` and a disposable volume (removed
+afterwards). The backup/restore rows were measured on the original pass; the
+`/data` layout they depend on is unchanged.
 
 Idle footprint: ~50 MiB RSS, ~2% CPU, no GPU, no swap.

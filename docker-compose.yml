@@ -1,10 +1,25 @@
 # KELP chat server — single-replica Compose deployment (KEL-16, M2-F).
 #
-#   docker compose up -d --build
+#   docker compose up -d --no-build
 #
-# Secrets are not in this file. They are read at start time from
-# `deploy/kelp.env` (mode 0600, gitignored); copy `deploy/kelp.env.example` and
-# fill it in. State lives in the `kelp-data` volume, never in the image.
+# This file never builds. `docs/DEPLOY.md` §4 builds `kelp:<commit>` once with
+# `docker build`, and records that tag in `/opt/kelp/.env` as `KELP_IMAGE` so the
+# systemd unit, a manual start, and a rollback all name the same artifact. If
+# `KELP_IMAGE` is unset, or the tag is not present on the host, startup fails
+# loudly: pulling is disabled and there is no `kelp:local` fallback to quietly
+# become a stale or unbuilt image.
+#
+# Two env files, two different jobs:
+#
+#   /opt/kelp/.env     Compose interpolation only: KELP_IMAGE,
+#                      KELP_PUBLISH_PORT. Read by Compose itself (and by the
+#                      systemd unit's EnvironmentFile). Never seen by the
+#                      container. Template: deploy/compose.env.example.
+#   deploy/kelp.env    Container environment: secrets and runtime config, mode
+#                      0600, gitignored, excluded from the build context. It is
+#                      not interpolated into this file and holds no deploy tag.
+#
+# State lives in the `kelp-data` volume, never in the image.
 #
 # Do not scale this service. The server takes an exclusive lock on
 # `<KELP_DB_PATH>.lock` and the second instance exits with `database_locked`
@@ -14,12 +29,12 @@ name: kelp
 
 services:
   kelp:
-    image: ${KELP_IMAGE:-kelp:local}
-    build:
-      context: .
-      args:
-        KELP_VERSION: ${KELP_VERSION:-0.0.0}
-        KELP_GIT_COMMIT: ${KELP_GIT_COMMIT:-unknown}
+    # Required: no default. A missing tag is an operator error, not a rebuild.
+    image: ${KELP_IMAGE:?set KELP_IMAGE to a built tag (docs/DEPLOY.md section 4)}
+    # Never reach out to a registry: a tag this host does not have is a failure
+    # here, not a silent pull of whatever `kelp:<something>` means upstream.
+    pull_policy: never
+
     env_file:
       - deploy/kelp.env
     restart: unless-stopped

@@ -16,11 +16,12 @@
 .netlify/
 
 # Secrets and environment files: never sent to the daemon or copied into the
-# image, at any depth. `payments/.env.example` is tracked, so it is excluded
-# explicitly as well as by pattern.
+# image, at any depth. `payments/.env.example` and `deploy/*.env.example` are
+# tracked templates, so they are excluded explicitly as well as by pattern.
 **/.env
 **/.env.*
 deploy/*.env
+deploy/*.env.example
 payments/.env.example
 
 # Runtime state (database, artifacts, audit, usage, index, logs)
