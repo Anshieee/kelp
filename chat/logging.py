@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import contextvars
 import json
+import math
 import re
 import sys
 import threading
@@ -97,7 +98,10 @@ _ALLOWED_FIELDS = frozenset(
     }
 )
 
-_REQUEST_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$")
+#: Full-string match on purpose: ``re.match`` with a trailing ``$`` accepts
+#: ``"req_ok\n"`` because ``$`` also matches just before a final newline, which
+#: is exactly the log-injection shape this check exists to reject.
+_REQUEST_ID_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,127}")
 
 
 _request_id_var: contextvars.ContextVar[str | None] = contextvars.ContextVar(
@@ -128,10 +132,7 @@ def is_valid_request_id(value: Any) -> bool:
     newline or a second log record.
     """
 
-    return (
-        isinstance(value, str)
-        and bool(_REQUEST_ID_RE.match(value))
-    )
+    return isinstance(value, str) and bool(_REQUEST_ID_RE.fullmatch(value))
 
 
 def current_request_id() -> str | None:
@@ -221,8 +222,13 @@ def _clean(value: Any) -> Any:
 
     if value is None or isinstance(value, bool):
         return value
-    if isinstance(value, (int, float)):
+    if isinstance(value, int):
         return value
+    if isinstance(value, float):
+        # ``json.dumps`` is called with ``allow_nan=False`` below. A duration
+        # that divided by zero or overflowed would otherwise raise inside the
+        # sink and drop the whole line; drop the impossible value instead.
+        return value if math.isfinite(value) else None
     if isinstance(value, str):
         return _scrubber.scrub_text(value)
     return None
@@ -243,7 +249,10 @@ def log(event: str, *, level: str = "info", **fields: Any) -> dict[str, Any] | N
         "event": _scrubber.scrub_text(str(event)),
     }
     request_id = fields.pop("request_id", None) or current_request_id()
-    if request_id:
+    # A supplied or ambient id is only echoed when it passes the same check the
+    # HTTP layer applies, so an unvalidated caller cannot smuggle a separator
+    # into the one field every sink joins on.
+    if is_valid_request_id(request_id):
         record["request_id"] = _scrubber.scrub_text(str(request_id))
     for key, value in fields.items():
         if key not in _ALLOWED_FIELDS:
@@ -252,7 +261,7 @@ def log(event: str, *, level: str = "info", **fields: Any) -> dict[str, Any] | N
         if cleaned is not None:
             record[key] = cleaned
 
-    line = json.dumps(record, separators=(",", ":"), default=str)
+    line = json.dumps(record, separators=(",", ":"), default=str, allow_nan=False)
     with _write_lock:
         stream = _stream if _stream is not None else sys.stdout
         print(line, file=stream, flush=True)

@@ -196,6 +196,61 @@ def test_request_id_validation_blocks_log_injection() -> None:
     assert not is_valid_request_id(None)
 
 
+def test_request_id_rejects_every_trailing_control_character() -> None:
+    """``re.match`` with ``$`` accepts a final newline; ``fullmatch`` does not."""
+
+    for value in (
+        "req_ok\n",
+        "req_ok\r",
+        "req_ok\n\n",
+        "req_ok\t",
+        " req_ok",
+        "req_ok ",
+        "req_ok\u2028",
+        "req_ok\x00",
+    ):
+        assert not is_valid_request_id(value), repr(value)
+    assert is_valid_request_id("req_ok")
+
+
+def test_an_invalid_ambient_request_id_is_not_echoed() -> None:
+    stream = io.StringIO()
+    configure_logging(level="debug", stream=stream)
+
+    with request_context("req_ok\nforged: true"):
+        record = log("suspicious")
+
+    assert record is not None
+    assert "request_id" not in record
+    parsed = _lines(stream)[0]
+    assert "request_id" not in parsed
+    assert "\nforged" not in stream.getvalue()
+
+
+def test_non_finite_numbers_are_dropped_not_serialised() -> None:
+    stream = io.StringIO()
+    configure_logging(level="debug", stream=stream)
+
+    record = log(
+        "impossible_measurement",
+        duration_ms=float("nan"),
+        cost_usd=float("inf"),
+        status=200,
+        count=7,
+    )
+
+    assert record is not None
+    assert "duration_ms" not in record
+    assert "cost_usd" not in record
+    assert record["status"] == 200
+    assert record["count"] == 7
+    parsed = _lines(stream)[0]
+    assert parsed == record
+    raw = stream.getvalue()
+    assert "NaN" not in raw
+    assert "Infinity" not in raw
+
+
 def test_server_entrypoint_applies_kelp_log_level(tmp_path: Any) -> None:
     from chat.server import ServerConfig, build_app
 

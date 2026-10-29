@@ -1065,8 +1065,30 @@ class _Handler(BaseHTTPRequestHandler):
             pass
 
     def log_message(self, format: str, *args: Any) -> None:
-        # Request line only: ids, status, duration. No bodies, no arguments.
-        super().log_message(format, *args)
+        """Silence the stdlib access log; the JSON sink already has this request.
+
+        :meth:`ChatAPI.handle` emits exactly one structured ``http_request``
+        line per request with a validated request id, a normalised route, and
+        scrubbed values. ``BaseHTTPRequestHandler`` would print a second,
+        unredacted line to stderr, which both doubles the record and escapes
+        the JSON contract, so this is deliberately a no-op.
+        """
+
+        return None
+
+    def log_error(self, format: str, *args: Any) -> None:
+        """Route protocol errors to the JSON sink instead of raw stderr.
+
+        The stdlib message is built from the request line, so it is not
+        interpolated: only the fixed event and level are logged. Any detail
+        would be unvalidated request text and the access line already carries
+        the route and status.
+        """
+
+        try:
+            log("http_error", level="warning", status="error")
+        except Exception:  # noqa: BLE001 - logging must never break a connection
+            return
 
 
 def make_server(

@@ -2,25 +2,38 @@
 
 from __future__ import annotations
 
+import asyncio
+import http.client
 import io
 import json
 import math
+import threading
 from pathlib import Path
 from typing import Any
 
 import pytest
 
 from chat import ChatAPI, ChatService, ChatStore, Request
+from chat.api import _Handler, make_server
 from chat.logging import configure_logging
 from chat.metrics import (
     LoggedUsageStore,
     Metrics,
     PROMETHEUS_CONTENT_TYPE,
 )
-from kernel.usage import JsonlUsageStore
+from kernel.provider import ProviderFailure
+from kernel.usage import InMemoryUsageStore, JsonlUsageStore, UsageRecord
 from openshell.audit import AuditLog, SecretScrubber
 
-from .chatkit import MODEL, StubProvider, text_script
+from .chatkit import (
+    MODEL,
+    StubProvider,
+    executor_factory,
+    make_service,
+    send_and_wait,
+    text_script,
+    tool_script,
+)
 
 AUTH = {"authorization": "Bearer tok"}
 CSRF = {"x-csrf-token": "csrf"}
@@ -411,3 +424,431 @@ def test_planted_secret_is_redacted_in_logs_metrics_and_audit(tmp_path: Path) ->
     assert "[redacted]" in (tmp_path / "audit" / "audit.jsonl").read_text(
         encoding="utf-8"
     )
+
+
+# -- histogram overflow -----------------------------------------------------
+
+
+def test_observation_above_the_largest_bucket_still_counts() -> None:
+    """``+Inf`` and ``_count`` include every observation, not the last bucket."""
+
+    metrics = Metrics()
+    metrics.observe_approval_wait(0.3)
+    metrics.observe_approval_wait(999.0)  # above the largest finite bucket
+    metrics.observe_approval_wait(3600.0)
+    values = samples(metrics.render())
+
+    assert values['approval_wait_seconds_bucket{le="600"}'] == 1
+    assert values['approval_wait_seconds_bucket{le="+Inf"}'] == 3
+    assert values["approval_wait_seconds_count"] == 3
+    assert math.isclose(values["approval_wait_seconds_sum"], 0.3 + 999.0 + 3600.0)
+    assert metrics.approval_wait.count() == 3
+
+
+def test_histogram_overflow_is_counted_per_label_set() -> None:
+    metrics = Metrics()
+    metrics.observe_http("GET", "/api/threads", 200, 0.001)
+    metrics.observe_http("GET", "/api/threads", 200, 60.0)
+    metrics.observe_http("GET", "/api/threads", 500, 60.0)
+    values = samples(metrics.render())
+    ok = '{method="GET",route="/api/threads",status="200"}'
+    failed = '{method="GET",route="/api/threads",status="500"}'
+
+    assert values[f"http_request_duration_seconds_count{ok}"] == 2
+    assert (
+        values[
+            'http_request_duration_seconds_bucket'
+            '{method="GET",route="/api/threads",status="200",le="+Inf"}'
+        ]
+        == 2
+    )
+    assert values[f"http_request_duration_seconds_count{failed}"] == 1
+    assert (
+        values[
+            'http_request_duration_seconds_bucket'
+            '{method="GET",route="/api/threads",status="500",le="+Inf"}'
+        ]
+        == 1
+    )
+    assert metrics.http_duration.count(
+        method="GET", route="/api/threads", status="200"
+    ) == 2
+
+
+def test_non_finite_measurements_never_reach_the_exposition() -> None:
+    metrics = Metrics()
+    metrics.observe_http("GET", "/api/threads", 200, float("nan"))
+    metrics.observe_turn("stop", float("inf"))
+    metrics.observe_approval_wait(-0.0)
+    metrics.add_cost(float("nan"))
+    metrics.add_tokens("input", MODEL, 4)
+
+    rendered = metrics.render()
+    assert "nan" not in rendered.lower()
+    assert "-inf" not in rendered.lower()
+    # A non-finite observation is dropped, so the histogram has no series and
+    # the cost counter stays at the zero it was booted with.
+    assert "http_request_duration_seconds_count" not in rendered
+    values = samples(rendered)
+    assert values["cost_usd_total"] == 0
+    assert values[f'tokens_total{{direction="input",model="{MODEL}"}}'] == 4
+
+
+# -- usage store proxy ------------------------------------------------------
+
+
+def _usage_record(**overrides: Any) -> UsageRecord:
+    values: dict[str, Any] = {
+        "turn_id": "turn_1",
+        "session_id": "thread_1",
+        "model": MODEL,
+        "input_tokens": 10,
+        "output_tokens": 5,
+        "total_tokens": 15,
+        "estimated_cost_usd": None,
+        "cost_known": False,
+        "usage_reported": True,
+        "steps": 1,
+        "tool_calls": 0,
+        "started_at": "2026-01-01T00:00:00Z",
+        "finished_at": "2026-01-01T00:00:01Z",
+        "duration_ms": 1000,
+        "outcome": "stop",
+    }
+    values.update(overrides)
+    return UsageRecord(**values)
+
+
+def test_logged_usage_store_reads_in_memory_records_and_forwards_len() -> None:
+    stream = io.StringIO()
+    configure_logging(level="debug", stream=stream)
+    inner = InMemoryUsageStore()
+    store = LoggedUsageStore(inner)
+    record = _usage_record()
+
+    store.record(record)
+
+    assert len(store) == 1
+    assert store.records() == [record.to_dict()]
+    line = json.loads(stream.getvalue().splitlines()[-1])
+    assert line["event"] == "usage"
+    assert line["turn"] == "turn_1"
+    assert line["cost_known"] is False
+    assert line["usage_reported"] is True
+    assert "cost_usd" not in line  # unknown cost is absent, not zero
+
+
+# -- tool-call labels and error codes --------------------------------------
+
+
+def test_model_authored_tool_name_is_bucketed_before_logs_metrics_and_audit(
+    tmp_path: Path,
+) -> None:
+    stream = io.StringIO()
+    configure_logging(level="debug", secret_values=(SECRET,), stream=stream)
+    metrics = Metrics(scrubber=SecretScrubber([SECRET]))
+    audit = AuditLog(tmp_path / "audit" / "audit.jsonl", secret_values=(SECRET,))
+    crafted = 'docs.answer"}' + SECRET + "\n" + "z" * 300
+
+    async def executor(call: Any) -> dict[str, Any]:
+        return {
+            "ok": True,
+            "skill": "docs.answer",
+            "tool": "docs.answer",
+            "duration_ms": 1,
+            "output": {"answer": "ok"},
+        }
+
+    scripts = [
+        tool_script(crafted, {"query": "q"}, call_id="call_bad"),
+        tool_script("docs.answer", {"query": "q"}, call_id="call_good"),
+        text_script("done"),
+    ]
+    service, store, _provider = make_service(
+        tmp_path,
+        scripts,
+        tool_executor_factory=executor_factory(executor),
+        tools=({"type": "function", "function": {"name": "docs.answer"}},),
+        metrics=metrics,
+        audit=audit,
+    )
+    try:
+        thread = service.create_thread()
+
+        async def scenario() -> None:
+            await send_and_wait(service, thread["id"], "go")
+
+        asyncio.run(scenario())
+    finally:
+        store.close()
+
+    values = samples(metrics.render())
+    assert values['tool_calls_total{tool="unknown",status="done"}'] == 1
+    assert values['tool_calls_total{tool="docs.answer",status="done"}'] == 1
+    rendered = metrics.render()
+    assert SECRET not in rendered
+    assert "z" * 40 not in rendered
+
+    lines = [json.loads(line) for line in stream.getvalue().splitlines() if line]
+    calls = [line for line in lines if line["event"] == "tool_call"]
+    assert [call["tool"] for call in calls] == ["unknown", "docs.answer"]
+    assert all(len(call["tool"]) <= 64 for call in calls)
+    assert SECRET not in stream.getvalue()
+    assert crafted not in stream.getvalue()
+
+    entries = audit.entries(event="tool_call")
+    assert [entry["tool"] for entry in entries] == ["unknown", "docs.answer"]
+    audit_text = (tmp_path / "audit" / "audit.jsonl").read_text(encoding="utf-8")
+    assert SECRET not in audit_text
+    assert "z" * 40 not in audit_text
+
+
+def test_tool_error_code_reaches_log_and_audit_but_never_a_metric_label(
+    tmp_path: Path,
+) -> None:
+    stream = io.StringIO()
+    configure_logging(level="debug", stream=stream)
+    metrics = Metrics()
+    audit = AuditLog(tmp_path / "audit" / "audit.jsonl")
+
+    async def executor(call: Any) -> dict[str, Any]:
+        return {
+            "ok": False,
+            "skill": "docs.answer",
+            "tool": "docs.answer",
+            "duration_ms": 2,
+            "error": {"code": "tool_timeout", "message": "LEAKY-ERROR-DETAIL"},
+        }
+
+    scripts = [
+        tool_script("docs.answer", {"query": "q"}),
+        text_script("sorry"),
+    ]
+    service, store, _provider = make_service(
+        tmp_path,
+        scripts,
+        tool_executor_factory=executor_factory(executor),
+        tools=({"type": "function", "function": {"name": "docs.answer"}},),
+        metrics=metrics,
+        audit=audit,
+    )
+    try:
+        thread = service.create_thread()
+
+        async def scenario() -> None:
+            await send_and_wait(service, thread["id"], "go")
+
+        asyncio.run(scenario())
+    finally:
+        store.close()
+
+    lines = [json.loads(line) for line in stream.getvalue().splitlines() if line]
+    calls = [line for line in lines if line["event"] == "tool_call"]
+    assert len(calls) == 1
+    assert calls[0]["status"] == "failed"
+    assert calls[0]["error_code"] == "tool_timeout"
+    assert "LEAKY-ERROR-DETAIL" not in stream.getvalue()
+
+    entries = audit.entries(event="tool_call")
+    assert entries[0]["extra"]["error_code"] == "tool_timeout"
+    assert "LEAKY-ERROR-DETAIL" not in (
+        tmp_path / "audit" / "audit.jsonl"
+    ).read_text(encoding="utf-8")
+
+    rendered = metrics.render()
+    values = samples(rendered)
+    assert values['tool_calls_total{tool="docs.answer",status="failed"}'] == 1
+    assert "tool_timeout" not in rendered
+
+
+class _ExplodingProvider:
+    def __init__(self, message: str):
+        self.message = message
+
+    async def stream(self, request: Any) -> Any:  # pragma: no cover - async gen
+        raise RuntimeError(self.message)
+        yield  # pragma: no cover - makes this an async generator
+
+
+def test_kernel_error_code_is_threaded_into_the_finalized_turn(tmp_path: Path) -> None:
+    stream = io.StringIO()
+    configure_logging(level="debug", stream=stream)
+    metrics = Metrics()
+    audit = AuditLog(tmp_path / "audit" / "audit.jsonl")
+    store = ChatStore(tmp_path / "chat.db")
+    provider = StubProvider(
+        [
+            [
+                ProviderFailure(
+                    code="provider_unavailable",
+                    message="LEAKY-PROVIDER-BODY",
+                    retryable=True,
+                )
+            ]
+        ]
+    )
+    service = ChatService(
+        store=store, provider=provider, model=MODEL, audit=audit, metrics=metrics
+    )
+    try:
+        thread = service.create_thread()
+
+        async def scenario() -> None:
+            await send_and_wait(service, thread["id"], "go")
+
+        asyncio.run(scenario())
+    finally:
+        store.close()
+
+    lines = [json.loads(line) for line in stream.getvalue().splitlines() if line]
+    errors = [line for line in lines if line["event"] == "turn_error"]
+    finished = [line for line in lines if line["event"] == "turn_finished"]
+    assert errors and errors[0]["error_code"] == "provider_unavailable"
+    assert len(finished) == 1
+    assert finished[0]["status"] == "error"
+    assert finished[0]["error_code"] == "provider_unavailable"
+    assert "LEAKY-PROVIDER-BODY" not in stream.getvalue()
+
+    entry = audit.entries(event="turn_finished")[0]
+    assert entry["extra"]["error_code"] == "provider_unavailable"
+    assert "provider_unavailable" not in metrics.render()
+    assert samples(metrics.render())['turns_total{outcome="error"}'] == 1
+
+
+def test_catch_all_logs_only_the_exception_class_name(tmp_path: Path) -> None:
+    stream = io.StringIO()
+    configure_logging(level="debug", stream=stream)
+    metrics = Metrics()
+    audit = AuditLog(tmp_path / "audit" / "audit.jsonl")
+    store = ChatStore(tmp_path / "chat.db")
+    leaked = "EXCEPTION-MESSAGE-MUST-NOT-LEAK"
+    service = ChatService(
+        store=store,
+        provider=_ExplodingProvider(leaked),
+        model=MODEL,
+        audit=audit,
+        metrics=metrics,
+    )
+    try:
+        thread = service.create_thread()
+
+        async def scenario() -> None:
+            await send_and_wait(service, thread["id"], "go")
+
+        asyncio.run(scenario())
+    finally:
+        store.close()
+
+    raw = stream.getvalue()
+    lines = [json.loads(line) for line in raw.splitlines() if line]
+    crashed = [line for line in lines if line["event"] == "turn_crashed"]
+    finished = [line for line in lines if line["event"] == "turn_finished"]
+    assert crashed and crashed[0]["error_code"] == "RuntimeError"
+    assert finished[0]["status"] == "error"
+    assert finished[0]["error_code"] == "provider_error"
+    assert leaked not in raw
+    assert leaked not in (tmp_path / "audit" / "audit.jsonl").read_text(
+        encoding="utf-8"
+    )
+    assert "RuntimeError" not in metrics.render()
+    assert samples(metrics.render())['turns_total{outcome="error"}'] == 1
+
+
+# -- stdlib handler --------------------------------------------------------
+
+
+def test_stdlib_handler_logging_is_silenced_and_errors_use_the_json_sink() -> None:
+    stream = io.StringIO()
+    configure_logging(level="debug", stream=stream)
+
+    handler = object.__new__(_Handler)
+    handler.log_message('"%s" %s %s', "GET /api/threads HTTP/1.1", "400", "-")
+    handler.log_error(
+        "code %s message %s", "400", "Bad request version (GET /api/threads)"
+    )
+
+    lines = [json.loads(line) for line in stream.getvalue().splitlines() if line]
+    assert [line["event"] for line in lines] == ["http_error"]
+    assert lines[0]["level"] == "warning"
+    assert "GET /api/threads" not in stream.getvalue()
+
+
+def test_served_request_emits_one_json_access_line_and_no_stderr_line(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    stream = io.StringIO()
+    configure_logging(level="debug", stream=stream)
+    api, _service, store = make_api(tmp_path, metrics=Metrics())
+    server = make_server(api, "127.0.0.1", 0)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        host, port = server.server_address[0], server.server_address[1]
+        connection = http.client.HTTPConnection(host, port, timeout=5)
+        connection.request("GET", "/api/healthz")
+        response = connection.getresponse()
+        assert response.status == 200
+        response.read()
+        connection.close()
+    finally:
+        server.shutdown()
+        server.server_close()
+        api.close()
+        store.close()
+        thread.join(timeout=5)
+
+    captured = capsys.readouterr()
+    assert "GET /api/healthz" not in captured.err
+    assert "- - [" not in captured.err
+
+    lines = [json.loads(line) for line in stream.getvalue().splitlines() if line]
+    access = [line for line in lines if line["event"] == "http_request"]
+    assert len(access) == 1
+    assert access[0]["route"] == "/api/healthz"
+    assert access[0]["status"] == 200
+
+
+def test_malformed_and_oversized_error_codes_are_bounded(tmp_path: Path) -> None:
+    stream = io.StringIO()
+    configure_logging(level="debug", stream=stream)
+    metrics = Metrics()
+    audit = AuditLog(tmp_path / "audit" / "audit.jsonl")
+    store = ChatStore(tmp_path / "chat.db")
+    long_code = "a" * 200
+    provider = StubProvider(
+        [
+            [
+                ProviderFailure(
+                    code="bad code\nwith-control", message="x", retryable=False
+                )
+            ],
+            [ProviderFailure(code=long_code, message="x", retryable=False)],
+        ]
+    )
+    service = ChatService(
+        store=store, provider=provider, model=MODEL, audit=audit, metrics=metrics
+    )
+    try:
+        async def scenario() -> None:
+            for index in range(2):
+                thread = service.create_thread()
+                await send_and_wait(service, thread["id"], f"go {index}")
+
+        asyncio.run(scenario())
+    finally:
+        store.close()
+
+    raw = stream.getvalue()
+    finished = [
+        json.loads(line)
+        for line in raw.splitlines()
+        if line and json.loads(line)["event"] == "turn_finished"
+    ]
+    assert [entry["error_code"] for entry in finished] == ["unknown", "a" * 64]
+    assert "bad code" not in raw
+    assert long_code not in raw
+    entries = audit.entries(event="turn_finished")
+    assert [entry["extra"]["error_code"] for entry in entries] == [
+        "unknown",
+        "a" * 64,
+    ]

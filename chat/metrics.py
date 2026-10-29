@@ -29,8 +29,9 @@ log line, so access log, turn, audit, and usage all agree on one id.
 
 from __future__ import annotations
 
+import math
 import threading
-from dataclasses import replace
+from dataclasses import asdict, is_dataclass, replace
 from typing import Any, Iterable, Mapping
 
 from openshell.audit import SecretScrubber
@@ -93,9 +94,17 @@ class Counter:
         self._lock = threading.Lock()
 
     def inc(self, amount: float = 1.0, **labels: str) -> None:
+        try:
+            amount = float(amount)
+        except (TypeError, ValueError):
+            return
+        if not math.isfinite(amount):
+            # ``nan``/``inf`` would poison the whole series for the life of the
+            # process and render an unparseable sample; drop the bad sample.
+            return
         key = self._key(labels)
         with self._lock:
-            self._values[key] = self._values.get(key, 0.0) + float(amount)
+            self._values[key] = self._values.get(key, 0.0) + amount
 
     def ensure(self, **labels: str) -> None:
         """Create a zero sample so an unlabeled series is present from boot."""
@@ -136,24 +145,34 @@ class Histogram:
         self.labelnames = tuple(labelnames)
         self._counts: dict[tuple[str, ...], list[int]] = {}
         self._sums: dict[tuple[str, ...], float] = {}
+        self._totals: dict[tuple[str, ...], int] = {}
         self._lock = threading.Lock()
 
     def _key(self, labels: Mapping[str, str]) -> tuple[str, ...]:
         return tuple(str(labels.get(name, "")) for name in self.labelnames)
 
     def observe(self, value: float, **labels: str) -> None:
-        value = max(0.0, float(value))
+        try:
+            value = float(value)
+        except (TypeError, ValueError):
+            return
+        if not math.isfinite(value):
+            return
+        value = max(0.0, value)
         key = self._key(labels)
         with self._lock:
             counts = self._counts.setdefault(key, [0] * len(self.buckets))
+            # The per-key total, not the last bucket, is the source of truth:
+            # an observation above the largest finite bucket lands in no
+            # bucket, and ``+Inf``/``_count`` must still include it.
+            self._totals[key] = self._totals.get(key, 0) + 1
             for index, bucket in enumerate(self.buckets):
                 if value <= bucket:
                     counts[index] += 1
             self._sums[key] = self._sums.get(key, 0.0) + value
 
     def count(self, **labels: str) -> int:
-        counts = self._counts.get(self._key(labels))
-        return counts[-1] if counts else 0
+        return self._totals.get(self._key(labels), 0)
 
     def ensure(self, **labels: str) -> None:
         """Create a zero sample so an unlabeled histogram is present at boot."""
@@ -162,12 +181,14 @@ class Histogram:
         with self._lock:
             self._counts.setdefault(key, [0] * len(self.buckets))
             self._sums.setdefault(key, 0.0)
+            self._totals.setdefault(key, 0)
 
     def render(self) -> list[str]:
         lines = [f"# HELP {self.name} {self.help}", f"# TYPE {self.name} histogram"]
         with self._lock:
             items = sorted(self._counts.items())
             sums = dict(self._sums)
+            totals = dict(self._totals)
         for key, counts in items:
             labels = dict(zip(self.labelnames, key))
             for index, bucket in enumerate(self.buckets):
@@ -176,7 +197,7 @@ class Histogram:
                     f"{self.name}_bucket{_labels_text(bucket_labels)} "
                     f"{_format_value(float(counts[index]))}"
                 )
-            total = counts[-1] if counts else 0
+            total = totals.get(key, 0)
             inf_labels = {**labels, "le": "+Inf"}
             lines.append(
                 f"{self.name}_bucket{_labels_text(inf_labels)} "
@@ -317,6 +338,23 @@ def get_metrics() -> Metrics:
         return _DEFAULT_METRICS
 
 
+def _usage_row(row: Any) -> dict[str, Any]:
+    """Normalise a usage row from either store to a plain dict."""
+
+    if isinstance(row, Mapping):
+        return dict(row)
+    to_dict = getattr(row, "to_dict", None)
+    if callable(to_dict):
+        try:
+            value = to_dict()
+        except Exception:  # pragma: no cover - exotic record
+            return {}
+        return dict(value) if isinstance(value, Mapping) else {}
+    if is_dataclass(row) and not isinstance(row, type):
+        return asdict(row)
+    return {}
+
+
 class LoggedUsageStore:
     """Wrap a usage store: stamp the request id and log one ``usage`` line.
 
@@ -334,8 +372,33 @@ class LoggedUsageStore:
         return getattr(self.inner, "path", None)
 
     def records(self) -> list[dict[str, Any]]:
+        """Return usage rows as dicts for either store implementation.
+
+        ``JsonlUsageStore.records`` is a method; ``InMemoryUsageStore.records``
+        is a list of :class:`UsageRecord`. Both are normalised here so a caller
+        does not have to know which store the server booted with.
+        """
+
         records = getattr(self.inner, "records", None)
-        return records() if callable(records) else []
+        if callable(records):
+            try:
+                rows = records()
+            except Exception:  # noqa: BLE001 - a torn file must not crash a read
+                return []
+        elif isinstance(records, list):
+            rows = records
+        else:
+            return []
+        return [_usage_row(row) for row in rows or []]
+
+    def __len__(self) -> int:
+        length = getattr(self.inner, "__len__", None)
+        if callable(length):
+            try:
+                return int(length())
+            except (TypeError, ValueError):  # pragma: no cover - exotic store
+                pass
+        return len(self.records())
 
     def record(self, record: Any) -> None:
         request_id = current_request_id()
@@ -349,6 +412,8 @@ class LoggedUsageStore:
             output_tokens=getattr(record, "output_tokens", None),
             total_tokens=getattr(record, "total_tokens", None),
             cost_usd=getattr(record, "estimated_cost_usd", None),
+            cost_known=getattr(record, "cost_known", None),
+            usage_reported=getattr(record, "usage_reported", None),
             duration_ms=getattr(record, "duration_ms", None),
             status=getattr(record, "outcome", None),
         )
