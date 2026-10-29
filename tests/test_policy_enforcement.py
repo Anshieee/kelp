@@ -464,13 +464,19 @@ def test_egress_client_denies_unsafe_method_on_read_skill(tmp_path: Path) -> Non
             required=("url",),
         ),
     )
+    audit = AuditLog(tmp_path / "audit.jsonl")
     result = invoke(
         registry,
         arguments={"url": "https://api.example.com/v1", "method": "POST"},
         workspace_root=tmp_path,
+        audit=audit,
     )
     assert result["error"]["code"] == "policy_denied"
     assert "requires the 'write' effect" in result["error"]["message"]
+    egress = audit.entries(event="skill_egress")
+    assert egress[-1]["decision"] == "deny"
+    assert egress[-1]["outcome"] == "policy_denied"
+    assert egress[-1]["extra"]["host"] == "api.example.com"
 
 
 def test_egress_client_allows_declared_host_and_audits(tmp_path: Path) -> None:

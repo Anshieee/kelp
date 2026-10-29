@@ -591,6 +591,13 @@ def _send(
         response.close()
 
 
+def _url_host_hint(url: Any) -> str:
+    try:
+        return urllib.parse.urlsplit(str(url)).hostname or "unresolved"
+    except ValueError:
+        return "unresolved"
+
+
 class EgressClient:
     """The only sanctioned network path for a skill.
 
@@ -634,7 +641,17 @@ class EgressClient:
         timeout: float | None = None,
     ) -> EgressResponse:
         normalised = str(method).upper()
-        host = self._policy.check_url(url, normalised)
+        try:
+            host = self._policy.check_url(url, normalised)
+        except PolicyDenied:
+            self._audit(
+                "skill_egress",
+                _url_host_hint(url),
+                normalised,
+                "deny",
+                "policy_denied",
+            )
+            raise
         effective_timeout = self._timeout if timeout is None else float(timeout)
         if effective_timeout <= 0:
             raise ValueError("timeout must be positive")
