@@ -11,10 +11,10 @@ that goes with it is [`sdlc-mindmap.svg`](sdlc-mindmap.svg), with a PNG fallback
 site embeds a copy of the SVG directly in the page, so every box there can be clicked; that copy
 and these two files must be updated together.
 
-What this snapshot rests on: `main` is at `33994ab`, all **510 tests pass**, and the repository is
-public. KEL-5 through KEL-10 are merged, reviewed, and done; KEL-11 is merged and reviewed too, and
-opens M2. KEL-10, payments, carries both its paths: the Stripe saved-card scaffold, the Razorpay
-gateway, and the Razorpay hosted Checkout.
+What this snapshot rests on: `main` is at `7ad39b7`, all **616 tests pass**, and the repository is
+public. KEL-5 through KEL-10 are merged, reviewed, and done; KEL-11, KEL-12, and KEL-13 are merged
+and reviewed too, and carry M2. KEL-10, payments, carries both its paths: the Stripe saved-card
+scaffold, the Razorpay gateway, and the Razorpay hosted Checkout.
 
 KEL-10 closed on **owner confirmation on 30 October 2026** (Assume-Done). The code paths are merged
 and the suite is green; the order path was proven earlier against the Razorpay test API. The one
@@ -25,6 +25,14 @@ that, **M1 Prototype is complete**: every work item inside it is done.
 KEL-11 opened **M2 Polished MVP** on 30 October 2026. It is the serve entrypoint: one process, one
 command, ordered boot, a single-instance lock, a clean stop, and boot recovery that closes out a turn
 a crash left behind. It merged at `33994ab` from `kel-11` (head `46ba746`) and added 19 tests.
+
+KEL-12 and KEL-13 then took M2 further, both merged on 30 October 2026. KEL-12 is health and
+readiness: a fast liveness answer, a readiness answer that names each dependency, and bounded, cached
+probes that leak no secrets. It merged at `66228bc` from `kel-12` (head `2c94e0e`) and added 38
+tests. KEL-13 is real document search: PDF and CSV ingestion, chunking, hybrid ranking, and answers
+quoted with page and row citations. It merged at `7ad39b7` from `kel-13` (head `66ddd70`) and added
+68 tests. With the two of them in, the suite went from 510 to **616**. Still in M2: repeatable
+quality measurements and the deploy on the Nebius GPU.
 
 ## How to read the labels
 
@@ -45,12 +53,13 @@ snapshot date.
 
 ## The map
 
-![Mind map of the delivery: milestones M0 to M4, work items KEL-5 to KEL-11, product surfaces, payments, and design.](sdlc-mindmap.svg)
+![Mind map of the delivery: milestones M0 to M4, work items KEL-5 to KEL-13, product surfaces, payments, and design.](sdlc-mindmap.svg)
 
 The same map in words, in case the image does not load:
 
 - **Milestones** — five stages, M0 to M4.
-- **The work** — seven work items, KEL-5 to KEL-11: all seven done, M1 closed, and M2 under way.
+- **The work** — nine work items, KEL-5 to KEL-13: all nine done, M1 closed, and M2 under way with
+  three pieces merged.
 - **Surfaces** — where you talk to the assistant: dashboard first, Telegram next, WhatsApp and voice memos later.
 - **Money** — saved cards through Stripe and hosted Checkout through Razorpay, both merged and closed out; an in-app balance later.
 - **Design** — the screen plan is written, and so is the chat spec. The chat surface code is merged; the drawing file and the browser screen are next.
@@ -69,16 +78,17 @@ promise that full-vision scope lands this week. Scope is cumulative: M2 includes
 |---|---|---|---|
 | **M0 Foundation** | 30 Oct 2026 | IN PROGRESS | The repo (public), the docs, the tests, the standard development setup, model and provider chosen, and a written list of what could go wrong. The repo, docs, tests, and skill contract are in. Still open: the automated checks, the development setup, and the threat model. |
 | **M1 Prototype** | 30 Oct 2026 | COMPLETE | The end-to-end story: ask, get an answer with sources, read a file, approve an action, pay with a saved card, watch the six-scene demo. All six work items live here, and all six are done: KEL-5 to KEL-9 were merged earlier, and KEL-10 closed on owner confirmation on 30 October 2026. |
-| **M2 Polished MVP** | 30 Oct 2026 | IN PROGRESS | Survives ordinary use: picks up after a restart, self-checks, better search over your documents, repeatable quality measurements, and a deploy on the Nebius GPU. Started with KEL-11, the serve entrypoint; search, measurements, and the GPU deploy remain. |
+| **M2 Polished MVP** | 30 Oct 2026 | IN PROGRESS | Survives ordinary use: picks up after a restart, self-checks, better search over your documents, repeatable quality measurements, and a deploy on the Nebius GPU. Done so far: KEL-11, the serve entrypoint; KEL-12, health and readiness; KEL-13, real document search with citations. Measurements and the GPU deploy remain. |
 | **M3 Hardening** | 30 Oct 2026 | TO COME | The privacy and cost promises hold under pressure: who sees what, where keys live, caps on traffic, a retention rule, and a spend ceiling. |
 | **M4 Full vision** | 30 Oct 2026 | TO COME | More devices, work the assistant starts on its own, abilities added by others, and team sharing. A direction, not a deadline. |
 
-## The seven work items
+## The nine work items
 
 KEL-5 feeds KEL-6 and KEL-7. Those two feed KEL-8. KEL-7 also feeds KEL-10. KEL-8 comes before the
-demo, KEL-9. All seven are done. KEL-10, payments, closed M1 on owner confirmation on 30 October
+demo, KEL-9. All nine are done. KEL-10, payments, closed M1 on owner confirmation on 30 October
 2026: both of its paths were merged and reviewed earlier, and the live step was taken on the owner's
-word. KEL-11 then opened M2 with the serve entrypoint.
+word. KEL-11 then opened M2 with the serve entrypoint, and KEL-12 and KEL-13 followed with health
+checks and real document search.
 
 ### KEL-5 — Skill contracts — DONE
 
@@ -120,7 +130,7 @@ price is counted per chunk.
 - Merge: [`d3c763e`](https://github.com/Anshieee/kelp/commit/d3c763e) (branch [`kel-6`](https://github.com/Anshieee/kelp/tree/kel-6), head `4c72afc`)
 
 Status detail: merged into `main` at `d3c763e`. The kernel suite is 43 tests — 25 for the loop and
-18 for the streaming client — and passes with the rest of the 510. The review written up in
+18 for the streaming client — and passes with the rest of the 616. The review written up in
 [`docs/REVIEW_KEL6_KEL7.md`](REVIEW_KEL6_KEL7.md) signed off, and KEL-8 built on top of it.
 
 ### KEL-7 — Approval gate — DONE
@@ -163,7 +173,7 @@ showing where an answer came from, and approval requests shown in the conversati
 Status detail: merged into `main` at `e0bbb72`. The chat surface is in: named threads that can be
 reopened, an append-only stream of events, a card for each tool step, approvals shown in the
 conversation over the KEL-7 gate, artifacts, and a cooperative cancel token so Stop works. The chat
-suite is 86 tests, part of the 510. The spec is on `main` at 1,164 lines; the review fixes that
+suite is 86 tests, part of the 616. The spec is on `main` at 1,164 lines; the review fixes that
 shaped it landed at `56b0785`:
 
 - **Honest dependencies (M1).** The web search, GitHub read, and document handlers are still stubs.
@@ -320,6 +330,82 @@ command text or secret values. Two review findings were fixed before the merge: 
 settled on shutdown rather than abandoned, and `--check` is a true dry run. Still in M2: the
 dashboard's Retry and Resume buttons, better search, quality measurements, and the Nebius GPU deploy.
 
+### KEL-12 — Health and readiness — DONE
+
+Two endpoints that answer two different questions. `/healthz` is liveness: the process is up and
+answering, with no dependency calls, so it stays fast and stays 200 even while a dependency is
+degraded. `/readyz` is readiness: the database is reachable and writable, migrations are at head,
+the skill manifests loaded, the data directory writable, and the model provider answers within a
+bounded probe. The reply names each check with its status and latency, and any required check failing
+returns 503 with the failing check named.
+
+*Why it matters:* "it is running" and "it can serve" are different answers, and a supervisor needs
+both. Without the split, a service is either restarted for no reason or keeps taking traffic it
+cannot handle.
+
+*Plain words:* a **liveness check** asks "are you there?", a **readiness check** asks "can you do the
+job now?", a **dependency** is something the service needs, and a **probe** is a small, time-limited
+test of one.
+
+- Linear: https://linear.app/kelp-ai/issue/KEL-12/m2-b-health-and-readiness-healthz-readyz-with-dependency-checks
+- Routes and checks: [`chat/api.py`](https://github.com/Anshieee/kelp/blob/main/chat/api.py) (main)
+- Wiring: [`chat/server.py`](https://github.com/Anshieee/kelp/blob/main/chat/server.py)
+- Spec section: [`docs/CHAT_SPEC.md`](https://github.com/Anshieee/kelp/blob/main/docs/CHAT_SPEC.md) §15.6
+- Tests: [`tests/test_health.py`](https://github.com/Anshieee/kelp/blob/main/tests/test_health.py)
+- Merge: [`66228bc`](https://github.com/Anshieee/kelp/commit/66228bc) (branch
+  [`kel-12`](https://github.com/Anshieee/kelp/tree/kel-12), head `2c94e0e`)
+
+Status detail: merged into `main` at `66228bc`, adding 38 tests to a suite of 548. Liveness is public
+and makes no state calls; readiness uses the same authentication as the rest of the API. Every probe
+is bounded and cached, and the bodies carry no tokens, absolute paths, or exception text. The review
+fixed four things before the merge: a provider probe accepts only a 2xx, so a redirect or an auth
+rejection reads as degraded; a cached answer is stamped when the probe completes, so its reported age
+and thirty-second reuse window describe the answer rather than when the scrape started; production
+wiring is exercised through the real app builder, so a check that is configured but not connected
+cannot pass unnoticed; and probe selection is by presence, not truthiness, so a falsy callable is
+still run.
+
+### KEL-13 — Real document search — DONE
+
+The fixture-only document path is gone. A PDF is read page by page with page numbers kept; a CSV is
+read with its header, inferred column types, and record numbers kept. Files are stored by content
+hash, so re-uploading the same bytes changes nothing. Documents are cut into overlapping,
+token-bounded chunks that carry their page, sheet, or row range and never cross a document boundary.
+Retrieval is hybrid — a lexical score and an embedding score merged with a deterministic tie-break, a
+top-k budget, and a relevance floor — and the answer quotes the chunks that won, with a citation that
+names the page or row.
+
+*Why it matters:* an answer from your own files is only trustworthy if you can check it against the
+source. A citation you can open is the difference between "the model said so" and "here is the page".
+
+*Plain words:* **chunking** is cutting a long document into pieces small enough to search well. An
+**embedding** is a list of numbers that stands for the meaning of a piece of text, so similar
+meanings sit close together. **Hybrid search** combines word matching with meaning matching. A
+**citation** is the label saying which page or row an answer came from.
+
+- Linear: https://linear.app/kelp-ai/issue/KEL-13/m2-c-retrieval-real-docsanswer-with-pdfcsv-chunking-ranking-citations
+- Parsing: [`extract.py`](https://github.com/Anshieee/kelp/blob/main/skills/builtin/docs_answer/extract.py) (main)
+- Chunking: [`chunking.py`](https://github.com/Anshieee/kelp/blob/main/skills/builtin/docs_answer/chunking.py)
+- Index: [`index.py`](https://github.com/Anshieee/kelp/blob/main/skills/builtin/docs_answer/index.py)
+- Ranking: [`retrieval.py`](https://github.com/Anshieee/kelp/blob/main/skills/builtin/docs_answer/retrieval.py)
+- Answering: [`answer.py`](https://github.com/Anshieee/kelp/blob/main/skills/builtin/docs_answer/answer.py)
+- Tests: [`tests/test_docs_answer.py`](https://github.com/Anshieee/kelp/blob/main/tests/test_docs_answer.py) and
+  [`tests/test_docs_answer_index.py`](https://github.com/Anshieee/kelp/blob/main/tests/test_docs_answer_index.py)
+- Merge: [`7ad39b7`](https://github.com/Anshieee/kelp/commit/7ad39b7) (branch
+  [`kel-13`](https://github.com/Anshieee/kelp/tree/kel-13), head `66ddd70`)
+
+Status detail: merged into `main` at `7ad39b7`, adding 68 tests to a suite of 616. Parsing is
+defensive: inline images are skipped whole so their binary payload cannot be read as text and
+fabricate a citation; PDF form fields are followed in place with a depth cap and a cycle guard; a
+malformed CSV becomes a plain `ValueError` rather than a raw parser exception; and an oversized cell
+is clipped before it can dominate the index, the token budget, or the reply. The index is contained:
+every write, delete, and load re-checks the resolved path, refuses a symlink where a directory should
+be, and never deletes anything outside `var/index`. A single read supplies size, digest, and parse so
+the file cannot change underneath the check, and a document-wide decompression budget charges even a
+rejected bomb. Retention is deliberately lazy: deleting an artifact does not delete its index on the
+spot, but the next question prunes the orphaned entry, and `remove_index` is the explicit hook for a
+caller that needs an instant guarantee.
+
 ## Decisions that shape the map
 
 ### Surfaces
@@ -356,7 +442,7 @@ dashboard's Retry and Resume buttons, better search, quality measurements, and t
 ### GitHub
 
 - Repository (public): https://github.com/Anshieee/kelp
-- Shared copy of the code: https://github.com/Anshieee/kelp/tree/main — head `33994ab`
+- Shared copy of the code: https://github.com/Anshieee/kelp/tree/main — head `7ad39b7`
 - All branches: https://github.com/Anshieee/kelp/branches
   - `kel-5` — merged (`b8de92f`)
   - `kel-6` — merged at `d3c763e`; branch head `4c72afc`
@@ -368,9 +454,11 @@ dashboard's Retry and Resume buttons, better search, quality measurements, and t
   - `kel-10-razorpay` — merged at `5472c3b`; branch head `cabefb7`
   - `kel-10-checkout` — merged at `c474c72`; branch head `f07baee`
   - `kel-11` — merged at `33994ab`; branch head `46ba746`
+  - `kel-12` — merged at `66228bc`; branch head `2c94e0e`
+  - `kel-13` — merged at `7ad39b7`; branch head `66ddd70`
 - Change history: https://github.com/Anshieee/kelp/commits/main
 - Pull requests: https://github.com/Anshieee/kelp/pulls
-- Tests: 510 pass on `main` (`python -m pytest`); `make demo` plays all six beats
+- Tests: 616 pass on `main` (`python -m pytest`); `make demo` plays all six beats
 
 ### Linear
 
@@ -383,7 +471,9 @@ dashboard's Retry and Resume buttons, better search, quality measurements, and t
   [KEL-8](https://linear.app/kelp-ai/issue/KEL-8/dashboard-chat-surface-primary-interface),
   [KEL-9](https://linear.app/kelp-ai/issue/KEL-9/demo-choreography-6-beat-scripted-end-to-end-run-npm-run-demo),
   [KEL-10](https://linear.app/kelp-ai/issue/KEL-10/wallet-stripe-saved-cards-setupintent-attach-list-propose-approve),
-  [KEL-11](https://linear.app/kelp-ai/issue/KEL-11/m2-a-serve-entrypoint-boot-graceful-shutdown-restartresume)
+  [KEL-11](https://linear.app/kelp-ai/issue/KEL-11/m2-a-serve-entrypoint-boot-graceful-shutdown-restartresume),
+  [KEL-12](https://linear.app/kelp-ai/issue/KEL-12/m2-b-health-and-readiness-healthz-readyz-with-dependency-checks),
+  [KEL-13](https://linear.app/kelp-ai/issue/KEL-13/m2-c-retrieval-real-docsanswer-with-pdfcsv-chunking-ranking-citations)
 
 ### Docs and code
 
