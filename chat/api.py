@@ -1361,6 +1361,29 @@ class ChatAPI:
                 close()
             self._turn_slots.release()
 
+    def _retry_turn(self, turn_id: str) -> Response:
+        """Accept a retry as new work, taking a turn slot exactly like a send.
+
+        A retry queues a fresh turn (§5.4), so it shares the global turn cap and
+        returns its slot the same way ``_send`` does: when the retried turn
+        finalizes, or immediately when the call fails.
+        """
+
+        if not self._turn_slots.acquire():
+            return self._busy_response(
+                class_name="turns",
+                reason="turn_capacity",
+                limit=self._turn_slots.limit,
+            )
+        try:
+            payload = self.runner.run(self.service.retry(turn_id))
+        except BaseException:
+            # The retried turn never started, so its slot is returned now.
+            self._turn_slots.release()
+            raise
+        self._release_turn_slot_when_done(str(payload.get("turn_id", "")))
+        return _json_response(202, {"ok": True, **payload})
+
     # -- turns -------------------------------------------------------------
 
     def _turns(self, request: Request, method: str, rest: list[str]) -> Response:
@@ -1371,8 +1394,7 @@ class ChatAPI:
             payload = self.runner.run(self.service.stop(turn_id))
             return _json_response(202, {"ok": True, **payload})
         if rest[1] == "retry":
-            payload = self.runner.run(self.service.retry(turn_id))
-            return _json_response(202, {"ok": True, **payload})
+            return self._retry_turn(turn_id)
         raise ChatError("not_found", status=404, message="Unknown endpoint.")
 
     # -- approvals ---------------------------------------------------------
@@ -1702,13 +1724,23 @@ class _Handler(BaseHTTPRequestHandler):
         ``Content-Length`` is parsed before a single byte is read: a
         non-numeric, negative, duplicated, or over-cap value gets a typed
         response and the connection is closed, so a large body is never
-        buffered. Chunked bodies are read incrementally and aborted as soon as
-        the running total would exceed the same cap.
+        buffered. A request that also carries ``Transfer-Encoding`` is refused
+        outright (RFC 7230 §3.3.3). Chunked bodies are read incrementally and
+        aborted as soon as the running total would exceed the same cap.
         """
 
         cap, status, code = self.api.body_limit_for(path)
         transfer = ",".join(self.headers.get_all("Transfer-Encoding") or [])
         if transfer.strip():
+            if self.headers.get_all("Content-Length"):
+                # RFC 7230 §3.3.3: a message carrying both framings is a
+                # request-smuggling vector, so it is refused before any body is
+                # read rather than resolved by precedence.
+                raise _BodyRejected(
+                    400,
+                    "invalid_request",
+                    "A request cannot carry both Content-Length and Transfer-Encoding.",
+                )
             if transfer.strip().lower() != "chunked":
                 raise _BodyRejected(
                     400, "invalid_request", "Unsupported Transfer-Encoding."

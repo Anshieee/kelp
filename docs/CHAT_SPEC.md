@@ -919,11 +919,17 @@ identity; a presented token is hashed and never retained as a key.
   `details.reason = "turn_capacity"` or `"stream_capacity"` and a short
   `Retry-After`; the stream is never opened and the turn is never queued.
   Streaming slots are returned on exhaustion, `close()`, or collection.
+  A retry (`POST /api/turns/{id}/retry`) queues a fresh turn, so it takes a
+  turn slot exactly like a send and returns it the same way: when the retried
+  turn finalizes, or immediately if the call fails or is refused.
 - The body cap is enforced by the HTTP adapter before dispatch. A
   `Content-Length` that is non-numeric, negative, duplicated, or above the
   route's cap is rejected without reading the body: `413 upload_too_large`
   for uploads, `400 invalid_request` elsewhere. A chunked body is read
   incrementally and aborted as soon as the next chunk would exceed that cap.
+  A request that carries both `Content-Length` and `Transfer-Encoding` is
+  rejected with `400 invalid_request` and the connection is closed, so the two
+  framings can never disagree (RFC 7230 §3.3.3).
 - Configuration is environment-only: `KELP_RATE_LIMIT_ENABLED`,
   `KELP_RATE_LIMIT_<CLASS>_RPM`, `KELP_RATE_LIMIT_<CLASS>_BURST`,
   `KELP_RATE_LIMIT_IDLE_SECONDS`, `KELP_MAX_CONCURRENT_TURNS`, and

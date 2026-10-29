@@ -24,6 +24,7 @@ from chat.api import (
     make_server,
 )
 from kernel import TurnBudget
+from kernel.provider import ProviderFailure, TextDelta
 
 from .chatkit import MODEL, StubProvider, text_script
 
@@ -368,6 +369,39 @@ def test_chunked_over_cap_is_aborted_mid_read(tmp_path: Path) -> None:
         store.close()
 
 
+def test_content_length_with_transfer_encoding_is_a_typed_400(
+    tmp_path: Path,
+) -> None:
+    api, _service, store = make_api(tmp_path)
+    server, _thread = _serve(api)
+    try:
+        # Both framings on one message are a smuggling vector (RFC 7230
+        # §3.3.3). The body here is a valid chunked JSON object, so a 201
+        # would mean the ambiguity had been resolved instead of refused.
+        request = (
+            b"POST /api/threads HTTP/1.1\r\n"
+            b"Host: localhost\r\n"
+            b"Authorization: Bearer tok\r\n"
+            b"X-CSRF-Token: csrf\r\n"
+            b"Content-Type: application/json\r\n"
+            b"Content-Length: 2\r\n"
+            b"Transfer-Encoding: chunked\r\n"
+            b"\r\n"
+            b"2\r\n{}\r\n0\r\n\r\n"
+        )
+        head, body = _split(_raw_exchange(server, request))
+        assert b" 400 " in head
+        assert b" 500 " not in head
+        assert b"Connection: close" in head
+        error = json.loads(body)["error"]
+        assert error["code"] == "invalid_request"
+    finally:
+        server.shutdown()
+        server.server_close()
+        api.close()
+        store.close()
+
+
 # -- concurrency ------------------------------------------------------------
 
 
@@ -434,6 +468,62 @@ def test_turn_cap_returns_typed_busy_and_releases_after_turn(
         # The release monitor returned the slot when the turn finalized.
         used, limit = api._turn_slots.stats()
         assert (used, limit) == (0, 1)
+    finally:
+        api.close()
+        store.close()
+
+
+def test_retry_takes_and_returns_a_turn_slot(tmp_path: Path) -> None:
+    class TimingOut:
+        async def stream(self, request: object) -> Any:
+            yield TextDelta("partial")
+            yield ProviderFailure("provider_timeout", "timed out", retryable=True)
+
+    store = ChatStore(tmp_path / "chat.db")
+    service = ChatService(store=store, provider=TimingOut(), model=MODEL)
+    api = ChatAPI(
+        service, auth_token="tok", csrf_token="csrf", max_concurrent_turns=1
+    )
+    try:
+        thread_row = thread(api)
+        sent = call(
+            api,
+            "POST",
+            f"/api/threads/{thread_row['id']}/turns",
+            {"client_turn_id": "ct-retry-1", "text": "question"},
+        )
+        assert sent.status == 202, sent.body
+        turn_id = payload(sent)["turn_id"]
+        api.runner.run(service.wait_for_turn(turn_id, timeout=5.0))
+        assert api._turn_slots.stats() == (0, 1)
+
+        # A retry that fails before queueing work returns its slot at once.
+        missing = call(
+            api, "POST", "/api/turns/turn_00000000000000000000000000000000/retry", {}
+        )
+        assert missing.status == 404, missing.body
+        assert api._turn_slots.stats() == (0, 1)
+
+        # With the cap occupied, a retry is refused exactly like a send.
+        assert api._turn_slots.acquire() is True
+        blocked = call(api, "POST", f"/api/turns/{turn_id}/retry", {})
+        assert blocked.status == 429, blocked.body
+        error = payload(blocked)["error"]
+        assert error["code"] == "rate_limited"
+        assert error["details"]["reason"] == "turn_capacity"
+        assert blocked.headers["Retry-After"].isdigit()
+        assert api._turn_slots.stats() == (1, 1)
+
+        # The freed slot admits the retry, which holds it until that turn ends.
+        api._turn_slots.release()
+        accepted = call(api, "POST", f"/api/turns/{turn_id}/retry", {})
+        assert accepted.status == 202, accepted.body
+        retried = payload(accepted)
+        assert retried["retry_of"] == turn_id
+        assert api._turn_slots.stats() == (1, 1)
+
+        api.runner.run(service.wait_for_turn(retried["turn_id"], timeout=5.0))
+        assert api._turn_slots.stats() == (0, 1)
     finally:
         api.close()
         store.close()
