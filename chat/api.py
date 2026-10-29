@@ -30,6 +30,8 @@ from pathlib import Path
 from typing import Any, Callable, Iterator, Mapping
 from urllib.parse import parse_qs, unquote, urlsplit
 
+from openshell.egress_ledger import recipient_for_host
+
 from .artifacts import ArtifactError, MAX_UPLOAD_BYTES
 from .errors import ChatError
 from .logging import (
@@ -378,7 +380,10 @@ class HealthProbe:
             # A test double or an embedded provider has no upstream to reach.
             raise _NotConfigured
         api_key = getattr(config, "api_key", None)
-        self._run_probe(lambda: _http_provider_probe(base_url, api_key), runner)
+        ledger = getattr(provider, "ledger", None)
+        self._run_probe(
+            lambda: _http_provider_probe(base_url, api_key, ledger), runner
+        )
 
     def _run_probe(self, probe: Callable[[], Any], runner: "LoopRunner | None") -> None:
         result = probe()
@@ -407,11 +412,15 @@ def _append_probe(path: Path) -> None:
     os.close(fd)
 
 
-async def _http_provider_probe(base_url: str, api_key: str | None) -> None:
+async def _http_provider_probe(
+    base_url: str, api_key: str | None, ledger: Any | None = None
+) -> None:
     """One bounded ``GET /models``: only a 2xx means reachable and authenticated.
 
     A redirect, an auth rejection, or a gateway error is not a healthy upstream,
-    so anything outside ``200..299`` fails the check.
+    so anything outside ``200..299`` fails the check. The call carries no user
+    content — the key in a header and nothing else — but it is still an outbound
+    request, so it writes one content-free ledger row (KEL-22).
     """
 
     import httpx
@@ -420,12 +429,43 @@ async def _http_provider_probe(base_url: str, api_key: str | None) -> None:
     timeout = httpx.Timeout(
         _PROVIDER_HTTP_TIMEOUT, connect=min(1.0, _PROVIDER_HTTP_TIMEOUT)
     )
-    async with httpx.AsyncClient(timeout=timeout, follow_redirects=False) as client:
-        response = await client.get(
-            f"{base_url.rstrip('/')}/models", headers=headers
-        )
+    url = f"{base_url.rstrip('/')}/models"
+    response_bytes = 0
+    outcome = "failed"
+    try:
+        async with httpx.AsyncClient(
+            timeout=timeout, follow_redirects=False
+        ) as client:
+            response = await client.get(url, headers=headers)
+        response_bytes = len(getattr(response, "content", b"") or b"")
+        outcome = "completed"
+    except httpx.HTTPError:
+        outcome = "unreachable"
+        raise
+    finally:
+        _record_probe_egress(ledger, url, response_bytes, outcome)
     if not 200 <= response.status_code < 300:
         raise OSError("provider probe was rejected")
+
+
+def _record_probe_egress(
+    ledger: Any | None, url: str, response_bytes: int, outcome: str
+) -> None:
+    if ledger is None:
+        return
+    try:
+        host = urlsplit(url).hostname
+        ledger.record(
+            recipient=recipient_for_host(host),
+            purpose="provider.health",
+            request_bytes=0,
+            response_bytes=response_bytes,
+            outcome=outcome,
+            method="GET",
+            host=host,
+        )
+    except Exception:  # noqa: BLE001 - ledger is accounting, not traffic
+        return
 
 
 def _package_version() -> str:

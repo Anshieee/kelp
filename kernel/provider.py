@@ -12,10 +12,13 @@ Design rules:
 from __future__ import annotations
 
 import json
+import urllib.parse
 from dataclasses import dataclass, field
 from typing import Any, AsyncIterator, Mapping, Sequence, Union
 
 import httpx
+
+from openshell.egress_ledger import EgressLedger, recipient_for_host
 
 from .config import KernelConfig
 
@@ -236,9 +239,19 @@ class _StreamState:
 class TokenFactoryClient:
     """Async streaming client. Reuse one instance per process."""
 
-    def __init__(self, config: KernelConfig, *, client: httpx.AsyncClient | None = None):
+    def __init__(
+        self,
+        config: KernelConfig,
+        *,
+        client: httpx.AsyncClient | None = None,
+        ledger: EgressLedger | None = None,
+    ):
         self._config = config
         self._owns_client = client is None
+        #: KEL-22 egress account. Public so ``build_app`` can attach the
+        #: process ledger after construction, keeping ``TokenFactoryClient(config)``
+        #: a one-argument call for deployments and test harnesses that replace it.
+        self.ledger = ledger
         self._client = client or httpx.AsyncClient(
             timeout=httpx.Timeout(
                 connect=config.connect_timeout_s,
@@ -272,6 +285,32 @@ class TokenFactoryClient:
 
     __str__ = __repr__
 
+    def _record_egress(
+        self, url: str, request_bytes: int, response_bytes: int, outcome: str
+    ) -> None:
+        """Ledger row for one completed, failed, or refused call.
+
+        The recipient is resolved from the actual URL, so an operator-supplied
+        ``NEBIUS_TOKEN_FACTORY_BASE_URL`` is recorded as ``unlisted`` rather
+        than silently attributed to Nebius.
+        """
+
+        if self.ledger is None:
+            return
+        try:
+            host = urllib.parse.urlsplit(url).hostname
+            self.ledger.record(
+                recipient=recipient_for_host(host),
+                purpose="chat.completions",
+                request_bytes=request_bytes,
+                response_bytes=response_bytes,
+                outcome=outcome,
+                method="POST",
+                host=host,
+            )
+        except Exception:  # noqa: BLE001 - ledger is accounting, not traffic
+            return
+
     async def stream(self, request: ChatRequest) -> AsyncIterator[Any]:
         if not self._config.api_key:
             yield ProviderFailure(
@@ -300,16 +339,27 @@ class TokenFactoryClient:
             payload["tool_choice"] = "auto"
 
         url = f"{self._config.base_url}/chat/completions"
+        # KEL-22: one ledger row per call. Counts only — the payload itself
+        # (the transcript) never touches the ledger.
+        request_bytes = len(
+            json.dumps(
+                payload, ensure_ascii=False, separators=(",", ":"), default=str
+            ).encode("utf-8")
+        )
+        response_bytes = 0
+        outcome = "failed"
         try:
             async with self._client.stream(
                 "POST", url, headers=headers, json=payload
             ) as response:
                 if response.status_code >= 400:
+                    outcome = "provider_error"
                     yield _status_failure(response.status_code)
                     return
 
                 state = _StreamState()
                 async for data in _iter_sse_data(response.aiter_lines()):
+                    response_bytes += len(data.encode("utf-8")) + 1
                     if not data.strip():
                         continue
                     if data.strip() == "[DONE]":
@@ -317,6 +367,7 @@ class TokenFactoryClient:
                     try:
                         chunk = json.loads(data)
                     except json.JSONDecodeError:
+                        outcome = "provider_protocol_error"
                         yield ProviderFailure(
                             "provider_protocol_error",
                             "Token Factory sent a malformed streaming chunk.",
@@ -324,6 +375,7 @@ class TokenFactoryClient:
                         )
                         return
                     if not isinstance(chunk, Mapping):
+                        outcome = "provider_protocol_error"
                         yield ProviderFailure(
                             "provider_protocol_error",
                             "Token Factory sent a non-object streaming chunk.",
@@ -332,21 +384,27 @@ class TokenFactoryClient:
                         return
                     for event in state.handle(chunk):
                         if isinstance(event, ProviderFailure):
+                            outcome = event.code
                             yield event
                             return
                         yield event
 
                 for event in state.finish():
                     yield event
+                outcome = "completed"
         except httpx.TimeoutException:
+            outcome = "timeout"
             yield ProviderFailure(
                 "provider_timeout",
                 "Token Factory did not respond within the configured timeout.",
                 retryable=True,
             )
         except httpx.HTTPError as exc:
+            outcome = "unreachable"
             yield ProviderFailure(
                 "provider_unreachable",
                 f"Could not reach Token Factory ({type(exc).__name__}).",
                 retryable=True,
             )
+        finally:
+            self._record_egress(url, request_bytes, response_bytes, outcome)
