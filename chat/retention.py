@@ -106,9 +106,9 @@ RETENTION_ROWS: tuple[dict[str, str], ...] = (
     {
         "class": "Request/correlation logs",
         "where": "container stdout, not the data volume",
-        "ttl": "14 days (Docker json-file max-age)",
-        "enforced_by": "docker-compose logging block (operator config)",
-        "override": "deploy/compose.env.example",
+        "ttl": "Size-bounded: 10 MiB x 3 files per service, no age limit",
+        "enforced_by": "docker-compose.yml logging block (json-file max-size/max-file)",
+        "override": "docker-compose.yml logging.options (operator config)",
     },
     {
         "class": "Temporary artifacts",

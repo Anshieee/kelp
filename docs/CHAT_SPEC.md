@@ -811,10 +811,37 @@ reconcile to the event, not to the local click.
 
 - `PATCH /api/threads/{id}` `{ "title": "…" }` → 1-80 chars, trimmed, sets
   `title_source: "user"`.
-- `DELETE /api/threads/{id}` → soft delete; the thread disappears from the list, artifacts
-  and approvals become unreachable, and the stream connection is closed. Reconnect
-  attempts then get `404`, and the client stops retrying instead of looping.
-- Deleting a thread with a running turn stops it first (`reason: "cancelled"`).
+- `DELETE /api/threads/{id}` → **hard purge**, not a soft delete. One transaction
+  deletes the thread row and everything keyed to it: messages, their blocks, the
+  wire log (`events`), turns, approvals, and artifact registry rows. The 200 body
+  is `{ ok, thread_id, deleted, messages, blocks, events, turns, approvals,
+  artifacts, artifact_handles, vacuumed }`. The store delete itself is idempotent
+  (`deleted: false`, zero counts); on the wire a repeat delete answers
+  `404 unknown_thread`, which the client shows as "already gone" rather than an
+  error, so a retry after a dropped response cannot loop.
+- Filesystem work cannot join a SQLite transaction. Artifact metadata is captured
+  inside the transaction and unlinked, with its `docs.answer` index dropped,
+  immediately after commit; `VACUUM` (plus a WAL checkpoint) then returns the
+  freed pages to disk. A file-level failure is reported in the response and left
+  for the orphan sweep, which retries it.
+- After the purge the thread is unreachable: `GET`, `PATCH` and the stream answer
+  `404`, the stream connection is closed, and reconnect attempts get `404` so the
+  client stops retrying instead of looping.
+- The `threads.deleted_at` column stays in the schema for compatibility only. The
+  delete path never writes it: `DELETE /api/threads/{id}` hard-purges and a purged
+  thread has no row at all. `ChatStore.soft_delete_thread` remains as an unused
+  compatibility shim and is not part of retention — chat content is removed by
+  explicit delete, not by an age timer, and no query returns a shadow copy.
+- Deleting a thread with a running turn stops it first (`reason: "cancelled"`) and
+  waits up to 2 s for it to settle. If a turn is still live (`queued`, `running`,
+  `stopping`), **nothing is deleted** and the call returns
+  `409 turn_in_progress` with `details.active_turn_id`; the client retries the same
+  delete once the turn settles. A turn left over with no live task (a crash or a
+  Stop that never resumed) is settled as `interrupted` first so a dead turn cannot
+  make its thread undeletable.
+- The live-turn check is re-run inside the delete transaction. A turn that starts
+  concurrently aborts the purge instead of letting its finalize step append events
+  and update rows that no longer exist.
 
 ---
 
@@ -849,7 +876,7 @@ One error renderer for everything. Codes are internal; the person sees one sente
 | `already_used` | "That was already used. Nothing ran twice." | none |
 | `artifact_not_found` | "That file isn't available any more." | none |
 | `unknown_skill` | "The assistant tried a tool that doesn't exist." | none |
-| `turn_in_progress` | "Still answering. Wait or press Stop." | none |
+| `turn_in_progress` | "Still answering. Wait or press Stop." | Try again once it stops (the same send or delete) |
 | `rate_limited` | "Too many requests. Wait a moment." | Try again |
 | *(any unlisted code)* | "Something went wrong." | Try again |
 
@@ -868,6 +895,8 @@ Rules:
 - A `429 rate_limited` carries `Retry-After` in whole seconds; use it for the Try again
   affordance (§12.1). The limiter never reports its own failure as a `5xx`.
 - Errors never clear the composer text or the partial answer.
+- A `409 turn_in_progress` from `DELETE /api/threads/{id}` means nothing was
+  deleted; retrying the same request after the turn settles is always safe.
 - A tool failure is not a turn failure: one failed card plus the model's recovery. Only
   `turn_finished(reason="error")` turns the whole message red.
 

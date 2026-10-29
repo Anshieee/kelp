@@ -453,7 +453,7 @@ artifact names.
 | Derived index | `workspace/var/index` (`docs.answer` chunk cache) | Removed eagerly when the artifact or thread is deleted; orphan dirs swept | `ArtifactRegistry.purge` → `remove_index`; `sweep_orphans` | none (follows the artifact) |
 | Audit records | `KELP_AUDIT_DIR/audit.jsonl` and its segments | 30 days, capped at 40 segments | `RetentionMaintenance.rotate`, boot + daily | `KELP_RETENTION_AUDIT_DAYS`, `KELP_RETENTION_AUDIT_KEEP` |
 | Usage records | `KELP_USAGE_DIR/usage.jsonl` and its segments | 90 days, capped at 100 segments | `RetentionMaintenance.rotate`, boot + daily | `KELP_RETENTION_USAGE_DAYS`, `KELP_RETENTION_USAGE_KEEP` |
-| Request/correlation logs | container stdout, not the data volume | 14 days | Docker json-file `max-age` (operator config) | `deploy/compose.env.example` |
+| Request/correlation logs | container stdout, not the data volume | Size-bounded, not age-bounded: 10 MiB × 3 files per service (≈30 MiB) | `docker-compose.yml` `logging` block (json-file `max-size` / `max-file`) | `docker-compose.yml` `logging.options` (operator config) |
 | Temporary artifacts | `/tmp` (16 MiB `noexec` tmpfs) | Container lifetime | container tmpfs, never persisted | `docker-compose.yml` |
 
 Rotation renames the active file to a timestamped segment; it never rewrites a
@@ -469,15 +469,19 @@ Deleting a thread runs `VACUUM` after the delete transaction commits (and
 truncates the WAL) so the file on disk shrinks; the daily orphan sweep does the
 same when it removed registry rows. Both run outside an HTTP read path.
 
-On-box files outside the app's own records follow the same clock. Configure the
-container log driver in `docker-compose.yml` so stdout does not grow forever:
+On-box files outside the app's own records follow the same clock. The container
+log driver in `docker-compose.yml` bounds stdout **by size, not by age**: ten
+MiB per file, three files, about 30 MiB per service, with the oldest file
+deleted first. Age filtering (`max-age`) is not configured, so the runbook
+makes no day-based claim for these logs; change both the `logging` block and
+this table together if the operator wants one:
 
 ```yaml
 logging:
   driver: json-file
   options:
     max-size: "10m"
-    max-file: "14"
+    max-file: "3"
 ```
 
 ---

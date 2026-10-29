@@ -43,7 +43,14 @@ from .artifacts import HANDLE_RE, ArtifactError, ArtifactRegistry
 from .errors import ChatError
 from .logging import current_request_id, log
 from .metrics import Metrics, get_metrics
-from .store import APPROVAL_TRANSITIONS, ChatStore, iso_now, new_id
+from .store import (
+    APPROVAL_TRANSITIONS,
+    LIVE_TURN_STATES,
+    ChatStore,
+    ThreadBusyError,
+    iso_now,
+    new_id,
+)
 from .stream import EventBus
 
 __all__ = ["ChatService", "MESSAGE_STATUS_BY_REASON", "TurnBudget"]
@@ -419,32 +426,44 @@ class ChatService:
             raise ChatError("unknown_thread", status=404)
         active = thread.get("active_turn_id")
         if active:
+            task = self._tasks.get(active)
             try:
                 await self.stop(active)
-                await self.wait_for_turn(active, timeout=2.0)
+                if task is not None:
+                    await self.wait_for_turn(active, timeout=2.0)
             except (ChatError, asyncio.TimeoutError):
                 pass
             # Never purge under a live turn: its finalize step appends events
             # and updates rows that no longer exist, which would leave orphans
             # behind every successful delete.
             current = self.store.get_turn(active)
-            task = self._tasks.get(active)
-            if (
-                current is not None
-                and current["state"] in {"queued", "running", "stopping"}
-                and task is not None
-                and not task.done()
-            ):
-                raise ChatError(
-                    "turn_in_progress",
-                    status=409,
-                    message="The turn is still settling; retry the delete.",
-                    details={"active_turn_id": active},
-                )
-        result = self.store.purge_thread(
-            thread_id,
-            on_artifacts=self.artifacts.purge,
-        )
+            if current is not None and current["state"] in LIVE_TURN_STATES:
+                if task is not None and not task.done():
+                    raise ChatError(
+                        "turn_in_progress",
+                        status=409,
+                        message="The turn is still settling; retry the delete.",
+                        details={"active_turn_id": active},
+                    )
+                # No live task: the turn is a leftover from a crash or a Stop
+                # that never resumed. Settle it the way boot recovery does, so
+                # a dead turn cannot make its thread undeletable.
+                self.recover_interrupted()
+        try:
+            result = self.store.purge_thread(
+                thread_id,
+                on_artifacts=self.artifacts.purge,
+            )
+        except ThreadBusyError as exc:
+            # The store re-checks inside the delete transaction. Reaching this
+            # means a turn became live after the settle above (a retry or a
+            # concurrent send); nothing was deleted.
+            raise ChatError(
+                "turn_in_progress",
+                status=409,
+                message="The turn is still settling; retry the delete.",
+                details={"active_turn_id": exc.turn_ids[0]},
+            ) from None
         self.bus.close(thread_id)
         return {"ok": True, **result}
 

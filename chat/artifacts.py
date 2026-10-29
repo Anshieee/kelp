@@ -369,11 +369,14 @@ class ArtifactRegistry:
 
         skipped = set(str(handle) for handle in skip_handles)
         skipped.update(self._store.referenced_artifact_handles())
-        rows = self._store.orphan_artifact_rows(
+        # One atomic step: the registry rows are selected and deleted under the
+        # same parentless predicate, so a row claimed by a thread in between
+        # survives. Only the rows actually removed are reported, and only their
+        # bytes and indexes are cleaned up below.
+        rows = self._store.delete_orphan_artifacts(
             cutoff_iso, skip_handles=tuple(skipped)
         )
-        handles = [row["handle"] for row in rows]
-        deleted_rows = self._store.delete_artifacts(handles)
+        deleted_rows = len(rows)
         purged = self.purge(rows)
 
         # Files that never got a registry row (crash between write and insert,

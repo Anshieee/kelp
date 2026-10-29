@@ -3,19 +3,24 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import os
+import threading
+import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
 
-from chat import ChatService, ChatStore
+from chat import ChatError, ChatService, ChatStore
 from chat.artifacts import ArtifactRegistry
 from chat.retention import (
     RETENTION_ROWS,
+    RetentionMaintenance,
     RetentionPolicy,
     rotate_jsonl,
 )
+from chat.store import ThreadBusyError
 from kernel.provider import StreamEnd, TextDelta, UsageReport
 from kernel.usage import JsonlUsageStore, SpendCaps, SpendGuard, UsageRecord
 from openshell.audit import AuditLog
@@ -69,6 +74,9 @@ def test_purge_thread_removes_rows_files_and_index_and_is_idempotent(
             turn_id="turn_1",
         )
         store.append_event(thread["id"], "token_delta", {"text": "secret"})
+        store.update_turn(
+            "turn_1", state="finished", reason="stop", finished_at=_iso(BASE)
+        )
         store.save_approval(
             {
                 "id": "apr_purge",
@@ -388,3 +396,323 @@ def test_retention_table_is_documented_in_deploy_runbook() -> None:
     assert policy.audit_ttl_seconds == 30 * 86400
     assert policy.usage_ttl_seconds == 90 * 86400
     assert policy.artifact_orphan_seconds == 3600
+
+
+def test_purge_refuses_while_a_turn_is_live_and_deletes_nothing(
+    tmp_path: Path,
+) -> None:
+    store, registry, _workspace = _store_and_registry(tmp_path)
+    try:
+        thread = store.create_thread(title="busy")
+        message = store.create_message(
+            thread_id=thread["id"],
+            turn_id="turn_live",
+            role="user",
+            status="streaming",
+            blocks=[{"type": "text", "text": "hello"}],
+        )
+        store.create_turn(
+            thread_id=thread["id"],
+            user_message_id=message["id"],
+            assistant_message_id=message["id"],
+            client_turn_id="ct-live",
+            budget={},
+            turn_id="turn_live",
+        )
+        meta = registry.save_upload("busy.pdf", b"%PDF-1.4\n%%EOF")
+        registry.claim(meta["handle"], thread["id"])
+
+        with pytest.raises(ThreadBusyError) as caught:
+            store.purge_thread(thread["id"], on_artifacts=registry.purge)
+        assert caught.value.thread_id == thread["id"]
+        assert caught.value.turn_ids == ["turn_live"]
+
+        # The transaction aborted before the first delete: nothing was removed,
+        # so the client can simply retry the same request.
+        assert store.get_thread(thread["id"]) is not None
+        assert store.get_turn("turn_live")["state"] == "queued"
+        assert store.get_message(message["id"]) is not None
+        assert store.get_artifact(meta["handle"]) is not None
+
+        store.update_turn("turn_live", state="finished", reason="stop")
+        report = store.purge_thread(thread["id"], on_artifacts=registry.purge)
+        assert report["deleted"] is True
+        assert store.get_thread(thread["id"]) is None
+    finally:
+        store.close()
+
+
+def test_delete_thread_maps_a_live_turn_refusal_to_409(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    store, registry, _workspace = _store_and_registry(tmp_path)
+    service = ChatService(
+        store=store,
+        provider=None,
+        model="nvidia/Nemotron-3_5-Super-VL",
+        artifacts=registry,
+    )
+    try:
+        thread = service.create_thread()
+
+        def refuse(thread_id: str, **kwargs: object) -> dict[str, object]:
+            raise ThreadBusyError(thread_id, ["turn_race"])
+
+        monkeypatch.setattr(store, "purge_thread", refuse)
+
+        async def scenario() -> None:
+            with pytest.raises(ChatError) as caught:
+                await service.delete_thread(thread["id"])
+            error = caught.value
+            assert error.code == "turn_in_progress"
+            assert error.status == 409
+            assert error.error["details"] == {"active_turn_id": "turn_race"}
+
+        asyncio.run(scenario())
+        # A refused delete keeps the thread alive and returns no payload.
+        assert store.get_thread(thread["id"]) is not None
+    finally:
+        store.close()
+
+
+def test_delete_thread_settles_a_taskless_stale_turn_then_purges(
+    tmp_path: Path,
+) -> None:
+    store, registry, _workspace = _store_and_registry(tmp_path)
+    service = ChatService(
+        store=store,
+        provider=None,
+        model="nvidia/Nemotron-3_5-Super-VL",
+        artifacts=registry,
+    )
+    try:
+        thread = service.create_thread()
+        message = store.create_message(
+            thread_id=thread["id"],
+            turn_id="turn_stale",
+            role="user",
+            status="streaming",
+            blocks=[],
+        )
+        store.create_turn(
+            thread_id=thread["id"],
+            user_message_id=message["id"],
+            assistant_message_id=message["id"],
+            client_turn_id="ct-stale",
+            budget={},
+            turn_id="turn_stale",
+        )
+
+        async def scenario() -> dict[str, object]:
+            return await service.delete_thread(thread["id"])
+
+        result = asyncio.run(scenario())
+        assert result["ok"] is True
+        assert result["deleted"] is True
+        assert result["turns"] == 1  # settled as interrupted, then purged
+        assert store.get_thread(thread["id"]) is None
+        assert store.get_turn("turn_stale") is None
+    finally:
+        store.close()
+
+
+def test_orphan_delete_only_removes_rows_parentless_at_delete_time(
+    tmp_path: Path,
+) -> None:
+    store, _registry, _workspace = _store_and_registry(tmp_path)
+    try:
+        live = store.create_thread(title="live")
+        old = _iso(BASE)
+
+        def row(handle: str, thread_id: str | None) -> dict[str, object]:
+            return store.create_artifact(
+                {
+                    "handle": handle,
+                    "thread_id": thread_id,
+                    "name": f"{handle}.pdf",
+                    "kind": "pdf",
+                    "mime": "application/pdf",
+                    "size_bytes": 3,
+                    "sha256": handle,
+                    "storage_path": f"{handle.split(':', 1)[1]}.pdf",
+                    "created_at": old,
+                }
+            )
+
+        orphan = row("artifact:orphanrow01", None)
+        # Claimed after it aged: a concurrent claim wins, and the count must
+        # reflect only what the DELETE actually removed.
+        claimed = row("artifact:claimedrow1", None)
+        assert store.bind_artifact(claimed["handle"], live["id"]) is True
+        skipped = row("artifact:skippedrow1", None)
+        # A row whose thread row is gone is still an orphan (interrupted delete).
+        dangling = row("artifact:danglingrow", "ses_missing")
+
+        deleted = store.delete_orphan_artifacts(
+            _iso(BASE + timedelta(hours=2)),
+            skip_handles=(skipped["handle"],),
+        )
+        handles = {record["handle"] for record in deleted}
+
+        assert handles == {orphan["handle"], dangling["handle"]}
+        assert store.get_artifact(orphan["handle"]) is None
+        assert store.get_artifact(dangling["handle"]) is None
+        assert store.get_artifact(claimed["handle"]) is not None
+        assert store.get_artifact(skipped["handle"]) is not None
+
+        # Idempotent: a second sweep finds nothing and reports zero.
+        assert (
+            store.delete_orphan_artifacts(
+                _iso(BASE + timedelta(hours=2)), skip_handles=(skipped["handle"],)
+            )
+            == []
+        )
+    finally:
+        store.close()
+
+
+class _SpyStore:
+    def __init__(self) -> None:
+        self.vacuums = 0
+
+    def vacuum(self) -> bool:
+        self.vacuums += 1
+        return True
+
+
+class _SpyArtifacts:
+    def __init__(self, rows: int = 0, *, fail: bool = False) -> None:
+        self.calls = 0
+        self._rows = rows
+        self._fail = fail
+        self._lock = threading.Lock()
+
+    def sweep_orphans(self, *, older_than_seconds: float, now: object) -> dict[str, int]:
+        with self._lock:
+            self.calls += 1
+        if self._fail:
+            raise RuntimeError("sweep exploded")
+        return {
+            "artifact_rows": self._rows,
+            "files_removed": 0,
+            "files_missing": 0,
+            "indexes_removed": 0,
+            "skipped": 0,
+            "errors": 0,
+        }
+
+
+def test_maintenance_run_once_wires_sweep_rotation_and_vacuum(tmp_path: Path) -> None:
+    audit_path = tmp_path / "audit" / "audit.jsonl"
+    usage_path = tmp_path / "usage" / "usage.jsonl"
+    audit_path.parent.mkdir(parents=True)
+    usage_path.parent.mkdir(parents=True)
+    stamp = _iso(BASE)
+    audit_path.write_text(
+        json.dumps({"event": "old", "ts": stamp}) + "\n", encoding="utf-8"
+    )
+    usage_path.write_text(json.dumps({"ts": stamp, "usd": 0.1}) + "\n", encoding="utf-8")
+
+    store = _SpyStore()
+    artifacts = _SpyArtifacts(rows=2)
+    maintenance = RetentionMaintenance(
+        store=store,
+        artifacts=artifacts,
+        audit_path=audit_path,
+        usage_path=usage_path,
+        policy=RetentionPolicy(
+            audit_ttl_seconds=86400,
+            usage_ttl_seconds=86400,
+            audit_keep=2,
+            usage_keep=2,
+            log_rotate_seconds=3600,
+            log_max_bytes=10 * 1024 * 1024,
+            artifact_orphan_seconds=3600,
+            maintenance_interval_seconds=86400,
+        ),
+        now=lambda: BASE + timedelta(days=2),
+    )
+
+    report = maintenance.run_once()
+
+    assert artifacts.calls == 1
+    assert report["orphans"]["artifact_rows"] == 2
+    assert report["audit"]["rotated"] is True
+    assert report["usage"]["rotated"] is True
+    assert report["vacuumed"] is True
+    assert store.vacuums == 1
+
+    # Nothing removed this pass: the pass reports no vacuum instead of calling
+    # VACUUM on a database it did not touch.
+    artifacts._rows = 0
+    quiet = maintenance.run_once()
+    assert quiet["vacuumed"] is False
+    assert store.vacuums == 1
+
+
+def test_maintenance_daemon_runs_until_stop_and_survives_failures(
+    tmp_path: Path,
+) -> None:
+    artifacts = _SpyArtifacts(rows=0, fail=True)
+    maintenance = RetentionMaintenance(
+        store=_SpyStore(),
+        artifacts=artifacts,
+        audit_path=tmp_path / "audit.jsonl",
+        policy=RetentionPolicy(maintenance_interval_seconds=0.02),
+    )
+    named = lambda: [  # noqa: E731 - tiny predicate for the assertion below
+        thread for thread in threading.enumerate() if thread.name == "kelp-retention"
+    ]
+    maintenance.start()
+    try:
+        deadline = time.monotonic() + 5.0
+        while artifacts.calls < 3 and time.monotonic() < deadline:
+            time.sleep(0.01)
+        # A failing pass is logged, never fatal: the daemon keeps going.
+        assert artifacts.calls >= 3
+        assert len(named()) == 1
+        # start() is idempotent: a second call does not spawn a second thread.
+        maintenance.start()
+        assert len(named()) == 1
+    finally:
+        maintenance.stop(timeout=5.0)
+    assert named() == []
+    settled = artifacts.calls
+    time.sleep(0.05)
+    assert artifacts.calls == settled
+
+
+def test_maintenance_start_is_a_noop_when_the_interval_is_zero() -> None:
+    maintenance = RetentionMaintenance(
+        store=_SpyStore(),
+        artifacts=_SpyArtifacts(),
+        audit_path="/nonexistent/audit.jsonl",
+        policy=RetentionPolicy(maintenance_interval_seconds=0),
+    )
+    maintenance.start()
+    assert [
+        thread for thread in threading.enumerate() if thread.name == "kelp-retention"
+    ] == []
+    maintenance.stop()
+
+
+def test_request_log_row_matches_the_compose_size_bound() -> None:
+    """B4: the table claims a size bound, so the compose block must show one."""
+
+    compose = (ROOT / "docker-compose.yml").read_text(encoding="utf-8")
+    assert 'max-size: "10m"' in compose
+    assert 'max-file: "3"' in compose
+    assert "max-age" not in compose
+
+    row = next(
+        entry for entry in RETENTION_ROWS if entry["class"] == "Request/correlation logs"
+    )
+    assert "10 MiB" in row["ttl"]
+    assert "3 files" in row["ttl"]
+    assert "14 days" not in row["ttl"]
+    assert "docker-compose.yml" in row["override"]
+
+    deploy = (ROOT / "docs" / "DEPLOY.md").read_text(encoding="utf-8")
+    assert "14 days" not in deploy
+    assert 'max-file: "14"' not in deploy
+    assert "Size-bounded, not age-bounded" in deploy
