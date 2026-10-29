@@ -119,12 +119,18 @@ class RegistryToolExecutor:
         approval: Callable[[Any], Awaitable[bool]] | None = None,
         secrets: Mapping[str, str] | None = None,
         workspace_root: str | None = None,
+        policy: Any | None = None,
+        audit: Any | None = None,
+        turn_id: str | None = None,
         time_fn: Callable[[], float] | None = None,
     ):
         self._registry = registry
         self._approval = approval
         self._secrets = secrets
         self._workspace_root = workspace_root
+        self._policy = policy
+        self._audit = audit
+        self._turn_id = turn_id
         self._time = time_fn or time.monotonic
         self._waits: dict[str, int] = {}
         self._active_call: str | None = None
@@ -139,6 +145,9 @@ class RegistryToolExecutor:
                 approval=self._gate if self._approval is not None else None,
                 secrets=self._secrets,
                 workspace_root=self._workspace_root,
+                policy=self._policy,
+                audit=self._audit,
+                turn_id=self._turn_id,
             )
         finally:
             self._active_call = None

@@ -285,16 +285,6 @@ def rotate_jsonl(
                 except OSError:
                     pass
                 else:
-                    # Keep the segment's age tied to its newest record, so an
-                    # idle file that already exceeded the TTL is expired on
-                    # this same pass instead of living one extra TTL.
-                    try:
-                        os.utime(
-                            destination,
-                            ns=(stat.st_atime_ns, stat.st_mtime_ns),
-                        )
-                    except OSError:  # pragma: no cover - filesystem corner
-                        pass
                     segments.append(destination)
                     rotated = True
 
@@ -303,11 +293,15 @@ def rotate_jsonl(
         threshold = now_seconds - ttl_seconds
         kept: list[Path] = []
         for segment in segments:
-            try:
-                expired = segment.stat().st_mtime < threshold
-            except OSError:
-                expired = False
-            if expired:
+            # Judge a segment by its oldest record, not by an mtime a
+            # concurrent append can refresh (or that a rename can stale).
+            oldest = _oldest_record_time(segment)
+            if oldest is None:
+                try:
+                    oldest = segment.stat().st_mtime
+                except OSError:
+                    oldest = None
+            if oldest is not None and oldest < threshold:
                 try:
                     segment.unlink()
                     pruned += 1
