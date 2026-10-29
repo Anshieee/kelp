@@ -98,4 +98,3 @@ def numeric(value: str) -> float | None:
         return float(value.replace(",", "").replace("$", ""))
     except ValueError:
         return None
-

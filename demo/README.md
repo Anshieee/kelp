@@ -21,9 +21,9 @@ points at the report.
 | 1 | Ask a question that needs search | `web.search` runs, the answer streams, source chips carry recorded URLs |
 | 2 | Summarise a PDF, then question a CSV | uploads become artifacts, `docs.answer` reads them, page and row citations, PDF served intact, table preview |
 | 3 | Look up a GitHub issue | `github.read` is read-only: no approval card, `read`/`network` effects only, issue URL becomes a chip |
-| 4 | Approve a write | deny first — nothing is written; then approve — the write runs once and the audit log shows the decision, the single use, and the execution |
+| 4 | Approve a write | deny first — nothing is written, and the decision is audited at decision time as `denied`; then approve — the write runs once and the audit log shows the decision, the single use, and the execution. The audited note carries a planted fake key and must land as `[redacted]` |
 | 5 | Schedule a task | approval, then the task is on the scheduler list with a real cron and next run time |
-| 6 | Kill the server mid-answer | a real child process serving `ChatAPI` is `SIGKILL`ed; restart marks the turn interrupted, every event survives, retry resumes without a duplicate user message, an idempotent resend opens no third turn, and an SSE replay from `after=0` is gapless |
+| 6 | Kill the server mid-answer | a real child process serving `ChatAPI` is `SIGKILL`ed mid-stream; a **new** process boots with `--recover`, closes the interrupted turn, and serves the snapshot, SSE replay, retry, and idempotent resend over its own socket, with no duplicate user message and no third turn |
 
 Each beat writes `receipts/beat-N.json` (checks, timings, ids) and the run writes
 `receipts/demo-report.md` with a timing table. Screenshot capture belongs to the
@@ -34,8 +34,10 @@ run.
 
 Real: `chat.ChatService`, `chat.api.ChatAPI` (auth, routing, SSE framing,
 multipart upload), `kernel.AgentLoop`, `skills.SkillRegistry` (manifest
-validation, approval gate, schema checks), `openshell.ApprovalStore`/`AuditLog`,
-`chat.ArtifactRegistry`.
+validation, approval gate, schema checks), `openshell.AuditLog`, and
+`chat.ArtifactRegistry`. The skill approval gate is the KEL-8 path in
+`chat.service` over the chat store; `openshell.ApprovalStore` is only wired for
+exec approvals, which this demo does not exercise.
 
 Recorded: the provider (`demo/fixtures/provider.py` streams scripted tool calls
 and text) and the four handlers (`demo/handlers/`). The registry is built from
@@ -46,6 +48,18 @@ and timeouts stay exactly what the product declares.
 Fixture inputs live in `demo/fixtures/files/`: a two-page PDF, a three-row CSV,
 a search result set, and GitHub payloads. The PDF and CSV are uploaded through
 the real `POST /api/attachments` path, then claimed by a turn.
+
+## Beat 6 mechanics
+
+`demo/server.py` is the process under test. In turn mode it opens the run's
+database, serves `ChatAPI` on an ephemeral loopback port, starts one slow turn,
+and prints a single JSON ready line. The demo kills it with `SIGKILL` while
+tokens are still arriving, then starts it again with `--recover`: that boot step
+calls `ChatService.recover_interrupted()` before printing its ready line, so the
+turn is already `finished`/`interrupted` when the parent can observe it. The
+parent then talks to that restarted process over `http.client` — snapshot,
+`GET /stream?after=0`, retry, and resend — so recovery is proven across a
+process boundary rather than by calling a method in the same process.
 
 ## State
 
@@ -69,7 +83,9 @@ checks are relative to what the run created.
 ## Adding a beat
 
 1. Append the turn's script to `TURN_SCRIPTS` in `demo/runner.py` — one list of
-   provider events per model step, in turn order.
+   provider events per model step, in turn order. Beat 6's `RESUME_SCRIPT` is
+   replayed by the restarted process, so keep it last and append new beats
+   before it.
 2. Add the beat method and include it in `Demo.run`. Use `self.check(...)` for
    every claim; an unchecked beat is a beat that cannot catch a regression.
 3. If the beat needs a new skill, add the handler under `demo/handlers/` and map
@@ -79,6 +95,8 @@ checks are relative to what the run created.
 ## Tests
 
 `tests/test_demo.py` runs the whole thing in a subprocess with API keys stripped
-from the environment, proves the CLI exits `1` on a failed beat, checks that the
-fixture manifests keep the builtin contract, and pins the handlers, cron
-evaluation, and fail-closed behaviour.
+from the environment, proves the CLI exits `1` on a failed beat, compares each
+fixture manifest against the raw builtin JSON (everything except `entry`), and
+pins the handlers, cron evaluation (including Sunday as `7`), CSV/PDF citation
+locators, fail-closed behaviour, the audited denial, and the secret-scrubbed
+audit field.

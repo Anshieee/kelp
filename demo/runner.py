@@ -13,7 +13,9 @@ import signal
 import sqlite3
 import subprocess
 import sys
+import threading
 import time
+from collections import deque
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -28,13 +30,18 @@ from demo.fixtures import assets
 from demo.fixtures.provider import FixtureProvider, text_script, tool_script
 from demo.fixtures.registry import build_registry
 from demo.handlers.schedule_create import list_tasks
-from demo.surface import Surface
+from demo.surface import RemoteSurface, Surface
 from openshell.audit import AuditLog
 
-__all__ = ["Beat", "Demo", "TURN_SCRIPTS", "build_scripts"]
+__all__ = ["Beat", "Demo", "PLANTED_SECRET", "RESUME_SCRIPT", "TURN_SCRIPTS", "build_scripts"]
 
 TOTAL_BUDGET_SECONDS = 240.0
 GITHUB_REPO = "Anshieee/nebius-nvidia"
+
+# A fake provider key planted in an audited field. The audit log must persist
+# ``[redacted]`` instead of this value; beat 4 asserts that against the file.
+PLANTED_SECRET = "sk_live_kel9planted0000"
+
 
 TURN_SCRIPTS: list[list[list[Any]]] = [
     # 1 — web search, then an answer that cites the chips.
@@ -118,14 +125,19 @@ TURN_SCRIPTS: list[list[list[Any]]] = [
         ),
         text_script("The weekday task is on the scheduler list with its next run time."),
     ],
-    # 6 — the resumed turn, after the kill. Plain text; no tools.
-    [
-        text_script(
-            "Resumed after the restart: the thread kept every event, the interrupted "
-            "answer is still marked interrupted, and this turn is new."
-        )
-    ],
 ]
+
+# 6 — the resumed turn after the kill. Served by the restarted process
+#     (``demo.server --recover``), not by this process's provider; it stays in
+#     the table so both halves of beat 6 share one scripted answer.
+RESUME_SCRIPT: list[Any] = [
+    text_script(
+        "Resumed after the restart: the thread kept every event, the interrupted "
+        "answer is still marked interrupted, and this turn is new."
+    )
+]
+
+TURN_SCRIPTS.append(RESUME_SCRIPT)
 
 
 def build_scripts() -> list[list[list[Any]]]:
@@ -144,6 +156,33 @@ class Beat:
 
     def summary(self) -> str:
         return f"{len(self.checks)} checks"
+
+
+class _Drain:
+    """Keep a child's stderr from filling its pipe; keep the tail for errors."""
+
+    def __init__(self, pipe: Any, *, keep: int = 200):
+        self._lines: deque[str] = deque(maxlen=keep)
+        self._thread = threading.Thread(target=self._run, args=(pipe,), daemon=True)
+        self._thread.start()
+
+    def _run(self, pipe: Any) -> None:
+        try:
+            for line in pipe:
+                self._lines.append(line)
+        except (ValueError, OSError):  # pragma: no cover - pipe closed under us
+            pass
+        finally:
+            try:
+                pipe.close()
+            except OSError:  # pragma: no cover - already closed
+                pass
+
+    def tail(self, lines: int = 12) -> str:
+        return "".join(self._lines[-lines:])
+
+    def join(self, timeout: float = 5.0) -> None:
+        self._thread.join(timeout=timeout)
 
 
 class Demo:
@@ -165,6 +204,7 @@ class Demo:
         self.surface = Surface(self.api)
         self.audit = AuditLog(paths.audit)
         self.beats: list[Beat] = []
+        self._drains: dict[int, _Drain] = {}
 
     def _service(self, provider: Any) -> Any:
         from chat.service import ChatService
@@ -283,6 +323,84 @@ class Demo:
     def _event_types(self, thread_id: str) -> list[str]:
         return [event["type"] for event in self.surface.events(thread_id)]
 
+    # -- child servers (beat 6) --------------------------------------------
+
+    def _spawn_server(
+        self,
+        beat: Beat,
+        *,
+        thread_id: str | None = None,
+        text: str | None = None,
+        client_turn_id: str | None = None,
+        recover: bool = False,
+    ) -> tuple[subprocess.Popen[str], dict[str, Any]]:
+        """Start a real server child and wait for its one-line JSON ready payload."""
+
+        command = [
+            sys.executable,
+            "-m",
+            "demo.server",
+            "--state",
+            str(self.paths.state),
+        ]
+        if recover:
+            command.append("--recover")
+        else:
+            if not (thread_id and text and client_turn_id):  # pragma: no cover - caller supplies
+                raise DemoError(beat.number, "turn-mode server needs a thread, text, and client turn id")
+            command += [
+                "--thread",
+                thread_id,
+                "--text",
+                text,
+                "--client-turn-id",
+                client_turn_id,
+            ]
+        child = subprocess.Popen(
+            command,
+            cwd=str(REPO_ROOT),
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        drain = _Drain(child.stderr)
+        self._drains[id(child)] = drain
+        line = child.stdout.readline() if child.stdout is not None else ""
+        if not line:
+            self._stop_child(child)
+            raise DemoError(
+                beat.number,
+                f"child server never became ready: {drain.tail()[-400:].strip()}",
+            )
+        try:
+            ready = json.loads(line)
+        except json.JSONDecodeError as exc:
+            self._stop_child(child)
+            raise DemoError(
+                beat.number, f"child ready line was not JSON: {line[:200]!r}"
+            ) from exc
+        if not isinstance(ready, dict) or ready.get("ready") is not True:
+            self._stop_child(child)
+            raise DemoError(beat.number, f"child ready line was not a ready payload: {line[:200]!r}")
+        if not isinstance(ready.get("port"), int) or int(ready["port"]) <= 0:
+            self._stop_child(child)
+            raise DemoError(beat.number, f"child server reported no port: {ready!r}")
+        return child, ready
+
+    def _stop_child(self, child: subprocess.Popen[str], *, timeout: float = 10.0) -> None:
+        if child.poll() is None:
+            child.terminate()
+        try:
+            child.wait(timeout=timeout)
+        except subprocess.TimeoutExpired:  # pragma: no cover - unresponsive child
+            child.kill()
+            child.wait(timeout=timeout)
+        if child.stdout is not None:
+            child.stdout.close()
+        drain = self._drains.pop(id(child), None)
+        if drain is not None:
+            drain.join()
+
     def _wait_for_approval(
         self, beat: Beat, thread_id: str, turn_id: str, tool: str, timeout: float = 10.0
     ) -> dict[str, Any]:
@@ -321,23 +439,65 @@ class Demo:
             raise DemoError(beat.number, f"turn {turn_id} disappeared")
         return turn_id, self._turn_blocks(thread_id, turn_id)
 
-    def _audit_turn(self, thread_id: str, turn_id: str, since_seq: int) -> int:
-        """Mirror approval decisions and write executions into the audit log."""
+    def _record_decision(
+        self,
+        beat: Beat,
+        *,
+        turn_id: str,
+        card: Mapping[str, Any],
+        result: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        """Audit the owner's decision at the moment it is made.
+
+        The entry is written before the turn is waited on, so a decision can
+        never be a post-hoc reconstruction. The ``operator_note`` deliberately
+        carries a fake provider key: the log's scrubber must redact it.
+        """
+
+        status = str((result.get("approval") or {}).get("status") or "")
+        outcome = "not_executed" if status == "denied" else "awaiting_execution"
+        entry = self.audit.record(
+            "approval_decision",
+            turn_id=turn_id,
+            request_id=str(card["id"]),
+            tool=str(card.get("tool") or ""),
+            actor="owner",
+            decision=status,
+            outcome=outcome,
+            extra={
+                "single_use": bool(card.get("single_use")),
+                "operator_note": f"owner decision recorded; provider key {PLANTED_SECRET}",
+            },
+        )
+        self.check(beat, entry.get("decision") == status, f"{card['id']}: decision value recorded")
+        self.check(
+            beat,
+            PLANTED_SECRET not in json.dumps(entry) and "[redacted]" in json.dumps(entry),
+            f"{card['id']}: audited note is secret-scrubbed",
+        )
+        self.check(
+            beat,
+            bool(self.audit.entries(turn_id=turn_id, event="approval_decision")),
+            f"{card['id']}: decision was in the log before the turn finished",
+        )
+        return entry
+
+    def _audit_outcomes(self, thread_id: str, turn_id: str, since_seq: int) -> int:
+        """Audit what the decision led to: single use and run, never the decision."""
 
         written = 0
         for event in self.surface.events(thread_id):
             if event["seq"] <= since_seq:
                 continue
-            if event["type"] == "approval_resolved":
+            if event["type"] == "approval_resolved" and event.get("status") == "consumed":
                 card = self.store.get_approval(str(event["approval_id"])) or {}
-                status = str(event.get("status"))
                 self.audit.record(
-                    "approval_decision" if status in {"approved", "denied"} else "approval_settled",
+                    "approval_settled",
                     turn_id=turn_id,
                     request_id=str(event["approval_id"]),
                     tool=card.get("tool"),
                     actor="owner",
-                    decision=status,
+                    decision="consumed",
                     outcome="executed" if event.get("executed") else "not_executed",
                 )
                 written += 1
@@ -563,7 +723,7 @@ class Demo:
         tasks_before = list_tasks(self.paths.workspace)
 
         # 4a — deny. The gate must fail closed and nothing may be written.
-        turn_id, blocks = self._send_and_gate(
+        denied_turn, blocks = self._send_and_gate(
             beat,
             thread_id,
             "Every weekday at 7, summarize H200 capacity for me.",
@@ -579,6 +739,14 @@ class Demo:
             beat,
             list_tasks(self.paths.workspace) == tasks_before,
             "nothing was written after the denial",
+        )
+        denied_entries = self.audit.entries(turn_id=denied_turn, event="approval_decision")
+        self.check(beat, len(denied_entries) == 1, "the denial is in the audit log too")
+        self.check(
+            beat,
+            denied_entries[0].get("decision") == "denied"
+            and denied_entries[0].get("outcome") == "not_executed",
+            "the denial is recorded as not executed",
         )
 
         # 4b — approve. The write runs exactly once and is audited.
@@ -601,11 +769,11 @@ class Demo:
             "task is in the scheduler store",
         )
 
-        written = self._audit_turn(thread_id, turn_id, since)
-        self.check(beat, written >= 3, "decision, settlement, and execution reached the audit log")
+        written = self._audit_outcomes(thread_id, turn_id, since)
+        self.check(beat, written >= 2, "the single use and the execution reached the audit log")
         entries = self.audit.entries(turn_id=turn_id)
         decisions = {entry.get("decision") for entry in entries if entry["event"] == "approval_decision"}
-        self.check(beat, "approved" in decisions, "audit log shows the approval")
+        self.check(beat, "approved" in decisions, "audit log shows the approval at decision time")
         settlements = {entry.get("decision") for entry in entries if entry["event"] == "approval_settled"}
         self.check(beat, "consumed" in settlements, "audit log shows the single use")
         self.check(
@@ -613,14 +781,23 @@ class Demo:
             any(entry["event"] == "tool_executed" and entry.get("outcome") == "ok" for entry in entries),
             "audit log shows the execution",
         )
+
+        # The planted key went into an audited field; only the redaction may land.
+        raw = self.paths.audit.read_text(encoding="utf-8")
+        self.check(beat, PLANTED_SECRET not in raw, "the planted secret never reached the audit file")
+        self.check(beat, "[redacted]" in raw, "the audited note was redacted in place")
         self.check(
             beat,
-            all("prompt" not in json.dumps(entry) for entry in entries),
-            "audit entries carry no task payloads or secrets",
+            all(
+                "prompt" not in entry and "Summarize H200 capacity" not in json.dumps(entry)
+                for entry in entries
+            ),
+            "audit entries carry no task payloads",
         )
 
         beat.data.update(
             {
+                "denied_turn": denied_turn,
                 "approved_turn": turn_id,
                 "approved_task": task["task_id"],
                 "audit_entries": len(entries),
@@ -656,6 +833,7 @@ class Demo:
         result = self.surface.decide(card["id"], decision)
         self.check(beat, result["ok"] is True, f"{client_turn_id}: decision accepted")
         self.check(beat, result["executed"] is False, f"{client_turn_id}: decision ran nothing by itself")
+        self._record_decision(beat, turn_id=turn_id, card=card, result=result)
 
         self.surface.wait_for_turn(turn_id, timeout=20.0)
         blocks = self._turn_blocks(thread_id, turn_id)
@@ -718,139 +896,192 @@ class Demo:
         thread = self.surface.create_thread("Kill and resume")
         thread_id = thread["id"]
         beat.data["thread_id"] = thread_id
+        question = "Write a long status report about the Nebius demo while I kill this server."
 
-        child = subprocess.Popen(
-            [
-                sys.executable,
-                "-m",
-                "demo.server",
-                "--state",
-                str(self.paths.state),
-                "--thread",
-                thread_id,
-                "--text",
-                "Write a long status report about the Nebius demo while I kill this server.",
-                "--client-turn-id",
-                "demo-6",
-            ],
-            cwd=str(REPO_ROOT),
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
+        # A real child process serves the turn that gets killed.
+        child, ready = self._spawn_server(
+            beat, thread_id=thread_id, text=question, client_turn_id="demo-6"
         )
+        turn_id = str(ready["turn_id"])
+        answer_chars = int(ready["answer_chars"])
+        steps = int(ready["steps"])
+        self.check(beat, ready.get("port", 0) > 0, "child server bound a real socket")
         try:
-            assert child.stdout is not None
-            ready_line = child.stdout.readline()
-            if not ready_line:
-                stderr = child.stderr.read() if child.stderr else ""
-                raise DemoError(beat.number, f"child server never became ready: {stderr[-400:]}")
-            ready = json.loads(ready_line)
-            turn_id = str(ready["turn_id"])
-            self.check(beat, ready.get("port", 0) > 0, "child server bound a real socket")
-
             try:
-                _wait_for(lambda: _count_events(self.paths.db, thread_id, "token_delta") >= 3, 15.0)
+                _wait_for(
+                    lambda: _count_events(self.paths.db, thread_id, "token_delta") >= 3,
+                    15.0,
+                )
             except TimeoutError:
                 raise DemoError(beat.number, "the child never streamed enough tokens to kill") from None
-            if child.poll() is not None:  # pragma: no cover - timing guard
-                raise DemoError(beat.number, "child finished before it could be killed")
+            self.check(beat, child.poll() is None, "child was still running when the kill landed")
+            self.check(
+                beat,
+                _turn_state(self.paths.db, turn_id) == "running",
+                "the turn was still running when the kill landed",
+            )
             os.kill(child.pid, signal.SIGKILL)
         finally:
-            child.wait(timeout=10)
-            if child.stdout is not None:
-                child.stdout.close()
-            if child.stderr is not None:
-                child.stderr.close()
+            self._stop_child(child)
 
-        self.check(beat, child.returncode == -signal.SIGKILL, f"server was killed (exit {child.returncode})")
+        self.check(
+            beat,
+            child.returncode == -signal.SIGKILL,
+            f"server was killed (exit {child.returncode})",
+        )
 
-        before = self.surface.events(thread_id)
-        prefix = [(event["seq"], event["type"]) for event in before]
+        prefix = _read_events(self.paths.db, thread_id)
+        types_before = [event["type"] for event in prefix]
         partial = self._assistant_text(self.surface.snapshot(thread_id), turn_id)
-        self.check(beat, 0 < len(partial) < 400, "the answer was mid-stream when the server died")
+        deltas = types_before.count("token_delta")
+        last_before = int(prefix[-1]["seq"]) if prefix else 0
+        self.check(beat, "turn_started" in types_before, "turn_started reached the log before the kill")
+        self.check(beat, "token_delta" in types_before, "streamed tokens were on disk before the kill")
+        self.check(beat, "turn_finished" not in types_before, "the turn had not finished before the kill")
         self.check(
             beat,
-            any(event["type"] == "token_delta" for event in before),
-            "streamed tokens were on disk before the kill",
+            0 < deltas < steps,
+            f"the kill landed before the final step ({deltas} of {steps} tokens streamed)",
         )
-
-        # Restart: a new store handle and a new service over the same files.
-        closed = self.service.recover_interrupted()
-        self.check(beat, closed == [turn_id], "the interrupted turn was closed on restart")
-        turn = self.store.get_turn(turn_id) or {}
-        self.check(beat, turn.get("reason") == "interrupted", "turn marked interrupted")
-
-        after = self.surface.events(thread_id)
         self.check(
             beat,
-            [(event["seq"], event["type"]) for event in after[: len(prefix)]] == prefix,
-            "every event written before the kill survived",
+            0 < len(partial) < answer_chars,
+            f"the answer was mid-stream ({len(partial)} of {answer_chars} chars)",
         )
-        self.check(beat, len(after) == len(prefix) + 1, "restart appended exactly one event")
-        self.check(beat, after[-1]["type"] == "turn_finished", "the closing event is turn_finished")
         self.check(
             beat,
-            self._assistant_text(self.surface.snapshot(thread_id), turn_id) == partial,
-            "partial answer is preserved verbatim",
+            _turn_state(self.paths.db, turn_id) == "running",
+            "SIGKILL left the turn running on disk",
         )
 
-        # Resume the thread: one new turn, no duplicate user message.
-        resumed = self.surface.json("POST", f"/api/turns/{turn_id}/retry", expect=(202,))
-        new_turn = resumed["turn_id"]
-        self.surface.wait_for_turn(new_turn, timeout=20.0)
-        snapshot = self.surface.snapshot(thread_id)
-        user_messages = [m for m in snapshot["messages"] if m["role"] == "user"]
-        self.check(beat, len(user_messages) == 1, "no duplicate user message after resume")
-        turns = {m["turn_id"] for m in snapshot["messages"]}
-        self.check(beat, len(turns) == 2, "exactly two turns: interrupted and resumed")
-        resumed_turn = self.store.get_turn(new_turn) or {}
-        self.check(beat, resumed_turn.get("retry_of") == turn_id, "resumed turn points at the killed one")
-        self.check(beat, resumed_turn.get("reason") == "stop", "resumed turn finished normally")
-        final = self._assistant_text(snapshot, new_turn)
-        self.check(beat, final != partial and len(final) > 0, "resumed answer is new content")
+        # Restart: a brand-new process runs the recovery boot step, then serves.
+        restarted, recovered = self._spawn_server(beat, recover=True)
+        try:
+            self.check(
+                beat,
+                recovered.get("recovered") == [turn_id],
+                "the new process closed the interrupted turn",
+            )
+            record = _turn_record(self.paths.db, turn_id)
+            self.check(
+                beat,
+                record.get("state") == "finished",
+                "the turn is finished after the restart",
+            )
+            self.check(
+                beat,
+                record.get("reason") == "interrupted",
+                "the restarted process marked the turn interrupted",
+            )
 
-        # An idempotent resend must not open a third turn.
-        again = self.surface.send(
-            thread_id,
-            "Write a long status report about the Nebius demo while I kill this server.",
-            client_turn_id="demo-6",
-            expect=(200,),
-        )
-        self.check(beat, again.get("idempotent") is True, "resend was recognised as a replay")
-        self.check(beat, again["turn_id"] == turn_id, "resend returned the original turn")
-        self.check(
-            beat,
-            len({m["turn_id"] for m in self.surface.snapshot(thread_id)["messages"]}) == 2,
-            "replay created no third turn",
-        )
+            # Everything below crosses the process boundary over a real socket.
+            remote = RemoteSurface(int(recovered["port"]))
+            snapshot = remote.snapshot(thread_id)
+            interrupted = self._assistant_message(snapshot, turn_id)
+            self.check(
+                beat,
+                interrupted is not None and interrupted["status"] == "interrupted",
+                "the restarted server reports the message interrupted",
+            )
+            self.check(
+                beat,
+                interrupted is not None and self._message_text(interrupted) == partial,
+                "the partial answer survived verbatim into the new process",
+            )
 
-        # Wire replay: reconnect with Last-Event-ID and receive a gapless log.
-        last = self.store.last_seq(thread_id)
-        frames = list(self.surface.stream(thread_id, after=0, max_events=last + 1))
-        seqs = [frame[0] for frame in frames]
-        self.check(beat, seqs == list(range(1, last + 1)), "SSE replay is gapless")
-        self.check(beat, frames[-1][1] == "turn_finished", "stream ends on turn_finished")
+            last = int(snapshot["last_seq"])
+            frames = remote.stream(thread_id, after=0, max_events=last)
+            self.check(
+                beat,
+                [seq for seq, _, _ in frames] == list(range(1, last + 1)),
+                "SSE replay from the new process is gapless",
+            )
+            self.check(
+                beat,
+                [kind for _, kind, _ in frames] == types_before + ["turn_finished"],
+                "replay preserves the pre-kill order and appends turn_finished",
+            )
 
-        beat.data.update(
-            {
-                "killed_turn": turn_id,
-                "resumed_turn": new_turn,
-                "events_before_kill": len(prefix),
-                "partial_chars": len(partial),
-                "final_chars": len(final),
-                "last_seq": last,
-            }
+            # Resume over the new process's socket: one new turn, no duplicate user message.
+            resumed = remote.json("POST", f"/api/turns/{turn_id}/retry", expect=(202,))
+            new_turn = str(resumed["turn_id"])
+            self.check(beat, resumed.get("retry_of") == turn_id, "resumed turn points at the killed one")
+            try:
+                _wait_for(
+                    lambda: _turn_state(self.paths.db, new_turn) == "finished",
+                    20.0,
+                    interval=0.02,
+                )
+            except TimeoutError:
+                raise DemoError(beat.number, "the resumed turn never finished") from None
+            snapshot = remote.snapshot(thread_id)
+            resumed_turn = _turn_record(self.paths.db, new_turn)
+            self.check(beat, resumed_turn.get("reason") == "stop", "resumed turn finished normally")
+            user_messages = [m for m in snapshot["messages"] if m["role"] == "user"]
+            self.check(beat, len(user_messages) == 1, "no duplicate user message after resume")
+            self.check(
+                beat,
+                len({m["turn_id"] for m in snapshot["messages"]}) == 2,
+                "exactly two turns: interrupted and resumed",
+            )
+            final = self._assistant_text(snapshot, new_turn)
+            self.check(beat, final != partial and len(final) > 0, "resumed answer is new content")
+
+            # An idempotent resend must not open a third turn.
+            again = remote.json(
+                "POST",
+                f"/api/threads/{thread_id}/turns",
+                body={
+                    "text": question,
+                    "client_turn_id": "demo-6",
+                    "attachment_handles": [],
+                },
+                expect=(200,),
+            )
+            self.check(beat, again.get("idempotent") is True, "resend was recognised as a replay")
+            self.check(beat, again.get("turn_id") == turn_id, "resend returned the original turn")
+            self.check(
+                beat,
+                len({m["turn_id"] for m in remote.snapshot(thread_id)["messages"]}) == 2,
+                "replay created no third turn",
+            )
+
+            beat.data.update(
+                {
+                    "killed_turn": turn_id,
+                    "resumed_turn": new_turn,
+                    "events_before_kill": len(prefix),
+                    "last_seq_before_kill": last_before,
+                    "answer_chars": answer_chars,
+                    "partial_chars": len(partial),
+                    "final_chars": len(final),
+                    "last_seq": last,
+                    "recovered_by": "demo.server --recover",
+                }
+            )
+        finally:
+            self._stop_child(restarted)
+
+    @staticmethod
+    def _assistant_message(
+        snapshot: Mapping[str, Any], turn_id: str
+    ) -> Mapping[str, Any] | None:
+        for message in snapshot["messages"]:
+            if message["turn_id"] == turn_id and message["role"] == "assistant":
+                return message
+        return None
+
+    @staticmethod
+    def _message_text(message: Mapping[str, Any]) -> str:
+        return "".join(
+            str(block.get("text") or "")
+            for block in message["blocks"]
+            if block.get("type") == "text"
         )
 
     def _assistant_text(self, snapshot: Mapping[str, Any], turn_id: str) -> str:
-        for message in snapshot["messages"]:
-            if message["turn_id"] == turn_id and message["role"] == "assistant":
-                return "".join(
-                    str(block.get("text") or "")
-                    for block in message["blocks"]
-                    if block.get("type") == "text"
-                )
-        return ""
+        message = self._assistant_message(snapshot, turn_id)
+        return self._message_text(message) if message is not None else ""
 
 
 def _count_events(db: Path, thread_id: str, event_type: str) -> int:
@@ -866,10 +1097,41 @@ def _count_events(db: Path, thread_id: str, event_type: str) -> int:
         connection.close()
 
 
-def _wait_for(predicate: Callable[[], bool], timeout: float) -> None:
+def _read_events(db: Path, thread_id: str) -> list[dict[str, Any]]:
+    """Read the persisted event log from a fresh connection, not a cached handle."""
+
+    uri = f"file:{db}?mode=ro"
+    connection = sqlite3.connect(uri, uri=True, timeout=5.0)
+    connection.row_factory = sqlite3.Row
+    try:
+        rows = connection.execute(
+            "SELECT seq, type FROM events WHERE thread_id = ? ORDER BY seq",
+            (thread_id,),
+        ).fetchall()
+    finally:
+        connection.close()
+    return [{"seq": int(row["seq"]), "type": str(row["type"])} for row in rows]
+
+
+def _turn_record(db: Path, turn_id: str) -> dict[str, Any]:
+    uri = f"file:{db}?mode=ro"
+    connection = sqlite3.connect(uri, uri=True, timeout=5.0)
+    connection.row_factory = sqlite3.Row
+    try:
+        row = connection.execute("SELECT * FROM turns WHERE id = ?", (turn_id,)).fetchone()
+    finally:
+        connection.close()
+    return dict(row) if row is not None else {}
+
+
+def _turn_state(db: Path, turn_id: str) -> str:
+    return str(_turn_record(db, turn_id).get("state") or "")
+
+
+def _wait_for(predicate: Callable[[], bool], timeout: float, *, interval: float = 0.01) -> None:
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         if predicate():
             return
-        time.sleep(0.01)
+        time.sleep(interval)
     raise TimeoutError("condition was not met before the timeout")

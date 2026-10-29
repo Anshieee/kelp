@@ -18,8 +18,9 @@ import pytest
 
 from demo.config import REPO_ROOT
 from demo.fixtures import assets
-from demo.fixtures.registry import build_registry, fixture_manifest
+from demo.fixtures.registry import build_registry
 from demo.handlers import docs_answer, github_read, schedule_create, web_search
+from demo.runner import PLANTED_SECRET, TOTAL_BUDGET_SECONDS
 from skills.context import SkillContext
 from skills.errors import SkillHandlerError
 
@@ -41,7 +42,8 @@ def _run_demo(state: Path) -> subprocess.CompletedProcess[str]:
         env=_env_without_secrets(),
         capture_output=True,
         text=True,
-        timeout=180,
+        # The run's own budget is the contract; the harness only outlives it.
+        timeout=int(TOTAL_BUDGET_SECONDS) + 60,
     )
 
 
@@ -75,11 +77,24 @@ def test_demo_end_to_end(tmp_path: Path) -> None:
     assert all(task["status"] == "scheduled" for task in tasks)
 
     audit = [json.loads(line) for line in (state / "audit.jsonl").read_text().splitlines()]
-    assert {"approval_decision", "tool_executed"} <= {entry["event"] for entry in audit}
+    assert {"approval_decision", "approval_settled", "tool_executed"} <= {
+        entry["event"] for entry in audit
+    }
+    decisions = {
+        entry.get("decision") for entry in audit if entry["event"] == "approval_decision"
+    }
+    assert {"approved", "denied"} <= decisions, "both decisions were audited"
+    raw_audit = (state / "audit.jsonl").read_text()
+    assert PLANTED_SECRET not in raw_audit
+    assert "[redacted]" in raw_audit
 
     beat_six = json.loads((receipts / "beat-6.json").read_text())
-    assert beat_six["data"]["events_before_kill"] > 0
-    assert beat_six["data"]["resumed_turn"] != beat_six["data"]["killed_turn"]
+    data = beat_six["data"]
+    assert data["events_before_kill"] > 0
+    assert data["resumed_turn"] != data["killed_turn"]
+    assert 0 < data["partial_chars"] < data["answer_chars"]
+    assert data["recovered_by"] == "demo.server --recover"
+    assert any("new process" in check for check in beat_six["checks"])
 
 
 def test_demo_exits_non_zero_when_a_beat_fails(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -108,12 +123,26 @@ def test_fixture_manifests_keep_the_real_contract(tmp_path: Path) -> None:
         "schedule.create",
         "web.search",
     }
-    for manifest in (tmp_path / "skills").glob("*/manifest.json"):
+    manifests = sorted((tmp_path / "skills").glob("*/manifest.json"))
+    assert len(manifests) == 4
+    for manifest in manifests:
         fixture = json.loads(manifest.read_text())
-        builtin = fixture_manifest(REPO_ROOT / "skills" / "builtin" / manifest.parent.name / "manifest.json")
-        for key in ("input_schema", "output_schema", "permissions", "tools", "timeout_ms", "idempotent"):
-            assert fixture[key] == builtin[key], key
-        assert fixture["entry"]["module"].startswith("demo.handlers.")
+        builtin = json.loads(
+            (REPO_ROOT / "skills" / "builtin" / manifest.parent.name / "manifest.json").read_text()
+        )
+        # Compare against the raw builtin JSON, so a drift in any contract field
+        # (schemas, permissions, effects, scopes, timeout) fails here. Only the
+        # entry point is allowed to differ, and it must point at a fixture.
+        without_entry = {
+            key: value for key, value in fixture.items() if key != "entry"
+        }
+        assert without_entry == {
+            key: value for key, value in builtin.items() if key != "entry"
+        }
+        assert fixture["entry"] == {
+            "module": f"demo.handlers.{fixture['name'].replace('.', '_')}",
+            "callable": "run",
+        }
         assert registry.get(fixture["name"]).requires_approval == builtin["permissions"]["requires_approval"]
 
 
@@ -158,7 +187,18 @@ def test_docs_answer_sums_the_csv(tmp_path: Path) -> None:
     )
     assert "1,284,500" in output["answer"]
     assert output["artifact"]["rows"] == 3
+
+    # Every citation names a real line of the attached file: locator and text
+    # both come from the source rows, not from the answer string.
+    rows = [line.split(",") for line in assets.csv_bytes().decode("utf-8").splitlines()]
+    revenue = sum(int(row[2]) for row in rows[1:])
+    assert f"{revenue:,}" in output["answer"]
+    assert output["citations"] == [
+        {"locator": f"row {number}", "text": ",".join(row)}
+        for number, row in enumerate(rows[1:], start=2)
+    ]
     assert output["citations"][0]["locator"] == "row 2"
+    assert output["citations"][0]["text"].startswith("emea,Q3,412300")
 
 
 def test_docs_answer_cites_the_matching_pdf_page(tmp_path: Path) -> None:
@@ -216,9 +256,17 @@ def test_web_search_returns_recorded_results(tmp_path: Path) -> None:
 
 def test_cron_next_run_lands_on_a_weekday() -> None:
     after = dt.datetime(2026, 10, 30, 12, 0, tzinfo=dt.timezone.utc)  # Friday
+    assert after.weekday() == 4
     next_run = schedule_create.next_run_at("30 8 * * 1-5", "UTC", after=after)
     assert next_run == dt.datetime(2026, 11, 2, 8, 30, tzinfo=dt.timezone.utc)
     assert next_run.weekday() == 0
+
+
+def test_cron_treats_seven_as_sunday() -> None:
+    after = dt.datetime(2026, 10, 30, 12, 0, tzinfo=dt.timezone.utc)  # Friday
+    next_run = schedule_create.next_run_at("0 9 * * 7", "UTC", after=after)
+    assert next_run == dt.datetime(2026, 11, 1, 9, 0, tzinfo=dt.timezone.utc)
+    assert next_run.weekday() == 6
 
 
 def test_cron_rejects_an_impossible_expression() -> None:

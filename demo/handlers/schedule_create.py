@@ -26,7 +26,8 @@ from skills.errors import SkillHandlerError
 __all__ = ["list_tasks", "next_run_at", "run", "tasks_path"]
 
 _FIELD_RE = re.compile(r"^[0-9*/,\-]+$")
-_LIMITS = ((0, 59), (0, 23), (1, 31), (1, 12), (0, 6))
+# Cron weekdays run 0-7 (both 0 and 7 are Sunday); next_run_at folds 7 to 0.
+_LIMITS = ((0, 59), (0, 23), (1, 31), (1, 12), (0, 7))
 _MAX_DAYS = 366
 
 
@@ -80,6 +81,10 @@ def next_run_at(expr: str, timezone_name: str, *, after: datetime | None = None)
     )
     if len(fields) != 5:  # pragma: no cover - manifest pattern already rejects
         raise ValueError("a cron expression has five fields")
+    # Cron allows 7 for Sunday; Python's weekday numbering stops at 6.
+    weekdays = fields[-1]
+    if 7 in weekdays:
+        fields = fields[:-1] + ((weekdays - {7}) | {0},)
     try:
         zone = ZoneInfo(timezone_name)
     except (ZoneInfoNotFoundError, ValueError) as exc:
