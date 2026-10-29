@@ -33,6 +33,7 @@ from pathlib import Path
 from typing import Any, Mapping, Sequence
 
 from kernel import JsonlUsageStore, KernelConfig, TokenFactoryClient
+from kernel.usage import SpendCaps, SpendGuard
 from openshell.approvals import ApprovalStore
 from openshell.audit import AuditLog, SecretScrubber
 from skills.errors import SkillManifestError
@@ -171,6 +172,7 @@ class ServerConfig:
     auth_token: str = field(default="", repr=False)
     csrf_token: str | None = field(default=None, repr=False)
     kernel: KernelConfig = field(default_factory=KernelConfig, repr=False)
+    spend_caps: SpendCaps = field(default_factory=SpendCaps, repr=False)
 
     @classmethod
     def from_env(cls, env: Mapping[str, str] | None = None) -> "ServerConfig":
@@ -198,6 +200,10 @@ class ServerConfig:
 
         port = _parse_port(_text(source, PORT_ENV))
         kernel = KernelConfig.from_env(source)
+        try:
+            spend_caps = SpendCaps.from_env(source)
+        except ValueError as exc:
+            raise ConfigError("invalid_config", str(exc)) from None
 
         skill_root_text = _text(source, SKILL_ROOT_ENV)
         skill_root = (
@@ -223,6 +229,7 @@ class ServerConfig:
             auth_token=auth_token,
             csrf_token=csrf_token,
             kernel=kernel,
+            spend_caps=spend_caps,
         )
 
     @property
@@ -464,13 +471,19 @@ def build_app(
         audit = AuditLog(config.audit_path, secret_values=secret_values)
         if runtime_provider is None:
             runtime_provider = TokenFactoryClient(config.kernel)
+        usage_store = LoggedUsageStore(JsonlUsageStore(config.usage_path))
+        spend_guard = SpendGuard(
+            usage_store,
+            config.spend_caps,
+            state_path=config.usage_dir / "spend-state.json",
+        )
         service = ChatService(
             store=store,
             provider=runtime_provider,
             registry=registry,
             artifacts=ArtifactRegistry(store, config.artifact_dir),
             approvals=ApprovalStore(),
-            usage_store=LoggedUsageStore(JsonlUsageStore(config.usage_path)),
+            usage_store=usage_store,
             model=config.kernel.primary_model,
             config=config.kernel,
             secrets=secrets,
@@ -478,7 +491,11 @@ def build_app(
             tools=_tool_specs(registry),
             audit=audit,
             metrics=metrics,
+            spend_guard=spend_guard,
         )
+        # Publish persisted spend before the first scrape: the gauge is derived
+        # from the records on disk, so a restart shows the real total.
+        service.refresh_spend_metrics()
         # Exactly one recovery pass, before the API can accept a request.
         recovery = settle_interrupted(service, store, audit)
         recovered = len(recovery.closed_turns) + len(recovery.expired_approvals)

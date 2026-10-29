@@ -17,6 +17,15 @@ The named series are the M2-D contract:
 * ``sse_reconnects_total`` — unlabeled counter
 * ``recoveries_total`` — unlabeled counter
 
+The M3-C spend guardrail adds, all labelled ``window`` (``day``/``month``):
+
+* ``spend_used_usd`` — gauge, counted spend inside the window
+* ``spend_cap_usd`` — gauge, configured ceiling (absent when uncapped)
+* ``spend_cap_ratio`` — gauge, used/limit
+* ``spend_unknown_price_records`` — gauge, records with no known price
+* ``spend_cap_warnings_total`` — counter, once-per-window 80% warnings
+* ``spend_cap_blocked_total`` — counter, turns refused by the guardrail
+
 Label values are scrubbed with the OpenShell :class:`SecretScrubber`, so a
 secret that somehow reaches a label (a model id built from a key, a tool name)
 is rendered as ``[redacted]`` rather than exposed. Cards stay bounded because
@@ -40,6 +49,7 @@ from .logging import current_request_id, log
 
 __all__ = [
     "Counter",
+    "Gauge",
     "Histogram",
     "LoggedUsageStore",
     "Metrics",
@@ -121,6 +131,45 @@ class Counter:
 
     def render(self) -> list[str]:
         lines = [f"# HELP {self.name} {self.help}", f"# TYPE {self.name} counter"]
+        with self._lock:
+            items = sorted(self._values.items())
+        for key, value in items:
+            labels = dict(zip(self.labelnames, key))
+            lines.append(f"{self.name}{_labels_text(labels)} {_format_value(value)}")
+        return lines
+
+
+class Gauge:
+    """A last-write-wins sample set keyed by sorted label values."""
+
+    def __init__(self, name: str, help_text: str, labelnames: Iterable[str] = ()):
+        self.name = name
+        self.help = help_text
+        self.labelnames = tuple(labelnames)
+        self._values: dict[tuple[str, ...], float] = {}
+        self._lock = threading.Lock()
+
+    def _key(self, labels: Mapping[str, str]) -> tuple[str, ...]:
+        return tuple(str(labels.get(name, "")) for name in self.labelnames)
+
+    def set(self, value: float, **labels: str) -> None:
+        try:
+            value = float(value)
+        except (TypeError, ValueError):
+            return
+        if not math.isfinite(value):
+            # A non-finite sample would poison the exposition; keep the last
+            # finite observation instead.
+            return
+        key = self._key(labels)
+        with self._lock:
+            self._values[key] = value
+
+    def value(self, **labels: str) -> float | None:
+        return self._values.get(self._key(labels))
+
+    def render(self) -> list[str]:
+        lines = [f"# HELP {self.name} {self.help}", f"# TYPE {self.name} gauge"]
         with self._lock:
             items = sorted(self._values.items())
         for key, value in items:
@@ -254,6 +303,30 @@ class Metrics:
         self.recoveries = Counter(
             "recoveries_total", "Turns and approvals settled by boot recovery."
         )
+        self.spend_used = Gauge(
+            "spend_used_usd", "Counted spend inside the spend window.",
+            ("window",),
+        )
+        self.spend_cap = Gauge(
+            "spend_cap_usd", "Configured spend ceiling for the window.",
+            ("window",),
+        )
+        self.spend_ratio = Gauge(
+            "spend_cap_ratio", "Spend divided by the configured ceiling.",
+            ("window",),
+        )
+        self.spend_unknown = Gauge(
+            "spend_unknown_price_records",
+            "Usage records in the window with no known price.",
+            ("window",),
+        )
+        self.spend_warnings = Counter(
+            "spend_cap_warnings_total", "80% spend warnings by window.", ("window",)
+        )
+        self.spend_blocked = Counter(
+            "spend_cap_blocked_total", "Turns refused by the spend guardrail.",
+            ("window",),
+        )
         # Unlabeled series exist at zero from the first scrape, so a dashboard
         # sees the contract even before the first turn or reconnect.
         self.turn_duration.ensure()
@@ -272,6 +345,12 @@ class Metrics:
             self.approval_wait,
             self.sse_reconnects,
             self.recoveries,
+            self.spend_used,
+            self.spend_cap,
+            self.spend_ratio,
+            self.spend_unknown,
+            self.spend_warnings,
+            self.spend_blocked,
         )
 
     # -- labels ------------------------------------------------------------
@@ -314,6 +393,34 @@ class Metrics:
 
     def add_recoveries(self, amount: int = 1) -> None:
         self.recoveries.inc(float(amount))
+
+    def observe_spend(
+        self,
+        window: str,
+        *,
+        used_usd: float,
+        limit_usd: float | None,
+        ratio: float | None,
+        unknown_price_records: int,
+    ) -> None:
+        """Publish the guardrail's view of one window before a turn starts."""
+
+        labels = self._labels(window=window)
+        self.spend_used.set(used_usd, **labels)
+        self.spend_unknown.set(float(unknown_price_records), **labels)
+        if limit_usd is None:
+            # No ceiling is configured: leave the cap series absent rather
+            # than publish a misleading 0.
+            return
+        self.spend_cap.set(limit_usd, **labels)
+        if ratio is not None:
+            self.spend_ratio.set(ratio, **labels)
+
+    def inc_spend_warning(self, window: str) -> None:
+        self.spend_warnings.inc(**self._labels(window=window))
+
+    def inc_spend_blocked(self, window: str) -> None:
+        self.spend_blocked.inc(**self._labels(window=window))
 
     # -- exposition --------------------------------------------------------
 

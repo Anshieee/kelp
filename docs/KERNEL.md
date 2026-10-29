@@ -120,6 +120,21 @@ One `UsageRecord` per turn is appended to the configured store:
 - A broken store sets `usage_persisted: false` on `turn_finished`; accounting
   never kills a turn. No store configured is also reported as not persisted.
 
+`kernel.usage.SpendGuard` turns those persisted records into the M3-C spend
+ceiling. It reads the JSONL on every check (never an in-memory counter), sums
+the current UTC day and month, and reports:
+
+- a window's counted spend, configured limit, ratio, and unknown-price count;
+- `warnings` at 80% of a configured limit, recorded in a small sidecar marker
+  file so the warning happens once per window even across restarts;
+- `blocked` with `block_reason` `cap`, `unknown_price`, or `usage_unavailable`.
+
+The guard is configured with `KELP_SPEND_CAP_DAY_USD`,
+`KELP_SPEND_CAP_MONTH_USD`, `KELP_SPEND_UNKNOWN_PRICE_MODE`
+(`block`/`count_as`), and `KELP_SPEND_UNKNOWN_PRICE_USD`. It does not raise: the
+chat layer refuses a new turn before it exists, so no provider call is made and
+no partial message is written (`docs/DEPLOY.md` §13.1).
+
 ## 4. Deliberately not in this slice
 
 - Dashboard/transport (SSE/WebSocket) and any UI.

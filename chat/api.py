@@ -1147,6 +1147,12 @@ class ChatAPI:
         if head == "metrics":
             if len(segments) != 1 or method != "GET":
                 raise ChatError("not_found", status=404, message="Unknown endpoint.")
+            # Refresh the derived spend gauges from the persisted records before
+            # rendering, so a scrape is current even when no turn settled in this
+            # process (a restart, or a turn that ended in another worker). The
+            # refresh is best effort: a scrape must not fail because accounting
+            # is momentarily unreadable (KEL-18 review M1).
+            self.service.publish_spend_metrics()
             # Reached only through ``handle``, which has already authorized it.
             text = self.metrics.render() + self._limiter_exposition()
             body = text.encode("utf-8")

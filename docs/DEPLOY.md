@@ -115,6 +115,10 @@ no default: the process refuses to start without them (`missing_api_key` or
 | `KELP_AUDIT_DIR` | no | `/data/audit` | no | Append-only `audit.jsonl` |
 | `KELP_USAGE_DIR` | no | `/data/usage` | no | Append-only `usage.jsonl` |
 | `KELP_SKILL_ROOT` | no | unset → built-in skills | no | Custom skill directory |
+| `KELP_SPEND_CAP_DAY_USD` | no | unset → uncapped | no | Refuse new turns once today's persisted spend reaches this amount |
+| `KELP_SPEND_CAP_MONTH_USD` | no | unset → uncapped | no | Same, for the calendar month |
+| `KELP_SPEND_UNKNOWN_PRICE_MODE` | no | `block` | no | `block` or `count_as`: what an unpriced turn means for the cap |
+| `KELP_SPEND_UNKNOWN_PRICE_USD` | no | `0.01` | no | Amount charged per unpriced turn in `count_as` mode |
 | `KELP_LOG_LEVEL` | no | `info` | no | `debug` / `info` / `warning` / `error` |
 | `KELP_RATE_LIMIT_ENABLED` | no | `1` | no | Token buckets on; `0` disables them (concurrency caps stay on) |
 | `KELP_RATE_LIMIT_AUTH_RPM` / `_BURST` | no | `30` / `10` | no | Failed-auth attempts per minute and burst, per peer address |
@@ -720,8 +724,62 @@ holds the database, uploads, and logs for a very long time. Check current Nebius
 prices in the console — this document does not quote them. Egress is negligible:
 requests are small, and the heavy lifting happens in Token Factory.
 
-Cap spend at the provider, not just here. A missing cap is the only way this
-gets expensive.
+### 13.1 Spend guardrail
+
+Two ceilings, both optional and read at boot:
+
+```bash
+KELP_SPEND_CAP_DAY_USD=2.00      # refuse new turns after $2 today (UTC)
+KELP_SPEND_CAP_MONTH_USD=40.00   # refuse new turns after $40 this month (UTC)
+KELP_SPEND_UNKNOWN_PRICE_MODE=block   # block | count_as
+KELP_SPEND_UNKNOWN_PRICE_USD=0.01     # count_as only
+```
+
+The totals are recomputed from `/data/usage/usage.jsonl` on every check, so a
+restart mid-window neither resets the counter nor forgets that a warning was
+already sent. Behaviour:
+
+- **80% of a window** — one structured `spend_cap_warning` log line and audit
+  entry, plus the `spend_used_usd`, `spend_cap_usd`, `spend_cap_ratio`, and
+  `spend_unknown_price_records` gauges. Once per window, not per turn.
+- **100% of a window** — `POST /api/threads/{id}/turns` answers **402** with
+  `code: "spend_cap_reached"` and `retryable: false` before the turn row, the
+  messages, or any provider call exist. The audit trail gets a
+  `spend_cap_blocked` entry. A blocked retry behaves the same way.
+- **Unknown prices** — a model with no list price records
+  `estimated_cost_usd: null`. `block` (the default) refuses new turns while such
+  a record sits in a capped window, because an unmeasurable total is not a cap.
+  `count_as` instead charges each such record `KELP_SPEND_UNKNOWN_PRICE_USD`, and
+  reports the count in the gauge and the error details.
+- **Unreadable usage** — if `usage.jsonl` cannot be read while a cap is set, new
+  turns are refused with reason `usage_unavailable` (fail closed), not allowed
+  through at an unknown spend.
+
+A malformed cap value fails startup with `invalid_config`; it never silently
+means "unlimited".
+
+### 13.2 Deploy checklist: cap spend at the provider too
+
+The app cap protects the product; the provider cap protects the account. Do
+both, in this order:
+
+- [ ] Set a hard monthly spend limit in the Token Factory console for the key
+      this deployment uses, at or slightly above `KELP_SPEND_CAP_MONTH_USD`.
+- [ ] Confirm `KELP_SPEND_CAP_DAY_USD`/`_MONTH_USD` are set in
+      `deploy/kelp.env` (the container environment; no secret belongs there but
+      these are plain config) and that the file is still `0600`.
+- [ ] After the first real turn (§12.2), check `/metrics`:
+      `spend_used_usd{window="day"}` is non-zero and
+      `spend_unknown_price_records{window="day"}` is `0`. A non-zero unknown
+      count with a cap configured means the configured model has no price in
+      `kernel/config.py`; add one or choose `count_as`.
+- [ ] Verify the refusal path once, deliberately: set
+      `KELP_SPEND_CAP_DAY_USD=0`, restart, and confirm a send returns `402`
+      `spend_cap_reached` **without** a provider request in the logs. Restore
+      the real value and restart.
+
+Cap spend at the provider, not just here. A missing provider cap is the only way
+this gets expensive.
 
 ---
 

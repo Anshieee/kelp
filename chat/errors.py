@@ -25,6 +25,7 @@ _DEFAULT_STATUS = {
     "expired": 409,
     "already_used": 409,
     "rate_limited": 429,
+    "spend_cap_reached": 402,
     "unauthorized": 401,
     "csrf_failed": 403,
     "upload_too_large": 413,
