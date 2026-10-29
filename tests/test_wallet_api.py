@@ -12,6 +12,7 @@ from chat.wallet import WalletAPI
 from payments.stripe_wallet import STRIPE_SECRET_KEY_ENV
 from payments.wallet import (
     SpendCaps,
+    StripeGatewayError,
     Wallet,
     WalletLedger,
     redact_text,
@@ -160,6 +161,7 @@ def test_limits_endpoint(api: WalletAPI) -> None:
     assert limits["per_purchase_cents"] == 5000
     assert limits["monthly_cents"] == 20_000
     assert limits["spent_cents"] == 0
+    assert limits["reserved_cents"] == 0
     assert limits["remaining_cents"] == 20_000
 
 
@@ -349,6 +351,42 @@ def test_approve_pays_and_returns_a_receipt(api: WalletAPI, gateway: FakeGateway
     )
     assert payload(again)["idempotent"] is True
     assert len(gateway.payments) == 1
+
+
+def test_retryable_payment_failure_is_resumable_over_http(
+    api: WalletAPI, gateway: FakeGateway
+) -> None:
+    proposal = _ready_to_pay(api)
+    gateway.payment_error = StripeGatewayError(
+        "Can't reach the card processor right now.", retryable=True
+    )
+
+    failed = call(
+        api,
+        "POST",
+        "/api/wallet/approve",
+        body={"proposal_id": proposal["id"]},
+    )
+    assert failed.status == 502
+    error = payload(failed)["error"]
+    assert error["code"] == "payment_failed"
+    assert error["retryable"] is True
+
+    limits = payload(call(api, "GET", "/api/wallet/limits"))["limits"]
+    assert limits["spent_cents"] == 0
+    assert limits["reserved_cents"] == 1500
+
+    gateway.payment_error = None
+    retried = call(
+        api,
+        "POST",
+        "/api/wallet/approve",
+        body={"proposal_id": proposal["id"]},
+    )
+    assert retried.status == 200
+    assert payload(retried)["proposal"]["status"] == "paid"
+    assert len(gateway.payments) == 2
+    assert len(gateway.intents) == 1
 
 
 def test_deny_returns_a_denial_without_a_receipt(

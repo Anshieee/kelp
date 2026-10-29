@@ -15,11 +15,21 @@ Security boundaries:
   view (brand, last4, expiry); raw card numbers, CVCs, and other Stripe
   payload fields are dropped. Card-like input is rejected, not echoed.
 - Pending orders are single-use. ``approve``/``deny`` is an atomic compare-and-
-  set, and the monthly cap is checked again inside that transition, so two
-  concurrent approvals cannot overspend.
+  set. Approving also *reserves* the amount: the cap total counts paid orders
+  plus approved-but-unpaid ones, and that total is read inside the same
+  transaction as the state change. Two concurrent approvals therefore cannot
+  overspend, even before either charge settles.
 - Every order carries its own idempotency key. The key is stored with the
   order and reused for the Stripe charge, so a retried request cannot create a
   second charge for the same order.
+- A retryable transport failure (timeout, 5xx, processor still working) leaves
+  the order ``approved`` instead of ``failed``, so the same
+  ``kelp-order-<id>`` key can be retried and Stripe deduplicates the charge. A
+  definitive rejection marks the order ``failed``.
+- A reservation that is never charged is swept after
+  :data:`DEFAULT_APPROVAL_TTL`; the order becomes ``failed`` with reason
+  ``approval_expired`` and stops holding cap. A retry inside the window
+  resumes the charge; a retry after it must propose a new order.
 
 Configuration (server-only environment):
 
@@ -44,14 +54,16 @@ import sqlite3
 import threading
 import uuid
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Callable, Iterable, Mapping, Protocol
 
 from .stripe_wallet import STRIPE_SECRET_KEY_ENV, StripeConfig, WalletNotConfigured
 
 __all__ = [
+    "APPROVAL_EXPIRED_REASON",
     "CUSTOMER_ID_ENV",
+    "DEFAULT_APPROVAL_TTL",
     "DEFAULT_CURRENCY",
     "DEFAULT_MONTHLY_CAP_CENTS",
     "DEFAULT_PER_PURCHASE_CAP_CENTS",
@@ -86,6 +98,13 @@ MAX_AMOUNT_CENTS = 99_999_999
 MAX_DESCRIPTION_CHARS = 200
 MAX_IDEMPOTENCY_CHARS = 80
 
+# How long an approval holds cap before it is treated as abandoned: long enough
+# to retry a timed-out charge, short enough that a crash cannot pin a budget for
+# a whole month.
+DEFAULT_APPROVAL_TTL = timedelta(minutes=30)
+MAX_APPROVAL_TTL = timedelta(days=31)
+APPROVAL_EXPIRED_REASON = "approval_expired"
+
 _CURRENCY_RE = re.compile(r"^[a-z]{3}$")
 _PAYMENT_METHOD_RE = re.compile(r"^pm_[A-Za-z0-9]{4,}$")
 _CUSTOMER_RE = re.compile(r"^cus_[A-Za-z0-9]{4,}$")
@@ -95,8 +114,13 @@ _SETUP_INTENT_RE = re.compile(r"^seti_[A-Za-z0-9_]{4,}$")
 _BRAND_RE = re.compile(r"^[a-z][a-z0-9 _-]{0,31}$")
 
 # Card-like strings: 13-19 digits with optional single separators. Over-matches
-# are acceptable; hiding a number is cheaper than leaking one.
+# are acceptable when *hiding* text; masking a number is cheaper than leaking
+# one.
 _PAN_RE = re.compile(r"(?<!\d)(?:\d[ -]?){12,18}\d(?!\d)")
+# The same run, but only when it stands on its own. This is the pattern used to
+# *reject* input: identifiers such as ``ord_<hex>`` or ``pi_test_123`` routinely
+# contain 13+ digits in a row and must not be mistaken for a card number.
+_PAN_TOKEN_RE = re.compile(r"(?<![0-9A-Za-z])(?:\d[ -]?){12,18}\d(?![0-9A-Za-z])")
 _STRIPE_KEY_RE = re.compile(r"\b(?:sk|rk|pk)_(?:live|test)_[A-Za-z0-9]{4,}")
 _CARD_DATA_KEY_RE = re.compile(
     r"(?i)^(?:number|card_number|pan|cvc|cvv|cvc2|security_code|encrypted_number)$"
@@ -227,7 +251,12 @@ def redact_payload(value: Any) -> Any:
 
 
 def contains_raw_card_data(value: Any) -> bool:
-    """True when a payload carries a PAN-like string or a card-secret key."""
+    """True when a payload carries a PAN-like token or a card-secret key.
+
+    A bare 13-19 digit run only counts when it is a token of its own, so order
+    and payment ids (``ord_...``) are not mistaken for card numbers. Text
+    containing a card number is still redacted by :func:`redact_text`.
+    """
 
     if isinstance(value, Mapping):
         for key, item in value.items():
@@ -237,7 +266,7 @@ def contains_raw_card_data(value: Any) -> bool:
                 return True
         return False
     if isinstance(value, str):
-        return bool(_PAN_RE.search(value))
+        return bool(_PAN_TOKEN_RE.search(value))
     if isinstance(value, (list, tuple)):
         return any(contains_raw_card_data(item) for item in value)
     return False
@@ -265,11 +294,25 @@ def _iso(value: datetime) -> str:
     return value.astimezone(timezone.utc).isoformat()
 
 
-def _month_start(value: datetime) -> str:
-    start = value.astimezone(timezone.utc).replace(
+def _month_start_dt(value: datetime) -> datetime:
+    return value.astimezone(timezone.utc).replace(
         day=1, hour=0, minute=0, second=0, microsecond=0
     )
-    return start.isoformat()
+
+
+def _month_start(value: datetime) -> str:
+    return _month_start_dt(value).isoformat()
+
+
+def _chmod(target: Path, mode: int) -> None:
+    """Set ``mode`` on ``target`` when it exists; ignore platform quirks."""
+
+    try:
+        os.chmod(target, mode)
+    except FileNotFoundError:
+        pass
+    except OSError:  # pragma: no cover - platform dependent
+        pass
 
 
 @dataclass(frozen=True)
@@ -399,13 +442,22 @@ class SpendCaps:
             ),
         )
 
-    def to_public(self, *, currency: str, spent_cents: int) -> dict[str, Any]:
+    def to_public(
+        self,
+        *,
+        currency: str,
+        spent_cents: int,
+        reserved_cents: int = 0,
+    ) -> dict[str, Any]:
+        committed = spent_cents + reserved_cents
         return {
             "currency": currency,
             "per_purchase_cents": self.per_purchase_cents,
             "monthly_cents": self.monthly_cents,
             "spent_cents": spent_cents,
-            "remaining_cents": max(0, self.monthly_cents - spent_cents),
+            "reserved_cents": reserved_cents,
+            "committed_cents": committed,
+            "remaining_cents": max(0, self.monthly_cents - committed),
         }
 
 
@@ -519,8 +571,10 @@ CREATE INDEX IF NOT EXISTS proposals_spend
 class WalletLedger:
     """SQLite ledger for saved-card views, orders, and the spend total.
 
-    One connection, one write lock, ``0600`` for on-disk ledgers. ``:memory:``
-    is for tests and throwaway runs. No secret or card number is ever a column.
+    One connection, one write lock. An on-disk ledger keeps its directory at
+    ``0700`` and every file it touches (the database, ``-wal``, ``-shm``) at
+    ``0600``. ``:memory:`` is for tests and throwaway runs. No secret or card
+    number is ever a column.
     """
 
     def __init__(
@@ -532,7 +586,11 @@ class WalletLedger:
         raw = str(path)
         self.path = None if raw == ":memory:" else Path(path)
         if self.path is not None:
-            self.path.parent.mkdir(parents=True, exist_ok=True)
+            # The ledger directory is owner-only: the database, its WAL, and its
+            # SHM file all describe the same payments, so none may be readable by
+            # another account on the host.
+            self.path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+            _chmod(self.path.parent, 0o700)
         self._now = now or _utc_now
         self._lock = threading.RLock()
         self._conn = sqlite3.connect(
@@ -542,14 +600,25 @@ class WalletLedger:
         )
         self._conn.row_factory = sqlite3.Row
         if self.path is not None:
+            # Tighten the database before SQLite creates -wal/-shm: it copies the
+            # database's mode onto those files, so they are born 0600.
+            self._secure_files()
             self._conn.execute("PRAGMA journal_mode=WAL")
             self._conn.execute("PRAGMA synchronous=FULL")
         self._conn.executescript(_SCHEMA)
-        if self.path is not None:
-            try:
-                os.chmod(self.path, 0o600)
-            except OSError:  # pragma: no cover - platform dependent
-                pass
+        self._secure_files()
+
+    def _secure_files(self) -> None:
+        """Best-effort ``0600`` on the database and its WAL/SHM siblings."""
+
+        if self.path is None:
+            return
+        for target in (
+            self.path,
+            Path(f"{self.path}-wal"),
+            Path(f"{self.path}-shm"),
+        ):
+            _chmod(target, 0o600)
 
     # -- lifecycle ---------------------------------------------------------
 
@@ -572,6 +641,14 @@ class WalletLedger:
         customer_id: str = "",
         make_default: bool = False,
     ) -> Card:
+        """Store a card view.
+
+        The default card changes only when asked: an explicit ``make_default``,
+        or the first card ever saved. Syncing cards back from Stripe must not
+        move the owner's default behind their back, so a refresh that discovers
+        a new card leaves the existing default alone.
+        """
+
         now = _iso(self._now())
         with self._lock:
             self._conn.execute("BEGIN IMMEDIATE")
@@ -579,9 +656,16 @@ class WalletLedger:
                 existing = self._conn.execute(
                     "SELECT is_default FROM cards WHERE id = ?", (card.id,)
                 ).fetchone()
-                is_default = bool(make_default) or existing is None or bool(
-                    existing["is_default"]
-                )
+                if make_default:
+                    is_default = True
+                elif existing is not None:
+                    # Re-syncing a known card keeps whatever default it had.
+                    is_default = bool(existing["is_default"])
+                else:
+                    has_any = self._conn.execute(
+                        "SELECT 1 FROM cards LIMIT 1"
+                    ).fetchone()
+                    is_default = has_any is None
                 if is_default:
                     self._conn.execute("UPDATE cards SET is_default = 0")
                 self._conn.execute(
@@ -716,18 +800,24 @@ class WalletLedger:
         payment_method_id: str | None,
         monthly_cap_cents: int,
         monthly_since: str,
+        approved_since: str | None = None,
+        expire_before: str | None = None,
     ) -> tuple[Proposal | None, str]:
         """Atomically answer a pending order.
 
         Outcomes: ``approved``, ``denied``, ``blocked`` (cap), ``conflict``
-        (already answered), ``missing``. The monthly total is read inside the
-        same transaction as the state change.
+        (already answered), ``missing``. The amount already committed
+        (paid *and* still-approved orders) is read inside the same transaction as
+        the state change, so approving reserves the amount before the charge is
+        attempted and two approvals cannot both fit inside the cap.
         """
 
         now = _iso(self._now())
         with self._lock:
             self._conn.execute("BEGIN IMMEDIATE")
             try:
+                if expire_before is not None:
+                    self._expire_stale_in_transaction(expire_before)
                 row = self._conn.execute(
                     "SELECT * FROM proposals WHERE id = ?", (proposal_id,)
                 ).fetchone()
@@ -749,10 +839,13 @@ class WalletLedger:
                     )
                     outcome = "denied"
                 else:
-                    spent = self._spend_in_transaction(
-                        row["currency"], monthly_since
+                    paid, reserved = self._spend_in_transaction(
+                        row["currency"],
+                        monthly_since,
+                        approved_since or monthly_since,
                     )
-                    if spent + int(row["amount_cents"]) > monthly_cap_cents:
+                    requested = paid + reserved + int(row["amount_cents"])
+                    if requested > monthly_cap_cents:
                         self._conn.execute(
                             """
                             UPDATE proposals
@@ -829,20 +922,79 @@ class WalletLedger:
             raise WalletError("unknown_proposal")
         return proposal
 
-    def spend_cents(self, currency: str, *, since: str) -> int:
-        with self._lock:
-            return self._spend_in_transaction(currency, since)
+    def expire_stale_approvals(self, *, before: str) -> int:
+        """Fail approved orders whose reservation lapsed, freeing their cap.
 
-    def _spend_in_transaction(self, currency: str, since: str) -> int:
+        A crash between approval and charge must not pin the monthly budget
+        forever. Returns the number of orders swept.
+        """
+
+        with self._lock:
+            return self._expire_stale_in_transaction(before)
+
+    def _expire_stale_in_transaction(self, before: str) -> int:
+        return self._conn.execute(
+            """
+            UPDATE proposals
+            SET status = 'failed', reason = ?
+            WHERE status = 'approved' AND (decided_at IS NULL OR decided_at < ?)
+            """,
+            (APPROVAL_EXPIRED_REASON, before),
+        ).rowcount
+
+    def spend_breakdown(
+        self,
+        currency: str,
+        *,
+        since: str,
+        approved_since: str | None = None,
+    ) -> tuple[int, int]:
+        """``(paid_cents, reserved_cents)`` for the month's committed total.
+
+        ``paid`` counts settled orders; ``reserved`` counts approvals that have
+        not been charged yet and are still inside their reservation window.
+        """
+
+        with self._lock:
+            return self._spend_in_transaction(
+                currency, since, approved_since or since
+            )
+
+    def spend_cents(
+        self,
+        currency: str,
+        *,
+        since: str,
+        approved_since: str | None = None,
+    ) -> int:
+        paid, reserved = self.spend_breakdown(
+            currency, since=since, approved_since=approved_since
+        )
+        return paid + reserved
+
+    def _spend_in_transaction(
+        self,
+        currency: str,
+        since: str,
+        approved_since: str,
+    ) -> tuple[int, int]:
         row = self._conn.execute(
             """
-            SELECT COALESCE(SUM(amount_cents), 0) AS total
+            SELECT
+                COALESCE(SUM(
+                    CASE WHEN status = 'paid' AND paid_at IS NOT NULL
+                              AND paid_at >= ? THEN amount_cents END
+                ), 0) AS paid,
+                COALESCE(SUM(
+                    CASE WHEN status = 'approved' AND decided_at IS NOT NULL
+                              AND decided_at >= ? THEN amount_cents END
+                ), 0) AS reserved
             FROM proposals
-            WHERE status = 'paid' AND currency = ? AND paid_at >= ?
+            WHERE currency = ? AND status IN ('paid', 'approved')
             """,
-            (currency, since),
+            (since, approved_since, currency),
         ).fetchone()
-        return int(row["total"])
+        return int(row["paid"]), int(row["reserved"])
 
     # -- rows --------------------------------------------------------------
 
@@ -1113,6 +1265,7 @@ class Wallet:
         gateway: StripeGateway | None = None,
         customer_id: str = "",
         now_fn: Callable[[], datetime] | None = None,
+        approval_ttl: timedelta | None = None,
     ) -> None:
         self._config = config
         self.caps = caps or SpendCaps()
@@ -1125,6 +1278,15 @@ class Wallet:
                 message="STRIPE_CUSTOMER_ID must look like cus_….",
             )
         self._now = now_fn or _utc_now
+        ttl = DEFAULT_APPROVAL_TTL if approval_ttl is None else approval_ttl
+        if not isinstance(ttl, timedelta) or not (
+            timedelta(0) < ttl <= MAX_APPROVAL_TTL
+        ):
+            raise WalletError(
+                "invalid_config",
+                message="approval_ttl must be a positive span up to 31 days.",
+            )
+        self.approval_ttl = ttl
 
     @classmethod
     def from_env(
@@ -1147,6 +1309,27 @@ class Wallet:
             now_fn=now_fn,
         )
 
+    # -- time windows ------------------------------------------------------
+
+    def _windows(self) -> tuple[str, str, str]:
+        """``(month_start, reserved_since, sweep_before)`` for cap arithmetic.
+
+        ``reserved_since`` is the later of the month start and the reservation
+        window, so an approval from last month never leaks into this month's
+        total. ``sweep_before`` is the plain TTL boundary used to expire
+        abandoned approvals.
+        """
+
+        now = self._now()
+        month = _month_start_dt(now)
+        sweep_before = now - self.approval_ttl
+        reserved_since = max(sweep_before.astimezone(timezone.utc), month)
+        return _iso(month), _iso(reserved_since), _iso(sweep_before)
+
+    def _sweep_stale_approvals(self) -> int:
+        _, _, sweep_before = self._windows()
+        return self.ledger.expire_stale_approvals(before=sweep_before)
+
     # -- introspection -----------------------------------------------------
 
     @property
@@ -1166,8 +1349,13 @@ class Wallet:
 
     def limits(self, currency: str | None = None) -> dict[str, Any]:
         code = normalize_currency(currency)
-        spent = self.ledger.spend_cents(code, since=_month_start(self._now()))
-        return self.caps.to_public(currency=code, spent_cents=spent)
+        since, reserved_since, _ = self._windows()
+        paid, reserved = self.ledger.spend_breakdown(
+            code, since=since, approved_since=reserved_since
+        )
+        return self.caps.to_public(
+            currency=code, spent_cents=paid, reserved_cents=reserved
+        )
 
     def list_cards(self) -> list[dict[str, Any]]:
         return [card.to_public() for card in self.ledger.list_cards()]
@@ -1281,7 +1469,13 @@ class Wallet:
         if existing is not None:
             return existing, False
 
-        spent = self.ledger.spend_cents(code, since=_month_start(self._now()))
+        # An abandoned approval must not hold budget against a new order.
+        self._sweep_stale_approvals()
+        since, reserved_since, _ = self._windows()
+        paid, reserved = self.ledger.spend_breakdown(
+            code, since=since, approved_since=reserved_since
+        )
+        committed = paid + reserved
         if amount > self.caps.per_purchase_cents:
             raise WalletError(
                 "cap_exceeded",
@@ -1291,13 +1485,15 @@ class Wallet:
                     "per_purchase_cap_cents": self.caps.per_purchase_cents,
                 },
             )
-        if spent + amount > self.caps.monthly_cents:
+        if committed + amount > self.caps.monthly_cents:
             raise WalletError(
                 "monthly_cap_exceeded",
                 user_fixable=True,
                 details={
                     "amount_cents": amount,
-                    "spent_cents": spent,
+                    "spent_cents": paid,
+                    "reserved_cents": reserved,
+                    "committed_cents": committed,
                     "monthly_cap_cents": self.caps.monthly_cents,
                 },
             )
@@ -1331,17 +1527,24 @@ class Wallet:
         if not isinstance(proposal_id, str) or not proposal_id:
             raise WalletError("unknown_proposal")
 
+        # Approvals older than the reservation window are abandoned; they stop
+        # holding cap and cannot be silently charged later.
+        self._sweep_stale_approvals()
+
         current = self.ledger.get_proposal(proposal_id)
         if current is None:
             raise WalletError("unknown_proposal")
 
         if decision == "deny":
+            since, reserved_since, sweep_before = self._windows()
             proposal, outcome = self.ledger.decide(
                 proposal_id,
                 decision="deny",
                 payment_method_id=None,
                 monthly_cap_cents=self.caps.monthly_cents,
-                monthly_since=_month_start(self._now()),
+                monthly_since=since,
+                approved_since=reserved_since,
+                expire_before=sweep_before,
             )
             if outcome == "missing":  # pragma: no cover - checked above
                 raise WalletError("unknown_proposal")
@@ -1376,12 +1579,15 @@ class Wallet:
 
         card = self._select_card(payment_method_id)
         self._require_config()
+        since, reserved_since, sweep_before = self._windows()
         proposal, outcome = self.ledger.decide(
             proposal_id,
             decision="approve",
             payment_method_id=card.id,
             monthly_cap_cents=self.caps.monthly_cents,
-            monthly_since=_month_start(self._now()),
+            monthly_since=since,
+            approved_since=reserved_since,
+            expire_before=sweep_before,
         )
         if outcome == "missing":  # pragma: no cover - checked above
             raise WalletError("unknown_proposal")
@@ -1391,14 +1597,17 @@ class Wallet:
             raise WalletError("already_decided")
         assert proposal is not None
         if outcome == "blocked":
+            paid, reserved = self.ledger.spend_breakdown(
+                proposal.currency, since=since, approved_since=reserved_since
+            )
             raise WalletError(
                 "monthly_cap_exceeded",
                 user_fixable=True,
                 details={
                     "amount_cents": proposal.amount_cents,
-                    "spent_cents": self.ledger.spend_cents(
-                        proposal.currency, since=_month_start(self._now())
-                    ),
+                    "spent_cents": paid,
+                    "reserved_cents": reserved,
+                    "committed_cents": paid + reserved,
                     "monthly_cap_cents": self.caps.monthly_cents,
                 },
             )
@@ -1424,12 +1633,29 @@ class Wallet:
             )
         except StripeGatewayError as exc:
             reason = exc.code or "payment_failed"
-            self.ledger.mark_failed(proposal.id, reason=reason)
+            if not exc.retryable:
+                # A definitive rejection: nothing was charged, so retire the
+                # order. The reservation is released with it.
+                self.ledger.mark_failed(proposal.id, reason=reason)
+                raise WalletError(
+                    "payment_failed",
+                    retryable=False,
+                    message="The card was not charged. Try again.",
+                    details={"reason": redact_text(str(exc))[:200]},
+                ) from None
+            # Unknown outcome: the charge may still be settling, or it may never
+            # have left this host. Keep the order approved and its reservation
+            # alive so the caller can retry the *same* order, which reuses
+            # ``kelp-order-<id>`` and cannot double-charge.
             raise WalletError(
                 "payment_failed",
-                retryable=exc.retryable,
-                message="The card was not charged. Try again.",
-                details={"reason": redact_text(str(exc))[:200]},
+                retryable=True,
+                message="We couldn't confirm the charge. Retry this order.",
+                details={
+                    "reason": redact_text(str(exc))[:200],
+                    "order_status": proposal.status,
+                    "idempotency_key": self.gateway_idempotency_key(proposal.id),
+                },
             ) from None
 
         return self.ledger.mark_paid(

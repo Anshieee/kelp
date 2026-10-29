@@ -10,7 +10,7 @@ from __future__ import annotations
 import json
 import re
 import stat
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Mapping
 
@@ -18,7 +18,9 @@ import pytest
 
 from payments.stripe_wallet import STRIPE_SECRET_KEY_ENV, StripeConfig, WalletNotConfigured
 from payments.wallet import (
+    APPROVAL_EXPIRED_REASON,
     CUSTOMER_ID_ENV,
+    DEFAULT_APPROVAL_TTL,
     MONTHLY_CAP_ENV,
     PER_PURCHASE_CAP_ENV,
     Card,
@@ -50,13 +52,19 @@ class Clock:
 
 
 class FakeGateway:
-    """Records calls and returns canned Stripe-shaped payloads. Never networks."""
+    """Records calls and returns canned Stripe-shaped payloads. Never networks.
+
+    Payment intents are keyed by idempotency key, the way Stripe does it: a
+    repeated key returns the *same* intent and never creates a second charge.
+    ``payments`` keeps every call for assertions about retries.
+    """
 
     def __init__(self) -> None:
         self.setup_intents: list[dict[str, Any]] = []
         self.attachments: list[dict[str, Any]] = []
         self.listings: list[dict[str, Any]] = []
         self.payments: list[dict[str, Any]] = []
+        self.intents: dict[str, dict[str, Any]] = {}
         self.attach_result: Mapping[str, Any] | None = None
         self.list_result: list[Mapping[str, Any]] = []
         self.payment_result: Mapping[str, Any] = {"status": "succeeded"}
@@ -140,13 +148,18 @@ class FakeGateway:
         )
         if self.payment_error is not None:
             raise self.payment_error
-        return {
-            "id": "pi_test_123",
+        existing = self.intents.get(idempotency_key)
+        if existing is not None:
+            return existing
+        intent = {
+            "id": f"pi_test_{123 + len(self.intents)}",
             "status": "succeeded",
             "amount": amount_cents,
             "currency": currency,
             **self.payment_result,
         }
+        self.intents[idempotency_key] = intent
+        return intent
 
 
 @pytest.fixture
@@ -161,6 +174,7 @@ def make_wallet(
     caps: SpendCaps | None = None,
     clock: Clock | None = None,
     customer_id: str = CUSTOMER,
+    approval_ttl: timedelta | None = None,
 ) -> Wallet:
     config = StripeConfig.from_env({STRIPE_SECRET_KEY_ENV: TEST_KEY})
     ledger = WalletLedger(
@@ -174,6 +188,7 @@ def make_wallet(
         gateway=gateway or FakeGateway(),
         customer_id=customer_id,
         now_fn=clock,
+        approval_ttl=approval_ttl,
     )
 
 
@@ -364,11 +379,92 @@ def test_list_and_refresh_cards() -> None:
     assert gateway.listings[0]["customer_id"] == CUSTOMER
 
 
+def test_first_saved_card_becomes_default_and_others_do_not() -> None:
+    ledger = WalletLedger()
+    first = ledger.add_card(Card(PM_ID, "visa", "4242", 12, 2030))
+    second = ledger.add_card(Card("pm_testmastercard", "mastercard", "4444", 1, 2031))
+
+    assert first.is_default is True
+    assert second.is_default is False
+    assert ledger.default_card() is not None
+    assert ledger.default_card().id == PM_ID
+
+
+def test_refresh_cards_never_steals_the_default_card() -> None:
+    gateway = FakeGateway()
+    wallet = make_wallet(gateway=gateway)
+    add_card(wallet)  # PM_ID, the owner's default
+
+    gateway.list_result = [
+        {
+            "id": "pm_testmastercard",
+            "card": {
+                "brand": "mastercard",
+                "last4": "4444",
+                "exp_month": 1,
+                "exp_year": 2031,
+            },
+        }
+    ]
+    cards = wallet.refresh_cards()
+    assert [card["id"] for card in cards if card["is_default"]] == [PM_ID]
+
+    # Syncing a card the owner already has must not move the default either.
+    gateway.list_result = [
+        {
+            "id": PM_ID,
+            "card": {
+                "brand": "visa",
+                "last4": "4242",
+                "exp_month": 12,
+                "exp_year": 2030,
+            },
+        }
+    ]
+    cards = wallet.refresh_cards()
+    assert [card["id"] for card in cards if card["is_default"]] == [PM_ID]
+
+    # Only an explicit choice moves it.
+    moved = wallet.ledger.add_card(
+        Card("pm_testmastercard", "mastercard", "4444", 1, 2031),
+        make_default=True,
+    )
+    assert moved.is_default is True
+    assert [card["id"] for card in wallet.list_cards() if card["is_default"]] == [
+        "pm_testmastercard"
+    ]
+
+
 def test_file_ledger_is_owner_only(tmp_path: Path) -> None:
-    wallet = make_wallet(tmp_path=tmp_path)
-    mode = stat.S_IMODE((tmp_path / "wallet.db").stat().st_mode)
-    assert mode == 0o600
-    wallet.ledger.close()
+    directory = tmp_path / "wallet"
+    ledger = WalletLedger(directory / "wallet.db")
+    # Force a write so the WAL and SHM siblings exist while it is open.
+    ledger.add_card(Card(PM_ID, "visa", "4242", 12, 2030, True))
+    ledger.create_proposal(
+        amount_cents=100,
+        currency="usd",
+        description="one",
+        idempotency_key="order-perm-1",
+    )
+
+    assert stat.S_IMODE(directory.stat().st_mode) == 0o700
+    for name in ("wallet.db", "wallet.db-wal", "wallet.db-shm"):
+        target = directory / name
+        assert target.exists(), f"{name} should exist while the ledger is open"
+        assert stat.S_IMODE(target.stat().st_mode) == 0o600, name
+    ledger.close()
+
+
+def test_existing_loose_ledger_directory_is_tightened(tmp_path: Path) -> None:
+    directory = tmp_path / "loose"
+    directory.mkdir(mode=0o755)
+    directory.chmod(0o755)
+
+    ledger = WalletLedger(directory / "wallet.db")
+
+    assert stat.S_IMODE(directory.stat().st_mode) == 0o700
+    assert stat.S_IMODE((directory / "wallet.db").stat().st_mode) == 0o600
+    ledger.close()
 
 
 # -- orders and caps -------------------------------------------------------
@@ -548,16 +644,19 @@ def test_gateway_failure_marks_failed_and_never_counts_as_spend() -> None:
 
 
 @pytest.mark.parametrize(
-    "result",
+    ("result", "status", "retryable"),
     [
-        {"amount": 999},  # different amount than approved
-        {"currency": "eur"},
-        {"status": "processing"},
-        {"status": "requires_action"},
-        {"id": "not_an_intent"},
+        ({"amount": 999}, "failed", False),  # different amount than approved
+        ({"currency": "eur"}, "failed", False),
+        ({"id": "not_an_intent"}, "failed", False),
+        # The processor may still be working: keep the order resumable.
+        ({"status": "processing"}, "approved", True),
+        ({"status": "requires_action"}, "approved", True),
     ],
 )
-def test_incomplete_or_mismatched_payment_is_not_a_receipt(result: dict[str, Any]) -> None:
+def test_incomplete_or_mismatched_payment_is_not_a_receipt(
+    result: dict[str, Any], status: str, retryable: bool
+) -> None:
     gateway = FakeGateway()
     gateway.payment_result = result
     wallet = make_wallet(gateway=gateway)
@@ -568,8 +667,9 @@ def test_incomplete_or_mismatched_payment_is_not_a_receipt(result: dict[str, Any
         wallet.approve(proposal.id)
 
     assert caught.value.code == "payment_failed"
+    assert caught.value.retryable is retryable
     stored = wallet.ledger.get_proposal(proposal.id)
-    assert stored.status == "failed"
+    assert stored.status == status
     assert stored.receipt is None
     assert wallet.limits("usd")["spent_cents"] == 0
 
@@ -594,6 +694,149 @@ def test_resume_of_approved_order_reuses_the_same_charge_key() -> None:
     assert idempotent is True
     assert paid.status == "paid"
     assert gateway.payments[0]["idempotency_key"] == f"kelp-order-{proposal.id}"
+
+
+def test_retryable_transport_error_keeps_the_order_approved_for_resume() -> None:
+    gateway = FakeGateway()
+    gateway.payment_error = StripeGatewayError(
+        "Can't reach the card processor right now.", retryable=True
+    )
+    wallet = make_wallet(gateway=gateway)
+    add_card(wallet)
+    proposal, _ = wallet.propose(1000, idempotency_key="order-timeout-1")
+
+    with pytest.raises(WalletError) as caught:
+        wallet.approve(proposal.id)
+
+    assert caught.value.code == "payment_failed"
+    assert caught.value.status == 502
+    assert caught.value.retryable is True
+    stored = wallet.ledger.get_proposal(proposal.id)
+    assert stored.status == "approved"  # not failed: the outcome is unknown
+    assert stored.receipt is None
+    limits = wallet.limits("usd")
+    assert limits["spent_cents"] == 0
+    assert limits["reserved_cents"] == 1000
+    assert limits["remaining_cents"] == 19_000
+
+    # The retry resumes the same order and reuses the same Stripe key.
+    gateway.payment_error = None
+    paid, idempotent = wallet.approve(proposal.id)
+
+    assert idempotent is True
+    assert paid.status == "paid"
+    assert paid.receipt is not None
+    assert paid.receipt.payment_intent_id == "pi_test_123"
+    assert len(gateway.payments) == 2
+    assert {call["idempotency_key"] for call in gateway.payments} == {
+        f"kelp-order-{proposal.id}"
+    }
+    assert len(gateway.intents) == 1  # Stripe saw one intent for this order
+    assert wallet.limits("usd")["spent_cents"] == 1000
+    assert wallet.limits("usd")["reserved_cents"] == 0
+
+
+def test_approval_reserves_the_amount_against_new_orders() -> None:
+    gateway = FakeGateway()
+    gateway.payment_error = StripeGatewayError("timeout", retryable=True)
+    wallet = make_wallet(
+        gateway=gateway, caps=SpendCaps(per_purchase_cents=5000, monthly_cents=6000)
+    )
+    add_card(wallet)
+    first, _ = wallet.propose(5000, idempotency_key="order-reserve-1")
+    with pytest.raises(WalletError):
+        wallet.approve(first.id)
+
+    # Nothing is paid yet, but the approval holds the money.
+    with pytest.raises(WalletError) as caught:
+        wallet.propose(2000, idempotency_key="order-reserve-2")
+
+    assert caught.value.code == "monthly_cap_exceeded"
+    assert caught.value.details["spent_cents"] == 0
+    assert caught.value.details["reserved_cents"] == 5000
+    assert caught.value.details["monthly_cap_cents"] == 6000
+
+
+def test_two_approvals_cannot_both_fit_inside_the_cap() -> None:
+    gateway = FakeGateway()
+    gateway.payment_error = StripeGatewayError("timeout", retryable=True)
+    wallet = make_wallet(
+        gateway=gateway, caps=SpendCaps(per_purchase_cents=5000, monthly_cents=6000)
+    )
+    add_card(wallet)
+    first, _ = wallet.propose(5000, idempotency_key="order-conc-1")
+    second, _ = wallet.propose(2000, idempotency_key="order-conc-2")
+
+    with pytest.raises(WalletError):
+        wallet.approve(first.id)  # leaves first approved, 5000 reserved
+
+    with pytest.raises(WalletError) as caught:
+        wallet.approve(second.id)
+
+    assert caught.value.code == "monthly_cap_exceeded"
+    assert wallet.ledger.get_proposal(second.id).status == "blocked"
+    assert gateway.intents == {}  # the second order never reached Stripe
+
+
+def test_stale_approval_is_swept_and_frees_the_monthly_cap() -> None:
+    clock = Clock(datetime(2026, 3, 1, 12, tzinfo=timezone.utc))
+    gateway = FakeGateway()
+    gateway.payment_error = StripeGatewayError("timeout", retryable=True)
+    wallet = make_wallet(
+        clock=clock,
+        gateway=gateway,
+        caps=SpendCaps(per_purchase_cents=5000, monthly_cents=6000),
+    )
+    add_card(wallet)
+    first, _ = wallet.propose(5000, idempotency_key="order-stale-1")
+    with pytest.raises(WalletError):
+        wallet.approve(first.id)
+    assert wallet.ledger.get_proposal(first.id).status == "approved"
+
+    with pytest.raises(WalletError) as caught:
+        wallet.propose(2000, idempotency_key="order-stale-2")
+    assert caught.value.code == "monthly_cap_exceeded"
+
+    clock.value = clock.value + DEFAULT_APPROVAL_TTL + timedelta(seconds=1)
+
+    # The abandoned approval can no longer be charged...
+    with pytest.raises(WalletError) as late:
+        wallet.approve(first.id)
+    assert late.value.code == "already_decided"
+
+    # ...and no longer holds the budget.
+    second, created = wallet.propose(2000, idempotency_key="order-stale-2")
+    assert created is True
+    swept = wallet.ledger.get_proposal(first.id)
+    assert swept.status == "failed"
+    assert swept.reason == APPROVAL_EXPIRED_REASON
+    assert wallet.limits("usd")["reserved_cents"] == 0
+
+    gateway.payment_error = None
+    paid, _ = wallet.approve(second.id)
+    assert paid.status == "paid"
+    assert wallet.limits("usd")["spent_cents"] == 2000
+
+
+def test_each_order_gets_its_own_intent_and_retries_share_one() -> None:
+    gateway = FakeGateway()
+    wallet = make_wallet(gateway=gateway)
+    add_card(wallet)
+    first, _ = wallet.propose(1000, idempotency_key="order-intent-a")
+    second, _ = wallet.propose(1000, idempotency_key="order-intent-b")
+
+    wallet.approve(first.id)
+    wallet.approve(second.id)
+
+    assert set(gateway.intents) == {
+        f"kelp-order-{first.id}",
+        f"kelp-order-{second.id}",
+    }
+
+    # A repeat approval of a settled order never calls Stripe again.
+    wallet.approve(first.id)
+    assert len(gateway.payments) == 2
+    assert len(gateway.intents) == 2
 
 
 def test_month_rollover_resets_the_monthly_total() -> None:
@@ -678,8 +921,20 @@ def test_redact_payload_drops_secret_keys_recursively() -> None:
 def test_contains_raw_card_data() -> None:
     assert contains_raw_card_data({"card": {"number": PAN}}) is True
     assert contains_raw_card_data({"note": f"see {PAN}"}) is True
+    assert contains_raw_card_data({"note": "4242 4242 4242 4242"}) is True
     assert contains_raw_card_data({"card": {"last4": "4242"}}) is False
     assert contains_raw_card_data({"amount_cents": 1000}) is False
+
+
+def test_identifiers_with_long_digit_runs_are_not_card_data() -> None:
+    # A uuid4 hex id can contain 13+ digits in a row; treating that as a card
+    # number rejected the wallet's own order ids about one run in fourteen.
+    proposal_id = "ord_1761924561876a1c9d3fefff161680"
+    assert contains_raw_card_data({"proposal_id": proposal_id}) is False
+    assert contains_raw_card_data({"payment_intent_id": "pi_test_123"}) is False
+    # Redaction is still allowed to be broader than rejection.
+    assert PAN not in redact_text(f"card {PAN}")
+    assert "[redacted-card]" in redact_text(f"x{PAN}")
 
 
 def test_no_hardcoded_stripe_keys_in_the_new_wallet_module() -> None:
