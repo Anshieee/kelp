@@ -851,15 +851,16 @@ class Demo:
     def _beat_schedule(self, beat: Beat) -> None:
         thread = self.surface.create_thread("Scheduler")
         thread_id = thread["id"]
-        task = self._send_and_gate(
+        since = self.store.last_seq(thread_id)
+        turn_id, blocks = self._send_and_gate(
             beat,
             thread_id,
             "Every weekday at 8:30, summarize my open issues.",
             client_turn_id="demo-5",
             tool="schedule.create",
             decision="approve",
-        )[1]
-        task_id = self._block(task, "schedule.create")["detail"]["result"]["output"]["task_id"]
+        )
+        task_id = self._block(blocks, "schedule.create")["detail"]["result"]["output"]["task_id"]
 
         tasks = list_tasks(self.paths.workspace)
         entry = next((item for item in tasks if item["task_id"] == task_id), None)
@@ -873,10 +874,49 @@ class Demo:
         self.check(beat, next_run.weekday() < 5, "next run is a weekday")
         self.check(beat, len(tasks) >= 2, "the scheduler lists every created task")
 
+        # The decision was written at decision time as awaiting_execution; the
+        # single use and the run have to settle it, or the log keeps a dangling
+        # outcome for this turn.
+        written = self._audit_outcomes(thread_id, turn_id, since)
+        self.check(beat, written >= 2, "the single use and the execution reached the audit log")
+        entries = self.audit.entries(turn_id=turn_id)
+        self.check(
+            beat,
+            any(
+                entry["event"] == "approval_settled" and entry.get("decision") == "consumed"
+                for entry in entries
+            ),
+            "the scheduled write was settled as consumed",
+        )
+        self.check(
+            beat,
+            any(
+                entry["event"] == "tool_executed" and entry.get("outcome") == "ok"
+                for entry in entries
+            ),
+            "the audit log shows the scheduled write executing",
+        )
+        decisions = {
+            entry.get("decision") for entry in entries if entry["event"] == "approval_decision"
+        }
+        self.check(beat, "approved" in decisions, "audit log shows the approval at decision time")
+        settled_ids = {
+            entry.get("request_id") for entry in entries if entry["event"] == "approval_settled"
+        }
+        dangling = {
+            entry.get("request_id")
+            for entry in entries
+            if entry["event"] == "approval_decision"
+            and entry.get("outcome") == "awaiting_execution"
+        } - settled_ids
+        self.check(beat, not dangling, "no approval is left dangling as awaiting_execution")
+
         beat.data.update(
             {
                 "thread_id": thread_id,
+                "turn_id": turn_id,
                 "task_id": task_id,
+                "audit_entries": len(entries),
                 "task_count": len(tasks),
                 "tasks": [
                     {

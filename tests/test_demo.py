@@ -84,6 +84,21 @@ def test_demo_end_to_end(tmp_path: Path) -> None:
         entry.get("decision") for entry in audit if entry["event"] == "approval_decision"
     }
     assert {"approved", "denied"} <= decisions, "both decisions were audited"
+    # Every decision that promised a settlement has one: no dangling
+    # awaiting_execution for any turn (beat 4 and beat 5 both settle).
+    pending = {
+        (entry.get("turn_id"), entry.get("request_id"))
+        for entry in audit
+        if entry["event"] == "approval_decision"
+        and entry.get("outcome") == "awaiting_execution"
+    }
+    settled = {
+        (entry.get("turn_id"), entry.get("request_id"))
+        for entry in audit
+        if entry["event"] == "approval_settled"
+    }
+    assert pending - settled == set(), "an approved write never settled its audit outcome"
+    assert settled, "at least one approval settled"
     raw_audit = (state / "audit.jsonl").read_text()
     assert PLANTED_SECRET not in raw_audit
     assert "[redacted]" in raw_audit
