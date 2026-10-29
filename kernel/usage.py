@@ -25,6 +25,7 @@ from __future__ import annotations
 import json
 import math
 import os
+import re
 import threading
 from dataclasses import asdict, dataclass
 from datetime import datetime, timedelta, timezone
@@ -97,6 +98,25 @@ class UsageStore(Protocol):
     def record(self, record: UsageRecord) -> None: ...
 
 
+def _jsonl_paths(path: Path) -> list[Path]:
+    """Active usage file plus retained rotated segments, oldest first.
+
+    The retention pass renames the active file; a spend total must keep counting
+    the segments inside the current day/month window, or a rotation would look
+    like a spending reset.
+    """
+
+    pattern = re.compile(
+        re.escape(path.name) + r"\.\d{8}T\d{12,}Z(?:\.\d{4,})?$"
+    )
+    try:
+        entries = list(path.parent.iterdir())
+    except OSError:
+        return [path]
+    segments = [entry for entry in entries if pattern.fullmatch(entry.name)]
+    return sorted(segments, key=lambda entry: entry.name) + [path]
+
+
 class InMemoryUsageStore:
     """Test/dev store."""
 
@@ -135,10 +155,14 @@ class JsonlUsageStore:
                 os.fsync(handle.fileno())
 
     def records(self) -> list[dict[str, Any]]:
-        if not self.path.exists():
-            return []
-        lines = self.path.read_text(encoding="utf-8").splitlines()
-        return [json.loads(line) for line in lines if line.strip()]
+        rows: list[dict[str, Any]] = []
+        for path in _jsonl_paths(self.path):
+            try:
+                lines = path.read_text(encoding="utf-8").splitlines()
+            except FileNotFoundError:  # a rotation raced this read
+                continue
+            rows.extend(json.loads(line) for line in lines if line.strip())
+        return rows
 
 
 # ---------------------------------------------------------------------------
@@ -348,34 +372,43 @@ class SpendGuard:
         path = self._file_path()
         if path is None:
             return self._memory_rows(), 0
-        try:
-            stat = path.stat()
-        except FileNotFoundError:
+        paths = _jsonl_paths(path)
+        stats: list[tuple[str, int, int]] = []
+        for candidate in paths:
+            try:
+                stat = candidate.stat()
+            except FileNotFoundError:
+                continue
+            except OSError as exc:  # pragma: no cover - permission/IO
+                raise SpendUsageUnavailable(str(exc)) from None
+            stats.append((str(candidate), stat.st_mtime_ns, stat.st_size))
+        if not stats:
             return [], 0
-        except OSError as exc:  # pragma: no cover - permission/IO
-            raise SpendUsageUnavailable(str(exc)) from None
-        key = (str(path), stat.st_mtime_ns, stat.st_size)
+        key = tuple(stats)
         with self._lock:
             if key == self._cache_key:
                 return list(self._cache_rows), self._cache_torn
-        try:
-            raw = path.read_text(encoding="utf-8")
-        except OSError as exc:
-            raise SpendUsageUnavailable(str(exc)) from None
         rows: list[dict[str, Any]] = []
         torn = 0
-        for line in raw.splitlines():
-            if not line.strip():
-                continue
+        for candidate in paths:
             try:
-                row = json.loads(line)
-            except ValueError:
-                torn += 1
+                raw = candidate.read_text(encoding="utf-8")
+            except FileNotFoundError:  # a rotation raced this read
                 continue
-            if isinstance(row, Mapping):
-                rows.append(dict(row))
-            else:  # a JSON value that is not an object is not a record
-                torn += 1
+            except OSError as exc:
+                raise SpendUsageUnavailable(str(exc)) from None
+            for line in raw.splitlines():
+                if not line.strip():
+                    continue
+                try:
+                    row = json.loads(line)
+                except ValueError:
+                    torn += 1
+                    continue
+                if isinstance(row, Mapping):
+                    rows.append(dict(row))
+                else:  # a JSON value that is not an object is not a record
+                    torn += 1
         with self._lock:
             self._cache_key = key
             self._cache_rows = rows

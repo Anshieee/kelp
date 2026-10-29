@@ -11,15 +11,13 @@ artifact is gone. The per-token directory keeps stale cleanup a directory scan
 instead of a full index read; the per-kind level keeps a PDF and a CSV that
 happen to share a token from evicting each other.
 
-Retention is **lazy, by design, in this milestone**: deleting an artifact does
-not call into this module. The derived text survives until the next
-`docs.answer` call, which prunes every token whose artifact is gone before it
-builds or loads anything (so a deleted file's text is unreachable from the
-skill from that call on). :func:`remove_index` is the eager hook, but the chat
-thread/file deletion path is not wired to it here — wiring it would put an
-index dependency inside the chat service, which owns no retrieval state. The
-window is therefore "until the next question", not "instantly"; anything that
-needs a hard guarantee must call :func:`remove_index` itself.
+Retention is **eager on deletion and lazy as a fallback**. The chat thread /
+artifact deletion path calls :func:`remove_index` for every handle it removes
+(:class:`chat.artifacts.ArtifactRegistry`), so a deleted document's text is gone
+at the same moment its bytes are. The next `docs.answer` call still runs
+:func:`prune_indexes` before building or loading anything, which reclaims
+entries left by a crash between the registry delete and the eager unlink. The
+two paths agree: an index entry whose artifact is gone is never served.
 
 Guarantees:
 
@@ -427,10 +425,9 @@ def ensure_index(
 def remove_index(workspace_root: str | os.PathLike[str], handle: str) -> bool:
     """Drop every index entry for one artifact handle. Returns whether any existed.
 
-    This is the *eager* hook; it is deliberately not wired into chat file or
-    thread deletion (see the module docstring). Pruning is lazy instead: the
-    next `docs.answer` call drops entries whose artifact is gone, which bounds
-    retention at one more question rather than at deletion.
+    This is the *eager* hook, called by ``chat.artifacts.ArtifactRegistry`` when
+    a thread or upload is deleted. :func:`prune_indexes` remains the lazy
+    fallback for entries orphaned by a crash or an older deployment.
     """
 
     if not isinstance(handle, str) or not HANDLE_RE.match(handle):

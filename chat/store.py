@@ -14,6 +14,7 @@ from __future__ import annotations
 import base64
 import json
 import os
+import re
 import sqlite3
 import threading
 import uuid
@@ -22,7 +23,14 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Iterator, Mapping, Sequence
 
-__all__ = ["APPROVAL_TRANSITIONS", "ChatStore", "iso_now", "new_id"]
+__all__ = [
+    "APPROVAL_TRANSITIONS",
+    "ChatStore",
+    "LIVE_TURN_STATES",
+    "ThreadBusyError",
+    "iso_now",
+    "new_id",
+]
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS threads (
@@ -114,7 +122,10 @@ CREATE TABLE IF NOT EXISTS artifacts (
     pages INTEGER,
     rows INTEGER
 );
+CREATE INDEX IF NOT EXISTS artifacts_thread ON artifacts (thread_id, created_at);
 """
+
+_ARTIFACT_HANDLE_RE = re.compile(r"artifact:[A-Za-z0-9_-]{8,128}")
 
 
 def iso_now(moment: datetime | None = None) -> str:
@@ -153,6 +164,26 @@ def _load(value: str | None, default: Any) -> Any:
         return default
 
 
+LIVE_TURN_STATES = ("queued", "running", "stopping")
+
+
+class ThreadBusyError(RuntimeError):
+    """A purge found a live turn in the thread and aborted before deleting.
+
+    Raised from inside :meth:`ChatStore.purge_thread`'s transaction, so the
+    row check and the deletes are one atomic decision: either the thread is
+    quiet and everything goes, or nothing goes and the caller retries. The
+    service maps this to ``409 turn_in_progress``.
+    """
+
+    def __init__(self, thread_id: str, turn_ids: Sequence[str]):
+        self.thread_id = thread_id
+        self.turn_ids = list(turn_ids)
+        super().__init__(
+            f"thread {thread_id} still has live turns: {', '.join(self.turn_ids)}"
+        )
+
+
 class ChatStore:
     """Threads, messages, events, turns, approvals, and artifact metadata."""
 
@@ -185,6 +216,31 @@ class ChatStore:
     def close(self) -> None:
         with self._lock:
             self._conn.close()
+
+    def vacuum(self) -> bool:
+        """Reclaim free pages after a bulk delete.
+
+        ``VACUUM`` is a whole-database rewrite, so it runs only when this call
+        owns the outermost transaction. A caller already inside
+        :meth:`transaction` must commit first and vacuum afterwards; in that
+        case this is a no-op and returns ``False``.
+        """
+
+        with self._lock:
+            if self._depth:
+                return False
+            try:
+                self._conn.execute("VACUUM")
+            except sqlite3.OperationalError:  # pragma: no cover - busy reader
+                return False
+            try:
+                # A WAL keeps the pre-vacuum pages alive until it is
+                # checkpointed; truncate it so the file on disk actually
+                # shrinks. Another reader can defer this, never fail a delete.
+                self._conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+            except sqlite3.OperationalError:  # pragma: no cover - busy reader
+                pass
+            return True
 
     def __enter__(self) -> "ChatStore":
         return self
@@ -866,6 +922,255 @@ class ChatStore:
                 "UPDATE artifacts SET deleted_at = ? WHERE thread_id = ?",
                 (self._now_iso(), thread_id),
             )
+
+    # -- retention ---------------------------------------------------------
+
+    def purge_thread(
+        self,
+        thread_id: str,
+        *,
+        on_artifacts: Callable[[Sequence[Mapping[str, Any]]], Any] | None = None,
+        vacuum: bool = True,
+    ) -> dict[str, Any]:
+        """Hard-delete one thread and everything that belongs to it.
+
+        Every row is removed in a single transaction: messages, their blocks,
+        the wire log, turns, approvals, artifact registry rows, and the thread
+        itself. Nothing is left flagged ``deleted_at`` — a second call finds no
+        rows and returns zero counts instead of failing.
+
+        The live-turn check runs *inside* that transaction, before any delete:
+        a turn in ``queued``, ``running`` or ``stopping`` makes a purge
+        impossible to do cleanly (its finalize step would append events and
+        update rows that no longer exist), so the transaction aborts with
+        :class:`ThreadBusyError` and the caller retries after the turn settles.
+        No partial delete can be observed.
+
+        Filesystem work cannot join a SQLite transaction, so the artifact
+        metadata is captured before the delete and handed to ``on_artifacts``
+        *after* commit. That callback owns unlinking bytes and dropping the
+        derived index. A callback failure is reported, not raised: the rows are
+        already gone, and the orphan sweep will retry the leftovers.
+
+        ``VACUUM`` runs after commit when this call owns the transaction, so
+        the space a thread occupied is actually returned to the filesystem.
+        """
+
+        artifact_rows: list[dict[str, Any]] = []
+        counts = {
+            "messages": 0,
+            "blocks": 0,
+            "events": 0,
+            "turns": 0,
+            "approvals": 0,
+            "artifacts": 0,
+        }
+        deleted_thread = False
+        with self.transaction():
+            live = self._conn.execute(
+                "SELECT id FROM turns WHERE thread_id = ? AND state IN "
+                f"({', '.join('?' for _ in LIVE_TURN_STATES)}) "
+                "ORDER BY created_at, rowid",
+                (thread_id, *LIVE_TURN_STATES),
+            ).fetchall()
+            if live:
+                raise ThreadBusyError(thread_id, [row["id"] for row in live])
+            artifact_rows = [
+                self._artifact_record(row)
+                for row in self._conn.execute(
+                    "SELECT * FROM artifacts WHERE thread_id = ?", (thread_id,)
+                ).fetchall()
+            ]
+            counts["blocks"] = self._conn.execute(
+                "DELETE FROM blocks WHERE message_id IN "
+                "(SELECT id FROM messages WHERE thread_id = ?)",
+                (thread_id,),
+            ).rowcount
+            counts["messages"] = self._conn.execute(
+                "DELETE FROM messages WHERE thread_id = ?", (thread_id,)
+            ).rowcount
+            counts["events"] = self._conn.execute(
+                "DELETE FROM events WHERE thread_id = ?", (thread_id,)
+            ).rowcount
+            counts["approvals"] = self._conn.execute(
+                "DELETE FROM approvals WHERE thread_id = ?", (thread_id,)
+            ).rowcount
+            counts["turns"] = self._conn.execute(
+                "DELETE FROM turns WHERE thread_id = ?", (thread_id,)
+            ).rowcount
+            counts["artifacts"] = self._conn.execute(
+                "DELETE FROM artifacts WHERE thread_id = ?", (thread_id,)
+            ).rowcount
+            deleted_thread = (
+                self._conn.execute(
+                    "DELETE FROM threads WHERE id = ?", (thread_id,)
+                ).rowcount
+                > 0
+            )
+
+        report: dict[str, Any] = {
+            "thread_id": thread_id,
+            "deleted": deleted_thread,
+            **counts,
+            "artifact_handles": [row["handle"] for row in artifact_rows],
+            "vacuumed": False,
+        }
+        if on_artifacts is not None and artifact_rows:
+            try:
+                report["files"] = on_artifacts(artifact_rows)
+            except Exception as exc:  # noqa: BLE001 - rows are already gone
+                report["files"] = {
+                    "error": type(exc).__name__,
+                    "retry": "orphan_sweep",
+                }
+        if vacuum:
+            report["vacuumed"] = self.vacuum()
+        return report
+
+    def _orphan_filter(
+        self,
+        alias: str,
+        cutoff: str,
+        skip_handles: Sequence[str],
+    ) -> tuple[str, list[Any]]:
+        """SQL predicate for "older than the grace window and parentless".
+
+        ``parentless`` is evaluated by the database at the moment the
+        statement runs: a row whose ``thread_id`` is unset, or whose parent
+        thread no longer exists. Both the read and the delete go through this
+        one predicate so they cannot drift apart.
+        """
+
+        clauses = [
+            f"{alias}.created_at < ?",
+            f"({alias}.thread_id IS NULL OR NOT EXISTS "
+            f"(SELECT 1 FROM threads t WHERE t.id = {alias}.thread_id))",
+        ]
+        params: list[Any] = [cutoff]
+        skipped = tuple(dict.fromkeys(str(handle) for handle in skip_handles))
+        if skipped:
+            placeholders = ", ".join("?" for _ in skipped)
+            clauses.append(f"{alias}.handle NOT IN ({placeholders})")
+            params.extend(skipped)
+        return " AND ".join(clauses), params
+
+    def orphan_artifact_rows(
+        self,
+        cutoff: str,
+        *,
+        skip_handles: Sequence[str] = (),
+    ) -> list[dict[str, Any]]:
+        """Artifact rows older than ``cutoff`` with no live parent thread.
+
+        A row is orphaned when it was never claimed (``thread_id IS NULL``) or
+        when its thread row is gone (an interrupted delete). Callers pass the
+        handles still referenced by a live turn in ``skip_handles`` so a sweep
+        can never race a turn that is about to claim an upload.
+
+        This is a read-only view for diagnostics; :meth:`delete_orphan_artifacts`
+        is the sweep's writer, because only a delete under the same predicate
+        is atomic with respect to a concurrent claim.
+        """
+
+        where, params = self._orphan_filter("a", cutoff, skip_handles)
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT a.* FROM artifacts a WHERE " + where, params
+            ).fetchall()
+        return [self._artifact_record(row) for row in rows]
+
+    def delete_orphan_artifacts(
+        self,
+        cutoff: str,
+        *,
+        skip_handles: Sequence[str] = (),
+    ) -> list[dict[str, Any]]:
+        """Atomically delete parentless artifact rows older than ``cutoff``.
+
+        Selection and deletion share one transaction, and the ``DELETE``
+        re-evaluates the parentless predicate itself, so a row claimed by a
+        thread between the two statements (another process on the same file)
+        survives and is not reported. The returned records are exactly the
+        rows that were removed — never "the rows we meant to remove" — which
+        keeps caller counts and filesystem cleanup honest.
+        """
+
+        where, params = self._orphan_filter("artifacts", cutoff, skip_handles)
+        with self.transaction():
+            rows = self._conn.execute(
+                "SELECT * FROM artifacts WHERE " + where, params
+            ).fetchall()
+            records = [self._artifact_record(row) for row in rows]
+            handles = [record["handle"] for record in records]
+            if not handles:
+                return []
+            gone: set[str] = set()
+            # SQLite's bound-variable limit is 999 on older builds.
+            for start in range(0, len(handles), 500):
+                chunk = handles[start : start + 500]
+                placeholders = ", ".join("?" for _ in chunk)
+                self._conn.execute(
+                    f"DELETE FROM artifacts WHERE handle IN ({placeholders}) "
+                    "AND (thread_id IS NULL OR NOT EXISTS "
+                    "(SELECT 1 FROM threads t WHERE t.id = artifacts.thread_id))",
+                    chunk,
+                )
+                survivors = self._conn.execute(
+                    f"SELECT handle FROM artifacts WHERE handle IN ({placeholders})",
+                    chunk,
+                ).fetchall()
+                gone.update(
+                    handle
+                    for handle in chunk
+                    if handle not in {row["handle"] for row in survivors}
+                )
+            deleted = [record for record in records if record["handle"] in gone]
+        return deleted
+
+    def delete_artifacts(self, handles: Sequence[str]) -> int:
+        """Hard-delete artifact registry rows by handle. Idempotent."""
+
+        unique = tuple(dict.fromkeys(str(handle) for handle in handles))
+        if not unique:
+            return 0
+        deleted = 0
+        with self.transaction():
+            # SQLite's bound-variable limit is 999 on older builds.
+            for start in range(0, len(unique), 500):
+                chunk = unique[start : start + 500]
+                placeholders = ", ".join("?" for _ in chunk)
+                deleted += self._conn.execute(
+                    f"DELETE FROM artifacts WHERE handle IN ({placeholders})",
+                    chunk,
+                ).rowcount
+        return deleted
+
+    def artifact_handles(self) -> set[str]:
+        with self._lock:
+            rows = self._conn.execute("SELECT handle FROM artifacts").fetchall()
+        return {row["handle"] for row in rows}
+
+    def artifact_storage_paths(self) -> set[str]:
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT storage_path FROM artifacts"
+            ).fetchall()
+        return {row["storage_path"] for row in rows}
+
+    def referenced_artifact_handles(self) -> set[str]:
+        """Handles mentioned in any message block, live turn or not.
+
+        Used by the orphan sweep: an upload that is still referenced must not
+        be deleted out from under a turn, even when its registry row looks
+        unbound.
+        """
+
+        with self._lock:
+            rows = self._conn.execute("SELECT payload_json FROM blocks").fetchall()
+        handles: set[str] = set()
+        for row in rows:
+            handles.update(_ARTIFACT_HANDLE_RE.findall(row["payload_json"] or ""))
+        return handles
 
     # -- recovery ----------------------------------------------------------
 

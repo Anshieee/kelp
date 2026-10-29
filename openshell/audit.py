@@ -5,7 +5,11 @@ command, an argument hash, and outcome metadata — never environment values,
 stdout/stderr bodies, or secret material. Redaction happens before serialization
 and is applied to every string field.
 
-There is no rewrite or delete API. Rotation is a deployment concern.
+There is no rewrite or delete API. Rotation is performed by the application's
+retention pass (``chat.retention``): it renames the active file to a timestamped
+segment and expires whole segments. :meth:`AuditLog.entries` reads the active
+file plus retained segments, oldest first, so a rotation never hides history
+that the policy still keeps.
 """
 
 from __future__ import annotations
@@ -32,6 +36,20 @@ _KV_RE = re.compile(
 _SECRET_NAME_RE = re.compile(
     r"(?i)(token|secret|password|passwd|api[_-]?key|credential|authorization|private[_-]?key)"
 )
+
+
+def _jsonl_paths(path: Path) -> list[Path]:
+    """Active JSONL file plus its timestamped rotated segments, oldest first."""
+
+    pattern = re.compile(
+        re.escape(path.name) + r"\.\d{8}T\d{12,}Z(?:\.\d{4,})?$"
+    )
+    try:
+        entries = list(path.parent.iterdir())
+    except OSError:
+        return [path]
+    segments = [entry for entry in entries if pattern.fullmatch(entry.name)]
+    return sorted(segments, key=lambda entry: entry.name) + [path]
 
 
 def is_secret_env_name(name: str) -> bool:
@@ -182,12 +200,15 @@ class AuditLog:
         turn_id: str | None = None,
         event: str | None = None,
     ) -> list[dict[str, Any]]:
-        if not self.path.exists():
-            return []
-        raw = self.path.read_text(encoding="utf-8")
-        parsed = [
-            json.loads(line) for line in raw.splitlines() if line.strip()
-        ]
+        parsed: list[dict[str, Any]] = []
+        for path in _jsonl_paths(self.path):
+            try:
+                raw = path.read_text(encoding="utf-8")
+            except FileNotFoundError:  # a rotation raced this read
+                continue
+            parsed.extend(
+                json.loads(line) for line in raw.splitlines() if line.strip()
+            )
         if turn_id is not None:
             parsed = [entry for entry in parsed if entry.get("turn_id") == turn_id]
         if event is not None:

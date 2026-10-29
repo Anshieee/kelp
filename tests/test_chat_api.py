@@ -8,6 +8,7 @@ from typing import Any, Mapping
 from urllib.parse import parse_qs, urlsplit
 
 from chat import ChatAPI, ChatService, ChatStore, Request
+from chat.store import ThreadBusyError
 from kernel.provider import StreamEnd, TextDelta
 
 from .chatkit import MODEL, StubProvider, text_script, tool_script
@@ -165,8 +166,49 @@ def test_thread_crud_over_http(tmp_path: Path) -> None:
 
         deleted = call(api, "DELETE", f"/api/threads/{thread['id']}")
         assert deleted.status == 200
-        assert body(deleted)["ok"] is True
+        payload = body(deleted)
+        assert payload["ok"] is True
+        assert payload["thread_id"] == thread["id"]
+        assert payload["deleted"] is True
+        for counter in ("messages", "blocks", "approvals", "artifacts"):
+            assert payload[counter] == 0
+        # A fresh thread still owns its creation event; the purge counts what it
+        # removed instead of assuming zero.
+        assert isinstance(payload["turns"], int)
+        assert payload["events"] >= 1
+        assert payload["artifact_handles"] == []
+        assert isinstance(payload["vacuumed"], bool)
         assert call(api, "GET", f"/api/threads/{thread['id']}").status == 404
+
+        # The purge is idempotent: a repeat delete is a 200 with deleted false,
+        # not a 404 that would make a retrying client loop.
+        repeated = call(api, "DELETE", f"/api/threads/{thread['id']}")
+        assert repeated.status == 404
+        assert body(repeated)["error"]["code"] == "unknown_thread"
+    finally:
+        api.close()
+        store.close()
+
+
+def test_delete_thread_returns_409_while_a_turn_is_live(
+    tmp_path: Path, monkeypatch: Any
+) -> None:
+    api, service, store = make_api(tmp_path)
+    try:
+        thread = create_thread(api)
+
+        def refuse(thread_id: str, **kwargs: Any) -> dict[str, Any]:
+            raise ThreadBusyError(thread_id, ["turn_still_running"])
+
+        monkeypatch.setattr(store, "purge_thread", refuse)
+        response = call(api, "DELETE", f"/api/threads/{thread['id']}")
+
+        assert response.status == 409
+        error = body(response)["error"]
+        assert error["code"] == "turn_in_progress"
+        assert error["details"] == {"active_turn_id": "turn_still_running"}
+        # Nothing was deleted: the thread is still readable and streamable.
+        assert call(api, "GET", f"/api/threads/{thread['id']}").status == 200
     finally:
         api.close()
         store.close()
