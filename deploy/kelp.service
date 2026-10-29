@@ -1,0 +1,42 @@
+# systemd wrapper for the Compose deployment (KEL-16, M2-F).
+#
+# systemd owns boot and stop; Compose owns the process. The image already
+# restarts a crashed server (`restart: unless-stopped`) and its HEALTHCHECK
+# marks a wedged one unhealthy, so this unit stays deliberately thin and shares
+# one env contract with the non-systemd path.
+#
+# Install:
+#   sudo install -m 0644 deploy/kelp.service /etc/systemd/system/kelp.service
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now kelp.service
+#
+# Logs:    docker compose -f /opt/kelp/docker-compose.yml logs --tail=100 kelp
+# Stop:    sudo systemctl stop kelp.service   (SIGTERM, 30s grace, turns settle)
+
+[Unit]
+Description=KELP private assistant (Docker Compose, single replica)
+Documentation=file:/opt/kelp/docs/DEPLOY.md
+Requires=docker.service
+After=docker.service network-online.target
+Wants=network-online.target
+# Never let a failed start loop forever against a missing env file.
+StartLimitIntervalSec=300
+StartLimitBurst=3
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+WorkingDirectory=/opt/kelp
+Environment=COMPOSE_PROJECT_NAME=kelp
+# `up -d` waits for the container to start, not for readiness; the runbook's
+# smoke step is what proves a healthy deployment.
+ExecStart=/usr/bin/docker compose up -d --remove-orphans
+ExecStop=/usr/bin/docker compose down
+TimeoutStartSec=180
+TimeoutStopSec=60
+# docker compose talks to the daemon over /var/run/docker.sock.
+Restart=no
+UMask=0022
+
+[Install]
+WantedBy=multi-user.target

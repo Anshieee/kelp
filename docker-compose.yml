@@ -1,0 +1,67 @@
+# KELP chat server — single-replica Compose deployment (KEL-16, M2-F).
+#
+#   docker compose up -d --build
+#
+# Secrets are not in this file. They are read at start time from
+# `deploy/kelp.env` (mode 0600, gitignored); copy `deploy/kelp.env.example` and
+# fill it in. State lives in the `kelp-data` volume, never in the image.
+#
+# Do not scale this service. The server takes an exclusive lock on
+# `<KELP_DB_PATH>.lock` and the second instance exits with `database_locked`
+# (exit 3) instead of sharing SQLite.
+
+name: kelp
+
+services:
+  kelp:
+    image: ${KELP_IMAGE:-kelp:local}
+    build:
+      context: .
+      args:
+        KELP_VERSION: ${KELP_VERSION:-0.0.0}
+        KELP_GIT_COMMIT: ${KELP_GIT_COMMIT:-unknown}
+    env_file:
+      - deploy/kelp.env
+    restart: unless-stopped
+    init: true
+
+    # Bound to loopback: the only supported ingress is a TLS reverse proxy on
+    # the same host. Change to 0.0.0.0 only behind a firewall you control.
+    ports:
+      - "127.0.0.1:${KELP_PUBLISH_PORT:-8765}:8765"
+
+    volumes:
+      - kelp-data:/data
+
+    # The container filesystem is immutable; only /data and /tmp are writable.
+    read_only: true
+    tmpfs:
+      - /tmp:size=16m,noexec,nosuid
+    user: "10001:10001"
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 256
+    mem_limit: 1g
+    cpus: 2.0
+
+    # The server cancels and settles in-flight turns before exiting.
+    stop_grace_period: 30s
+
+    healthcheck:
+      test: ["CMD", "python", "/app/deploy/healthcheck.py", "--live"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 40s
+
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+volumes:
+  kelp-data:
+    name: kelp-data
