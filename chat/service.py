@@ -26,6 +26,7 @@ from kernel import (
 from kernel import events as kernel_events
 from kernel.usage import UsageStore
 from openshell.approvals import ApprovalStore
+from openshell.audit import AuditLog
 from openshell.errors import (
     ApprovalAlreadyUsed,
     ApprovalDenied,
@@ -39,6 +40,8 @@ from skills.loader import SkillRegistry
 from . import cards
 from .artifacts import HANDLE_RE, ArtifactError, ArtifactRegistry
 from .errors import ChatError
+from .logging import current_request_id, log
+from .metrics import Metrics, get_metrics
 from .store import APPROVAL_TRANSITIONS, ChatStore, iso_now, new_id
 from .stream import EventBus
 
@@ -108,6 +111,8 @@ class ChatService:
         now: Callable[[], datetime] | None = None,
         approval_ttl_seconds: float = 600.0,
         tools: Sequence[Mapping[str, Any]] = (),
+        audit: AuditLog | None = None,
+        metrics: Metrics | None = None,
     ):
         self.store = store
         self.bus = EventBus()
@@ -121,6 +126,8 @@ class ChatService:
         self._provider = provider
         self._registry = registry
         self._usage_store = usage_store
+        self._audit = audit
+        self._metrics = metrics or get_metrics()
         self._budget = budget or TurnBudget()
         self._model = model or (config or KernelConfig.from_env()).primary_model
         self._secrets = dict(secrets or {})
@@ -139,6 +146,18 @@ class ChatService:
         self._waiting_approval: dict[str, str] = {}
         self._live_blocks: dict[str, list[dict[str, Any]]] = {}
         self._closing = False
+
+    # -- audit -------------------------------------------------------------
+
+    def _record_audit(self, event: str, **fields: Any) -> None:
+        """Audit without ever failing a turn: accounting is not traffic."""
+
+        if self._audit is None:
+            return
+        try:
+            self._audit.record(event, **fields)
+        except Exception:  # noqa: BLE001 - a full disk must not end a turn
+            return
 
     # -- threads -----------------------------------------------------------
 
@@ -649,6 +668,14 @@ class ChatService:
         if isinstance(event, kernel_events.ToolCallStarted):
             state.steps = max(state.steps, event.step)
             state.text_open = False
+            log(
+                "tool_call_started",
+                thread_id=state.thread_id,
+                turn=state.turn["id"],
+                tool=event.name,
+                status="started",
+                step=event.step,
+            )
             effects = self._effects_for(event.name)
             redacted = cards.redact_arguments(
                 event.arguments, secrets=self._secret_values
@@ -756,6 +783,31 @@ class ChatService:
             cards.apply_sweeps(state.blocks)
             if block.get("approval_id"):
                 self._settle_approval(state, block["approval_id"], executed=True)
+            tool_status = str(
+                block.get("status") or ("done" if event.ok else "failed")
+            )
+            self._metrics.observe_tool(event.name, tool_status)
+            if event.waited_ms > 0:
+                self._metrics.observe_approval_wait(event.waited_ms / 1000.0)
+            request_id = current_request_id()
+            log(
+                "tool_call",
+                request_id=request_id,
+                thread_id=state.thread_id,
+                turn=state.turn["id"],
+                tool=event.name,
+                status=tool_status,
+                duration_ms=event.duration_ms,
+                step=event.step,
+            )
+            self._record_audit(
+                "tool_call",
+                turn_id=state.turn["id"],
+                request_id=request_id,
+                tool=event.name,
+                outcome=tool_status,
+                duration_ms=event.duration_ms,
+            )
             self._flush(state, force=True)
             self._emit(
                 state.thread_id,
@@ -959,6 +1011,29 @@ class ChatService:
             finished_at=iso_now(self._now()),
             usage=usage,
         )
+        request_id = current_request_id()
+        self._metrics.observe_turn(reason, max(0.0, duration_ms / 1000.0))
+        self._metrics.add_tokens("input", state.model, state.input_tokens)
+        self._metrics.add_tokens("output", state.model, state.output_tokens)
+        if state.estimated_cost_usd is not None:
+            self._metrics.add_cost(state.estimated_cost_usd)
+        log(
+            "turn_finished",
+            request_id=request_id,
+            thread_id=state.thread_id,
+            turn=state.turn["id"],
+            status=reason,
+            duration_ms=duration_ms,
+            model=state.model,
+        )
+        self._record_audit(
+            "turn_finished",
+            turn_id=state.turn["id"],
+            request_id=request_id,
+            outcome=reason,
+            duration_ms=duration_ms,
+            extra={"thread_id": state.thread_id},
+        )
         self._emit(
             state.thread_id,
             "turn_finished",
@@ -1012,6 +1087,24 @@ class ChatService:
         )
         self.store.save_approval(card)
         self._attach_approval(state, card)
+        request_id = current_request_id()
+        log(
+            "approval_requested",
+            request_id=request_id,
+            thread_id=state.thread_id,
+            turn=state.turn["id"],
+            tool=request.tool,
+            approval_id=approval_id,
+            status="pending",
+        )
+        self._record_audit(
+            "approval_requested",
+            turn_id=state.turn["id"],
+            request_id=request_id,
+            tool=request.tool,
+            decision="pending",
+            argument_hash=request.argument_hash,
+        )
         waiter = asyncio.Event()
         loop = asyncio.get_running_loop()
         self._waiters[approval_id] = waiter
@@ -1352,6 +1445,32 @@ class ChatService:
                 loop.call_soon_threadsafe(waiter.set)
             else:  # pragma: no cover - defensive
                 waiter.set()
+        request_id = current_request_id()
+        log(
+            "approval_resolved",
+            request_id=request_id,
+            thread_id=updated.get("thread_id"),
+            turn=updated.get("turn_id"),
+            tool=updated.get("tool"),
+            approval_id=approval_id,
+            status=status,
+        )
+        self._record_audit(
+            "approval_resolved",
+            turn_id=(
+                str(updated["turn_id"])
+                if updated.get("turn_id") is not None
+                else None
+            ),
+            request_id=request_id,
+            tool=(
+                str(updated["tool"])
+                if updated.get("tool") is not None
+                else None
+            ),
+            decision=status,
+            outcome=status,
+        )
         return updated, True
 
     def _apply_resolution_to_blocks(
