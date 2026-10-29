@@ -865,6 +865,8 @@ Rules:
 
 - Never show a code, stack trace, HTTP status, provider payload, or secret in the main
   copy. "See details" may show `code`, `field`, and `retryable` — nothing else.
+- A `429 rate_limited` carries `Retry-After` in whole seconds; use it for the Try again
+  affordance (§12.1). The limiter never reports its own failure as a `5xx`.
 - Errors never clear the composer text or the partial answer.
 - A tool failure is not a turn failure: one failed card plus the model's recovery. Only
   `turn_finished(reason="error")` turns the whole message red.
@@ -884,10 +886,63 @@ KEL-8 adds a network surface to a private assistant; these are requirements, not
 | XSS | Model text renders as text (no `dangerouslySetInnerHTML`, no Markdown HTML). Chip URLs restricted to http/https. Artifact content served with `nosniff` and a fixed content-type allowlist, and downloaded filenames sanitised. |
 | Path traversal | Artifact resolution is registry-lookup only, never `join(user_input)`. Handles are looked up, then the stored path is used. Symlinks are rejected; the target must resolve inside `${WORKSPACE}/var/artifacts`. |
 | CSRF / clickjacking | SameSite cookies + CSRF token. Frame denial is scoped to **app HTML routes only**: `X-Frame-Options: DENY` and CSP `frame-ancestors 'none'` there. `/api/*` responses are not framed and carry no frame headers, except `/api/artifacts/{handle}/content`, which is exempt from `DENY` and served with `X-Frame-Options: SAMEORIGIN` + CSP `frame-ancestors 'self'`, `nosniff`, and an allowlist `Content-Type`; it is only ever embedded by the app's sandboxed preview iframe (§8.2), so the preview works without making the app frameable. |
-| DoS | Per-thread concurrency limit 1; body limits (message 8,000 characters after trim — the same character count as §5.1, not 8 KB; decision body 1 KB; upload 20 MB); one stream per tab, idle-closed at 5 min; a global cap on concurrent streams per owner. |
+| DoS | Per-thread concurrency limit 1; body limits (message 8,000 characters after trim — the same character count as §5.1, not 8 KB; decision body 1 KB; upload 20 MB); one stream per tab, idle-closed at 5 min; per-class token buckets, a global turn cap, and a concurrent-stream cap per owner (§12.1). |
 | Logs | Request logs contain ids, status, and duration — no message text, no arguments, no provider bodies. |
 | Audit | Approval decisions and executions come from KEL-7's audit log; the chat layer does not duplicate it. |
 | Retention | Messages and artifacts live under `var/` and are deletable per thread; nothing is uploaded to a third party beyond the tools' declared hosts. |
+
+### 12.1 Rate limits and concurrency (KEL-17)
+
+The limiter runs in front of dispatch, before routing or body work. Every
+authenticated request costs one token from its route class, keyed by client
+identity; a presented token is hashed and never retained as a key.
+
+| Class | Routes | Default per minute / burst |
+|---|---|---|
+| `auth` | Only failed authentication attempts, keyed by peer address | 30 / 10 |
+| `chat` | Thread create/rename/delete, turns, approvals | 120 / 30 |
+| `upload` | `POST /attachments` | 60 / 20 |
+| `read` | `GET` threads, approvals, artifacts | 600 / 200 |
+| `admin` | `GET /metrics`, `GET /readyz` | 1200 / 300 |
+
+- A rejected call is `429` with the ordinary error envelope
+  (`error.code = "rate_limited"`, `retryable: true`) and a `Retry-After`
+  header in whole seconds. It is never a `5xx`; an internal limiter fault
+  fails open and the request proceeds.
+- Failed authentication is charged to the independent `auth` bucket, so a
+  burst of bad credentials cannot spend the owner's chat or read budget. A
+  successful authentication clears that peer's failure debt, and a key that
+  goes idle is discarded (default 300 s; `KELP_RATE_LIMIT_IDLE_SECONDS`), so
+  the map is bounded and a quiet client starts from a full bucket.
+- A global turn cap and a per-owner stream cap sit alongside the token
+  buckets. Exceeding either returns `429 rate_limited` with
+  `details.reason = "turn_capacity"` or `"stream_capacity"` and a short
+  `Retry-After`; the stream is never opened and the turn is never queued.
+  Streaming slots are returned on exhaustion, `close()`, or collection.
+  A retry (`POST /api/turns/{id}/retry`) queues a fresh turn, so it takes a
+  turn slot exactly like a send and returns it the same way: when the retried
+  turn finalizes, or immediately if the call fails or is refused.
+- The body cap is enforced by the HTTP adapter before dispatch. A
+  `Content-Length` that is non-numeric, negative, duplicated, or above the
+  route's cap is rejected without reading the body: `413 upload_too_large`
+  for uploads, `400 invalid_request` elsewhere. A chunked body is read
+  incrementally and aborted as soon as the next chunk would exceed that cap.
+  A request that carries both `Content-Length` and `Transfer-Encoding` is
+  rejected with `400 invalid_request` and the connection is closed, so the two
+  framings can never disagree (RFC 7230 §3.3.3).
+- Configuration is environment-only: `KELP_RATE_LIMIT_ENABLED`,
+  `KELP_RATE_LIMIT_<CLASS>_RPM`, `KELP_RATE_LIMIT_<CLASS>_BURST`,
+  `KELP_RATE_LIMIT_IDLE_SECONDS`, `KELP_MAX_CONCURRENT_TURNS`, and
+  `KELP_MAX_STREAMS_PER_OWNER`. A zero RPM or burst denies that class; a zero
+  turn or stream cap disables that cap.
+- `GET /api/metrics` exposes `kelp_limiter_in_use`,
+  `kelp_limiter_capacity`, and `kelp_limiter_saturation` with
+  `class="turns"` and `class="streams"`. Stream capacity is per owner, so its
+  `in_use` sample is the busiest owner's usage and its saturation the hottest
+  owner's ratio.
+
+This layer does not change `TurnBudget`: the kernel's per-turn step, token,
+tool-call, and wall-clock limits remain the only turn limits.
 
 ---
 
