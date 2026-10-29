@@ -11,15 +11,20 @@ that goes with it is [`sdlc-mindmap.svg`](sdlc-mindmap.svg), with a PNG fallback
 site embeds a copy of the SVG directly in the page, so every box there can be clicked; that copy
 and these two files must be updated together.
 
-What this snapshot rests on: `main` is at `c474c72`, all **491 tests pass**, and the repository is
-public. KEL-5 through KEL-10 are merged, reviewed, and done. KEL-10, payments, carries both its
-paths: the Stripe saved-card scaffold, the Razorpay gateway, and the Razorpay hosted Checkout.
+What this snapshot rests on: `main` is at `33994ab`, all **510 tests pass**, and the repository is
+public. KEL-5 through KEL-10 are merged, reviewed, and done; KEL-11 is merged and reviewed too, and
+opens M2. KEL-10, payments, carries both its paths: the Stripe saved-card scaffold, the Razorpay
+gateway, and the Razorpay hosted Checkout.
 
 KEL-10 closed on **owner confirmation on 30 October 2026** (Assume-Done). The code paths are merged
 and the suite is green; the order path was proven earlier against the Razorpay test API. The one
 thing not physically observed is a person finishing a hosted Checkout in a browser, so that step is
 taken on the owner's word, and the receipt it produces is to be verified on the next live run. With
 that, **M1 Prototype is complete**: every work item inside it is done.
+
+KEL-11 opened **M2 Polished MVP** on 30 October 2026. It is the serve entrypoint: one process, one
+command, ordered boot, a single-instance lock, a clean stop, and boot recovery that closes out a turn
+a crash left behind. It merged at `33994ab` from `kel-11` (head `46ba746`) and added 19 tests.
 
 ## How to read the labels
 
@@ -40,12 +45,12 @@ snapshot date.
 
 ## The map
 
-![Mind map of the delivery: milestones M0 to M4, work items KEL-5 to KEL-10, product surfaces, payments, and design.](sdlc-mindmap.svg)
+![Mind map of the delivery: milestones M0 to M4, work items KEL-5 to KEL-11, product surfaces, payments, and design.](sdlc-mindmap.svg)
 
 The same map in words, in case the image does not load:
 
 - **Milestones** — five stages, M0 to M4.
-- **The work** — six work items, KEL-5 to KEL-10: all six done.
+- **The work** — seven work items, KEL-5 to KEL-11: all seven done, M1 closed, and M2 under way.
 - **Surfaces** — where you talk to the assistant: dashboard first, Telegram next, WhatsApp and voice memos later.
 - **Money** — saved cards through Stripe and hosted Checkout through Razorpay, both merged and closed out; an in-app balance later.
 - **Design** — the screen plan is written, and so is the chat spec. The chat surface code is merged; the drawing file and the browser screen are next.
@@ -64,15 +69,16 @@ promise that full-vision scope lands this week. Scope is cumulative: M2 includes
 |---|---|---|---|
 | **M0 Foundation** | 30 Oct 2026 | IN PROGRESS | The repo (public), the docs, the tests, the standard development setup, model and provider chosen, and a written list of what could go wrong. The repo, docs, tests, and skill contract are in. Still open: the automated checks, the development setup, and the threat model. |
 | **M1 Prototype** | 30 Oct 2026 | COMPLETE | The end-to-end story: ask, get an answer with sources, read a file, approve an action, pay with a saved card, watch the six-scene demo. All six work items live here, and all six are done: KEL-5 to KEL-9 were merged earlier, and KEL-10 closed on owner confirmation on 30 October 2026. |
-| **M2 Polished MVP** | 30 Oct 2026 | TO COME | Survives ordinary use: picks up after a restart, self-checks, better search over your documents, repeatable quality measurements, and a deploy on the Nebius GPU. |
+| **M2 Polished MVP** | 30 Oct 2026 | IN PROGRESS | Survives ordinary use: picks up after a restart, self-checks, better search over your documents, repeatable quality measurements, and a deploy on the Nebius GPU. Started with KEL-11, the serve entrypoint; search, measurements, and the GPU deploy remain. |
 | **M3 Hardening** | 30 Oct 2026 | TO COME | The privacy and cost promises hold under pressure: who sees what, where keys live, caps on traffic, a retention rule, and a spend ceiling. |
 | **M4 Full vision** | 30 Oct 2026 | TO COME | More devices, work the assistant starts on its own, abilities added by others, and team sharing. A direction, not a deadline. |
 
-## The six work items
+## The seven work items
 
 KEL-5 feeds KEL-6 and KEL-7. Those two feed KEL-8. KEL-7 also feeds KEL-10. KEL-8 comes before the
-demo, KEL-9. All six are done. KEL-10, payments, was the last to close: both of its paths were merged
-and reviewed earlier, and the live step was taken on owner confirmation on 30 October 2026.
+demo, KEL-9. All seven are done. KEL-10, payments, closed M1 on owner confirmation on 30 October
+2026: both of its paths were merged and reviewed earlier, and the live step was taken on the owner's
+word. KEL-11 then opened M2 with the serve entrypoint.
 
 ### KEL-5 — Skill contracts — DONE
 
@@ -114,7 +120,7 @@ price is counted per chunk.
 - Merge: [`d3c763e`](https://github.com/Anshieee/kelp/commit/d3c763e) (branch [`kel-6`](https://github.com/Anshieee/kelp/tree/kel-6), head `4c72afc`)
 
 Status detail: merged into `main` at `d3c763e`. The kernel suite is 43 tests — 25 for the loop and
-18 for the streaming client — and passes with the rest of the 491. The review written up in
+18 for the streaming client — and passes with the rest of the 510. The review written up in
 [`docs/REVIEW_KEL6_KEL7.md`](REVIEW_KEL6_KEL7.md) signed off, and KEL-8 built on top of it.
 
 ### KEL-7 — Approval gate — DONE
@@ -157,7 +163,7 @@ showing where an answer came from, and approval requests shown in the conversati
 Status detail: merged into `main` at `e0bbb72`. The chat surface is in: named threads that can be
 reopened, an append-only stream of events, a card for each tool step, approvals shown in the
 conversation over the KEL-7 gate, artifacts, and a cooperative cancel token so Stop works. The chat
-suite is 86 tests, part of the 491. The spec is on `main` at 1,164 lines; the review fixes that
+suite is 86 tests, part of the 510. The spec is on `main` at 1,164 lines; the review fixes that
 shaped it landed at `56b0785`:
 
 - **Honest dependencies (M1).** The web search, GitHub read, and document handlers are still stubs.
@@ -226,7 +232,8 @@ order, amount, and currency. Settlement is idempotent by receipt, a definitive m
 order and releases its reservation, and an unknown outcome stays approved for a retry.
 
 The suite grew by 266 tests: 54 for the wallet, 32 for its HTTP surface, 72 for the Razorpay
-gateway, 52 for Checkout, and 22 for the Checkout HTTP surface — 491 in total.
+gateway, 52 for Checkout, and 22 for the Checkout HTTP surface — 491 in total at that merge. KEL-11
+then took the suite to 510.
 
 The review of the Checkout path raised four findings, and all four are fixed. A Checkout order and a
 saved-card approval can no longer race for the same order: the reservation writes the checkout claim
@@ -276,6 +283,43 @@ mid-stream and proves recovery in a new process. The review findings are fixed: 
 its approval in the audit log, so no outcome stays `awaiting_execution`. Screenshot capture belongs
 to the dashboard slice; the receipts are the review artefacts for this backend-only run.
 
+### KEL-11 — Serve entrypoint — DONE
+
+One process, one command. `make serve` loads the settings, checks them one variable at a time,
+creates its folders owner-only, opens the database under a lock, settles anything a previous run left
+behind, binds the port, and logs what it did. `make check-serve` runs the same checks without opening
+the database or binding a port, so a supervisor can ask "is this configured?" safely.
+
+*Why it matters:* it is the difference between a set of working parts and something you can start. It
+is also what makes a restart safe: the turn in flight is settled, and nothing runs twice.
+
+*Plain words:* a **graceful shutdown** stops accepting new work, finishes what is in hand, and exits
+instead of being cut off. A **lock** marks the database as taken, so a second copy cannot quietly
+write over the first. An **interrupted turn** is one a restart closed out, keeping the steps that had
+already finished.
+
+- Linear: https://linear.app/kelp-ai/issue/KEL-11/m2-a-serve-entrypoint-boot-graceful-shutdown-restartresume
+- Server: [`chat/server.py`](https://github.com/Anshieee/kelp/blob/main/chat/server.py)
+- Boot recovery: [`chat/recovery.py`](https://github.com/Anshieee/kelp/blob/main/chat/recovery.py)
+- Tests: [`tests/test_server.py`](https://github.com/Anshieee/kelp/blob/main/tests/test_server.py)
+- Settings surface: [`/.env.example`](https://github.com/Anshieee/kelp/blob/main/.env.example)
+- Merge: [`33994ab`](https://github.com/Anshieee/kelp/commit/33994ab) (branch
+  [`kel-11`](https://github.com/Anshieee/kelp/tree/kel-11), head `46ba746`)
+
+Status detail: merged into `main` at `33994ab`, adding 19 tests to a suite of 510. Boot is ordered
+and fails fast: an unreadable or invalid setting raises a named `ConfigError` carrying the variable
+and the step, every created directory is made `0700`, and a second process on the same database or
+port is refused with `database_locked` rather than racing. `ServerConfig.__repr__` reports only
+whether a token or key is configured, so a secret cannot leak through a log line or a traceback.
+Shutdown takes `SIGTERM` or `SIGINT`, stops accepting work, settles in-flight turns inside a fixed
+window, closes the database, and exits zero. Boot recovery marks a still-running turn interrupted
+with its completed steps kept, fails tool blocks stuck in `running` or `waiting_approval` with
+`error.code = "interrupted"`, and expires approvals whose waiter died with the process — recording
+the same `approval_resolved` and `approval_expired` audit entries a normal decision would, with no
+command text or secret values. Two review findings were fixed before the merge: in-flight turns are
+settled on shutdown rather than abandoned, and `--check` is a true dry run. Still in M2: the
+dashboard's Retry and Resume buttons, better search, quality measurements, and the Nebius GPU deploy.
+
 ## Decisions that shape the map
 
 ### Surfaces
@@ -312,7 +356,7 @@ to the dashboard slice; the receipts are the review artefacts for this backend-o
 ### GitHub
 
 - Repository (public): https://github.com/Anshieee/kelp
-- Shared copy of the code: https://github.com/Anshieee/kelp/tree/main — head `c474c72`
+- Shared copy of the code: https://github.com/Anshieee/kelp/tree/main — head `33994ab`
 - All branches: https://github.com/Anshieee/kelp/branches
   - `kel-5` — merged (`b8de92f`)
   - `kel-6` — merged at `d3c763e`; branch head `4c72afc`
@@ -323,9 +367,10 @@ to the dashboard slice; the receipts are the review artefacts for this backend-o
   - `kel-10-scaffold` — merged at `5e270eb`; branch head `a98054b`
   - `kel-10-razorpay` — merged at `5472c3b`; branch head `cabefb7`
   - `kel-10-checkout` — merged at `c474c72`; branch head `f07baee`
+  - `kel-11` — merged at `33994ab`; branch head `46ba746`
 - Change history: https://github.com/Anshieee/kelp/commits/main
 - Pull requests: https://github.com/Anshieee/kelp/pulls
-- Tests: 491 pass on `main` (`python -m pytest`); `make demo` plays all six beats
+- Tests: 510 pass on `main` (`python -m pytest`); `make demo` plays all six beats
 
 ### Linear
 
@@ -337,7 +382,8 @@ to the dashboard slice; the receipts are the review artefacts for this backend-o
   [KEL-7](https://linear.app/kelp-ai/issue/KEL-7/openshell-approval-gated-tool-execution-audit),
   [KEL-8](https://linear.app/kelp-ai/issue/KEL-8/dashboard-chat-surface-primary-interface),
   [KEL-9](https://linear.app/kelp-ai/issue/KEL-9/demo-choreography-6-beat-scripted-end-to-end-run-npm-run-demo),
-  [KEL-10](https://linear.app/kelp-ai/issue/KEL-10/wallet-stripe-saved-cards-setupintent-attach-list-propose-approve)
+  [KEL-10](https://linear.app/kelp-ai/issue/KEL-10/wallet-stripe-saved-cards-setupintent-attach-list-propose-approve),
+  [KEL-11](https://linear.app/kelp-ai/issue/KEL-11/m2-a-serve-entrypoint-boot-graceful-shutdown-restartresume)
 
 ### Docs and code
 

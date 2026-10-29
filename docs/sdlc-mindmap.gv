@@ -24,7 +24,7 @@ digraph sdlc {
   // Main branches
   m0   [label="M0 Foundation\nIN PROGRESS" shape="box" style="filled,bold,rounded" fontsize="15" penwidth="2" fillcolor="#D6E6F7" URL="#m0" tooltip="Stage 0: shared code, docs, checks, risk list. In progress."];
   m1   [label="M1 Prototype\nCOMPLETE" shape="box" style="filled,bold,rounded" fontsize="15" penwidth="2" fillcolor="#D9EDD7" URL="#m1" tooltip="Stage 1: ask, answer, approve, pay, demo. Every work item done."];
-  m2   [label="M2 Polished MVP\nTO COME" shape="box" style="filled,bold,rounded" fontsize="15" penwidth="2" fillcolor="#FCEFC7" URL="#m2" tooltip="Stage 2: survives ordinary use. Agreed, not started."];
+  m2   [label="M2 Polished MVP\nIN PROGRESS" shape="box" style="filled,bold,rounded" fontsize="15" penwidth="2" fillcolor="#FCEFC7" URL="#m2" tooltip="Stage 2: survives ordinary use. Started: serve entry, health, restart recovery."];
   m3   [label="M3 Hardening\nTO COME" shape="box" style="filled,bold,rounded" fontsize="15" penwidth="2" fillcolor="#F0DCC8" URL="#m3" tooltip="Stage 3: privacy and cost promises hold. Agreed, not started."];
   m4   [label="M4 Full vision\nTO COME" shape="box" style="filled,bold,rounded" fontsize="15" penwidth="2" fillcolor="#DDD8EF" URL="#m4" tooltip="Stage 4: more devices and sharing. Direction, not a deadline."];
   surf [label="Surfaces" shape="box" style="filled,bold,rounded" fontsize="15" penwidth="2" fillcolor="#CDE9E4" URL="#surfaces" tooltip="Where you talk to the assistant: screen now, phone apps later."];
@@ -112,8 +112,12 @@ digraph sdlc {
   k9 -> k9_saved;
   k9 -> k9_shots;
 
+  // M2 work items (KEL-11 onwards; soft amber family)
+  k11 [label="KEL-11 Serve entry\nDONE" shape="box" style="filled,bold,rounded" fillcolor="#FCEFC7" URL="#kel-11" tooltip="One command serves the app: ordered boot, clean shutdown, restart recovery. Merged and reviewed."];
+  m2 -> k11;
+
   // M2 leaves (soft amber family)
-  m2_restart [label="Restarts, keeps chat\nTO COME" fillcolor="#FFF8E1" URL="#m2" tooltip="Picks up after a restart with nothing lost. Not started."];
+  m2_restart [label="Restarts, keeps chat\nDONE" fillcolor="#FFF8E1" URL="#m2" tooltip="Picks up after a restart with nothing lost. Merged and reviewed."];
   m2_search  [label="Better file search\nTO COME" fillcolor="#FFF8E1" URL="#m2" tooltip="Finds the right bit of your documents. Not started."];
   m2_gpu     [label="Runs on Nebius GPU\nTO COME" fillcolor="#FFF8E1" URL="#m2" tooltip="Model served from our fast chip. Not started."];
   m2 -> m2_restart;
