@@ -245,10 +245,10 @@
 <!-- k10 -->
 <g id="node17" class="node">
 <title>k10</title>
-<g id="a_node17"><a xlink:href="#kel-10" xlink:title="Pay with saved cards after you say yes. Agreed, not started.">
+<g id="a_node17"><a xlink:href="#kel-10" xlink:title="Pay with saved cards after you say yes. Scaffold merged; live Stripe run waits on a test key.">
 <path fill="#d9edd7" stroke="black" stroke-width="2" d="M714.83,-1620.49C714.83,-1620.49 592.33,-1620.49 592.33,-1620.49 586.33,-1620.49 580.33,-1614.49 580.33,-1608.49 580.33,-1608.49 580.33,-1591.49 580.33,-1591.49 580.33,-1585.49 586.33,-1579.49 592.33,-1579.49 592.33,-1579.49 714.83,-1579.49 714.83,-1579.49 720.83,-1579.49 726.83,-1585.49 726.83,-1591.49 726.83,-1591.49 726.83,-1608.49 726.83,-1608.49 726.83,-1614.49 720.83,-1620.49 714.83,-1620.49"/>
 <text xml:space="preserve" text-anchor="middle" x="653.58" y="-1604.14" font-family="Helvetica,sans-Serif" font-size="13.00">KEL&#45;10 Saved cards</text>
-<text xml:space="preserve" text-anchor="middle" x="653.58" y="-1587.64" font-family="Helvetica,sans-Serif" font-size="13.00">TO COME</text>
+<text xml:space="preserve" text-anchor="middle" x="653.58" y="-1587.64" font-family="Helvetica,sans-Serif" font-size="13.00">IN PROGRESS</text>
 </a>
 </g>
 </g>
@@ -466,7 +466,7 @@
 <!-- p_stripe -->
 <g id="node50" class="node">
 <title>p_stripe</title>
-<g id="a_node50"><a xlink:href="#payments" xlink:title="Save once, pay after approval, receipt each time. Now.">
+<g id="a_node50"><a xlink:href="#payments" xlink:title="Save once, pay after approval, receipt each time. Scaffold merged; live run waits on a test key.">
 <ellipse fill="#f9ecec" stroke="black" cx="653.58" cy="-388.99" rx="116.35" ry="18"/>
 <text xml:space="preserve" text-anchor="middle" x="653.58" y="-384.89" font-family="Helvetica,sans-Serif" font-size="13.00">Stripe saved cards now</text>
 </a>
@@ -733,10 +733,10 @@
 <!-- k10_cards -->
 <g id="node31" class="node">
 <title>k10_cards</title>
-<g id="a_node31"><a xlink:href="#kel-10" xlink:title="Cards kept by Stripe, charged only with approval. Not started.">
+<g id="a_node31"><a xlink:href="#kel-10" xlink:title="Cards kept by Stripe, charged only with approval. Code merged, runs on a fake transport.">
 <ellipse fill="#edf6ec" stroke="black" cx="998" cy="-1640.99" rx="127.99" ry="28.99"/>
 <text xml:space="preserve" text-anchor="middle" x="998" y="-1645.14" font-family="Helvetica,sans-Serif" font-size="13.00">Save once, pay after yes</text>
-<text xml:space="preserve" text-anchor="middle" x="998" y="-1628.64" font-family="Helvetica,sans-Serif" font-size="13.00">TO COME</text>
+<text xml:space="preserve" text-anchor="middle" x="998" y="-1628.64" font-family="Helvetica,sans-Serif" font-size="13.00">IN PROGRESS</text>
 </a>
 </g>
 </g>
@@ -748,10 +748,10 @@
 <!-- k10_caps -->
 <g id="node32" class="node">
 <title>k10_caps</title>
-<g id="a_node32"><a xlink:href="#kel-10" xlink:title="Spending rules that block over&#45;limit pays. Not started.">
+<g id="a_node32"><a xlink:href="#kel-10" xlink:title="Spending rules that block over&#45;limit pays. Built and tested offline.">
 <ellipse fill="#edf6ec" stroke="black" cx="998" cy="-1557.99" rx="115.26" ry="28.99"/>
 <text xml:space="preserve" text-anchor="middle" x="998" y="-1562.14" font-family="Helvetica,sans-Serif" font-size="13.00">Per&#45;buy, monthly caps</text>
-<text xml:space="preserve" text-anchor="middle" x="998" y="-1545.64" font-family="Helvetica,sans-Serif" font-size="13.00">TO COME</text>
+<text xml:space="preserve" text-anchor="middle" x="998" y="-1545.64" font-family="Helvetica,sans-Serif" font-size="13.00">IN PROGRESS</text>
 </a>
 </g>
 </g>
@@ -763,10 +763,10 @@
 <!-- k10_receipt -->
 <g id="node33" class="node">
 <title>k10_receipt</title>
-<g id="a_node33"><a xlink:href="#kel-10" xlink:title="What was done, when, and how much. Not started.">
+<g id="a_node33"><a xlink:href="#kel-10" xlink:title="What was done, when, and how much. Built and tested offline; live run pending.">
 <ellipse fill="#edf6ec" stroke="black" cx="998" cy="-1474.99" rx="99.88" ry="28.99"/>
 <text xml:space="preserve" text-anchor="middle" x="998" y="-1479.14" font-family="Helvetica,sans-Serif" font-size="13.00">Receipt every time</text>
-<text xml:space="preserve" text-anchor="middle" x="998" y="-1462.64" font-family="Helvetica,sans-Serif" font-size="13.00">TO COME</text>
+<text xml:space="preserve" text-anchor="middle" x="998" y="-1462.64" font-family="Helvetica,sans-Serif" font-size="13.00">IN PROGRESS</text>
 </a>
 </g>
 </g>

@@ -52,7 +52,7 @@ digraph sdlc {
   k6  [label="KEL-6 Answer loop\nDONE" shape="box" style="filled,bold,rounded" fillcolor="#D9EDD7" URL="#kel-6" tooltip="Engine: reads, thinks, answers bit by bit. Merged and reviewed."];
   k7  [label="KEL-7 Ask first\nDONE" shape="box" style="filled,bold,rounded" fillcolor="#D9EDD7" URL="#kel-7" tooltip="Checkpoint that asks you before acting. Merged and reviewed."];
   k8  [label="KEL-8 Chat screen\nDONE" shape="box" style="filled,bold,rounded" fillcolor="#D9EDD7" URL="#kel-8" tooltip="Main screen you talk through. Surface merged to main; the browser screen is next."];
-  k10 [label="KEL-10 Saved cards\nTO COME" shape="box" style="filled,bold,rounded" fillcolor="#D9EDD7" URL="#kel-10" tooltip="Pay with saved cards after you say yes. Agreed, not started."];
+  k10 [label="KEL-10 Saved cards\nIN PROGRESS" shape="box" style="filled,bold,rounded" fillcolor="#D9EDD7" URL="#kel-10" tooltip="Pay with saved cards after you say yes. Scaffold merged; live Stripe run waits on a test key."];
   k9  [label="KEL-9 Final check\nDONE" shape="box" style="filled,bold,rounded" fillcolor="#D9EDD7" URL="#kel-9" tooltip="Six-scene demo that proves it works. Merged and reviewed."];
   m1 -> k5;
   m1 -> k6;
@@ -94,9 +94,9 @@ digraph sdlc {
   k8 -> k8_appr;
 
   // KEL-10 leaves
-  k10_cards [label="Save once, pay after yes\nTO COME" fillcolor="#EDF6EC" URL="#kel-10" tooltip="Cards kept by Stripe, charged only with approval. Not started."];
-  k10_caps  [label="Per-buy, monthly caps\nTO COME" fillcolor="#EDF6EC" URL="#kel-10" tooltip="Spending rules that block over-limit pays. Not started."];
-  k10_receipt [label="Receipt every time\nTO COME" fillcolor="#EDF6EC" URL="#kel-10" tooltip="What was done, when, and how much. Not started."];
+  k10_cards [label="Save once, pay after yes\nIN PROGRESS" fillcolor="#EDF6EC" URL="#kel-10" tooltip="Cards kept by Stripe, charged only with approval. Code merged, runs on a fake transport."];
+  k10_caps  [label="Per-buy, monthly caps\nIN PROGRESS" fillcolor="#EDF6EC" URL="#kel-10" tooltip="Spending rules that block over-limit pays. Built and tested offline."];
+  k10_receipt [label="Receipt every time\nIN PROGRESS" fillcolor="#EDF6EC" URL="#kel-10" tooltip="What was done, when, and how much. Built and tested offline; live run pending."];
   k10 -> k10_cards;
   k10 -> k10_caps;
   k10 -> k10_receipt;
@@ -144,7 +144,7 @@ digraph sdlc {
   surf -> s_voice;
 
   // Payments leaves (soft rose family)
-  p_stripe [label="Stripe saved cards now" fillcolor="#F9ECEC" URL="#payments" tooltip="Save once, pay after approval, receipt each time. Now."];
+  p_stripe [label="Stripe saved cards now" fillcolor="#F9ECEC" URL="#payments" tooltip="Save once, pay after approval, receipt each time. Scaffold merged; live run waits on a test key."];
   p_razor  [label="Razorpay later" fillcolor="#F9ECEC" URL="#payments" tooltip="No integration in this round. Later."];
   p_bal    [label="In-app balance later" fillcolor="#F9ECEC" URL="#payments" tooltip="Topping up and ledger wait. Later."];
   pay -> p_stripe;

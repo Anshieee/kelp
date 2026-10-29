@@ -11,8 +11,9 @@ that goes with it is [`sdlc-mindmap.svg`](sdlc-mindmap.svg), with a PNG fallback
 site embeds a copy of the SVG directly in the page, so every box there can be clicked; that copy
 and these two files must be updated together.
 
-What this snapshot rests on: `main` is at `1f08e53`, all **259 tests pass**, and the repository is
-public. KEL-5 through KEL-9 are merged and reviewed. KEL-10 is agreed and not started.
+What this snapshot rests on: `main` is at `5e270eb`, all **345 tests pass**, and the repository is
+public. KEL-5 through KEL-9 are merged and reviewed and are done. KEL-10, the wallet, merged as an
+offline scaffold and is in progress: its live exercise still needs a Stripe test key.
 
 ## How to read the labels
 
@@ -37,7 +38,7 @@ snapshot date.
 The same map in words, in case the image does not load:
 
 - **Milestones** — five stages, M0 to M4.
-- **The work** — six work items, KEL-5 to KEL-10: five done, one to come.
+- **The work** — six work items, KEL-5 to KEL-10: five done, one in progress.
 - **Surfaces** — where you talk to the assistant: dashboard first, Telegram next, WhatsApp and voice memos later.
 - **Money** — Stripe now, Razorpay and an in-app balance later.
 - **Design** — the screen plan is written, and so is the chat spec. The chat surface code is merged; the drawing file and the browser screen are next.
@@ -55,7 +56,7 @@ promise that full-vision scope lands this week. Scope is cumulative: M2 includes
 | Stage | Target | State | What finishing it means |
 |---|---|---|---|
 | **M0 Foundation** | 30 Oct 2026 | IN PROGRESS | The repo (public), the docs, the tests, the standard development setup, model and provider chosen, and a written list of what could go wrong. The repo, docs, tests, and skill contract are in. Still open: the automated checks, the development setup, and the threat model. |
-| **M1 Prototype** | 30 Oct 2026 | IN PROGRESS | The end-to-end story: ask, get an answer with sources, read a file, approve an action, pay with a saved card, watch the six-scene demo. All six work items live here. Five are done and merged: KEL-5 to KEL-9. One remains: KEL-10, the wallet. |
+| **M1 Prototype** | 30 Oct 2026 | IN PROGRESS | The end-to-end story: ask, get an answer with sources, read a file, approve an action, pay with a saved card, watch the six-scene demo. All six work items live here. Five are done and merged: KEL-5 to KEL-9. KEL-10, the wallet, is merged as an offline scaffold; its live Stripe exercise is pending a test key. |
 | **M2 Polished MVP** | 30 Oct 2026 | TO COME | Survives ordinary use: picks up after a restart, self-checks, better search over your documents, repeatable quality measurements, and a deploy on the Nebius GPU. |
 | **M3 Hardening** | 30 Oct 2026 | TO COME | The privacy and cost promises hold under pressure: who sees what, where keys live, caps on traffic, a retention rule, and a spend ceiling. |
 | **M4 Full vision** | 30 Oct 2026 | TO COME | More devices, work the assistant starts on its own, abilities added by others, and team sharing. A direction, not a deadline. |
@@ -63,7 +64,8 @@ promise that full-vision scope lands this week. Scope is cumulative: M2 includes
 ## The six work items
 
 KEL-5 feeds KEL-6 and KEL-7. Those two feed KEL-8. KEL-7 also feeds KEL-10. KEL-8 comes before the
-demo, KEL-9, which is merged; KEL-10, the wallet, is the only item left.
+demo, KEL-9, which is merged. KEL-10, the wallet, is the one item still open: its code is merged and
+its live run waits on a Stripe test key.
 
 ### KEL-5 — Skill contracts — DONE
 
@@ -105,7 +107,7 @@ price is counted per chunk.
 - Merge: [`d3c763e`](https://github.com/Anshieee/kelp/commit/d3c763e) (branch [`kel-6`](https://github.com/Anshieee/kelp/tree/kel-6), head `4c72afc`)
 
 Status detail: merged into `main` at `d3c763e`. The kernel suite is 43 tests — 25 for the loop and
-18 for the streaming client — and passes with the rest of the 259. The review written up in
+18 for the streaming client — and passes with the rest of the 345. The review written up in
 [`docs/REVIEW_KEL6_KEL7.md`](REVIEW_KEL6_KEL7.md) signed off, and KEL-8 built on top of it.
 
 ### KEL-7 — Approval gate — DONE
@@ -148,7 +150,7 @@ showing where an answer came from, and approval requests shown in the conversati
 Status detail: merged into `main` at `e0bbb72`. The chat surface is in: named threads that can be
 reopened, an append-only stream of events, a card for each tool step, approvals shown in the
 conversation over the KEL-7 gate, artifacts, and a cooperative cancel token so Stop works. The chat
-suite is 86 tests, part of the 259. The spec is on `main` at 1,164 lines; the review fixes that
+suite is 86 tests, part of the 345. The spec is on `main` at 1,164 lines; the review fixes that
 shaped it landed at `56b0785`:
 
 - **Honest dependencies (M1).** The web search, GitHub read, and document handlers are still stubs.
@@ -171,7 +173,7 @@ shaped it landed at `56b0785`:
 The browser screen that draws this surface is still to come. The drawing file comes first, then the
 screen code.
 
-### KEL-10 — Wallet — TO COME
+### KEL-10 — Wallet — IN PROGRESS
 
 Saved cards through Stripe: save once, list, a per-purchase cap, a monthly cap, a confirmation
 window, and a receipt. Every payment passes through the KEL-7 approval step, so nothing is
@@ -183,12 +185,30 @@ charged without a yes.
 them. **SetupIntent** is Stripe's name for the one-time step that saves a card for later.
 
 - Linear: https://linear.app/kelp-ai/issue/KEL-10/wallet-stripe-saved-cards-setupintent-attach-list-propose-approve
-- Placeholder: [`payments/stripe_wallet.py`](https://github.com/Anshieee/kelp/blob/main/payments/stripe_wallet.py) (main)
-- Tests: [`tests/test_payments.py`](https://github.com/Anshieee/kelp/blob/main/tests/test_payments.py)
+- Wallet: [`payments/wallet.py`](https://github.com/Anshieee/kelp/blob/main/payments/wallet.py) (main)
+- HTTP surface: [`chat/wallet.py`](https://github.com/Anshieee/kelp/blob/main/chat/wallet.py) (main)
+- Tests: [`tests/test_wallet.py`](https://github.com/Anshieee/kelp/blob/main/tests/test_wallet.py) and
+  [`tests/test_wallet_api.py`](https://github.com/Anshieee/kelp/blob/main/tests/test_wallet_api.py)
+- Merge: [`5e270eb`](https://github.com/Anshieee/kelp/commit/5e270eb) (branch
+  [`kel-10-scaffold`](https://github.com/Anshieee/kelp/tree/kel-10-scaffold), head `a98054b`)
+- Placeholder settings file it grew out of: [`payments/stripe_wallet.py`](https://github.com/Anshieee/kelp/blob/main/payments/stripe_wallet.py)
 
-Status detail: the Linear issue is created and sits in Todo. Only a placeholder settings file
-exists today, now on `main` because it came in with KEL-7. No real Stripe calls yet. Razorpay and
-an in-app balance are outside this round.
+Status detail: merged into `main` at `5e270eb`, built on `kel-10-scaffold` from `fa84773`. The
+scaffold is in and runs offline: a SQLite ledger for cards, proposals, and receipts; save-once and
+list; per-purchase and monthly caps; a ten-minute confirmation window; approve or deny as a
+single-use compare-and-set that also reserves the amount, so two approvals cannot overspend; an
+idempotency key per order so a retry cannot charge twice; and an HTTP surface under `/api/wallet`
+with the same bearer-token, cookie, and CSRF rules as the chat API. The suite grew by 86 tests — 54
+for the wallet and 32 for its HTTP surface — for 345 in total.
+
+The secret key is read from the server environment only. It never reaches a browser, the ledger, a
+status payload, an error body, or a `repr`. Card details are reduced to brand, last4, and expiry;
+card-like input is rejected rather than echoed. Every real Stripe call sits behind a gateway
+interface, and the tests inject a fake, so no request leaves the machine and no money moves.
+
+Still open: the live exercise against Stripe test mode. That needs `STRIPE_SECRET_KEY` set in the
+server environment; until it is, the wallet is visible but cannot take payments, and the Linear item
+stays In Progress rather than Done. Razorpay and an in-app balance are outside this round.
 
 ### KEL-9 — Demo run — DONE
 
@@ -251,7 +271,7 @@ to the dashboard slice; the receipts are the review artefacts for this backend-o
 ### GitHub
 
 - Repository (public): https://github.com/Anshieee/kelp
-- Shared copy of the code: https://github.com/Anshieee/kelp/tree/main — head `1f08e53`
+- Shared copy of the code: https://github.com/Anshieee/kelp/tree/main — head `5e270eb`
 - All branches: https://github.com/Anshieee/kelp/branches
   - `kel-5` — merged (`b8de92f`)
   - `kel-6` — merged at `d3c763e`; branch head `4c72afc`
@@ -259,9 +279,10 @@ to the dashboard slice; the receipts are the review artefacts for this backend-o
   - `kel-8` — carries the spec history, head `56b0785`
   - `kel-8-build` — merged at `e0bbb72`; branch head `d9e8618`
   - `kel-9` — merged at `1f08e53`; branch head `60f653b`
+  - `kel-10-scaffold` — merged at `5e270eb`; branch head `a98054b`
 - Change history: https://github.com/Anshieee/kelp/commits/main
 - Pull requests: https://github.com/Anshieee/kelp/pulls
-- Tests: 259 pass on `main` (`python -m pytest`); `make demo` plays all six beats
+- Tests: 345 pass on `main` (`python -m pytest`); `make demo` plays all six beats
 
 ### Linear
 
