@@ -27,7 +27,6 @@ ERROR_CODES = frozenset(
         "invalid_output",
         "approval_required",
         "approval_denied",
-        "policy_denied",
         "timeout",
         "handler_error",
         "missing_secret",

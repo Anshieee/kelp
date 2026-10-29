@@ -15,14 +15,13 @@ import json
 import os
 import re
 import time
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Awaitable, Callable, Iterable, Mapping
+from typing import Any, Awaitable, Callable, Iterable, Mapping
 
 from jsonschema import Draft202012Validator
 from jsonschema.exceptions import SchemaError
-from openshell.policy import Decision, PolicyConfig, PolicyEngine
 
 from .context import ApprovalRequest, SkillContext
 from .errors import (
@@ -30,15 +29,6 @@ from .errors import (
     SkillManifestError,
     Violation,
 )
-from .policy import (
-    GuardedSkillContext,
-    InvocationPolicy,
-    PolicyDenied,
-    active_invocation,
-)
-
-if TYPE_CHECKING:  # pragma: no cover - typing only
-    from openshell.audit import AuditLog
 
 __all__ = [
     "APPROVAL_TTL_SECONDS",
@@ -372,39 +362,19 @@ def _check_semantics(data: Mapping[str, Any], label: str) -> list[Violation]:
 
 
 class SkillRegistry:
-    """Immutable set of loaded skills plus the validated invocation pipeline.
+    """Immutable set of loaded skills plus the validated invocation pipeline."""
 
-    ``policy`` and ``audit`` are optional registry-wide defaults. A per-call
-    ``invoke(..., policy=…)`` lets a deployment tighten policy without a
-    restart; the manifest's declared scope can never be widened.
-    """
-
-    def __init__(
-        self,
-        skills: Mapping[str, LoadedSkill],
-        root: Path,
-        *,
-        policy: "PolicyConfig | PolicyEngine | None" = None,
-        audit: "AuditLog | None" = None,
-    ):
+    def __init__(self, skills: Mapping[str, LoadedSkill], root: Path):
         self.root = Path(root)
         self._skills: dict[str, LoadedSkill] = dict(skills)
         self._by_tool: dict[str, LoadedSkill] = {
             tool: skill for skill in self._skills.values() for tool in skill.tool_names
         }
-        self._policy = policy
-        self._audit = audit
 
     # -- discovery ---------------------------------------------------------
 
     @classmethod
-    def load(
-        cls,
-        root: str | Path | None = None,
-        *,
-        policy: "PolicyConfig | PolicyEngine | None" = None,
-        audit: "AuditLog | None" = None,
-    ) -> "SkillRegistry":
+    def load(cls, root: str | Path | None = None) -> "SkillRegistry":
         root_path = Path(root) if root is not None else DEFAULT_SKILL_ROOT
         if not root_path.is_dir():
             raise SkillManifestError(
@@ -493,7 +463,7 @@ class SkillRegistry:
         if violations:
             raise SkillManifestError(root_path, violations)
 
-        return cls(loaded, root_path, policy=policy, audit=audit)
+        return cls(loaded, root_path)
 
     # -- introspection -----------------------------------------------------
 
@@ -525,27 +495,10 @@ class SkillRegistry:
         approval: ApprovalHook | None = None,
         secrets: Mapping[str, str] | None = None,
         workspace_root: str | Path | None = None,
-        policy: "PolicyConfig | PolicyEngine | None" = None,
-        audit: "AuditLog | None" = None,
-        turn_id: str | None = None,
-        actor: str | None = None,
     ) -> dict[str, Any]:
         started = time.perf_counter()
-        effective_audit = audit if audit is not None else self._audit
         skill = self._by_tool.get(tool)
         if skill is None:
-            _audit_invocation(
-                effective_audit,
-                tool=tool,
-                skill_name=tool,
-                version=None,
-                effects=(),
-                decision="deny",
-                outcome="unknown_skill",
-                duration_ms=_ms(started),
-                turn_id=turn_id,
-                actor=actor,
-            )
             return _error_envelope(
                 tool,
                 tool,
@@ -556,399 +509,157 @@ class SkillRegistry:
                 duration_ms=_ms(started),
             )
 
-        explicit_root = Path(workspace_root) if workspace_root is not None else None
-        config = _resolve_policy_config(
-            policy if policy is not None else self._policy, explicit_root
-        )
-        invocation_policy = InvocationPolicy.from_skill(skill, config)
         env: Mapping[str, str] = os.environ if secrets is None else secrets
-        inner = SkillContext(
+        ctx = SkillContext(
             skill.name,
-            config.workspace_root,
+            workspace_root if workspace_root is not None else Path.cwd(),
             {name: env[name] for name in skill.declared_secrets if name in env},
         )
-        ctx = GuardedSkillContext(
-            inner,
-            invocation_policy,
-            audit=effective_audit,
-            turn_id=turn_id,
-        )
-
-        def finish(
-            envelope: dict[str, Any],
-            *,
-            decision: str,
-            outcome: str,
-            policy_category: str | None = None,
-            approval_hash: str | None = None,
-        ) -> dict[str, Any]:
-            _audit_invocation(
-                effective_audit,
-                tool=tool,
-                skill_name=skill.name,
-                version=skill.version,
-                effects=skill.effects,
-                decision=decision,
-                outcome=outcome,
-                duration_ms=_ms(started),
-                turn_id=turn_id,
-                actor=actor,
-                policy_category=policy_category,
-                approval_hash=approval_hash,
-            )
-            return envelope
 
         args: Mapping[str, Any] = {} if arguments is None else arguments
         if not isinstance(args, Mapping):
-            return finish(
-                _error_envelope(
-                    skill.name,
-                    tool,
-                    "invalid_arguments",
-                    f"Arguments for {tool!r} must be a JSON object.",
-                    retryable=False,
-                    user_fixable=True,
-                    field="",
-                    duration_ms=_ms(started),
-                ),
-                decision="allow",
-                outcome="invalid_arguments",
+            return _error_envelope(
+                skill.name,
+                tool,
+                "invalid_arguments",
+                f"Arguments for {tool!r} must be a JSON object.",
+                retryable=False,
+                user_fixable=True,
+                field="",
+                duration_ms=_ms(started),
             )
 
         arg_errors = _schema_errors(skill.input_validator, args)
         if arg_errors:
             first = arg_errors[0]
-            return finish(
-                _error_envelope(
-                    skill.name,
-                    tool,
-                    "invalid_arguments",
-                    ctx.scrub(
-                        f"Invalid arguments for {tool!r}: {first['field'] or '/'}: {first['message']}"
-                    ),
-                    retryable=False,
-                    user_fixable=True,
-                    field=first["field"],
-                    details={"errors": _scrub_errors(arg_errors, ctx)},
-                    duration_ms=_ms(started),
+            return _error_envelope(
+                skill.name,
+                tool,
+                "invalid_arguments",
+                ctx.scrub(
+                    f"Invalid arguments for {tool!r}: {first['field'] or '/'}: {first['message']}"
                 ),
-                decision="allow",
-                outcome="invalid_arguments",
-            )
-
-        # KEL-20: concrete arguments are checked against the manifest on every
-        # call, before approval. A deny here is terminal and never produces an
-        # approval request.
-        try:
-            verdict = invocation_policy.evaluate_arguments(args)
-        except PolicyDenied as exc:
-            return finish(
-                _policy_denied_envelope(skill, tool, exc, ctx, _ms(started)),
-                decision="deny",
-                outcome="policy_denied",
-                policy_category=_policy_category(exc),
-            )
-
-        if verdict.decision is Decision.DENY:
-            exc = PolicyDenied(verdict.reason, verdict.blast_radius)
-            return finish(
-                _policy_denied_envelope(skill, tool, exc, ctx, _ms(started)),
-                decision="deny",
-                outcome="policy_denied",
-                policy_category=_policy_category(exc),
-            )
-
-        # Policy may ask for approval (an in-scope write), but the manifest's
-        # requires_approval remains the only thing that produces a prompt. A
-        # policy requirement without the manifest flag is a fail-closed deny.
-        if (
-            verdict.decision is Decision.REQUIRE_APPROVAL
-            and not skill.requires_approval
-        ):
-            exc = PolicyDenied(
-                "policy requires approval but the skill does not declare it",
-                ("approval:undeclared",),
-            )
-            return finish(
-                _policy_denied_envelope(skill, tool, exc, ctx, _ms(started)),
-                decision="deny",
-                outcome="policy_denied",
-                policy_category="approval",
+                retryable=False,
+                user_fixable=True,
+                field=first["field"],
+                details={"errors": _scrub_errors(arg_errors, ctx)},
+                duration_ms=_ms(started),
             )
 
         if skill.requires_approval:
             request = _build_approval_request(skill, args)
             envelope_approval = request.to_dict()
             if approval is None:
-                return finish(
-                    _error_envelope(
-                        skill.name,
-                        tool,
-                        "approval_required",
-                        f"Skill {tool!r} needs approval before it can run.",
-                        retryable=False,
-                        user_fixable=True,
-                        approval=envelope_approval,
-                        duration_ms=_ms(started),
-                    ),
-                    decision=verdict.decision.value,
-                    outcome="approval_required",
-                    approval_hash=request.argument_hash,
+                return _error_envelope(
+                    skill.name,
+                    tool,
+                    "approval_required",
+                    f"Skill {tool!r} needs approval before it can run.",
+                    retryable=False,
+                    user_fixable=True,
+                    approval=envelope_approval,
+                    duration_ms=_ms(started),
                 )
             try:
                 allowed = await approval(request)
             except Exception:  # noqa: BLE001 - a broken gate must fail closed
                 allowed = False
             if not allowed:
-                return finish(
-                    _error_envelope(
-                        skill.name,
-                        tool,
-                        "approval_denied",
-                        f"Approval for {tool!r} was denied; nothing ran.",
-                        retryable=False,
-                        user_fixable=False,
-                        duration_ms=_ms(started),
-                    ),
-                    decision=verdict.decision.value,
-                    outcome="approval_denied",
-                    approval_hash=request.argument_hash,
+                return _error_envelope(
+                    skill.name,
+                    tool,
+                    "approval_denied",
+                    f"Approval for {tool!r} was denied; nothing ran.",
+                    retryable=False,
+                    user_fixable=False,
+                    duration_ms=_ms(started),
                 )
 
         try:
-            with active_invocation(
-                invocation_policy,
-                tool=tool,
-                audit=effective_audit,
-                turn_id=turn_id,
-            ):
-                output = await asyncio.wait_for(
-                    skill.handler(dict(args), ctx), timeout=skill.timeout_ms / 1000
-                )
-        except PolicyDenied as exc:
-            return finish(
-                _policy_denied_envelope(skill, tool, exc, ctx, _ms(started)),
-                decision="deny",
-                outcome="policy_denied",
-                policy_category=_policy_category(exc),
+            output = await asyncio.wait_for(
+                skill.handler(dict(args), ctx), timeout=skill.timeout_ms / 1000
             )
         except asyncio.TimeoutError:
-            return finish(
-                _error_envelope(
-                    skill.name,
-                    tool,
-                    "timeout",
-                    f"Skill {tool!r} exceeded its {skill.timeout_ms} ms timeout.",
-                    retryable=True,
-                    user_fixable=False,
-                    duration_ms=_ms(started),
-                ),
-                decision=verdict.decision.value,
-                outcome="timeout",
+            return _error_envelope(
+                skill.name,
+                tool,
+                "timeout",
+                f"Skill {tool!r} exceeded its {skill.timeout_ms} ms timeout.",
+                retryable=True,
+                user_fixable=False,
+                duration_ms=_ms(started),
             )
         except SkillHandlerError as exc:
-            return finish(
-                _error_envelope(
-                    skill.name,
-                    tool,
-                    exc.code,
-                    ctx.scrub(exc.message),
-                    retryable=exc.retryable,
-                    user_fixable=exc.user_fixable,
-                    details=_scrub_obj(exc.details, ctx) if exc.details else None,
-                    duration_ms=_ms(started),
-                ),
-                decision=verdict.decision.value,
-                outcome=exc.code,
+            return _error_envelope(
+                skill.name,
+                tool,
+                exc.code,
+                ctx.scrub(exc.message),
+                retryable=exc.retryable,
+                user_fixable=exc.user_fixable,
+                details=_scrub_obj(exc.details, ctx) if exc.details else None,
+                duration_ms=_ms(started),
             )
         except Exception as exc:  # noqa: BLE001 - handler failures never escape
-            return finish(
-                _error_envelope(
-                    skill.name,
-                    tool,
-                    "handler_error",
-                    ctx.scrub(f"Skill {tool!r} failed: {type(exc).__name__}: {_short(exc)}"),
-                    retryable=False,
-                    user_fixable=False,
-                    duration_ms=_ms(started),
-                ),
-                decision=verdict.decision.value,
-                outcome="handler_error",
+            return _error_envelope(
+                skill.name,
+                tool,
+                "handler_error",
+                ctx.scrub(f"Skill {tool!r} failed: {type(exc).__name__}: {_short(exc)}"),
+                retryable=False,
+                user_fixable=False,
+                duration_ms=_ms(started),
             )
 
         if not isinstance(output, Mapping):
-            return finish(
-                _error_envelope(
-                    skill.name,
-                    tool,
-                    "invalid_output",
-                    f"Skill {tool!r} returned {type(output).__name__}; a JSON object is required.",
-                    retryable=False,
-                    user_fixable=False,
-                    duration_ms=_ms(started),
-                ),
-                decision=verdict.decision.value,
-                outcome="invalid_output",
+            return _error_envelope(
+                skill.name,
+                tool,
+                "invalid_output",
+                f"Skill {tool!r} returned {type(output).__name__}; a JSON object is required.",
+                retryable=False,
+                user_fixable=False,
+                duration_ms=_ms(started),
             )
         try:
             json.dumps(output)
         except (TypeError, ValueError):
-            return finish(
-                _error_envelope(
-                    skill.name,
-                    tool,
-                    "invalid_output",
-                    f"Skill {tool!r} returned a value that is not JSON-serializable.",
-                    retryable=False,
-                    user_fixable=False,
-                    duration_ms=_ms(started),
-                ),
-                decision=verdict.decision.value,
-                outcome="invalid_output",
+            return _error_envelope(
+                skill.name,
+                tool,
+                "invalid_output",
+                f"Skill {tool!r} returned a value that is not JSON-serializable.",
+                retryable=False,
+                user_fixable=False,
+                duration_ms=_ms(started),
             )
 
         output_errors = _schema_errors(skill.output_validator, output)
         if output_errors:
             first = output_errors[0]
-            return finish(
-                _error_envelope(
-                    skill.name,
-                    tool,
-                    "invalid_output",
-                    ctx.scrub(
-                        f"Skill {tool!r} returned output that violates its schema: "
-                        f"{first['field'] or '/'}: {first['message']}"
-                    ),
-                    retryable=False,
-                    user_fixable=False,
-                    field=first["field"],
-                    details={"errors": _scrub_errors(output_errors, ctx)},
-                    duration_ms=_ms(started),
+            return _error_envelope(
+                skill.name,
+                tool,
+                "invalid_output",
+                ctx.scrub(
+                    f"Skill {tool!r} returned output that violates its schema: "
+                    f"{first['field'] or '/'}: {first['message']}"
                 ),
-                decision=verdict.decision.value,
-                outcome="invalid_output",
+                retryable=False,
+                user_fixable=False,
+                field=first["field"],
+                details={"errors": _scrub_errors(output_errors, ctx)},
+                duration_ms=_ms(started),
             )
 
-        return finish(
-            {
-                "ok": True,
-                "skill": skill.name,
-                "tool": tool,
-                "duration_ms": _ms(started),
-                "idempotent": skill.idempotent,
-                "output": dict(output),
-            },
-            decision=verdict.decision.value,
-            outcome="ok",
-        )
-
-
-def _resolve_policy_config(
-    policy: "PolicyConfig | PolicyEngine | None", workspace_root: Path | None
-) -> PolicyConfig:
-    """Normalise a per-call policy without ever widening the manifest scope."""
-
-    if policy is None:
-        return PolicyConfig(workspace_root=workspace_root or Path.cwd())
-    if isinstance(policy, PolicyEngine):
-        config = policy.config
-    elif isinstance(policy, PolicyConfig):
-        config = policy
-    else:  # pragma: no cover - defensive: caller wiring bug
-        raise TypeError("policy must be a PolicyConfig, PolicyEngine, or None")
-    if workspace_root is not None and Path(config.workspace_root) != Path(
-        workspace_root
-    ):
-        config = replace(config, workspace_root=workspace_root)
-    return config
-
-
-def _policy_category(exc: PolicyDenied) -> str:
-    """Coarse category for the audit line; never the raw target."""
-
-    for item in exc.blast_radius:
-        text = str(item)
-        if text.startswith(("net:", "egress:")):
-            return "network"
-        if text.startswith("fs:"):
-            return "path"
-        if text.startswith("repo:"):
-            return "repo"
-        if text.startswith("effect:"):
-            return "effect"
-        if text.startswith("approval:"):
-            return "approval"
-        if text.startswith("arg:"):
-            return "argument"
-    return "policy"
-
-
-def _policy_denied_envelope(
-    skill: LoadedSkill,
-    tool: str,
-    exc: PolicyDenied,
-    ctx: SkillContext,
-    duration_ms: int,
-) -> dict[str, Any]:
-    reason = ctx.scrub(exc.reason)
-    return _error_envelope(
-        skill.name,
-        tool,
-        "policy_denied",
-        f"Policy denied {tool!r}: {reason}",
-        retryable=False,
-        user_fixable=False,
-        details={
-            "decision": "deny",
-            "reason": reason,
-            "blast_radius": [ctx.scrub(str(item)) for item in exc.blast_radius],
-        },
-        duration_ms=duration_ms,
-    )
-
-
-def _audit_invocation(
-    audit: "AuditLog | None",
-    *,
-    tool: str,
-    skill_name: str,
-    version: str | None,
-    effects: Iterable[str],
-    decision: str,
-    outcome: str,
-    duration_ms: int,
-    turn_id: str | None,
-    actor: str | None,
-    policy_category: str | None = None,
-    approval_hash: str | None = None,
-) -> None:
-    """Write the content-free ``skill_invoked`` line; never fail the call."""
-
-    if audit is None:
-        return
-    extra: dict[str, Any] = {
-        "skill": skill_name,
-        "version": version,
-        "effects": list(effects),
-        "scope_decision": decision,
-    }
-    if policy_category is not None:
-        extra["policy_category"] = policy_category
-    if approval_hash is not None:
-        extra["approval_argument_hash"] = approval_hash
-    try:
-        audit.record(
-            "skill_invoked",
-            turn_id=turn_id,
-            tool=tool,
-            actor=actor,
-            decision=decision,
-            outcome=outcome,
-            duration_ms=duration_ms,
-            extra=extra,
-        )
-    except Exception:  # noqa: BLE001 - a full disk must not end an invocation
-        return
+        return {
+            "ok": True,
+            "skill": skill.name,
+            "tool": tool,
+            "duration_ms": _ms(started),
+            "idempotent": skill.idempotent,
+            "output": dict(output),
+        }
 
 
 def _schema_errors(

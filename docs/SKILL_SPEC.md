@@ -235,10 +235,9 @@ Cross-field rules enforced by the loader:
 | `hosts` | lowercase DNS or leading `*.` wildcard; no scheme/port/path/IP | `api.github.com`, `*.example.com` |
 | `repos` | `owner/name` or `*` | `Anshieee/nebius-nvidia` |
 
-Scopes are **declared capability** and are enforced on every invocation (KEL-20). The loader
-builds an `InvocationPolicy` from the manifest, resolves `${WORKSPACE}`, and checks the concrete
-arguments and handler I/O against these lists before any side effect. A skill that exceeds its
-declared scope is denied even if the manifest was valid. See §8.5.
+Scopes are **declared capability**, not enforcement. P0-3 resolves `${WORKSPACE}`, checks the
+actual target against these lists, and decides allow / deny / require approval. A skill that
+exceeds its declared scope is a policy violation even if the manifest was valid.
 
 ### 8.3 Approval
 
@@ -279,36 +278,6 @@ model sees the hash and scope, not the payload. Approval wait time is **not** co
   known values of length ≥ 4 with `[redacted]`. Scrubbing is best-effort; the primary rule is
   that handlers never log arguments or secret values.
 
-### 8.5 Invoke-time enforcement (KEL-20)
-
-`invoke()` re-evaluates policy on **every** call, after argument-schema validation and **before**
-the approval hook. The manifest's declared scope is the ceiling: a per-call policy may narrow it,
-never widen it.
-
-| Target | Check |
-|---|---|
-| `paths` | The target is resolved (symlinks first) and must stay inside `${WORKSPACE}` and match a declared prefix. `..` and NUL bytes fail closed. |
-| `hosts` | A URL/host argument and every egress request must match an exact declared host or leading `*.` wildcard; scheme, embedded credentials, IP literals, and non-80/443 ports are refused. |
-| `repos` | A `repo` argument must be an exact declared `owner/name`, or the manifest must declare `*`. |
-| `effects` | A handler that asks for an effect the manifest did not declare is denied. |
-
-Handlers use the context chokepoints: `read_path` / `write_path`, `check_repo`, and
-`context.egress()` for network access. The egress client checks host **and** method (a non-GET
-method needs the `write` effect), disables redirects, and caps the response body. Independently,
-a ContextVar-scoped socket guard refuses direct `socket`/`urllib`/HTTP-library connections while
-a handler runs, so an ignoring handler fails closed. A test scans `skills/builtin` for direct
-egress imports.
-
-Decisions are `allow` / `require_approval` / `deny`. Only a manifest-level
-`requires_approval: true` can produce an approval prompt. A policy `deny` is **terminal**: it has
-no approval block and the hook is never called. A per-call policy that asks for approval without
-the manifest flag also fails closed.
-
-Every invocation appends one `skill_invoked` audit record with skill name and version, effects,
-scope decision, outcome, duration, and an approval argument hash when one exists. Raw arguments,
-document/chat text, and secret values are never written. Output-schema failures are audited as
-`invalid_output` and are never returned as success.
-
 ---
 
 ## 9. Handler contract
@@ -340,7 +309,6 @@ invoke(tool, arguments)
   ├─ unknown tool                    → unknown_skill
   ├─ arguments is not an object      → invalid_arguments
   ├─ input_schema validation         → invalid_arguments (field + details)
-  ├─ invoke-time policy check        → policy_denied (terminal, never approvable)
   ├─ requires_approval?
   │    ├─ no hook                    → approval_required (request attached)
   │    ├─ hook false/raises          → approval_denied
@@ -405,7 +373,6 @@ invoke(tool, arguments)
 | `invalid_arguments` | no | yes | Args failed the input schema. |
 | `approval_required` | no | yes | Waiting on a human; retry after approval. |
 | `approval_denied` | no | no | A human declined; nothing ran. |
-| `policy_denied` | no | no | The concrete call escaped the declared effects/scope. Terminal; never approvable. |
 | `invalid_output` | no | no | Handler violated its output schema; a bug. |
 | `timeout` | yes | no | Handler exceeded `timeout_ms`; side effects may be partial. |
 | `handler_error` | no | no | Unhandled handler failure (handler may opt in to retryable). |
