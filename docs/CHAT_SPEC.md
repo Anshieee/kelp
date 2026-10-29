@@ -1060,6 +1060,69 @@ Draw only these states; nothing else in the API changes what is on screen.
 | Thread list | `GET /threads` | empty, populated, active, renaming, delete-confirm |
 | Error banner | any | failed with Try again / Continue / Resend |
 
+### 15.6 Health and readiness
+
+Two process probes for a supervisor (systemd, Kubernetes, a load balancer). They are
+not part of the UI contract and are never called by the client.
+
+| Method | Path | Auth | Success | Failure |
+|---|---|---|---|---|
+| `GET` | `/api/healthz` | none | `200` liveness envelope | — |
+| `GET` | `/api/readyz` | owner token | `200` all checks pass | `503` when any check fails |
+| `GET` | `/api/health` | owner token | `200 { "ok": true }` | legacy alias, unchanged |
+
+All three live under the `/api` prefix, like every other route in this spec.
+`/api/healthz` is the only unauthenticated route. It touches no state and never reports
+component detail: a `200` means the HTTP loop is serving. `/api/readyz` runs six checks
+and returns `503` when any of them fails; there is no non-critical check, so every check
+is critical to readiness. The body still enumerates every check so an operator can see
+which component is degraded.
+
+```json
+{
+  "ok": true,
+  "status": "ok",
+  "version": "0.1.0",
+  "commit": "abc1234",
+  "uptime_seconds": 412.73,
+  "checks": {
+    "store":     { "ok": true },
+    "artifacts": { "ok": true },
+    "audit":     { "ok": true },
+    "usage":     { "ok": true },
+    "provider":  { "ok": true, "cached": false, "age_seconds": 0.0 },
+    "registry":  { "ok": true }
+  }
+}
+```
+
+`status` is `ok` or `degraded`.
+
+| Check | What it proves |
+|---|---|
+| `store` | `BEGIN IMMEDIATE` succeeds and rolls back: the database is writable and unlocked |
+| `artifacts` | a throwaway file can be created and removed under the artifact root |
+| `audit` | the audit file opens for append (`O_APPEND`); nothing is written |
+| `usage` | the usage JSONL opens for append; nothing is written |
+| `provider` | the upstream answers `GET /models` with a 2xx, or a provider-supplied probe passes |
+| `registry` | the loaded skill registry can enumerate its names |
+
+A check that is not configured for the deployment (`audit` on a bare `ChatAPI`, or a
+provider with no upstream) reports `{ "ok": true, "detail": "not_configured" }` so a
+test double or embedded use does not turn every scrape into a false alarm.
+
+Failure detail is a stable code only — `unavailable`, `timeout`, or `not_configured`.
+Bodies never contain tokens, API keys, filesystem paths, or exception text. `version`
+and `commit` come from `KELP_VERSION` and `KELP_GIT_COMMIT` (falling back to the
+installed package version and `"unknown"`); a source checkout is not touched at request
+time.
+
+The provider probe is cached for at most 30 s (`cached` and `age_seconds` say whether
+the current answer is reused), so a one-second scrape loop cannot hammer the upstream.
+`age_seconds` is measured from when the probe answered, not from when it started.
+Steady-state budget: p95 `/api/healthz` < 50 ms, p95 `/api/readyz` < 250 ms with a
+warm cache.
+
 ---
 
 ## 16. What Figma must deliver

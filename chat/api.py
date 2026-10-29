@@ -14,12 +14,18 @@ from __future__ import annotations
 
 import asyncio
 import hmac
+import inspect
 import json
+import os
 import re
+import sqlite3
+import tempfile
 import threading
+import time
 from dataclasses import dataclass, field
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from typing import Any, Iterator, Mapping
+from pathlib import Path
+from typing import Any, Callable, Iterator, Mapping
 from urllib.parse import parse_qs, unquote, urlsplit
 
 from .artifacts import ArtifactError, MAX_UPLOAD_BYTES
@@ -29,6 +35,7 @@ from .stream import IDLE_SECONDS, sse_frames
 
 __all__ = [
     "ChatAPI",
+    "HealthProbe",
     "LoopRunner",
     "Request",
     "Response",
@@ -41,6 +48,12 @@ _CLIENT_TURN_RE = re.compile(r"^[A-Za-z0-9_-]{1,100}$")
 _MUTATING = frozenset({"POST", "PATCH", "DELETE", "PUT"})
 _JSON_LIMIT = 1024 * 1024
 _DECISION_LIMIT = 1024
+#: A readiness probe is cached so a slow upstream cannot slow every scrape.
+_PROVIDER_TTL_SECONDS = 30.0
+_PROVIDER_PROBE_TIMEOUT = 3.0
+_PROVIDER_HTTP_TIMEOUT = 2.0
+_COMMIT_ENV = ("KELP_GIT_COMMIT", "GIT_COMMIT", "SOURCE_COMMIT")
+_VERSION_ENV = "KELP_VERSION"
 
 
 @dataclass
@@ -96,6 +109,291 @@ class LoopRunner:
         self._loop.close()
 
 
+class _NotConfigured(Exception):
+    """The component is not part of this deployment; the check is skipped."""
+
+
+class HealthProbe:
+    """Cheap liveness/readiness probes with a cached provider round-trip.
+
+    Every readiness check either touches only local state (SQLite lock, a
+    zero-byte append, a throwaway file) or reads an already-loaded object. Only
+    the provider check goes to the network, and its result is cached for
+    :data:`_PROVIDER_TTL_SECONDS`, so a scrape loop cannot hammer the upstream.
+
+    The payload deliberately carries stable codes only: no filesystem paths, no
+    configuration values, and no exception text, so an unauthenticated probe or
+    a degraded component never leaks where state lives.
+    """
+
+    def __init__(
+        self,
+        *,
+        store: Any | None = None,
+        artifacts: Any | None = None,
+        audit: Any | None = None,
+        usage_store: Any | None = None,
+        provider: Any | None = None,
+        registry: Any | None = None,
+        provider_check: Callable[[], Any] | None = None,
+        provider_ttl: float = _PROVIDER_TTL_SECONDS,
+        version: str | None = None,
+        commit: str | None = None,
+        started_at: float | None = None,
+        clock: Callable[[], float] = time.monotonic,
+    ):
+        self.store = store
+        self.artifacts = artifacts
+        self.audit = audit
+        self.usage_store = usage_store
+        self.provider = provider
+        self.registry = registry
+        self.provider_check = provider_check
+        self.provider_ttl = max(0.0, float(provider_ttl))
+        self.version = version or _package_version()
+        self.commit = commit or _commit_id()
+        self._clock = clock
+        self._started_at = self._clock() if started_at is None else started_at
+        self._provider_lock = threading.Lock()
+        self._provider_cached: tuple[float, dict[str, Any]] | None = None
+
+    @classmethod
+    def from_service(
+        cls, service: ChatService, *, audit: Any | None = None, **kwargs: Any
+    ) -> "HealthProbe":
+        """Derive probes from the components ``ChatService`` already owns."""
+
+        return cls(
+            store=getattr(service, "store", None),
+            artifacts=getattr(service, "artifacts", None),
+            audit=audit,
+            usage_store=getattr(service, "_usage_store", None),
+            provider=getattr(service, "_provider", None),
+            registry=getattr(service, "_registry", None),
+            **kwargs,
+        )
+
+    # -- payloads ----------------------------------------------------------
+
+    def liveness(self) -> dict[str, Any]:
+        """Liveness never touches state: a 200 means the loop is serving."""
+
+        return self._envelope("ok", {})
+
+    def readiness(self, *, runner: "LoopRunner | None" = None) -> tuple[dict[str, Any], bool]:
+        """Run every readiness check and return ``(payload, ready)``."""
+
+        checks = {
+            "store": self._guard(self._check_store),
+            "artifacts": self._guard(self._check_artifacts),
+            "audit": self._guard(self._check_audit),
+            "usage": self._guard(self._check_usage),
+            "provider": self._check_provider_cached(runner),
+            "registry": self._guard(self._check_registry),
+        }
+        ready = all(result["ok"] for result in checks.values())
+        return self._envelope("ok" if ready else "degraded", checks), ready
+
+    def _envelope(self, status: str, checks: Mapping[str, Any]) -> dict[str, Any]:
+        uptime = max(0.0, self._clock() - self._started_at)
+        return {
+            "ok": status == "ok",
+            "status": status,
+            "version": self.version,
+            "commit": self.commit,
+            "uptime_seconds": round(uptime, 3),
+            "checks": dict(checks),
+        }
+
+    # -- individual checks -------------------------------------------------
+
+    @staticmethod
+    def _guard(probe: Callable[[], None]) -> dict[str, Any]:
+        try:
+            probe()
+        except _NotConfigured:
+            return {"ok": True, "detail": "not_configured"}
+        except TimeoutError:
+            return {"ok": False, "detail": "timeout"}
+        except Exception:  # noqa: BLE001 - the body must never carry the message
+            return {"ok": False, "detail": "unavailable"}
+        return {"ok": True}
+
+    def _check_store(self) -> None:
+        """Acquire and release a write lock without changing any row."""
+
+        if self.store is None:
+            raise _NotConfigured
+        path = getattr(self.store, "path", None)
+        if path is None:
+            connection = getattr(self.store, "_conn", None)
+            if connection is None:
+                raise _NotConfigured
+            connection.execute("SELECT 1")
+            return
+        # A private connection with a short busy timeout keeps readyz under its
+        # latency budget even while a turn is writing. The database must already
+        # exist: a probe never creates state.
+        if not Path(path).exists():
+            raise FileNotFoundError("database file is missing")
+        connection = sqlite3.connect(str(path), timeout=0.05)
+        try:
+            connection.execute("BEGIN IMMEDIATE")
+            connection.execute("ROLLBACK")
+        finally:
+            connection.close()
+
+    def _check_artifacts(self) -> None:
+        if self.artifacts is None:
+            raise _NotConfigured
+        root = Path(self.artifacts.root)
+        fd, name = tempfile.mkstemp(prefix=".readyz-", dir=str(root))
+        try:
+            os.write(fd, b"ok")
+        finally:
+            os.close(fd)
+            try:
+                os.unlink(name)
+            except OSError:  # pragma: no cover - cleanup is best effort
+                pass
+
+    def _check_audit(self) -> None:
+        if self.audit is None:
+            raise _NotConfigured
+        path = getattr(self.audit, "path", None)
+        if path is None:
+            raise _NotConfigured
+        _append_probe(Path(path))
+
+    def _check_usage(self) -> None:
+        if self.usage_store is None:
+            raise _NotConfigured
+        path = getattr(self.usage_store, "path", None)
+        if path is None:
+            raise _NotConfigured
+        _append_probe(Path(path))
+
+    def _check_registry(self) -> None:
+        if self.registry is None:
+            raise _NotConfigured
+        names = self.registry.names()
+        if names is None:
+            raise OSError("registry did not return a name list")
+
+    # -- provider ----------------------------------------------------------
+
+    def _check_provider_cached(
+        self, runner: "LoopRunner | None"
+    ) -> dict[str, Any]:
+        # One scrape at a time: the clock is read under the lock, and the
+        # answer is stamped when the probe *completes*, so ``age_seconds`` and
+        # the TTL describe the cached answer rather than the moment a waiter
+        # started queueing for it.
+        with self._provider_lock:
+            now = self._clock()
+            cached = self._provider_cached
+            if cached is not None and now - cached[0] <= self.provider_ttl:
+                result = dict(cached[1])
+                result["cached"] = True
+                result["age_seconds"] = round(max(0.0, now - cached[0]), 3)
+                return result
+            result = self._guard(lambda: self._probe_provider(runner))
+            self._provider_cached = (self._clock(), dict(result))
+            result["cached"] = False
+            # Fresh from the probe, by construction: same clock read.
+            result["age_seconds"] = 0.0
+            return result
+
+    def _probe_provider(self, runner: "LoopRunner | None") -> None:
+        if self.provider_check is not None:
+            self._run_probe(self.provider_check, runner)
+            return
+        provider = self.provider
+        if provider is None:
+            raise _NotConfigured
+        # Presence, not truthiness: a probe object may define ``__bool__``.
+        custom = getattr(provider, "probe", None)
+        if custom is None:
+            custom = getattr(provider, "health", None)
+        if callable(custom):
+            self._run_probe(custom, runner)
+            return
+        config = getattr(provider, "config", None)
+        base_url = getattr(config, "base_url", None) if config is not None else None
+        if not base_url:
+            # A test double or an embedded provider has no upstream to reach.
+            raise _NotConfigured
+        api_key = getattr(config, "api_key", None)
+        self._run_probe(lambda: _http_provider_probe(base_url, api_key), runner)
+
+    def _run_probe(self, probe: Callable[[], Any], runner: "LoopRunner | None") -> None:
+        result = probe()
+        if inspect.isawaitable(result):
+            if runner is None:
+                close = getattr(result, "close", None)
+                if close is not None:
+                    close()
+                raise TimeoutError("no loop to run the provider probe")
+            result = runner.run(result, timeout=_PROVIDER_PROBE_TIMEOUT)
+        if result is False:
+            raise OSError("provider reported not ready")
+
+
+def _append_probe(path: Path) -> None:
+    """Verify append permission without writing a byte.
+
+    ``O_CREAT`` only creates an empty file; existing content, including the
+    audit trail, is never touched. The parent is created exactly as
+    ``AuditLog.record`` / ``JsonlUsageStore.record`` would create it, so a
+    first-run layout is ready and a blocked one fails.
+    """
+
+    path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    fd = os.open(path, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o600)
+    os.close(fd)
+
+
+async def _http_provider_probe(base_url: str, api_key: str | None) -> None:
+    """One bounded ``GET /models``: only a 2xx means reachable and authenticated.
+
+    A redirect, an auth rejection, or a gateway error is not a healthy upstream,
+    so anything outside ``200..299`` fails the check.
+    """
+
+    import httpx
+
+    headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
+    timeout = httpx.Timeout(
+        _PROVIDER_HTTP_TIMEOUT, connect=min(1.0, _PROVIDER_HTTP_TIMEOUT)
+    )
+    async with httpx.AsyncClient(timeout=timeout, follow_redirects=False) as client:
+        response = await client.get(
+            f"{base_url.rstrip('/')}/models", headers=headers
+        )
+    if not 200 <= response.status_code < 300:
+        raise OSError("provider probe was rejected")
+
+
+def _package_version() -> str:
+    override = os.environ.get(_VERSION_ENV)
+    if override and override.strip():
+        return override.strip()
+    try:
+        from importlib.metadata import version
+
+        return version("nebius-assistant")
+    except Exception:  # noqa: BLE001 - an uninstalled tree still serves
+        return "0.0.0"
+
+
+def _commit_id() -> str:
+    for name in _COMMIT_ENV:
+        value = os.environ.get(name)
+        if value and value.strip():
+            return value.strip()[:40]
+    return "unknown"
+
+
 class ChatAPI:
     def __init__(
         self,
@@ -106,12 +404,14 @@ class ChatAPI:
         runner: LoopRunner | None = None,
         stream_idle: float = IDLE_SECONDS,
         max_upload: int = MAX_UPLOAD_BYTES,
+        health: HealthProbe | None = None,
     ):
         self.service = service
         self.auth_token = auth_token
         self.csrf_token = csrf_token
         self.stream_idle = stream_idle
         self.max_upload = max_upload
+        self.health = health or HealthProbe.from_service(service)
         self._owns_runner = runner is None
         self.runner = runner or LoopRunner()
 
@@ -123,9 +423,12 @@ class ChatAPI:
 
     def handle(self, request: Request) -> Response:
         try:
-            self._authorize(request)
             path = unquote(urlsplit(request.path).path)
             segments = [segment for segment in path.split("/") if segment]
+            # Liveness is the one unauthenticated route: a supervisor must be
+            # able to tell "process alive" from "owner token missing".
+            if not self._is_public(request, segments):
+                self._authorize(request)
             if len(segments) < 1 or segments[0] != "api":
                 raise ChatError("not_found", status=404, message="Unknown endpoint.")
             return self._route(request, segments[1:])
@@ -177,8 +480,24 @@ class ChatAPI:
         if head == "artifacts":
             return self._artifacts(request, method, segments[1:])
         if head == "health":
+            if len(segments) != 1 or method != "GET":
+                raise ChatError("not_found", status=404, message="Unknown endpoint.")
+            # Legacy alias kept byte-compatible for existing supervisors.
             return _json_response(200, {"ok": True})
+        if head == "healthz":
+            if len(segments) != 1 or method != "GET":
+                raise ChatError("not_found", status=404, message="Unknown endpoint.")
+            return _json_response(200, self.health.liveness())
+        if head == "readyz":
+            if len(segments) != 1 or method != "GET":
+                raise ChatError("not_found", status=404, message="Unknown endpoint.")
+            payload, ready = self.health.readiness(runner=self.runner)
+            return _json_response(200 if ready else 503, payload)
         raise ChatError("not_found", status=404, message="Unknown endpoint.")
+
+    @staticmethod
+    def _is_public(request: Request, segments: list[str]) -> bool:
+        return request.method.upper() == "GET" and segments == ["api", "healthz"]
 
     # -- threads -----------------------------------------------------------
 
