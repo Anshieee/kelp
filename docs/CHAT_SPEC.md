@@ -1067,14 +1067,16 @@ not part of the UI contract and are never called by the client.
 
 | Method | Path | Auth | Success | Failure |
 |---|---|---|---|---|
-| `GET` | `/healthz` | none | `200` liveness envelope | — |
-| `GET` | `/readyz` | owner token | `200` all checks pass | `503` any critical check fails |
-| `GET` | `/health` | owner token | `200 { "ok": true }` | legacy alias, unchanged |
+| `GET` | `/api/healthz` | none | `200` liveness envelope | — |
+| `GET` | `/api/readyz` | owner token | `200` all checks pass | `503` when any check fails |
+| `GET` | `/api/health` | owner token | `200 { "ok": true }` | legacy alias, unchanged |
 
-`/healthz` is the only unauthenticated route. It touches no state and never reports
-component detail: a `200` means the HTTP loop is serving. `/readyz` runs six checks and
-returns `503` when any of them fails; the body still enumerates every check so an
-operator can see which component is degraded.
+All three live under the `/api` prefix, like every other route in this spec.
+`/api/healthz` is the only unauthenticated route. It touches no state and never reports
+component detail: a `200` means the HTTP loop is serving. `/api/readyz` runs six checks
+and returns `503` when any of them fails; there is no non-critical check, so every check
+is critical to readiness. The body still enumerates every check so an operator can see
+which component is degraded.
 
 ```json
 {
@@ -1102,7 +1104,7 @@ operator can see which component is degraded.
 | `artifacts` | a throwaway file can be created and removed under the artifact root |
 | `audit` | the audit file opens for append (`O_APPEND`); nothing is written |
 | `usage` | the usage JSONL opens for append; nothing is written |
-| `provider` | the upstream is reachable and authenticated (`GET /models`), or a provider-supplied probe passes |
+| `provider` | the upstream answers `GET /models` with a 2xx, or a provider-supplied probe passes |
 | `registry` | the loaded skill registry can enumerate its names |
 
 A check that is not configured for the deployment (`audit` on a bare `ChatAPI`, or a
@@ -1117,7 +1119,9 @@ time.
 
 The provider probe is cached for at most 30 s (`cached` and `age_seconds` say whether
 the current answer is reused), so a one-second scrape loop cannot hammer the upstream.
-Steady-state budget: p95 `/healthz` < 50 ms, p95 `/readyz` < 250 ms with a warm cache.
+`age_seconds` is measured from when the probe answered, not from when it started.
+Steady-state budget: p95 `/api/healthz` < 50 ms, p95 `/api/readyz` < 250 ms with a
+warm cache.
 
 ---
 

@@ -285,8 +285,12 @@ class HealthProbe:
     def _check_provider_cached(
         self, runner: "LoopRunner | None"
     ) -> dict[str, Any]:
-        now = self._clock()
+        # One scrape at a time: the clock is read under the lock, and the
+        # answer is stamped when the probe *completes*, so ``age_seconds`` and
+        # the TTL describe the cached answer rather than the moment a waiter
+        # started queueing for it.
         with self._provider_lock:
+            now = self._clock()
             cached = self._provider_cached
             if cached is not None and now - cached[0] <= self.provider_ttl:
                 result = dict(cached[1])
@@ -294,8 +298,9 @@ class HealthProbe:
                 result["age_seconds"] = round(max(0.0, now - cached[0]), 3)
                 return result
             result = self._guard(lambda: self._probe_provider(runner))
-            self._provider_cached = (now, dict(result))
+            self._provider_cached = (self._clock(), dict(result))
             result["cached"] = False
+            # Fresh from the probe, by construction: same clock read.
             result["age_seconds"] = 0.0
             return result
 
@@ -306,7 +311,10 @@ class HealthProbe:
         provider = self.provider
         if provider is None:
             raise _NotConfigured
-        custom = getattr(provider, "probe", None) or getattr(provider, "health", None)
+        # Presence, not truthiness: a probe object may define ``__bool__``.
+        custom = getattr(provider, "probe", None)
+        if custom is None:
+            custom = getattr(provider, "health", None)
         if callable(custom):
             self._run_probe(custom, runner)
             return
@@ -346,7 +354,11 @@ def _append_probe(path: Path) -> None:
 
 
 async def _http_provider_probe(base_url: str, api_key: str | None) -> None:
-    """One bounded ``GET /models``: reachable and authenticated is ready."""
+    """One bounded ``GET /models``: only a 2xx means reachable and authenticated.
+
+    A redirect, an auth rejection, or a gateway error is not a healthy upstream,
+    so anything outside ``200..299`` fails the check.
+    """
 
     import httpx
 
@@ -358,7 +370,7 @@ async def _http_provider_probe(base_url: str, api_key: str | None) -> None:
         response = await client.get(
             f"{base_url.rstrip('/')}/models", headers=headers
         )
-    if response.status_code >= 400:
+    if not 200 <= response.status_code < 300:
         raise OSError("provider probe was rejected")
 
 
