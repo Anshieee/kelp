@@ -230,10 +230,10 @@
 <!-- k8 -->
 <g id="node16" class="node">
 <title>k8</title>
-<g id="a_node16"><a xlink:href="#kel-8" xlink:title="Main screen you talk through. Spec drafted; no screen built yet.">
+<g id="a_node16"><a xlink:href="#kel-8" xlink:title="Main screen you talk through. Spec fixed after review; no screen built yet.">
 <path fill="#d9edd7" stroke="black" stroke-width="2" d="M709.58,-1827.49C709.58,-1827.49 597.58,-1827.49 597.58,-1827.49 591.58,-1827.49 585.58,-1821.49 585.58,-1815.49 585.58,-1815.49 585.58,-1798.49 585.58,-1798.49 585.58,-1792.49 591.58,-1786.49 597.58,-1786.49 597.58,-1786.49 709.58,-1786.49 709.58,-1786.49 715.58,-1786.49 721.58,-1792.49 721.58,-1798.49 721.58,-1798.49 721.58,-1815.49 721.58,-1815.49 721.58,-1821.49 715.58,-1827.49 709.58,-1827.49"/>
 <text xml:space="preserve" text-anchor="middle" x="653.58" y="-1811.14" font-family="Helvetica,sans-Serif" font-size="13.00">KEL&#45;8 Chat screen</text>
-<text xml:space="preserve" text-anchor="middle" x="653.58" y="-1794.64" font-family="Helvetica,sans-Serif" font-size="13.00">SPEC DRAFTED</text>
+<text xml:space="preserve" text-anchor="middle" x="653.58" y="-1794.64" font-family="Helvetica,sans-Serif" font-size="13.00">SPEC FIXED</text>
 </a>
 </g>
 </g>
@@ -688,7 +688,7 @@
 <!-- k8_chat -->
 <g id="node28" class="node">
 <title>k8_chat</title>
-<g id="a_node28"><a xlink:href="#kel-8" xlink:title="Conversations you name and pick up later. Spec drafted, not built.">
+<g id="a_node28"><a xlink:href="#kel-8" xlink:title="Conversations you name and pick up later. Spec fixed, not built.">
 <ellipse fill="#edf6ec" stroke="black" cx="998" cy="-1889.99" rx="83.44" ry="28.99"/>
 <text xml:space="preserve" text-anchor="middle" x="998" y="-1894.14" font-family="Helvetica,sans-Serif" font-size="13.00">Chats you keep</text>
 <text xml:space="preserve" text-anchor="middle" x="998" y="-1877.64" font-family="Helvetica,sans-Serif" font-size="13.00">TO COME</text>
@@ -703,7 +703,7 @@
 <!-- k8_cards -->
 <g id="node29" class="node">
 <title>k8_cards</title>
-<g id="a_node29"><a xlink:href="#kel-8" xlink:title="PDF and table previews plus where answers came from. Spec drafted, not built.">
+<g id="a_node29"><a xlink:href="#kel-8" xlink:title="PDF and table previews plus where answers came from. Spec fixed, not built.">
 <ellipse fill="#edf6ec" stroke="black" cx="998" cy="-1806.99" rx="123.21" ry="28.99"/>
 <text xml:space="preserve" text-anchor="middle" x="998" y="-1811.14" font-family="Helvetica,sans-Serif" font-size="13.00">File cards, source labels</text>
 <text xml:space="preserve" text-anchor="middle" x="998" y="-1794.64" font-family="Helvetica,sans-Serif" font-size="13.00">TO COME</text>
@@ -718,7 +718,7 @@
 <!-- k8_appr -->
 <g id="node30" class="node">
 <title>k8_appr</title>
-<g id="a_node30"><a xlink:href="#kel-8" xlink:title="Yes or no buttons shown in the conversation. Spec drafted, not built.">
+<g id="a_node30"><a xlink:href="#kel-8" xlink:title="Yes or no buttons shown in the conversation. Spec fixed, not built.">
 <ellipse fill="#edf6ec" stroke="black" cx="998" cy="-1723.99" rx="106.77" ry="28.99"/>
 <text xml:space="preserve" text-anchor="middle" x="998" y="-1728.14" font-family="Helvetica,sans-Serif" font-size="13.00">Approval inside chat</text>
 <text xml:space="preserve" text-anchor="middle" x="998" y="-1711.64" font-family="Helvetica,sans-Serif" font-size="13.00">TO COME</text>

@@ -4,7 +4,7 @@
 //         dot -Tpng docs/sdlc-mindmap.gv -o docs/sdlc-mindmap.png
 // Colours: white background, small muted fills per branch, black text.
 // Meaning is carried by words, never by colour alone. No emojis.
-// Status words: DONE, IN REVIEW, IN PROGRESS, TO COME, LATER, SPEC DRAFTED.
+// Status words: DONE, IN REVIEW, SPEC FIXED, IN PROGRESS, TO COME, LATER.
 // Interactivity: every node has URL (page anchor) + tooltip (one plain line),
 // so dot emits <a href> links and <title> tooltips in the SVG.
 digraph sdlc {
@@ -51,7 +51,7 @@ digraph sdlc {
   k5  [label="KEL-5 Skills\nDONE" shape="box" style="filled,bold,rounded" fillcolor="#D9EDD7" URL="#kel-5" tooltip="Rulebook every new ability follows. Finished."];
   k6  [label="KEL-6 Answer loop\nIN REVIEW" shape="box" style="filled,bold,rounded" fillcolor="#D9EDD7" URL="#kel-6" tooltip="Engine: reads, thinks, answers bit by bit. Merged to main; review pending."];
   k7  [label="KEL-7 Ask first\nIN REVIEW" shape="box" style="filled,bold,rounded" fillcolor="#D9EDD7" URL="#kel-7" tooltip="Checkpoint that asks you before acting. Merged to main; review pending."];
-  k8  [label="KEL-8 Chat screen\nSPEC DRAFTED" shape="box" style="filled,bold,rounded" fillcolor="#D9EDD7" URL="#kel-8" tooltip="Main screen you talk through. Spec drafted; no screen built yet."];
+  k8  [label="KEL-8 Chat screen\nSPEC FIXED" shape="box" style="filled,bold,rounded" fillcolor="#D9EDD7" URL="#kel-8" tooltip="Main screen you talk through. Spec fixed after review; no screen built yet."];
   k10 [label="KEL-10 Saved cards\nTO COME" shape="box" style="filled,bold,rounded" fillcolor="#D9EDD7" URL="#kel-10" tooltip="Pay with saved cards after you say yes. Agreed, not started."];
   k9  [label="KEL-9 Final check\nTO COME" shape="box" style="filled,bold,rounded" fillcolor="#D9EDD7" URL="#kel-9" tooltip="Six-scene demo that proves it works. Runs last."];
   m1 -> k5;
@@ -86,9 +86,9 @@ digraph sdlc {
   k7 -> k7_diary;
 
   // KEL-8 leaves
-  k8_chat [label="Chats you keep\nTO COME" fillcolor="#EDF6EC" URL="#kel-8" tooltip="Conversations you name and pick up later. Spec drafted, not built."];
-  k8_cards [label="File cards, source labels\nTO COME" fillcolor="#EDF6EC" URL="#kel-8" tooltip="PDF and table previews plus where answers came from. Spec drafted, not built."];
-  k8_appr [label="Approval inside chat\nTO COME" fillcolor="#EDF6EC" URL="#kel-8" tooltip="Yes or no buttons shown in the conversation. Spec drafted, not built."];
+  k8_chat [label="Chats you keep\nTO COME" fillcolor="#EDF6EC" URL="#kel-8" tooltip="Conversations you name and pick up later. Spec fixed, not built."];
+  k8_cards [label="File cards, source labels\nTO COME" fillcolor="#EDF6EC" URL="#kel-8" tooltip="PDF and table previews plus where answers came from. Spec fixed, not built."];
+  k8_appr [label="Approval inside chat\nTO COME" fillcolor="#EDF6EC" URL="#kel-8" tooltip="Yes or no buttons shown in the conversation. Spec fixed, not built."];
   k8 -> k8_chat;
   k8 -> k8_cards;
   k8 -> k8_appr;

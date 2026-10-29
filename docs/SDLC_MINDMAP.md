@@ -11,8 +11,9 @@ that goes with it is [`sdlc-mindmap.svg`](sdlc-mindmap.svg), with a PNG fallback
 site embeds a copy of the SVG directly in the page, so every box there can be clicked; that copy
 and these two files must be updated together.
 
-What this snapshot rests on: `main` is at `daf3b14`, all **153 tests pass**, and the repository is
-public. KEL-6 and KEL-7 are merged and waiting on review; KEL-8 has a written spec on its branch.
+What this snapshot rests on: `main` is at `9bd547e`, all **153 tests pass**, and the repository is
+public. KEL-6 and KEL-7 are merged and waiting on review; KEL-8's spec is written, reviewed, and
+fixed on `kel-8` at `56b0785`.
 
 ## How to read the labels
 
@@ -20,6 +21,7 @@ public. KEL-6 and KEL-7 are merged and waiting on review; KEL-8 has a written sp
 |---|---|
 | **DONE** | Finished, merged into the shared copy of the code, and reviewed. |
 | **IN REVIEW** | Merged into the shared copy, with a code review still open. |
+| **SPEC FIXED** | The written spec exists, has been through review, and its fixes are applied. No code yet. |
 | **IN PROGRESS** | Being built right now. |
 | **TO COME** | Agreed, not started. |
 
@@ -27,9 +29,7 @@ An **M number** is a milestone, a stage of the build. A **KEL number** is a work
 our task tracker. Linear can lag behind by a day; the statuses below match the tracker site on the
 snapshot date.
 
-Two boxes on the map carry a plainer word instead of one of these labels: **SPEC DRAFTED** on
-KEL-8 means the written spec exists and no code does, and **LATER** on the M4 leaves means outside
-this round.
+**LATER** on the M4 leaves means outside this round.
 
 ## The map
 
@@ -38,10 +38,10 @@ this round.
 The same map in words, in case the image does not load:
 
 - **Milestones** — five stages, M0 to M4.
-- **The work** — six work items, KEL-5 to KEL-10: one done, two in review, one in progress, two to come.
+- **The work** — six work items, KEL-5 to KEL-10: one done, two in review, one spec fixed, two to come.
 - **Surfaces** — where you talk to the assistant: dashboard first, Telegram next, WhatsApp and voice memos later.
 - **Money** — Stripe now, Razorpay and an in-app balance later.
-- **Design** — the screen plan is written, and so is the chat spec; the drawing file is next.
+- **Design** — the screen plan is written, and so is the chat spec; its review fixes are in. The drawing file is next.
 
 On the tracker site ([`netlify/index.html`](../netlify/index.html)) the same SVG is embedded
 inside the page rather than loaded as a picture. Each box is a link: activating it opens the
@@ -56,7 +56,7 @@ promise that full-vision scope lands this week. Scope is cumulative: M2 includes
 | Stage | Target | State | What finishing it means |
 |---|---|---|---|
 | **M0 Foundation** | 30 Oct 2026 | IN PROGRESS | The repo (public), the docs, the tests, the standard development setup, model and provider chosen, and a written list of what could go wrong. The repo, docs, tests, and skill contract are in. Still open: the automated checks, the development setup, and the threat model. |
-| **M1 Prototype** | 30 Oct 2026 | IN PROGRESS | The end-to-end story: ask, get an answer with sources, read a file, approve an action, pay with a saved card, watch the six-scene demo. All six work items live here. Four are moving: KEL-5 is done, KEL-6 and KEL-7 are merged and in review, and KEL-8 has a spec. |
+| **M1 Prototype** | 30 Oct 2026 | IN PROGRESS | The end-to-end story: ask, get an answer with sources, read a file, approve an action, pay with a saved card, watch the six-scene demo. All six work items live here. Four are moving: KEL-5 is done, KEL-6 and KEL-7 are merged and in review, and KEL-8's spec is fixed and waiting on the same sign-off. |
 | **M2 Polished MVP** | 30 Oct 2026 | TO COME | Survives ordinary use: picks up after a restart, self-checks, better search over your documents, repeatable quality measurements, and a deploy on the Nebius GPU. |
 | **M3 Hardening** | 30 Oct 2026 | TO COME | The privacy and cost promises hold under pressure: who sees what, where keys live, caps on traffic, a retention rule, and a spend ceiling. |
 | **M4 Full vision** | 30 Oct 2026 | TO COME | More devices, work the assistant starts on its own, abilities added by others, and team sharing. A direction, not a deadline. |
@@ -131,7 +131,7 @@ the rules say nothing, the answer is no.
 Status detail: merged into `main` at `daf3b14`. Policy, one-time approvals, gated execution, the
 audit log, and 50 tests are in and passing. Sign-off from the review is the remaining step.
 
-### KEL-8 — Dashboard chat — IN PROGRESS (spec drafted)
+### KEL-8 — Dashboard chat — SPEC FIXED
 
 The main screen. Conversations you can name and pick up later, answers that appear as they are
 written, a small openable card for each tool step, previews of PDF and spreadsheet answers, labels
@@ -142,11 +142,31 @@ showing where an answer came from, and approval requests shown in the conversati
 - Linear: https://linear.app/kelp-ai/issue/KEL-8/dashboard-chat-surface-primary-interface
 - Chat spec: [`docs/CHAT_SPEC.md`](https://github.com/Anshieee/kelp/blob/kel-8/docs/CHAT_SPEC.md) (kel-8 branch)
 - Spec commit: [`7bcf6d3`](https://github.com/Anshieee/kelp/commit/7bcf6d3)
+- Review fixes: [`56b0785`](https://github.com/Anshieee/kelp/commit/56b0785)
 - Screen plan: [`docs/frontend-scope-simple.md`](frontend-scope-simple.md)
 
-Status detail: the spec is written and committed on `kel-8` — threads, in-chat approvals, and
-artifact cards, 1,037 lines. The `kel-8` branch is not on GitHub yet, so those links open once it is
-pushed. No screen code exists. Building starts once KEL-6 and KEL-7 are signed off.
+Status detail: the spec is written, reviewed, and fixed on `kel-8` at `56b0785`, 1,164 lines. The
+review changed seven things:
+
+- **Honest dependencies (M1).** The web search, GitHub read, and document handlers are still stubs.
+  The spec now says so, and says the demo needs saved fixtures or recorded results instead of
+  pretending live tools exist.
+- **Attachments (M2).** A user message can carry a file, and the spec defines the chip, the record,
+  and the moment the file is bound to a thread.
+- **Sweep card (M3).** A run of GitHub reads gets one wider card, with its own scope row, instead of
+  many look-alike rows.
+- **Framing (M4).** Frame denial stays on the app pages, while the single file-preview endpoint is
+  allowed inside the app's own sandboxed frame, so PDF previews work without making the app
+  frameable.
+- **Errors (N1).** Six missing error codes are added, plus a catch-all for anything unlisted. A
+  late approval answers 409, not a success.
+- **Limits (N2).** The message limit is 8,000 characters, not bytes. Budget timing uses a monotonic
+  clock, so a wall-clock change cannot stretch a turn.
+- **Scope (N3).** Shell execution is OpenShell-only, and source chips share one "+n more" overflow
+  string.
+
+No screen code exists. Building starts once the KEL-6 and KEL-7 review is signed off and the
+drawing file exists.
 
 ### KEL-10 — Wallet — TO COME
 
@@ -205,9 +225,10 @@ Status detail: runs last, after the dashboard and the wallet. Nothing is written
 
 - **The screen plan is done.** Thirteen screens, three main flows, four states per screen. See
   [`docs/frontend-scope-simple.md`](frontend-scope-simple.md).
-- **The chat spec is done.** Threads, approvals inside the conversation, and artifact cards are
-  written out in [`docs/CHAT_SPEC.md`](https://github.com/Anshieee/kelp/blob/kel-8/docs/CHAT_SPEC.md)
-  on the `kel-8` branch.
+- **The chat spec is done and fixed.** Threads, approvals inside the conversation, and artifact
+  cards are written out in
+  [`docs/CHAT_SPEC.md`](https://github.com/Anshieee/kelp/blob/kel-8/docs/CHAT_SPEC.md) on the
+  `kel-8` branch, with the review fixes applied at `56b0785`.
 - **The drawing file is next.** No screen code until it exists.
 
 ## Where everything lives
@@ -220,7 +241,7 @@ Status detail: runs last, after the dashboard and the wallet. Nothing is written
   - `kel-5` — merged (`b8de92f`)
   - `kel-6` — merged at `d3c763e`; branch head `4c72afc`
   - `kel-7` — merged at `daf3b14`; branch head `ef6ea9f`
-  - `kel-8` — carries the chat spec, head `7bcf6d3` (not on GitHub yet)
+  - `kel-8` — carries the chat spec, head `56b0785`
 - Change history: https://github.com/Anshieee/kelp/commits/main
 - Pull requests: https://github.com/Anshieee/kelp/pulls
 - Tests: 153 pass on `main` (`python -m pytest`)
@@ -245,7 +266,7 @@ Status detail: runs last, after the dashboard and the wallet. Nothing is written
 - Skill contract: [`docs/SKILL_SPEC.md`](SKILL_SPEC.md)
 - Kernel design: [`docs/KERNEL.md`](https://github.com/Anshieee/kelp/blob/main/docs/KERNEL.md) (main)
 - Approval gate design: [`docs/OPENSHELL.md`](https://github.com/Anshieee/kelp/blob/main/docs/OPENSHELL.md) (main)
-- Chat surface spec: [`docs/CHAT_SPEC.md`](https://github.com/Anshieee/kelp/blob/kel-8/docs/CHAT_SPEC.md) (kel-8 branch)
+- Chat surface spec: [`docs/CHAT_SPEC.md`](https://github.com/Anshieee/kelp/blob/kel-8/docs/CHAT_SPEC.md) (kel-8 branch, review fixes at `56b0785`)
 - Code review for KEL-6 and KEL-7: [`docs/REVIEW_KEL6_KEL7.md`](REVIEW_KEL6_KEL7.md)
 - ADR 0001, one document skill: [`docs/adr/0001-docs-answer-single-skill.md`](adr/0001-docs-answer-single-skill.md)
 - Screen plan: [`docs/frontend-scope-simple.md`](frontend-scope-simple.md)

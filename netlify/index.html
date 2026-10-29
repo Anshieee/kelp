@@ -320,6 +320,12 @@
     color: var(--ink-2);
   }
 
+  .status.spec {
+    background: transparent;
+    border-color: var(--ink-2);
+    color: var(--ink-2);
+  }
+
   .status.progress {
     background: transparent;
     border-color: var(--ink);
@@ -993,9 +999,10 @@
       </p>
 
       <div class="hero-meta">
-        <ul class="legend" aria-label="What the four status labels mean">
+        <ul class="legend" aria-label="What the five status labels mean">
           <li><strong class="status done">Done</strong> finished, merged and reviewed</li>
           <li><strong class="status review">In review</strong> merged, waiting on review</li>
+          <li><strong class="status spec">Spec fixed</strong> spec reviewed, no code yet</li>
           <li><strong class="status progress">In progress</strong> being built right now</li>
           <li><strong class="status todo">To come</strong> agreed, not started</li>
         </ul>
@@ -1012,7 +1019,7 @@
           <div>
             <p class="label">Work items</p>
             <p>1 done, 2 in review</p>
-            <p class="soft">1 in progress, 2 to come</p>
+            <p class="soft">1 spec fixed, 2 to come</p>
           </div>
         </div>
       </div>
@@ -1022,7 +1029,7 @@
         <div class="map-frame" id="map-frame" role="group" aria-label="Delivery mind map">
           <svg class="mm" role="group" viewBox="0.00 0.00 1146.00 2748.00" preserveAspectRatio="xMidYMid meet" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink">
           <title>Delivery mind map</title>
-          <desc>White panel with pale coloured boxes. The centre is the Kelp assistant, live on 30 October. Six branches lead to M0 to M4, the six work items KEL-5 to KEL-10, surfaces, payments, and design. Status words say done, in review, in progress, or to come. Every box is a link to its entry or decision on the same page.</desc>
+          <desc>White panel with pale coloured boxes. The centre is the Kelp assistant, live on 30 October. Six branches lead to M0 to M4, the six work items KEL-5 to KEL-10, surfaces, payments, and design. Status words say done, in review, spec fixed, in progress, or to come. Every box is a link to its entry or decision on the same page.</desc>
           <g id="graph0" class="graph" transform="scale(1 1) rotate(0) translate(4 2743.98)">
           <title>sdlc</title>
           <polygon fill="white" stroke="none" points="-4,4 -4,-2743.98 1141.65,-2743.98 1141.65,4 -4,4"/>
@@ -1247,10 +1254,10 @@
           <!-- k8 -->
           <g id="node16" class="node">
           <title>k8</title>
-          <g id="a_node16"><a href="#kel-8" xlink:href="#kel-8" aria-label="Main screen you talk through. Spec drafted; no screen built yet. Opens the KEL-8 entry.">
+          <g id="a_node16"><a href="#kel-8" xlink:href="#kel-8" aria-label="Main screen you talk through. Spec fixed after review; no screen built yet. Opens the KEL-8 entry.">
           <path fill="#d9edd7" stroke="black" stroke-width="2" d="M709.58,-1827.49C709.58,-1827.49 597.58,-1827.49 597.58,-1827.49 591.58,-1827.49 585.58,-1821.49 585.58,-1815.49 585.58,-1815.49 585.58,-1798.49 585.58,-1798.49 585.58,-1792.49 591.58,-1786.49 597.58,-1786.49 597.58,-1786.49 709.58,-1786.49 709.58,-1786.49 715.58,-1786.49 721.58,-1792.49 721.58,-1798.49 721.58,-1798.49 721.58,-1815.49 721.58,-1815.49 721.58,-1821.49 715.58,-1827.49 709.58,-1827.49"/>
           <text xml:space="preserve" text-anchor="middle" x="653.58" y="-1811.14" font-family="Helvetica,sans-Serif" font-size="13.00">KEL&#45;8 Chat screen</text>
-          <text xml:space="preserve" text-anchor="middle" x="653.58" y="-1794.64" font-family="Helvetica,sans-Serif" font-size="13.00">SPEC DRAFTED</text>
+          <text xml:space="preserve" text-anchor="middle" x="653.58" y="-1794.64" font-family="Helvetica,sans-Serif" font-size="13.00">SPEC FIXED</text>
           </a>
           </g>
           </g>
@@ -1705,7 +1712,7 @@
           <!-- k8_chat -->
           <g id="node28" class="node">
           <title>k8_chat</title>
-          <g id="a_node28"><a href="#kel-8" xlink:href="#kel-8" aria-label="Conversations you name and pick up later. Spec drafted, not built. Opens the KEL-8 entry.">
+          <g id="a_node28"><a href="#kel-8" xlink:href="#kel-8" aria-label="Conversations you name and pick up later. Spec fixed, not built. Opens the KEL-8 entry.">
           <ellipse fill="#edf6ec" stroke="black" cx="998" cy="-1889.99" rx="83.44" ry="28.99"/>
           <text xml:space="preserve" text-anchor="middle" x="998" y="-1894.14" font-family="Helvetica,sans-Serif" font-size="13.00">Chats you keep</text>
           <text xml:space="preserve" text-anchor="middle" x="998" y="-1877.64" font-family="Helvetica,sans-Serif" font-size="13.00">TO COME</text>
@@ -1720,7 +1727,7 @@
           <!-- k8_cards -->
           <g id="node29" class="node">
           <title>k8_cards</title>
-          <g id="a_node29"><a href="#kel-8" xlink:href="#kel-8" aria-label="PDF and table previews plus where answers came from. Spec drafted, not built. Opens the KEL-8 entry.">
+          <g id="a_node29"><a href="#kel-8" xlink:href="#kel-8" aria-label="PDF and table previews plus where answers came from. Spec fixed, not built. Opens the KEL-8 entry.">
           <ellipse fill="#edf6ec" stroke="black" cx="998" cy="-1806.99" rx="123.21" ry="28.99"/>
           <text xml:space="preserve" text-anchor="middle" x="998" y="-1811.14" font-family="Helvetica,sans-Serif" font-size="13.00">File cards, source labels</text>
           <text xml:space="preserve" text-anchor="middle" x="998" y="-1794.64" font-family="Helvetica,sans-Serif" font-size="13.00">TO COME</text>
@@ -1735,7 +1742,7 @@
           <!-- k8_appr -->
           <g id="node30" class="node">
           <title>k8_appr</title>
-          <g id="a_node30"><a href="#kel-8" xlink:href="#kel-8" aria-label="Yes or no buttons shown in the conversation. Spec drafted, not built. Opens the KEL-8 entry.">
+          <g id="a_node30"><a href="#kel-8" xlink:href="#kel-8" aria-label="Yes or no buttons shown in the conversation. Spec fixed, not built. Opens the KEL-8 entry.">
           <ellipse fill="#edf6ec" stroke="black" cx="998" cy="-1723.99" rx="106.77" ry="28.99"/>
           <text xml:space="preserve" text-anchor="middle" x="998" y="-1728.14" font-family="Helvetica,sans-Serif" font-size="13.00">Approval inside chat</text>
           <text xml:space="preserve" text-anchor="middle" x="998" y="-1711.64" font-family="Helvetica,sans-Serif" font-size="13.00">TO COME</text>
@@ -1893,7 +1900,7 @@
         </li>
         <li>
           <p class="label">The work</p>
-          <p>Six work items numbered KEL-5 to KEL-10. One is done, two are merged and waiting on review, one has a written screen spec, and two have not started.</p>
+          <p>Six work items numbered KEL-5 to KEL-10. One is done, two are merged and waiting on review, one has a written spec that has been through review, and two have not started.</p>
         </li>
         <li>
           <p class="label">Surfaces</p>
@@ -1905,7 +1912,7 @@
         </li>
         <li>
           <p class="label">Design</p>
-          <p>The screen plan and the chat spec are written. The drawing file itself comes next.</p>
+          <p>The screen plan and the chat spec are written, and the spec review fixes are in. The drawing file itself comes next.</p>
         </li>
       </ul>
 
@@ -2012,8 +2019,8 @@
               <p class="fact-label">Status</p>
               <p>
                 In progress. KEL-5 is done and merged. KEL-6 and KEL-7 are merged into main and
-                waiting on review; the full suite is 153 tests, all passing. KEL-8 has a written
-                screen spec. KEL-10, then KEL-9, follow in that order.
+                waiting on review; the full suite is 153 tests, all passing. KEL-8 has a written,
+                reviewed screen spec on kel-8. KEL-10, then KEL-9, follow in that order.
               </p>
             </div>
             <div class="fact fact-wide">
@@ -2340,7 +2347,7 @@
             <small class="item-id">KEL-8</small>
             <strong class="item-title">Dashboard chat &mdash; the main screen</strong>
             <small class="item-line">The conversation where you can see every step the assistant takes.</small>
-            <strong class="status progress">In progress</strong>
+            <strong class="status spec">Spec fixed</strong>
           </summary>
           <div class="item-body">
             <div class="fact">
@@ -2348,8 +2355,9 @@
               <p>
                 The place you actually talk to the assistant. Conversations you can name and pick up
                 later, answers that appear as they are written, a small card for each tool step you
-                can open, previews of PDF and spreadsheet answers, labels showing where an answer
-                came from, and approval requests shown right in the conversation.
+                can open, files you attach to a question, one wider card for a run of GitHub lookups,
+                previews of PDF and spreadsheet answers, labels showing where an answer came from,
+                and approval requests shown right in the conversation.
               </p>
             </div>
             <div class="fact">
@@ -2369,10 +2377,14 @@
             <div class="fact">
               <p class="fact-label">Status</p>
               <p>
-                In progress, spec first. docs/CHAT_SPEC.md is written and committed on kel-8
-                (7bcf6d3): threads, in-chat approvals, and artifact cards, in 1,037 lines. The
-                branch is not on GitHub yet, so that link opens once it is pushed. No screen code
-                exists; building starts after KEL-6 and KEL-7 are signed off.
+                Spec fixed. docs/CHAT_SPEC.md is written on kel-8 (7bcf6d3) and the review fixes
+                landed at 56b0785, in 1,164 lines. The fixes name the stub tools honestly and ask
+                for saved fixtures, let a user message carry an attachment, add one wider GitHub
+                sweep card, scope frame denial to the app while the file-preview endpoint stays
+                frameable, add the six missing error codes and a catch-all, count the message limit
+                in characters with a monotonic budget clock, and keep shell execution to OpenShell.
+                No screen code exists; building starts after KEL-6 and KEL-7 are signed off and the
+                drawing file exists.
               </p>
             </div>
             <div class="fact fact-wide">
@@ -2381,6 +2393,7 @@
                 <li><a target="_blank" rel="noopener" href="https://linear.app/kelp-ai/issue/KEL-8/dashboard-chat-surface-primary-interface">KEL-8 in Linear</a><small>Description and discussion</small></li>
                 <li><a target="_blank" rel="noopener" href="https://github.com/Anshieee/kelp/blob/kel-8/docs/CHAT_SPEC.md">docs/CHAT_SPEC.md</a><small>The chat surface spec, on the kel-8 branch</small></li>
                 <li><a target="_blank" rel="noopener" href="https://github.com/Anshieee/kelp/commit/7bcf6d3">Commit 7bcf6d3</a><small>Where the spec landed</small></li>
+                <li><a target="_blank" rel="noopener" href="https://github.com/Anshieee/kelp/commit/56b0785">Commit 56b0785</a><small>The review fixes</small></li>
                 <li><a target="_blank" rel="noopener" href="https://github.com/Anshieee/kelp/blob/main/docs/frontend-scope-simple.md">docs/frontend-scope-simple.md</a><small>The screen plan: thirteen screens, three flows</small></li>
               </ul>
             </div>
@@ -2577,7 +2590,7 @@
             </div>
             <div>
               <dt>Done</dt>
-              <dd><strong>The chat spec.</strong> Threads, approvals shown in the conversation, and artifact cards, written out in docs/CHAT_SPEC.md on the kel-8 branch.</dd>
+              <dd><strong>The chat spec.</strong> Threads, approvals shown in the conversation, artifact cards, and attachments, written out in docs/CHAT_SPEC.md on the kel-8 branch with the review fixes applied at 56b0785.</dd>
             </div>
             <div>
               <dt>Next</dt>
