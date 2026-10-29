@@ -38,7 +38,7 @@ from openshell.audit import AuditLog
 from skills.errors import SkillManifestError
 from skills.loader import SkillRegistry
 
-from .api import ChatAPI, make_server
+from .api import ChatAPI, HealthProbe, make_server
 from .artifacts import ArtifactRegistry
 from .recovery import RecoveryReport, settle_interrupted
 from .service import ChatService
@@ -478,6 +478,7 @@ def build_app(
             service,
             auth_token=config.auth_token,
             csrf_token=config.csrf_token,
+            health=HealthProbe.from_service(service, audit=audit),
         )
         return Application(
             config=config,
