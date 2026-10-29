@@ -260,10 +260,10 @@
 <!-- k9 -->
 <g id="node18" class="node">
 <title>k9</title>
-<g id="a_node18"><a xlink:href="#kel-9" xlink:title="Six&#45;scene demo that proves it works. Runs last.">
+<g id="a_node18"><a xlink:href="#kel-9" xlink:title="Six&#45;scene demo that proves it works. Merged and reviewed.">
 <path fill="#d9edd7" stroke="black" stroke-width="2" d="M706.96,-1463.49C706.96,-1463.49 600.21,-1463.49 600.21,-1463.49 594.21,-1463.49 588.21,-1457.49 588.21,-1451.49 588.21,-1451.49 588.21,-1434.49 588.21,-1434.49 588.21,-1428.49 594.21,-1422.49 600.21,-1422.49 600.21,-1422.49 706.96,-1422.49 706.96,-1422.49 712.96,-1422.49 718.96,-1428.49 718.96,-1434.49 718.96,-1434.49 718.96,-1451.49 718.96,-1451.49 718.96,-1457.49 712.96,-1463.49 706.96,-1463.49"/>
 <text xml:space="preserve" text-anchor="middle" x="653.58" y="-1447.14" font-family="Helvetica,sans-Serif" font-size="13.00">KEL&#45;9 Final check</text>
-<text xml:space="preserve" text-anchor="middle" x="653.58" y="-1430.64" font-family="Helvetica,sans-Serif" font-size="13.00">TO COME</text>
+<text xml:space="preserve" text-anchor="middle" x="653.58" y="-1430.64" font-family="Helvetica,sans-Serif" font-size="13.00">DONE</text>
 </a>
 </g>
 </g>
@@ -778,10 +778,10 @@
 <!-- k9_six -->
 <g id="node34" class="node">
 <title>k9_six</title>
-<g id="a_node34"><a xlink:href="#kel-9" xlink:title="Ask, files, GitHub, approve, schedule, restart. Not started.">
+<g id="a_node34"><a xlink:href="#kel-9" xlink:title="Ask, files, GitHub, approve, schedule, restart. Merged to main.">
 <ellipse fill="#edf6ec" stroke="black" cx="998" cy="-1391.99" rx="134.35" ry="28.99"/>
 <text xml:space="preserve" text-anchor="middle" x="998" y="-1396.14" font-family="Helvetica,sans-Serif" font-size="13.00">Six scenes, one command</text>
-<text xml:space="preserve" text-anchor="middle" x="998" y="-1379.64" font-family="Helvetica,sans-Serif" font-size="13.00">TO COME</text>
+<text xml:space="preserve" text-anchor="middle" x="998" y="-1379.64" font-family="Helvetica,sans-Serif" font-size="13.00">DONE</text>
 </a>
 </g>
 </g>
@@ -793,10 +793,10 @@
 <!-- k9_saved -->
 <g id="node35" class="node">
 <title>k9_saved</title>
-<g id="a_node35"><a xlink:href="#kel-9" xlink:title="Make&#45;believe model answers so the run repeats. Not started.">
+<g id="a_node35"><a xlink:href="#kel-9" xlink:title="Make&#45;believe model answers so the run repeats. Merged to main.">
 <ellipse fill="#edf6ec" stroke="black" cx="998" cy="-1308.99" rx="139.65" ry="28.99"/>
 <text xml:space="preserve" text-anchor="middle" x="998" y="-1313.14" font-family="Helvetica,sans-Serif" font-size="13.00">Saved answers, offline&#45;safe</text>
-<text xml:space="preserve" text-anchor="middle" x="998" y="-1296.64" font-family="Helvetica,sans-Serif" font-size="13.00">TO COME</text>
+<text xml:space="preserve" text-anchor="middle" x="998" y="-1296.64" font-family="Helvetica,sans-Serif" font-size="13.00">DONE</text>
 </a>
 </g>
 </g>
@@ -808,17 +808,17 @@
 <!-- k9_shots -->
 <g id="node36" class="node">
 <title>k9_shots</title>
-<g id="a_node36"><a xlink:href="#kel-9" xlink:title="Screenshot per scene, error if one fails. Not started.">
-<ellipse fill="#edf6ec" stroke="black" cx="998" cy="-1225.99" rx="117.38" ry="28.99"/>
-<text xml:space="preserve" text-anchor="middle" x="998" y="-1230.14" font-family="Helvetica,sans-Serif" font-size="13.00">Photos, stops if broken</text>
-<text xml:space="preserve" text-anchor="middle" x="998" y="-1213.64" font-family="Helvetica,sans-Serif" font-size="13.00">TO COME</text>
+<g id="a_node36"><a xlink:href="#kel-9" xlink:title="A receipt per scene, an error if one fails. Merged to main.">
+<ellipse fill="#edf6ec" stroke="black" cx="998" cy="-1225.99" rx="125.87" ry="28.99"/>
+<text xml:space="preserve" text-anchor="middle" x="998" y="-1230.14" font-family="Helvetica,sans-Serif" font-size="13.00">Receipts, stops if broken</text>
+<text xml:space="preserve" text-anchor="middle" x="998" y="-1213.64" font-family="Helvetica,sans-Serif" font-size="13.00">DONE</text>
 </a>
 </g>
 </g>
 <!-- k9&#45;&gt;k9_shots -->
 <g id="edge35" class="edge">
 <title>k9&#45;&gt;k9_shots</title>
-<path fill="none" stroke="#555555" d="M719.17,-1437.95C742.32,-1433.44 767.36,-1425.14 786.34,-1409.99 841.65,-1365.86 804.12,-1313.46 858.34,-1267.99 871.16,-1257.24 886.67,-1249.25 902.62,-1243.29"/>
+<path fill="none" stroke="#555555" d="M719.17,-1437.95C742.32,-1433.44 767.36,-1425.14 786.34,-1409.99 841.65,-1365.86 804.12,-1313.46 858.34,-1267.99 870.39,-1257.89 884.82,-1250.22 899.75,-1244.39"/>
 </g>
 </g>
 </svg>

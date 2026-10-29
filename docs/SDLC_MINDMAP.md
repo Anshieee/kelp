@@ -11,9 +11,8 @@ that goes with it is [`sdlc-mindmap.svg`](sdlc-mindmap.svg), with a PNG fallback
 site embeds a copy of the SVG directly in the page, so every box there can be clicked; that copy
 and these two files must be updated together.
 
-What this snapshot rests on: `main` is at `e0bbb72`, all **247 tests pass**, and the repository is
-public. KEL-5, KEL-6, KEL-7, and KEL-8 are merged and reviewed. KEL-10 and KEL-9 are agreed and not
-started.
+What this snapshot rests on: `main` is at `1f08e53`, all **259 tests pass**, and the repository is
+public. KEL-5 through KEL-9 are merged and reviewed. KEL-10 is agreed and not started.
 
 ## How to read the labels
 
@@ -38,7 +37,7 @@ snapshot date.
 The same map in words, in case the image does not load:
 
 - **Milestones** — five stages, M0 to M4.
-- **The work** — six work items, KEL-5 to KEL-10: four done, two to come.
+- **The work** — six work items, KEL-5 to KEL-10: five done, one to come.
 - **Surfaces** — where you talk to the assistant: dashboard first, Telegram next, WhatsApp and voice memos later.
 - **Money** — Stripe now, Razorpay and an in-app balance later.
 - **Design** — the screen plan is written, and so is the chat spec. The chat surface code is merged; the drawing file and the browser screen are next.
@@ -56,15 +55,15 @@ promise that full-vision scope lands this week. Scope is cumulative: M2 includes
 | Stage | Target | State | What finishing it means |
 |---|---|---|---|
 | **M0 Foundation** | 30 Oct 2026 | IN PROGRESS | The repo (public), the docs, the tests, the standard development setup, model and provider chosen, and a written list of what could go wrong. The repo, docs, tests, and skill contract are in. Still open: the automated checks, the development setup, and the threat model. |
-| **M1 Prototype** | 30 Oct 2026 | IN PROGRESS | The end-to-end story: ask, get an answer with sources, read a file, approve an action, pay with a saved card, watch the six-scene demo. All six work items live here. Four are done and merged: KEL-5, KEL-6, KEL-7, and KEL-8. Two remain: KEL-10, the wallet, and KEL-9, the demo. |
+| **M1 Prototype** | 30 Oct 2026 | IN PROGRESS | The end-to-end story: ask, get an answer with sources, read a file, approve an action, pay with a saved card, watch the six-scene demo. All six work items live here. Five are done and merged: KEL-5 to KEL-9. One remains: KEL-10, the wallet. |
 | **M2 Polished MVP** | 30 Oct 2026 | TO COME | Survives ordinary use: picks up after a restart, self-checks, better search over your documents, repeatable quality measurements, and a deploy on the Nebius GPU. |
 | **M3 Hardening** | 30 Oct 2026 | TO COME | The privacy and cost promises hold under pressure: who sees what, where keys live, caps on traffic, a retention rule, and a spend ceiling. |
 | **M4 Full vision** | 30 Oct 2026 | TO COME | More devices, work the assistant starts on its own, abilities added by others, and team sharing. A direction, not a deadline. |
 
 ## The six work items
 
-KEL-5 feeds KEL-6 and KEL-7. Those two feed KEL-8. KEL-7 also feeds KEL-10. KEL-8 and KEL-10
-come before the demo, KEL-9.
+KEL-5 feeds KEL-6 and KEL-7. Those two feed KEL-8. KEL-7 also feeds KEL-10. KEL-8 comes before the
+demo, KEL-9, which is merged; KEL-10, the wallet, is the only item left.
 
 ### KEL-5 — Skill contracts — DONE
 
@@ -106,7 +105,7 @@ price is counted per chunk.
 - Merge: [`d3c763e`](https://github.com/Anshieee/kelp/commit/d3c763e) (branch [`kel-6`](https://github.com/Anshieee/kelp/tree/kel-6), head `4c72afc`)
 
 Status detail: merged into `main` at `d3c763e`. The kernel suite is 43 tests — 25 for the loop and
-18 for the streaming client — and passes with the rest of the 247. The review written up in
+18 for the streaming client — and passes with the rest of the 259. The review written up in
 [`docs/REVIEW_KEL6_KEL7.md`](REVIEW_KEL6_KEL7.md) signed off, and KEL-8 built on top of it.
 
 ### KEL-7 — Approval gate — DONE
@@ -149,7 +148,7 @@ showing where an answer came from, and approval requests shown in the conversati
 Status detail: merged into `main` at `e0bbb72`. The chat surface is in: named threads that can be
 reopened, an append-only stream of events, a card for each tool step, approvals shown in the
 conversation over the KEL-7 gate, artifacts, and a cooperative cancel token so Stop works. The chat
-suite is 86 tests, part of the 247. The spec is on `main` at 1,164 lines; the review fixes that
+suite is 86 tests, part of the 259. The spec is on `main` at 1,164 lines; the review fixes that
 shaped it landed at `56b0785`:
 
 - **Honest dependencies (M1).** The web search, GitHub read, and document handlers are still stubs.
@@ -191,12 +190,12 @@ Status detail: the Linear issue is created and sits in Todo. Only a placeholder 
 exists today, now on `main` because it came in with KEL-7. No real Stripe calls yet. Razorpay and
 an in-app balance are outside this round.
 
-### KEL-9 — Demo run — TO COME
+### KEL-9 — Demo run — DONE
 
 Six short scenes played in order by one command: ask and get sources; summarise a PDF and answer a
 spreadsheet question; look up a GitHub issue; approve a write and see it in the log; schedule a
-job; stop the server mid-answer and resume without losing anything. It takes screenshots and stops
-with an error if a scene fails.
+job; stop the server mid-answer and resume without losing anything. Each scene writes a receipt,
+and the run stops with an error if a scene fails.
 
 *Why it matters:* it is both the proof and the guard rail. A regression breaks the script before it
 reaches a person.
@@ -205,10 +204,18 @@ reaches a person.
 works offline.
 
 - Linear: https://linear.app/kelp-ai/issue/KEL-9/demo-choreography-6-beat-scripted-end-to-end-run-npm-run-demo
-- Repository: https://github.com/Anshieee/kelp (no demo script yet)
+- Choreography: [`demo/README.md`](https://github.com/Anshieee/kelp/blob/main/demo/README.md) (main)
+- Entry point: [`demo/runner.py`](https://github.com/Anshieee/kelp/blob/main/demo/runner.py)
+- Tests: [`tests/test_demo.py`](https://github.com/Anshieee/kelp/blob/main/tests/test_demo.py)
+- Merge: [`1f08e53`](https://github.com/Anshieee/kelp/commit/1f08e53) (branch [`kel-9`](https://github.com/Anshieee/kelp/tree/kel-9), head `60f653b`)
 
-Status detail: runs last, after the wallet, and after the chat surface on `main`. Nothing is
-written for the demo yet.
+Status detail: merged into `main` at `1f08e53`. `make demo` plays six beats — 129 checks in about
+two seconds — using the real chat service, kernel loop, skill registry, approval gate, artifact
+registry, and HTTP API. The provider and the four handlers are recorded fixtures, so the run is
+offline, deterministic, and needs no keys. Beat 6 kills a real child server with `SIGKILL`
+mid-stream and proves recovery in a new process. The review findings are fixed: beat 5 now settles
+its approval in the audit log, so no outcome stays `awaiting_execution`. Screenshot capture belongs
+to the dashboard slice; the receipts are the review artefacts for this backend-only run.
 
 ## Decisions that shape the map
 
@@ -244,16 +251,17 @@ written for the demo yet.
 ### GitHub
 
 - Repository (public): https://github.com/Anshieee/kelp
-- Shared copy of the code: https://github.com/Anshieee/kelp/tree/main — head `e0bbb72`
+- Shared copy of the code: https://github.com/Anshieee/kelp/tree/main — head `1f08e53`
 - All branches: https://github.com/Anshieee/kelp/branches
   - `kel-5` — merged (`b8de92f`)
   - `kel-6` — merged at `d3c763e`; branch head `4c72afc`
   - `kel-7` — merged at `daf3b14`; branch head `ef6ea9f`
   - `kel-8` — carries the spec history, head `56b0785`
   - `kel-8-build` — merged at `e0bbb72`; branch head `d9e8618`
+  - `kel-9` — merged at `1f08e53`; branch head `60f653b`
 - Change history: https://github.com/Anshieee/kelp/commits/main
 - Pull requests: https://github.com/Anshieee/kelp/pulls
-- Tests: 247 pass on `main` (`python -m pytest`)
+- Tests: 259 pass on `main` (`python -m pytest`); `make demo` plays all six beats
 
 ### Linear
 

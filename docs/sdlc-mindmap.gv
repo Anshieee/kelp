@@ -53,7 +53,7 @@ digraph sdlc {
   k7  [label="KEL-7 Ask first\nDONE" shape="box" style="filled,bold,rounded" fillcolor="#D9EDD7" URL="#kel-7" tooltip="Checkpoint that asks you before acting. Merged and reviewed."];
   k8  [label="KEL-8 Chat screen\nDONE" shape="box" style="filled,bold,rounded" fillcolor="#D9EDD7" URL="#kel-8" tooltip="Main screen you talk through. Surface merged to main; the browser screen is next."];
   k10 [label="KEL-10 Saved cards\nTO COME" shape="box" style="filled,bold,rounded" fillcolor="#D9EDD7" URL="#kel-10" tooltip="Pay with saved cards after you say yes. Agreed, not started."];
-  k9  [label="KEL-9 Final check\nTO COME" shape="box" style="filled,bold,rounded" fillcolor="#D9EDD7" URL="#kel-9" tooltip="Six-scene demo that proves it works. Runs last."];
+  k9  [label="KEL-9 Final check\nDONE" shape="box" style="filled,bold,rounded" fillcolor="#D9EDD7" URL="#kel-9" tooltip="Six-scene demo that proves it works. Merged and reviewed."];
   m1 -> k5;
   m1 -> k6;
   m1 -> k7;
@@ -102,9 +102,9 @@ digraph sdlc {
   k10 -> k10_receipt;
 
   // KEL-9 leaves
-  k9_six  [label="Six scenes, one command\nTO COME" fillcolor="#EDF6EC" URL="#kel-9" tooltip="Ask, files, GitHub, approve, schedule, restart. Not started."];
-  k9_saved [label="Saved answers, offline-safe\nTO COME" fillcolor="#EDF6EC" URL="#kel-9" tooltip="Make-believe model answers so the run repeats. Not started."];
-  k9_shots [label="Photos, stops if broken\nTO COME" fillcolor="#EDF6EC" URL="#kel-9" tooltip="Screenshot per scene, error if one fails. Not started."];
+  k9_six  [label="Six scenes, one command\nDONE" fillcolor="#EDF6EC" URL="#kel-9" tooltip="Ask, files, GitHub, approve, schedule, restart. Merged to main."];
+  k9_saved [label="Saved answers, offline-safe\nDONE" fillcolor="#EDF6EC" URL="#kel-9" tooltip="Make-believe model answers so the run repeats. Merged to main."];
+  k9_shots [label="Receipts, stops if broken\nDONE" fillcolor="#EDF6EC" URL="#kel-9" tooltip="A receipt per scene, an error if one fails. Merged to main."];
   k9 -> k9_six;
   k9 -> k9_saved;
   k9 -> k9_shots;
