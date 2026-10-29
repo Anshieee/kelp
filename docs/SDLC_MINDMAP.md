@@ -11,10 +11,10 @@ that goes with it is [`sdlc-mindmap.svg`](sdlc-mindmap.svg), with a PNG fallback
 site embeds a copy of the SVG directly in the page, so every box there can be clicked; that copy
 and these two files must be updated together.
 
-What this snapshot rests on: `main` is at `8884a5d`, all **775 tests pass**, and the repository is
+What this snapshot rests on: `main` is at `25584f8`, all **845 tests pass**, and the repository is
 public. KEL-5 through KEL-10 are merged, reviewed, and done; KEL-11, KEL-12, KEL-13, KEL-14, KEL-15,
-and KEL-16 are merged and reviewed too, and close M2. KEL-17 and KEL-18 then opened M3 and are
-merged and reviewed: abuse resistance and spend ceilings. KEL-10, payments, carries both its paths:
+and KEL-16 are merged and reviewed too, and close M2. KEL-17, KEL-18, KEL-20, and KEL-21 then opened
+M3 and are merged and reviewed: abuse resistance, spend ceilings, invoke-time policy, and retention. KEL-10, payments, carries both its paths:
 the Stripe saved-card scaffold, the Razorpay gateway, and the Razorpay hosted Checkout.
 
 KEL-10 closed on **owner confirmation on 30 October 2026** (Assume-Done). The code paths are merged
@@ -61,7 +61,20 @@ byte is read, and two concurrency caps in front of the expensive work. It merged
 guardrails: day and month dollar ceilings computed from the persisted usage records, exactly one
 warning per window at 80%, and a hard stop at 100% that refuses before any provider call. It merged
 at `8884a5d` from `kel-18` (head `544a545`) and added 26 tests, taking the suite from 749 to **775**.
-M3 is in progress: the who-sees-what item, key handling, and the retention rule are still open.
+
+KEL-20 then made the skill contract enforceable, merged on 30 October 2026. It is invoke-time policy:
+every call re-checks the concrete arguments against the effects, paths, hosts, and repos the manifest
+declared, all skill network access goes through one egress door, a cooperative socket guard refuses
+direct connections from a handler, a policy refusal is terminal with no approval path, and each call
+writes one content-free `skill_invoked` record. It merged at `223964c` from `kel-20` (head `1f9423e`)
+and added 52 tests, taking the suite from 775 to **827**.
+
+KEL-21 then closed the retention gap, merged on 30 October 2026. It is hard delete plus a stated
+clock: deleting a thread purges its rows in one transaction and unlinks its files, an orphan sweep
+removes what a crash left behind, `VACUUM` returns the pages, and audit and usage records rotate by
+size, age, and segment count against one table in `chat/retention.py`. It merged at `25584f8` from
+`kel-21` (head `4f96577`) and added 18 tests, taking the suite from 827 to **845**. M3 is still in
+progress: owner sign-in, KEL-19, and the written privacy review, KEL-22, are open.
 
 ## How to read the labels
 
@@ -82,13 +95,14 @@ snapshot date.
 
 ## The map
 
-![Mind map of the delivery: milestones M0 to M4, work items KEL-5 to KEL-18, product surfaces, payments, and design.](sdlc-mindmap.svg)
+![Mind map of the delivery: milestones M0 to M4, work items KEL-5 to KEL-21, product surfaces, payments, and design.](sdlc-mindmap.svg)
 
 The same map in words, in case the image does not load:
 
 - **Milestones** — five stages, M0 to M4.
-- **The work** — fourteen work items, KEL-5 to KEL-18: all fourteen are done, M1 and M2 are closed,
-  and M3 is in progress with two of its pieces merged — traffic caps and spend ceilings.
+- **The work** — sixteen work items, KEL-5 to KEL-21, with KEL-19 not used yet: all sixteen are
+  done, M1 and M2 are closed, and M3 is in progress with four of its pieces merged — traffic caps,
+  spend ceilings, invoke-time policy, and retention.
 - **Surfaces** — where you talk to the assistant: dashboard first, Telegram next, WhatsApp and voice memos later.
 - **Money** — saved cards through Stripe and hosted Checkout through Razorpay, both merged and closed out; an in-app balance later.
 - **Design** — the screen plan is written, and so is the chat spec. The chat surface code is merged; the drawing file and the browser screen are next.
@@ -108,17 +122,18 @@ promise that full-vision scope lands this week. Scope is cumulative: M2 includes
 | **M0 Foundation** | 30 Oct 2026 | IN PROGRESS | The repo (public), the docs, the tests, the standard development setup, model and provider chosen, and a written list of what could go wrong. The repo, docs, tests, and skill contract are in. Still open: the automated checks, the development setup, and the threat model. |
 | **M1 Prototype** | 30 Oct 2026 | COMPLETE | The end-to-end story: ask, get an answer with sources, read a file, approve an action, pay with a saved card, watch the six-scene demo. All six work items live here, and all six are done: KEL-5 to KEL-9 were merged earlier, and KEL-10 closed on owner confirmation on 30 October 2026. |
 | **M2 Polished MVP** | 30 Oct 2026 | COMPLETE | Survives ordinary use: picks up after a restart, self-checks, better search over your documents, an honest account of what it did, repeatable quality measurements, and a deploy a stranger can repeat. All six work items are done: KEL-11, the serve entrypoint; KEL-12, health and readiness; KEL-13, real document search with citations; KEL-14, structured logs and metrics; KEL-15, the eval harness that measures answer quality; KEL-16, the image and runbook. The runbook's end-to-end pass on a real Nebius host is still to be done. |
-| **M3 Hardening** | 30 Oct 2026 | IN PROGRESS | The privacy and cost promises hold under pressure: who sees what, where keys live, caps on traffic, a retention rule, and a spend ceiling. Two pieces are in: KEL-17, the traffic, body, and concurrency caps, and KEL-18, the spend ceilings. Still open: who sees what, key handling, and the retention rule. |
+| **M3 Hardening** | 30 Oct 2026 | IN PROGRESS | The privacy and cost promises hold under pressure: who sees what, where keys live, caps on traffic, a retention rule, and a spend ceiling. Four pieces are in: KEL-17, the traffic, body, and concurrency caps; KEL-18, the spend ceilings; KEL-20, the policy enforced at every skill call; and KEL-21, the retention rule. Still open: who sees what, which is KEL-19, owner sign-in, and the written privacy review, KEL-22. |
 | **M4 Full vision** | 30 Oct 2026 | TO COME | More devices, work the assistant starts on its own, abilities added by others, and team sharing. A direction, not a deadline. |
 
-## The fourteen work items
+## The sixteen work items
 
 KEL-5 feeds KEL-6 and KEL-7. Those two feed KEL-8. KEL-7 also feeds KEL-10. KEL-8 comes before the
 demo, KEL-9. The first twelve are done. KEL-10, payments, closed M1 on owner confirmation on 30
 October 2026: both of its paths were merged and reviewed earlier, and the live step was taken on the
 owner's word. KEL-11 then opened M2 with the serve entrypoint, and KEL-12, KEL-13, KEL-14, KEL-15,
 and KEL-16 followed with health checks, real document search, observability, the eval harness, and
-the deploy. KEL-17 and KEL-18 opened M3 the same day, with abuse resistance and spend ceilings.
+the deploy. KEL-17 and KEL-18 opened M3 the same day, with abuse resistance and spend ceilings, and
+KEL-20 and KEL-21 followed it with invoke-time policy and retention.
 
 ### KEL-5 — Skill contracts — DONE
 
@@ -160,7 +175,7 @@ price is counted per chunk.
 - Merge: [`d3c763e`](https://github.com/Anshieee/kelp/commit/d3c763e) (branch [`kel-6`](https://github.com/Anshieee/kelp/tree/kel-6), head `4c72afc`)
 
 Status detail: merged into `main` at `d3c763e`. The kernel suite is 43 tests — 25 for the loop and
-18 for the streaming client — and passes with the rest of the 775. The review written up in
+18 for the streaming client — and passes with the rest of the 845. The review written up in
 [`docs/REVIEW_KEL6_KEL7.md`](REVIEW_KEL6_KEL7.md) signed off, and KEL-8 built on top of it.
 
 ### KEL-7 — Approval gate — DONE
@@ -203,7 +218,7 @@ showing where an answer came from, and approval requests shown in the conversati
 Status detail: merged into `main` at `e0bbb72`. The chat surface is in: named threads that can be
 reopened, an append-only stream of events, a card for each tool step, approvals shown in the
 conversation over the KEL-7 gate, artifacts, and a cooperative cancel token so Stop works. The chat
-suite is 86 tests, part of the 775. The spec is on `main` at 1,164 lines; the review fixes that
+suite is 86 tests, part of the 845. The spec is on `main` at 1,164 lines; the review fixes that
 shaped it landed at `56b0785`:
 
 - **Honest dependencies (M1).** The web search, GitHub read, and document handlers are still stubs.
@@ -679,6 +694,119 @@ written procedure for adding a provider or model; the runbook's section 13.2 is 
 that names the price entry and the provider-side cap, which is a deploy step rather than a general
 recipe for a new provider.
 
+### KEL-20 — Skill policy — DONE
+
+A manifest is only a control if it is checked on every call. After the arguments pass their schema
+and before any approval is offered, `skills/policy.py` compares the concrete arguments with what the
+skill declared, and the manifest's scope is a ceiling that a narrower per-call policy may tighten but
+never widen. Arguments are typed by the skill, not guessed from their name: a property whose
+`input_schema` declares `kelp-path`, `kelp-write-path`, `kelp-host`, or `kelp-repo` is a scope
+target, and a plain `path`, `url`, or `repo` key without a format is opaque data. A path is resolved
+through its symlinks and must stay inside `${WORKSPACE}` and a declared prefix; a host must be an
+exact declared name or a `*.` wildcard, with embedded credentials, IP literals, and ports other than
+80 and 443 refused; a repo must be an exact `owner/name` unless the manifest says `*`. A typed
+target with no declared scope is refused, and an unknown `kelp-*` format is a manifest error at load.
+
+Network access has one door. A handler reaches the network only through `context.egress()`, which
+checks host **and** method — a non-GET method needs the `write` effect — follows no redirects, and
+caps the response body. A ContextVar-scoped socket guard then refuses direct `socket` or `urllib`
+connections for the length of the call: address lookup, connection, datagram sends, and the thread
+and executor starts a handler makes, so a handler that ignores the door fails closed. The outcomes
+are `allow`, `require_approval`, and `deny`. Only a manifest-level `requires_approval: true` can
+produce an approval prompt, and a `deny` is terminal, so the approval hook is never called for it.
+Each invocation appends one content-free `skill_invoked` record — skill name and version, effects,
+scope decision, outcome, duration, and a hash of the approval arguments when there is one — and an
+output that fails its schema is audited as `invalid_output` rather than returned as success.
+
+*Why it matters:* a manifest that is only read at registration is a label, not a control. A skill
+that says it reads one folder but is handed a path somewhere else, or a host that was never on its
+list, is the ordinary way a plugin becomes a hole in the wall. Checking the real arguments on every
+call, and treating a refusal as final, is what makes the declared scope mean something.
+
+*Plain words:* an **effect** is the kind of thing an action does — read, write, use the network, or
+run something. A **scope** is where it may do it. **Fail closed** means refusing when a check cannot
+be completed. A **terminal refusal** is one you cannot click past.
+
+- Linear: https://linear.app/kelp-ai/issue/KEL-20/m3-d-enforce-declared-effects-and-scopes-at-invoke-time
+- Policy, egress door, and socket guard: [`skills/policy.py`](https://github.com/Anshieee/kelp/blob/main/skills/policy.py)
+- Typed arguments and format errors: [`skills/loader.py`](https://github.com/Anshieee/kelp/blob/main/skills/loader.py)
+- Spec: [`docs/SKILL_SPEC.md`](SKILL_SPEC.md), section 8.5
+- Tests: [`tests/test_policy_enforcement.py`](https://github.com/Anshieee/kelp/blob/main/tests/test_policy_enforcement.py)
+- Merge: [`223964c`](https://github.com/Anshieee/kelp/commit/223964c) (branch
+  [`kel-20`](https://github.com/Anshieee/kelp/tree/kel-20), head `1f9423e`)
+
+Status detail: merged into `main` at `223964c`, adding 52 tests to a suite of 827. A denied host is
+audited as a refused egress attempt, not only a successful one. The review closed two blockers
+before the merge: the socket guard now covers the datagram and name-lookup entry points
+(`sendto`, `sendmsg`, `gethostbyname`, `gethostbyname_ex`, `gethostbyaddr`) and follows a handler
+into the threads and executor tasks it starts, and `ChatService` forwards the audit log and turn id
+to the registry executor, so the production chat path writes `skill_invoked` with its turn id rather
+than only a test doing it. It also replaced the argument-name guess with the per-property `format`
+values above and made a typed target with no declared scope fail closed. One honest limit: the guard
+is cooperative. A raw `_socket` object, a child process, a C extension that calls `connect` directly,
+or a thread that was already running before the call and receives work through a queue rather than
+`submit` is outside its reach, and has to be stopped at the deployment boundary. That boundary is
+written down in the spec, and the tests prove the guarded entry points fail closed.
+
+### KEL-21 — Retention — DONE
+
+Deleting a thread is a purge, not a flag. `DELETE /api/threads/{id}` removes, in one transaction, the
+thread row and everything keyed to it: messages, their blocks, the event log, turns, approvals, and
+artifact registry rows, with the counts in the reply. A second delete removes nothing and answers
+`404 unknown_thread`, which the client shows as "already gone", so a retry after a lost response
+cannot loop. Files cannot join a database transaction, so their metadata is captured in the
+transaction and the bytes are unlinked, with the `docs.answer` index dropped, immediately after the
+commit; a file-level failure is reported and left to the sweep to retry. `VACUUM` and a WAL
+checkpoint then return the freed pages to disk. A running turn is stopped first, and a turn that is
+still live makes the call answer `409 turn_in_progress` with the active turn id and delete nothing;
+that check is repeated inside the transaction, so a turn that started in between cannot write to
+rows that no longer exist.
+
+Everything with no live owner is swept. A boot-time pass and a daily pass find artifact rows with no
+parent, along with their files and index directories, past a one-hour grace, and report the counts;
+the rows are selected and deleted under one predicate in one transaction, so a row claimed in
+between survives and the counts match what was removed. A handle a live turn references is skipped.
+The same pass rotates the append-only records: the active audit and usage files are renamed to
+timestamped segments rather than rewritten, so a line already being appended lands inside its
+segment instead of being dropped, and a segment past its age or count cap is removed whole. Expiry
+reads the oldest record time in a segment, not the file's modification time, because an in-flight
+append can refresh the timestamp of a segment about to be pruned. Every reader, the spend guard
+included, reads the retained segments too, so rotation cannot quietly reset a day or month spend
+window. The lifetimes live in one place, `chat/retention.py`, and are mirrored in the runbook: audit
+records 30 days and 40 segments, usage records 90 days and 100 segments, rotation at 24 hours or
+10 MiB, artifacts after a one-hour orphan grace.
+
+*Why it matters:* "deleted" that leaves the text sitting in the file is not a privacy promise, it is
+a hidden copy. The same is true of a disk that keeps growing because nothing removes what a crash
+left behind. This makes the two claims the product depends on checkable: the owner's delete means
+the content is unreachable by every read path, and every other record has a stated lifetime that
+something actually enforces.
+
+*Plain words:* a **hard delete** removes the content itself, where a soft delete only hides it. An
+**orphan** is a leftover whose parent is gone, such as a file whose note was removed mid-way.
+**Vacuum** is the tidy-up that gives freed disk space back to the system. **Rotation** closes a full
+log file and starts a new one so no single file grows forever.
+
+- Linear: https://linear.app/kelp-ai/issue/KEL-21/m3-b-retention-purge-hard-delete-orphan-sweep-log-rotation
+- Lifetimes, rotation, boot and daily pass: [`chat/retention.py`](https://github.com/Anshieee/kelp/blob/main/chat/retention.py)
+- Purge transaction, live-turn check, orphan sweep: [`chat/store.py`](https://github.com/Anshieee/kelp/blob/main/chat/store.py)
+- Runbook retention table: [`docs/DEPLOY.md`](DEPLOY.md), section 8.1
+- Spec: [`docs/CHAT_SPEC.md`](CHAT_SPEC.md), sections 10.5 and 11
+- Tests: [`tests/test_retention.py`](https://github.com/Anshieee/kelp/blob/main/tests/test_retention.py)
+- Merge: [`25584f8`](https://github.com/Anshieee/kelp/commit/25584f8) (branch
+  [`kel-21`](https://github.com/Anshieee/kelp/tree/kel-21), head `4f96577`)
+
+Status detail: merged into `main` at `25584f8`, adding 18 tests to a suite of 845. The review closed
+five findings before the merge: the orphan sweep selects and deletes under one predicate in one
+transaction; the purge refuses with `409` while a turn is live and settles a turn that has no task,
+so a dead turn cannot make its thread undeletable; the chat spec documents the hard-purge shape and
+the unused `deleted_at` column; and the request-log row now states the size bound Compose actually
+enforces, 10 MiB across three files with no age limit. Two honest limits. Chat content has no
+age-based expiry: it is removed when the owner deletes the thread, and the table says so rather than
+pretending a timer exists. And the request logs are bounded by size, not by age, because the
+container log driver is configured that way; a day-based claim would need a change in both the
+Compose file and the runbook.
+
 ## Decisions that shape the map
 
 ### Surfaces
@@ -715,7 +843,7 @@ recipe for a new provider.
 ### GitHub
 
 - Repository (public): https://github.com/Anshieee/kelp
-- Shared copy of the code: https://github.com/Anshieee/kelp/tree/main — head `8884a5d`
+- Shared copy of the code: https://github.com/Anshieee/kelp/tree/main — head `25584f8`
 - All branches: https://github.com/Anshieee/kelp/branches
   - `kel-5` — merged (`b8de92f`)
   - `kel-6` — merged at `d3c763e`; branch head `4c72afc`
@@ -734,9 +862,11 @@ recipe for a new provider.
   - `kel-16` — merged at `3f4d6cc`; branch head `a63d49a`
   - `kel-17` — merged at `b48e113`; branch head `1e8d378`
   - `kel-18` — merged at `8884a5d`; branch head `544a545`
+  - `kel-20` — merged at `223964c`; branch head `1f9423e`
+  - `kel-21` — merged at `25584f8`; branch head `4f96577`
 - Change history: https://github.com/Anshieee/kelp/commits/main
 - Pull requests: https://github.com/Anshieee/kelp/pulls
-- Tests: 775 pass on `main` (`python -m pytest`); `make demo` plays all six beats, and
+- Tests: 845 pass on `main` (`python -m pytest`); `make demo` plays all six beats, and
   `make eval` passes offline with the network blocked
 
 ### Linear
@@ -757,7 +887,9 @@ recipe for a new provider.
   [KEL-15](https://linear.app/kelp-ai/issue/KEL-15/m2-e-eval-harness-make-eval-offline-and-make-eval-live),
   [KEL-16](https://linear.app/kelp-ai/issue/KEL-16/m2-f-nebius-deploy-dockerfile-gpu-runbook-restart-policy),
   [KEL-17](https://linear.app/kelp-ai/issue/KEL-17/m3-a-abuse-resistance-rate-limits-body-ceiling-concurrency-caps),
-  [KEL-18](https://linear.app/kelp-ai/issue/KEL-18/m3-c-spend-guardrails-dailymonthly-usd-ceilings-with-a-hard-stop)
+  [KEL-18](https://linear.app/kelp-ai/issue/KEL-18/m3-c-spend-guardrails-dailymonthly-usd-ceilings-with-a-hard-stop),
+  [KEL-20](https://linear.app/kelp-ai/issue/KEL-20/m3-d-enforce-declared-effects-and-scopes-at-invoke-time),
+  [KEL-21](https://linear.app/kelp-ai/issue/KEL-21/m3-b-retention-purge-hard-delete-orphan-sweep-log-rotation)
 
 ### Docs and code
 
