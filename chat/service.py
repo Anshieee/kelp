@@ -25,7 +25,7 @@ from kernel import (
     TurnBudget,
 )
 from kernel import events as kernel_events
-from kernel.usage import UsageStore
+from kernel.usage import SpendGuard, SpendState, UsageStore, state_payload
 from openshell.approvals import ApprovalStore
 from openshell.audit import AuditLog
 from openshell.errors import (
@@ -163,6 +163,7 @@ class ChatService:
         tools: Sequence[Mapping[str, Any]] = (),
         audit: AuditLog | None = None,
         metrics: Metrics | None = None,
+        spend_guard: SpendGuard | None = None,
     ):
         self.store = store
         self.bus = EventBus()
@@ -178,6 +179,7 @@ class ChatService:
         self._usage_store = usage_store
         self._audit = audit
         self._metrics = metrics or get_metrics()
+        self._spend = spend_guard
         self._budget = budget or TurnBudget()
         self._model = model or (config or KernelConfig.from_env()).primary_model
         self._secrets = dict(secrets or {})
@@ -214,6 +216,121 @@ class ChatService:
             self._audit.record(event, **fields)
         except Exception:  # noqa: BLE001 - a full disk must not end a turn
             return
+
+    # -- spend guardrail ---------------------------------------------------
+
+    def refresh_spend_metrics(self, now: datetime | None = None) -> SpendState | None:
+        """Publish the persisted spend totals so a scrape sees them at boot."""
+
+        if self._spend is None:
+            return None
+        state = self._spend.evaluate(now)
+        for window in state.windows:
+            self._metrics.observe_spend(
+                window.name,
+                used_usd=window.used_usd,
+                limit_usd=window.limit_usd,
+                ratio=window.ratio,
+                unknown_price_records=window.unknown_price_records,
+            )
+        return state
+
+    def _refuse_if_over_spend(self, *, action: str) -> None:
+        """Gate a new turn on the persisted day/month spend.
+
+        Runs before a turn row or message exists, so a refused request leaves
+        the thread exactly as it was and no provider call is made. The 80%
+        warning is emitted once per window: the marker is persisted by the
+        guard, so a restart inside the same window does not repeat it.
+        """
+
+        if self._spend is None:
+            return
+        state = self.refresh_spend_metrics()
+        if state is None:  # pragma: no cover - only when no guard is wired
+            return
+        request_id = current_request_id()
+        if state.warnings:
+            for name in state.warnings:
+                window = state.day if name == "day" else state.month
+                self._metrics.inc_spend_warning(name)
+                log(
+                    "spend_cap_warning",
+                    request_id=request_id,
+                    window=name,
+                    used_usd=round(window.used_usd, 8),
+                    limit_usd=window.limit_usd,
+                    ratio=None if window.ratio is None else round(window.ratio, 6),
+                    status="warning",
+                )
+                self._record_audit(
+                    "spend_cap_warning",
+                    request_id=request_id,
+                    outcome="warning",
+                    extra={
+                        "window": name,
+                        "used_usd": round(window.used_usd, 8),
+                        "limit_usd": window.limit_usd,
+                    },
+                )
+            self._spend.mark_warned(state)
+        if not state.blocked:
+            return
+        window_name = state.block_window or "month"
+        payload = state_payload(state)
+        self._metrics.inc_spend_blocked(window_name)
+        log(
+            "spend_cap_blocked",
+            request_id=request_id,
+            window=window_name,
+            reason=state.block_reason,
+            used_usd=round(
+                (state.day if window_name == "day" else state.month).used_usd, 8
+            ),
+            limit_usd=(
+                state.day if window_name == "day" else state.month
+            ).limit_usd,
+            status="blocked",
+        )
+        self._record_audit(
+            "spend_cap_blocked",
+            request_id=request_id,
+            outcome="blocked",
+            extra={
+                "action": action,
+                "window": window_name,
+                "reason": state.block_reason,
+                "unknown_price_mode": state.unknown_price_mode,
+                "windows": payload["windows"],
+            },
+        )
+        if state.block_reason == "unknown_price":
+            message = (
+                "Spending can't be measured for this period, so new messages "
+                "are paused."
+            )
+        elif state.block_reason == "usage_unavailable":
+            message = (
+                "Spending can't be checked right now, so new messages are paused."
+            )
+        else:
+            message = (
+                "The spending limit for this period is reached. New messages "
+                "resume when the limit resets."
+            )
+        raise ChatError(
+            "spend_cap_reached",
+            status=402,
+            message=message,
+            retryable=False,
+            details={
+                "window": window_name,
+                "reason": state.block_reason,
+                "unknown_price_mode": state.unknown_price_mode,
+                "unknown_price_usd": state.unknown_price_usd,
+                "windows": payload["windows"],
+            },
+        )
 
     # -- observability labels ---------------------------------------------
 
@@ -369,6 +486,10 @@ class ChatService:
                 details={"active_turn_id": thread["active_turn_id"]},
             )
 
+        # Before a turn or a message exists: a capped request leaves the
+        # thread untouched and never reaches the provider.
+        self._refuse_if_over_spend(action="send")
+
         turn_id = new_id("turn")
         user_id = new_id("msg")
         assistant_id = new_id("msg")
@@ -515,6 +636,8 @@ class ChatService:
         if user_message is None:  # pragma: no cover - internal invariant
             raise ChatError("unknown_turn", status=404)
         text = _message_text(user_message)
+        # A retry opens a new turn, so it is a new spend decision too.
+        self._refuse_if_over_spend(action="retry")
         # A retry never duplicates the user message: it opens a new assistant
         # message and a new turn over the same question (§5.4).
         thread_id = turn["thread_id"]
