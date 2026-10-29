@@ -67,7 +67,9 @@ Two consequences worth stating plainly:
 Readiness (`GET /api/readyz`) sends one bounded `GET {base_url}/models` to the
 model provider, cached for 30 seconds (`chat/api.py`). It carries the API key in
 a header and **no user content**. It is still outbound traffic, so it writes one
-ledger row with `purpose = "provider.health"`, `request_bytes = 0`.
+ledger row with `purpose = "provider.health"`, `request_bytes = 0`. The row says
+what the upstream did: `completed` with the status on a 2xx, or `provider_error`
+with the status on a rejection — a failing probe is never filed as a success.
 
 ### 2.2 What is not a recipient
 
@@ -118,9 +120,14 @@ Two properties matter for the privacy claim:
 
 `openshell/egress_ledger.py` writes one `egress` record per outbound call. Each
 record carries **recipient, purpose, request bytes, response bytes, method, host,
-outcome, HTTP status, and the turn id** — and nothing else. The API has no field
-that could hold a body, query, path, header value, file name, or prompt, so a
-caller cannot put content in it even by mistake.
+and outcome** — and nothing else. Two optional fields are filled in only by the
+call sites that know them: the **HTTP status** and the **turn id**. Skill egress
+writes both; the model client writes the outcome (`provider_error` on a rejected
+status) but no numeric status; a readiness probe belongs to no turn, so it has
+neither. Absent is better than invented. None of these is a free-text field: a
+host that is not a hostname is recorded as `unresolved` instead of being copied,
+and there is no field that could hold a body, query, path, header value, file
+name, or prompt, so a caller cannot put content in it even by mistake.
 
 Three properties make it trustworthy as an account rather than a log of good
 intentions:
@@ -129,9 +136,11 @@ intentions:
    `openshell.audit.AuditLog`, so they inherit the `0600` file mode, mandatory
    secret scrubbing, rotation, and the 30-day / 40-segment retention row above.
    There is no second file to forget and no second clock to drift.
-2. **Recipients are a closed set.** `EgressLedger.record` rejects an unknown
-   recipient id, and the host-to-recipient mapping is an exact match, so a
-   look-alike domain cannot be reported under a trusted name.
+2. **Recipients are a closed set, and so are destinations.** `EgressLedger.record`
+   rejects an unknown recipient id, the host-to-recipient mapping is an exact
+   match, so a look-alike domain cannot be reported under a trusted name, and a
+   host field is validated against a hostname grammar — a URL with a path or a
+   query becomes `unresolved` rather than being written into the trail.
 3. **It fails open on accounting, never on traffic.** A ledger write error is
    swallowed; a missing ledger is a no-op. The ledger never blocks a request, the
    same rule the rest of the audit trail follows.
@@ -150,7 +159,7 @@ Read it like any other audit record:
 from openshell import AuditLog, EgressLedger
 
 ledger = EgressLedger(AuditLog("var/audit/audit.jsonl"))
-for row in ledger.entries(turn_id="turn_01H…"):
+for row in ledger.entries():  # or entries(turn_id="turn_01H…") for a skill call
     print(row["extra"]["recipient"], row["extra"]["purpose"],
           row["extra"]["request_bytes"], row["extra"]["response_bytes"])
 ```
@@ -197,7 +206,10 @@ deliberate, separate change:
 
 `tests/test_privacy.py` enforces the invariant in both directions: the flag is
 `False` and no gate is reachable from the application, or the flag is `True` and
-the gate must be wired. It cannot be flipped as a copy change alone.
+the gate must be wired. The wiring check parses `build_app` rather than grepping
+it, and a second test builds the app with `ExecGate.__init__` booby-trapped, so a
+newly constructed gate fails at construction time. It cannot be flipped as a copy
+change alone.
 
 **Why this side of the decision.** Wiring the gate would have added a
 process-spawning capability to the same change that writes the privacy review,
@@ -237,18 +249,26 @@ does.
 `tests/test_privacy.py` checks the parts of this document that can be checked:
 
 - every recipient id in `openshell.egress_ledger.RECIPIENTS` is named in this
-  file, and every recipient named in §2 is a known id — both directions;
+  file, and every recipient named in §2 is a known id — both directions; the §2
+  host column and the hosts in `RECIPIENTS` are the same set;
+- every module under `chat/`, `kernel/`, `skills/`, `openshell/`, and
+  `payments/` is scanned for a hardcoded `https://` endpoint, so a new module is
+  covered without editing a list;
 - the retention row names used in §3 are exactly the `class` values in
   `chat.retention.RETENTION_ROWS`;
 - a model turn writes an `egress` row with byte counts and no content, including
   through the real `TokenFactoryClient` stream path;
 - a skill egress call writes a `tavily` / `github` row, and a policy denial still
   writes a row with zero response bytes;
+- the readiness probe records `completed` with its status on 2xx and
+  `provider_error` with the status on a rejection;
 - no ledger row contains transcript text, a query string, a file name, or a
-  secret value, and the ledger rejects an unknown recipient and a free-text
-  purpose;
-- `chat.cards.EXEC_AVAILABLE` and the wiring agree, and an exec card makes no
-  execution promise.
+  secret value; the ledger rejects an unknown recipient and a free-text purpose,
+  and a host that carries text is stored as `unresolved`;
+- `chat.cards.EXEC_AVAILABLE` and the wiring agree under AST inspection, and
+  `build_app` is run with `ExecGate.__init__` booby-trapped, so a newly wired
+  gate fails the test at construction time;
+- an exec card makes no execution promise.
 
 The retention behaviour itself is covered by `tests/test_retention.py`; this
 review references that table rather than restating it.

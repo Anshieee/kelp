@@ -418,9 +418,11 @@ async def _http_provider_probe(
     """One bounded ``GET /models``: only a 2xx means reachable and authenticated.
 
     A redirect, an auth rejection, or a gateway error is not a healthy upstream,
-    so anything outside ``200..299`` fails the check. The call carries no user
-    content — the key in a header and nothing else — but it is still an outbound
-    request, so it writes one content-free ledger row (KEL-22).
+    so anything outside ``200..299`` fails the check. The row it writes says
+    which: a rejected status is ``provider_error`` with the status code, never
+    ``completed``. The call carries no user content — the key in a header and
+    nothing else — but it is still an outbound request, so it writes one
+    content-free ledger row (KEL-22).
     """
 
     import httpx
@@ -431,25 +433,31 @@ async def _http_provider_probe(
     )
     url = f"{base_url.rstrip('/')}/models"
     response_bytes = 0
+    status: int | None = None
     outcome = "failed"
     try:
         async with httpx.AsyncClient(
             timeout=timeout, follow_redirects=False
         ) as client:
             response = await client.get(url, headers=headers)
+        status = int(response.status_code)
         response_bytes = len(getattr(response, "content", b"") or b"")
-        outcome = "completed"
+        outcome = "completed" if 200 <= status < 300 else "provider_error"
     except httpx.HTTPError:
         outcome = "unreachable"
         raise
     finally:
-        _record_probe_egress(ledger, url, response_bytes, outcome)
-    if not 200 <= response.status_code < 300:
-        raise OSError("provider probe was rejected")
+        _record_probe_egress(ledger, url, response_bytes, outcome, status)
+    if status is None or not 200 <= status < 300:
+        raise OSError(f"provider probe was rejected (HTTP {status})")
 
 
 def _record_probe_egress(
-    ledger: Any | None, url: str, response_bytes: int, outcome: str
+    ledger: Any | None,
+    url: str,
+    response_bytes: int,
+    outcome: str,
+    status: int | None = None,
 ) -> None:
     if ledger is None:
         return
@@ -463,6 +471,7 @@ def _record_probe_egress(
             outcome=outcome,
             method="GET",
             host=host,
+            status=status,
         )
     except Exception:  # noqa: BLE001 - ledger is accounting, not traffic
         return

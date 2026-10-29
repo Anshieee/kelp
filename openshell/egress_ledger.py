@@ -10,6 +10,9 @@ made to store content:
   name, or prompt — only a recipient id, a purpose token, and integers;
 * ``recipient`` must be a known id from :data:`RECIPIENTS`;
 * ``purpose`` must be a short lowercase token (a skill name or a call kind);
+* ``host`` is validated as a DNS name (or an IP literal). A string that is not
+  one is replaced by :data:`UNRESOLVED_HOST`, so a URL with a query or a path
+  cannot smuggle content into the account through this field;
 * sizes are validated non-negative integers (``bool`` is rejected).
 
 Entries are written through :class:`openshell.audit.AuditLog` as ``egress``
@@ -37,8 +40,10 @@ from .audit import AuditLog
 
 __all__ = [
     "EGRESS_EVENT",
+    "HOST_RE",
     "PURPOSE_RE",
     "RECIPIENTS",
+    "UNRESOLVED_HOST",
     "EgressLedger",
     "recipient_for_host",
 ]
@@ -61,6 +66,21 @@ RECIPIENTS: Mapping[str, tuple[str, ...]] = {
 #: A purpose is a skill name (``web.search``) or a call kind
 #: (``chat.completions``), never free text and never a URL.
 PURPOSE_RE = re.compile(r"^[a-z0-9][a-z0-9._:-]{0,63}$")
+
+#: What a host field becomes when it is not a host. The ledger records that the
+#: destination was not resolvable instead of copying an arbitrary string into
+#: the audit trail.
+UNRESOLVED_HOST = "unresolved"
+
+#: One DNS label: letters, digits, and inner hyphens, at most 63 characters.
+_HOST_LABEL = r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?"
+
+#: A bare hostname, IPv4 address (the label rule already admits dotted
+#: numerics), or a bracketed IPv6 literal. Deliberately no scheme, port, path,
+#: query, userinfo, or whitespace: those are where content would ride along.
+HOST_RE = re.compile(rf"^(?:{_HOST_LABEL}(?:\.{_HOST_LABEL})*|\[[0-9a-f:.]+\])$")
+
+_MAX_HOST = 253  # DNS name ceiling, excluding a trailing dot
 
 _MAX_BYTES = 1 << 40  # 1 TiB: a sanity ceiling, not a limit on traffic
 
@@ -98,6 +118,22 @@ def _check_purpose(purpose: Any) -> str:
     if not isinstance(purpose, str) or PURPOSE_RE.match(purpose) is None:
         raise ValueError(f"invalid egress purpose: {purpose!r}")
     return purpose
+
+
+def _check_host(host: Any) -> str:
+    """Normalise a host, or return :data:`UNRESOLVED_HOST` when it is not one.
+
+    A host field is a destination, not a note. Anything carrying a query, a
+    path, a port, or free text is recorded as ``unresolved`` so the account
+    stays content-free; the call itself is unaffected.
+    """
+
+    candidate = str(host).strip().lower().rstrip(".")
+    if not candidate or len(candidate) > _MAX_HOST:
+        return UNRESOLVED_HOST
+    if HOST_RE.match(candidate) is None:
+        return UNRESOLVED_HOST
+    return candidate
 
 
 class EgressLedger:
@@ -143,7 +179,7 @@ class EgressLedger:
             "outcome": _check_purpose(outcome),
         }
         if host:
-            extra["host"] = str(host)
+            extra["host"] = _check_host(host)
         if method:
             extra["method"] = _check_purpose(str(method).lower())
         if status is not None:

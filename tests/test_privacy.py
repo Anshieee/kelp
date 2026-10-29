@@ -16,6 +16,7 @@ These tests bind the written review (``docs/PRIVACY.md``) to the code:
 
 from __future__ import annotations
 
+import ast
 import asyncio
 import json
 import re
@@ -35,8 +36,10 @@ from kernel.provider import ChatRequest, TextDelta, TokenFactoryClient
 from openshell.audit import AuditLog
 from openshell.egress_ledger import (
     EGRESS_EVENT,
+    HOST_RE,
     PURPOSE_RE,
     RECIPIENTS,
+    UNRESOLVED_HOST,
     EgressLedger,
     recipient_for_host,
 )
@@ -54,18 +57,10 @@ ALLOWED_EXTRA_KEYS = frozenset(
      "method", "status"}
 )
 
-#: Files that can open a socket in this build, plus the manifests that declare
-#: a network host. A new hardcoded endpoint in one of them must be a recipient
-#: the review already names, which is what the completeness test enforces.
-EGRESS_SOURCES = (
-    "chat/api.py",
-    "kernel/config.py",
-    "kernel/provider.py",
-    "skills/policy.py",
-    "payments/wallet.py",
-    "payments/razorpay_gateway.py",
-    "payments/razorpay_checkout.py",
-)
+#: Packages that can open a socket or declare a network host. The completeness
+#: test globs every module under them, so a new file is covered without editing
+#: this list — that is the point of the glob.
+EGRESS_PACKAGES = ("chat", "kernel", "skills", "openshell", "payments")
 
 API_KEY = "test-key-not-a-real-secret"
 TRANSCRIPT = "my private notes about the nebius gpu cluster"
@@ -100,11 +95,52 @@ def test_privacy_review_names_no_recipient_the_code_does_not_know() -> None:
     assert documented == set(RECIPIENTS)
 
 
-def test_every_hardcoded_endpoint_is_a_known_recipient() -> None:
+def _documented_hosts() -> tuple[set[str], set[str]]:
+    """Return ``(documented_hosts, recipient_ids)`` from the §2 table."""
+
+    section = _doc().split("## 2. Every outbound recipient", 1)[1].split("### 2.1", 1)[0]
+    rows = re.findall(r"(?m)^\| `([a-z0-9_-]+)` \| (.+?) \|", section)
+    assert rows, "the recipient table is missing"
+    documented: set[str] = set()
+    for _recipient, host_cell in rows:
+        documented |= set(
+            re.findall(r"`([a-z0-9][a-z0-9.-]+\.[a-z]{2,})`", host_cell)
+        )
+    return documented, {recipient for recipient, _ in rows}
+
+
+def test_privacy_review_hosts_match_the_code_both_ways() -> None:
+    """The §2 host column is the same set as ``RECIPIENTS``, not a paraphrase."""
+
     known_hosts = {host for hosts in RECIPIENTS.values() for host in hosts}
+    documented, _ids = _documented_hosts()
+    assert documented == known_hosts, {
+        "documented_not_in_code": sorted(documented - known_hosts),
+        "code_not_documented": sorted(known_hosts - documented),
+    }
+
+
+def _egress_source_files() -> list[Path]:
+    files: list[Path] = []
+    for package in EGRESS_PACKAGES:
+        files.extend(sorted((ROOT / package).rglob("*.py")))
+    return files
+
+
+def test_every_hardcoded_endpoint_is_a_known_recipient() -> None:
+    """Glob every module that can reach the network, not a hand-kept list."""
+
+    known_hosts = {host for hosts in RECIPIENTS.values() for host in hosts}
+    files = _egress_source_files()
+    assert files, "the egress source glob matched nothing; the check would be vacuous"
+    # The glob must actually cover the trees the review scopes, not just one file.
+    covered = {path.relative_to(ROOT).parts[0] for path in files}
+    assert covered == set(EGRESS_PACKAGES), sorted(set(EGRESS_PACKAGES) - covered)
+
     offenders: list[str] = []
-    for relative in EGRESS_SOURCES:
-        text = (ROOT / relative).read_text(encoding="utf-8")
+    for path in files:
+        relative = path.relative_to(ROOT).as_posix()
+        text = path.read_text(encoding="utf-8")
         for host in re.findall(r"https://([a-z0-9.-]+)", text):
             if host not in known_hosts:
                 offenders.append(f"{relative}: {host}")
@@ -175,6 +211,58 @@ def test_ledger_refuses_unknown_recipients_and_free_text(tmp_path: Path) -> None
         ledger.record(recipient="tavily", purpose="web.search", request_bytes=-1)
     with pytest.raises(ValueError):
         ledger.record(recipient="tavily", purpose="web.search", request_bytes=True)
+
+
+def test_ledger_normalises_a_valid_host(tmp_path: Path) -> None:
+    _audit, ledger = _ledger(tmp_path)
+    ledger.record(
+        recipient="tavily", purpose="web.search", request_bytes=1, host=" API.Tavily.com. "
+    )
+    assert ledger.entries()[0]["extra"]["host"] == "api.tavily.com"
+
+
+def test_ledger_refuses_a_host_that_carries_text(tmp_path: Path) -> None:
+    """A host is a destination, not a place to smuggle content (KEL-22 B1)."""
+
+    _audit, ledger = _ledger(tmp_path)
+    hostile = f"api.tavily.com/search?q={TRANSCRIPT}"
+    ledger.record(
+        recipient="tavily", purpose="web.search", request_bytes=1, host=hostile
+    )
+    ledger.record(
+        recipient="github", purpose="github.read", request_bytes=1,
+        host=f"the user asked about {TRANSCRIPT}",
+    )
+    rows = ledger.entries()
+    assert len(rows) == 2
+    assert [row["extra"]["host"] for row in rows] == [UNRESOLVED_HOST] * 2
+    rendered = json.dumps(rows)
+    assert TRANSCRIPT not in rendered
+    assert "tavily.com/search" not in rendered
+
+
+def test_record_host_refuses_text_and_stays_fail_visible(tmp_path: Path) -> None:
+    _audit, ledger = _ledger(tmp_path)
+    ledger.record_host(
+        f"https://api.tavily.com/?q={TRANSCRIPT}",
+        purpose="web.search",
+        request_bytes=0,
+    )
+    extra = ledger.entries()[0]["extra"]
+    assert extra["recipient"] == "unlisted"
+    assert extra["host"] == UNRESOLVED_HOST
+    assert TRANSCRIPT not in json.dumps(ledger.entries())
+
+
+def test_host_grammar_admits_names_and_ip_literals_only() -> None:
+    assert HOST_RE.match("api.tavily.com")
+    assert HOST_RE.match("api-gateway.internal")
+    assert HOST_RE.match("127.0.0.1")
+    assert HOST_RE.match("[::1]")
+    assert not HOST_RE.match("api.tavily.com/search?q=secret")
+    assert not HOST_RE.match("api.tavily.com:443")
+    assert not HOST_RE.match("user@api.tavily.com")
+    assert not HOST_RE.match("the user asked about the cluster")
 
 
 def test_ledger_without_an_audit_log_is_a_no_op(tmp_path: Path) -> None:
@@ -423,6 +511,88 @@ def test_provider_health_probe_writes_a_content_free_row(tmp_path: Path) -> None
     assert extra["response_bytes"] == 512
 
 
+class _StubProbeResponse:
+    def __init__(self, status: int, content: bytes = b"") -> None:
+        self.status_code = status
+        self.content = content
+
+
+class _StubProbeClient:
+    """Stands in for ``httpx.AsyncClient``; the probe builds its own client."""
+
+    def __init__(self, response: _StubProbeResponse) -> None:
+        self._response = response
+        self.requested: list[str] = []
+
+    async def __aenter__(self) -> "_StubProbeClient":
+        return self
+
+    async def __aexit__(self, *exc_info: Any) -> bool:
+        return False
+
+    async def get(self, url: str, headers: Any = None) -> _StubProbeResponse:
+        self.requested.append(url)
+        return self._response
+
+
+def _stub_probe(
+    monkeypatch: pytest.MonkeyPatch, status: int, content: bytes = b""
+) -> _StubProbeClient:
+    client = _StubProbeClient(_StubProbeResponse(status, content))
+    monkeypatch.setattr(httpx, "AsyncClient", lambda **kwargs: client)
+    return client
+
+
+def test_provider_probe_rejection_is_provider_error_with_status(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A 401 is not a completed probe (KEL-22 B2)."""
+
+    _audit, ledger = _ledger(tmp_path)
+    client = _stub_probe(monkeypatch, 401, b'{"error":"unauthorized"}')
+
+    with pytest.raises(OSError) as excinfo:
+        asyncio.run(
+            chat_api._http_provider_probe(
+                "https://api.tokenfactory.nebius.com/v1", API_KEY, ledger
+            )
+        )
+    assert "401" in str(excinfo.value)
+    assert client.requested == ["https://api.tokenfactory.nebius.com/v1/models"]
+
+    rows = ledger.entries()
+    assert len(rows) == 1
+    extra = rows[0]["extra"]
+    assert extra["recipient"] == "tokenfactory"
+    assert extra["purpose"] == "provider.health"
+    assert extra["outcome"] == "provider_error"
+    assert extra["status"] == 401
+    assert extra["response_bytes"] == len(b'{"error":"unauthorized"}')
+    rendered = json.dumps(rows)
+    assert "unauthorized" not in rendered
+    assert API_KEY not in rendered
+
+
+def test_provider_probe_success_is_completed_with_status(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _audit, ledger = _ledger(tmp_path)
+    _stub_probe(monkeypatch, 200, b'{"data":[]}')
+
+    asyncio.run(
+        chat_api._http_provider_probe(
+            "https://api.tokenfactory.nebius.com/v1", API_KEY, ledger
+        )
+    )
+
+    rows = ledger.entries()
+    assert len(rows) == 1
+    extra = rows[0]["extra"]
+    assert extra["outcome"] == "completed"
+    assert extra["status"] == 200
+    assert extra["response_bytes"] == len(b'{"data":[]}')
+
+
 def test_egress_ledger_shares_the_audit_retention(tmp_path: Path) -> None:
     """One file, one clock: ledger rows live in the audit trail, not beside it."""
 
@@ -438,12 +608,75 @@ def test_egress_ledger_shares_the_audit_retention(tmp_path: Path) -> None:
 # ---------------------------------------------------------------------------
 
 
+def _exec_wiring() -> tuple[bool, bool]:
+    """Return ``(constructs_gate, enables_exec)`` from ``build_app``'s module.
+
+    Parsed, not grepped: a comment or a docstring mentioning ``ExecGate`` no
+    longer counts as wiring, and a rename cannot hide a real call.
+    """
+
+    tree = ast.parse(Path(chat_server.__file__).read_text(encoding="utf-8"))
+    constructs_gate = False
+    enables_exec = False
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        func = node.func
+        name = getattr(func, "id", None) or getattr(func, "attr", None)
+        if name == "ExecGate":
+            constructs_gate = True
+        for keyword in node.keywords:
+            if (
+                keyword.arg == "allow_exec"
+                and isinstance(keyword.value, ast.Constant)
+                and keyword.value.value is True
+            ):
+                enables_exec = True
+    return constructs_gate, enables_exec
+
+
 def test_exec_promise_matches_the_wiring() -> None:
     """Flag and wiring must agree; a copy-only flip fails here."""
 
-    build_app = Path(chat_server.__file__).read_text(encoding="utf-8")
-    gate_wired = "ExecGate" in build_app or "allow_exec" in build_app
-    assert cards.EXEC_AVAILABLE is gate_wired
+    constructs_gate, enables_exec = _exec_wiring()
+    if cards.EXEC_AVAILABLE:
+        assert constructs_gate, "EXEC_AVAILABLE is True but build_app builds no gate"
+        assert enables_exec, "EXEC_AVAILABLE is True but allow_exec is never enabled"
+    else:
+        assert not constructs_gate, "build_app constructs ExecGate while exec is unavailable"
+        assert not enables_exec, "build_app enables allow_exec while exec is unavailable"
+
+
+def test_build_app_never_constructs_the_exec_gate(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Runtime invariant: constructing the gate is observable, not greppable.
+
+    If ``build_app`` ever builds an ``ExecGate``, this fails at construction
+    time — regardless of how the call is spelled or imported.
+    """
+
+    if cards.EXEC_AVAILABLE:  # pragma: no cover - the wiring tests cover that side
+        pytest.skip("exec is declared available; wiring is covered separately")
+
+    import openshell.exec_gate as exec_gate
+
+    def _refuse(self: Any, *args: Any, **kwargs: Any) -> None:
+        raise AssertionError("build_app constructed ExecGate while exec is unavailable")
+
+    monkeypatch.setattr(exec_gate.ExecGate, "__init__", _refuse)
+
+    env = _env(tmp_path)
+    app = chat_server.build_app(
+        chat_server.ServerConfig.from_env(env), provider=_NoopProvider(), environ=env
+    )
+    try:
+        tool_names = {
+            spec["function"]["name"] for spec in app.service._tools  # noqa: SLF001
+        }
+        assert "shell.exec" not in tool_names
+    finally:
+        app.close()
 
 
 def test_exec_is_not_reachable_from_the_application(tmp_path: Path) -> None:
