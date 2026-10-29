@@ -763,7 +763,7 @@ class ChatService:
                 return
 
             approval_hook = self._approval_hook(state)
-            executor = self._make_executor(approval_hook)
+            executor = self._make_executor(approval_hook, turn_id=turn_id)
             loop = AgentLoop(
                 provider=self._provider,
                 config=KernelConfig(),
@@ -838,7 +838,7 @@ class ChatService:
             self.store.touch_thread(state.thread_id)
             self.bus.publish(state.thread_id)
 
-    def _make_executor(self, approval_hook: Any) -> Any:
+    def _make_executor(self, approval_hook: Any, *, turn_id: str | None = None) -> Any:
         if self._tool_executor_factory is not None:
             return self._tool_executor_factory(approval_hook)
         if self._registry is not None:
@@ -847,6 +847,10 @@ class ChatService:
                 approval=approval_hook,
                 secrets=self._secrets,
                 workspace_root=self._workspace_root,
+                # KEL-20: the registry writes one ``skill_invoked`` line per
+                # call, attributed to the turn that made it.
+                audit=self._audit,
+                turn_id=turn_id,
             )
         return None
 

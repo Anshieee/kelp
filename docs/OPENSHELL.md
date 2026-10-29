@@ -29,6 +29,42 @@ effects wins.
 still rejects it (v1.0). This gate is the separate, explicitly enabled capability
 P0-3 owns; a future spec revision can bridge them.
 
+### 1a. Invoke-time skill enforcement (KEL-20)
+
+`SkillRegistry.invoke` builds an `InvocationPolicy` from the loaded manifest on
+every call. Concrete path, host, and repo targets in the arguments are checked
+against the declared scopes after schema validation and **before** approval.
+Arguments are typed by the skill: only an `input_schema` property declaring
+`format: kelp-path` (read), `kelp-write-path`, `kelp-host`, or `kelp-repo` is
+interpreted, and a typed target with no declared scope is denied. An unknown
+`kelp-*` format fails the manifest at load. A handler can also assert its own
+intent through the context:
+
+| Context call | Enforced |
+|---|---|
+| `read_path` / `write_path` | resolved (symlink-aware) target inside `${WORKSPACE}` and a declared prefix |
+| `check_repo` | exact declared `owner/name`, or a manifest `*` |
+| `require_effect` | effect is declared in the manifest |
+| `egress()` | host in the declared allowlist and method compatible with `read`/`write` |
+
+The egress client is the single network chokepoint. It refuses redirects,
+embedded credentials, IP literals, and non-80/443 ports, and caps the response
+body. A ContextVar-scoped socket guard blocks direct `socket`, `urllib`, and
+HTTP-library connections while a handler runs — DNS (`getaddrinfo`,
+`gethostbyname*`, `gethostbyaddr`), `create_connection`,
+`connect`/`connect_ex`/`sendto`/`sendmsg` — and follows the handler into threads
+and executor tasks started during the call. The guard is cooperative: raw
+`_socket` objects, child processes, C extensions, and pre-existing threads fed
+through a queue rather than `submit` are outside it. Importing egress code
+directly in `skills/builtin` also fails the policy test, including
+`from`-imports, aliases, `__import__`, and `importlib`.
+
+A policy `deny` is terminal: `policy_denied` has no approval block and the
+approval hook is never invoked. Only `requires_approval: true` in the manifest
+creates a prompt. Every invocation writes one `skill_invoked` audit line with
+skill/version, effects, scope decision, outcome, duration, and approval hash —
+never raw arguments or content.
+
 ## 2. Approvals
 
 `ApprovalStore` transitions a request through `pending → approved → consumed`, or
@@ -78,7 +114,10 @@ JSONL, append-only, mode `0600`:
 Events for one turn: `exec_requested`, `approval_requested`, `approval_granted`
 (or `approval_denied`), `exec_started`, `exec_finished`; blocked attempts add
 `exec_blocked` with `outcome` (`not_approved`, `denied`, `expired`,
-`already_used`, `policy_denied`). Filter with `audit.entries(turn_id=…)`.
+`already_used`, `policy_denied`). Skill calls add `skill_invoked`
+(`decision`, `outcome`, `duration_ms`, and content-free `extra` with skill,
+version, effects, and scope decision) and egress adds `skill_egress` (host,
+method, decision, outcome). Filter with `audit.entries(turn_id=…)`.
 
 Redaction:
 
