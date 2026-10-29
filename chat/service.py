@@ -138,6 +138,7 @@ class ChatService:
         self._waiter_loops: dict[str, asyncio.AbstractEventLoop] = {}
         self._waiting_approval: dict[str, str] = {}
         self._live_blocks: dict[str, list[dict[str, Any]]] = {}
+        self._closing = False
 
     # -- threads -----------------------------------------------------------
 
@@ -474,6 +475,38 @@ class ChatService:
             return
         await asyncio.wait_for(event.wait(), timeout=timeout)
 
+    # -- shutdown ----------------------------------------------------------
+
+    async def aclose(self, *, timeout: float = 10.0) -> None:
+        """Cancel in-flight turns and settle them as ``interrupted`` (§10.4).
+
+        The server calls this on shutdown *before* the API loop and the store
+        are closed, so a turn that was streaming when ``SIGTERM`` arrived ends
+        with ``reason: "interrupted"`` — the same outcome boot recovery
+        produces — instead of being destroyed mid-flight or reported as a
+        client-requested ``cancelled``. The flag is set first because a hard
+        cancel only lands in :meth:`_run_turn` once it fires.
+
+        Cancellation is awaited, never fire-and-forget: a task left pending
+        when the loop closes is exactly the "Task was destroyed" warning this
+        exists to prevent.
+        """
+
+        self._closing = True
+        tasks = [task for task in self._tasks.values() if not task.done()]
+        for token in self._cancel.values():
+            token.cancel()
+        for task in tasks:
+            task.cancel()
+        if tasks:
+            _done, pending = await asyncio.wait(tasks, timeout=timeout)
+            for task in pending:  # pragma: no cover - finalize is synchronous
+                task.cancel()
+        # Safety net for a turn marked ``running`` with no live task: close it
+        # exactly as boot recovery would. Live tasks are skipped by the method
+        # itself, so this never double-settles a turn.
+        self.recover_interrupted()
+
     # -- turn runner -------------------------------------------------------
 
     async def _run_turn(self, turn_id: str, text: str) -> None:
@@ -535,9 +568,14 @@ class ChatService:
         except asyncio.CancelledError:
             if not state.finished:
                 self._abandon_turn_approvals(state)
-                self._mark_running_tools(state, "turn_cancelled")
+                # A process shutdown is not a client "stop": §10.4 says the
+                # turn ends ``interrupted`` so the client offers Resume.
+                reason = "interrupted" if self._closing else "cancelled"
+                self._mark_running_tools(
+                    state, "interrupted" if self._closing else "turn_cancelled"
+                )
                 self._finalize(
-                    state, "cancelled", duration_ms=self._elapsed(state)
+                    state, reason, duration_ms=self._elapsed(state)
                 )
         except Exception:  # noqa: BLE001 - a turn never escapes to the caller
             if not state.finished:
