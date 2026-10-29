@@ -1,0 +1,160 @@
+// Kelp assistant SDLC mindmap (KEL-numbered).
+// One central node, one idea per branch, plain words.
+// Render: dot -Tsvg docs/sdlc-mindmap.gv -o docs/sdlc-mindmap.svg
+//         dot -Tpng docs/sdlc-mindmap.gv -o docs/sdlc-mindmap.png
+// Colours: white background, small muted fills per branch, black text.
+// Meaning is carried by words, never by colour alone. No emojis.
+// Interactivity: every node has URL (page anchor) + tooltip (one plain line),
+// so dot emits <a href> links and <title> tooltips in the SVG.
+digraph sdlc {
+  bgcolor="white";
+  rankdir="LR";
+  splines="true";
+  overlap="false";
+  nodesep="0.35";
+  ranksep="1.0";
+  node [fontname="Helvetica" fontsize="13" color="black" fontcolor="black" fillcolor="white" style="filled,rounded"];
+  edge [color="#555555" arrowhead="none"];
+
+  // Central node
+  center [label="Kelp assistant\nlive Oct 30" shape="doubleoctagon" style="filled,bold" fontsize="20" penwidth="2.5" width="2.3" height="1.2" fillcolor="white" URL="#top" tooltip="Private assistant you talk to from a dashboard. Target live Oct 30."];
+
+  // Main branches
+  m0   [label="M0 Foundation\nIN PROGRESS" shape="box" style="filled,bold,rounded" fontsize="15" penwidth="2" fillcolor="#D6E6F7" URL="#m0" tooltip="Stage 0: shared code, docs, checks, risk list. In progress."];
+  m1   [label="M1 Prototype\nIN PROGRESS" shape="box" style="filled,bold,rounded" fontsize="15" penwidth="2" fillcolor="#D9EDD7" URL="#m1" tooltip="Stage 1: ask, answer, approve, pay, demo. In progress."];
+  m2   [label="M2 Polished MVP\nTO COME" shape="box" style="filled,bold,rounded" fontsize="15" penwidth="2" fillcolor="#FCEFC7" URL="#m2" tooltip="Stage 2: survives ordinary use. Agreed, not started."];
+  m3   [label="M3 Hardening\nTO COME" shape="box" style="filled,bold,rounded" fontsize="15" penwidth="2" fillcolor="#F0DCC8" URL="#m3" tooltip="Stage 3: privacy and cost promises hold. Agreed, not started."];
+  m4   [label="M4 Full vision\nTO COME" shape="box" style="filled,bold,rounded" fontsize="15" penwidth="2" fillcolor="#DDD8EF" URL="#m4" tooltip="Stage 4: more devices and sharing. Direction, not a deadline."];
+  surf [label="Surfaces" shape="box" style="filled,bold,rounded" fontsize="15" penwidth="2" fillcolor="#CDE9E4" URL="#surfaces" tooltip="Where you talk to the assistant: screen now, phone apps later."];
+  pay  [label="Payments" shape="box" style="filled,bold,rounded" fontsize="15" penwidth="2" fillcolor="#F2D8D8" URL="#payments" tooltip="How money moves: Stripe now, the rest later."];
+  fig  [label="Figma scope done" shape="box" style="filled,bold,rounded" fontsize="15" penwidth="2" fillcolor="#E2E2E2" URL="#figma" tooltip="Screen plan is written. Drawing file is next, no code yet."];
+
+  center -> m0;
+  center -> m1;
+  center -> m2;
+  center -> m3;
+  center -> m4;
+  center -> surf;
+  center -> pay;
+  center -> fig;
+
+  // M0 Foundation leaves (soft blue family)
+  m0_repo   [label="Repo and docs in place\nDONE" fillcolor="#EBF3FC" URL="#m0" tooltip="Shared code copy plus docs live. Finished."];
+  m0_checks [label="Auto checks open\nTO COME" fillcolor="#EBF3FC" URL="#m0" tooltip="Tests that run on every change. Not started."];
+  m0_risks  [label="Risk list written\nTO COME" fillcolor="#EBF3FC" URL="#m0" tooltip="Written list of what could go wrong. Not started."];
+  m0 -> m0_repo;
+  m0 -> m0_checks;
+  m0 -> m0_risks;
+
+  // M1 holds the six KEL work items (soft green family)
+  k5  [label="KEL-5 Skills\nDONE" shape="box" style="filled,bold,rounded" fillcolor="#D9EDD7" URL="#kel-5" tooltip="Rulebook every new ability follows. Finished."];
+  k6  [label="KEL-6 Answer loop\nIN PROGRESS" shape="box" style="filled,bold,rounded" fillcolor="#D9EDD7" URL="#kel-6" tooltip="Engine: reads, thinks, answers bit by bit. Being built now."];
+  k7  [label="KEL-7 Ask first\nIN PROGRESS" shape="box" style="filled,bold,rounded" fillcolor="#D9EDD7" URL="#kel-7" tooltip="Checkpoint that asks you before acting. Being built now."];
+  k8  [label="KEL-8 Chat screen\nTO COME" shape="box" style="filled,bold,rounded" fillcolor="#D9EDD7" URL="#kel-8" tooltip="Main screen you talk through. Agreed, not started."];
+  k10 [label="KEL-10 Saved cards\nTO COME" shape="box" style="filled,bold,rounded" fillcolor="#D9EDD7" URL="#kel-10" tooltip="Pay with saved cards after you say yes. Agreed, not started."];
+  k9  [label="KEL-9 Final check\nTO COME" shape="box" style="filled,bold,rounded" fillcolor="#D9EDD7" URL="#kel-9" tooltip="Six-scene demo that proves it works. Runs last."];
+  m1 -> k5;
+  m1 -> k6;
+  m1 -> k7;
+  m1 -> k8;
+  m1 -> k10;
+  m1 -> k9;
+
+  // KEL-5 leaves: what it is + why it matters
+  k5_rule [label="Rulebook for abilities\nDONE" fillcolor="#EDF6EC" URL="#kel-5" tooltip="What each tool takes in, gives back, may touch. Finished."];
+  k5_four [label="4 starters built in\nDONE" fillcolor="#EDF6EC" URL="#kel-5" tooltip="Web search, GitHub read, file answers, scheduler. Finished."];
+  k5_add  [label="New ability, no rewiring\nDONE" fillcolor="#EDF6EC" URL="#kel-5" tooltip="Adding a tool is a small contained job. Finished."];
+  k5 -> k5_rule;
+  k5 -> k5_four;
+  k5 -> k5_add;
+
+  // KEL-6 leaves
+  k6_stream [label="Answers bit by bit\nIN PROGRESS" fillcolor="#EDF6EC" URL="#kel-6" tooltip="Words appear as they arrive. Being built now."];
+  k6_tools  [label="Runs tools mid-answer\nIN PROGRESS" fillcolor="#EDF6EC" URL="#kel-6" tooltip="Asks a small program to do one thing, feeds back result. Being built now."];
+  k6_cap    [label="Stops at cost ceiling\nIN PROGRESS" fillcolor="#EDF6EC" URL="#kel-6" tooltip="Hard limit on steps and length, tallies price. Being built now."];
+  k6 -> k6_stream;
+  k6 -> k6_tools;
+  k6 -> k6_cap;
+
+  // KEL-7 leaves
+  k7_ask   [label="Allow, refuse, or ask\nIN PROGRESS" fillcolor="#EDF6EC" URL="#kel-7" tooltip="Nothing changes something without a yes. Being built now."];
+  k7_once  [label="One yes, 10 minutes\nIN PROGRESS" fillcolor="#EDF6EC" URL="#kel-7" tooltip="Approval names exact action, works once, then expires. Being built now."];
+  k7_diary [label="Diary no one can edit\nIN PROGRESS" fillcolor="#EDF6EC" URL="#kel-7" tooltip="Every decision logged, keys removed. Being built now."];
+  k7 -> k7_ask;
+  k7 -> k7_once;
+  k7 -> k7_diary;
+
+  // KEL-8 leaves
+  k8_chat [label="Chats you keep\nTO COME" fillcolor="#EDF6EC" URL="#kel-8" tooltip="Conversations you name and pick up later. Not started."];
+  k8_cards [label="File cards, source labels\nTO COME" fillcolor="#EDF6EC" URL="#kel-8" tooltip="PDF and table previews plus where answers came from. Not started."];
+  k8_appr [label="Approval inside chat\nTO COME" fillcolor="#EDF6EC" URL="#kel-8" tooltip="Yes or no buttons shown in the conversation. Not started."];
+  k8 -> k8_chat;
+  k8 -> k8_cards;
+  k8 -> k8_appr;
+
+  // KEL-10 leaves
+  k10_cards [label="Save once, pay after yes\nTO COME" fillcolor="#EDF6EC" URL="#kel-10" tooltip="Cards kept by Stripe, charged only with approval. Not started."];
+  k10_caps  [label="Per-buy, monthly caps\nTO COME" fillcolor="#EDF6EC" URL="#kel-10" tooltip="Spending rules that block over-limit pays. Not started."];
+  k10_receipt [label="Receipt every time\nTO COME" fillcolor="#EDF6EC" URL="#kel-10" tooltip="What was done, when, and how much. Not started."];
+  k10 -> k10_cards;
+  k10 -> k10_caps;
+  k10 -> k10_receipt;
+
+  // KEL-9 leaves
+  k9_six  [label="Six scenes, one command\nTO COME" fillcolor="#EDF6EC" URL="#kel-9" tooltip="Ask, files, GitHub, approve, schedule, restart. Not started."];
+  k9_saved [label="Saved answers, offline-safe\nTO COME" fillcolor="#EDF6EC" URL="#kel-9" tooltip="Make-believe model answers so the run repeats. Not started."];
+  k9_shots [label="Photos, stops if broken\nTO COME" fillcolor="#EDF6EC" URL="#kel-9" tooltip="Screenshot per scene, error if one fails. Not started."];
+  k9 -> k9_six;
+  k9 -> k9_saved;
+  k9 -> k9_shots;
+
+  // M2 leaves (soft amber family)
+  m2_restart [label="Restarts, keeps chat\nTO COME" fillcolor="#FFF8E1" URL="#m2" tooltip="Picks up after a restart with nothing lost. Not started."];
+  m2_search  [label="Better file search\nTO COME" fillcolor="#FFF8E1" URL="#m2" tooltip="Finds the right bit of your documents. Not started."];
+  m2_gpu     [label="Runs on Nebius GPU\nTO COME" fillcolor="#FFF8E1" URL="#m2" tooltip="Model served from our fast chip. Not started."];
+  m2 -> m2_restart;
+  m2 -> m2_search;
+  m2 -> m2_gpu;
+
+  // M3 leaves (soft peach family)
+  m3_who  [label="Who sees what\nTO COME" fillcolor="#FAEEE2" URL="#m3" tooltip="Privacy rules plus keys kept apart. Not started."];
+  m3_rate [label="Traffic caps, keep rules\nTO COME" fillcolor="#FAEEE2" URL="#m3" tooltip="Limits on use and how long data stays. Not started."];
+  m3_cost [label="Spend ceiling\nTO COME" fillcolor="#FAEEE2" URL="#m3" tooltip="Ceiling on model cost per turn and month. Not started."];
+  m3 -> m3_who;
+  m3 -> m3_rate;
+  m3 -> m3_cost;
+
+  // M4 leaves (soft lavender family)
+  m4_dev  [label="More devices\nLATER" fillcolor="#ECE9F7" URL="#m4" tooltip="Same assistant in more places. Later."];
+  m4_self [label="Starts tasks itself\nLATER" fillcolor="#ECE9F7" URL="#m4" tooltip="Work the assistant begins on its own. Later."];
+  m4_team [label="Sharing, add-ons\nLATER" fillcolor="#ECE9F7" URL="#m4" tooltip="Team use plus abilities added by others. Later."];
+  m4 -> m4_dev;
+  m4 -> m4_self;
+  m4 -> m4_team;
+
+  // Surfaces leaves (soft teal family)
+  s_dash [label="Dashboard chat now" fillcolor="#E6F4F1" URL="#surfaces" tooltip="Main screen in the browser. Built first."];
+  s_tg   [label="Telegram next" fillcolor="#E6F4F1" URL="#surfaces" tooltip="Mirror of the same assistant, same rules. Next."];
+  s_wa   [label="WhatsApp later" fillcolor="#E6F4F1" URL="#surfaces" tooltip="Not in this round. Later."];
+  s_voice [label="Voice memos later" fillcolor="#E6F4F1" URL="#surfaces" tooltip="No recording or listening work yet. Later."];
+  surf -> s_dash;
+  surf -> s_tg;
+  surf -> s_wa;
+  surf -> s_voice;
+
+  // Payments leaves (soft rose family)
+  p_stripe [label="Stripe saved cards now" fillcolor="#F9ECEC" URL="#payments" tooltip="Save once, pay after approval, receipt each time. Now."];
+  p_razor  [label="Razorpay later" fillcolor="#F9ECEC" URL="#payments" tooltip="No integration in this round. Later."];
+  p_bal    [label="In-app balance later" fillcolor="#F9ECEC" URL="#payments" tooltip="Topping up and ledger wait. Later."];
+  pay -> p_stripe;
+  pay -> p_razor;
+  pay -> p_bal;
+
+  // Figma leaves (soft grey family)
+  f_plan [label="13 screens planned\nDONE" fillcolor="#F2F2F2" URL="#figma" tooltip="Thirteen screens, three flows, four states each. Finished."];
+  f_flows [label="Chat, pay need most care\nDONE" fillcolor="#F2F2F2" URL="#figma" tooltip="Money screens get big numbers and plain words. Finished."];
+  f_code [label="No screen code yet\nTO COME" fillcolor="#F2F2F2" URL="#figma" tooltip="Drawing file next, then code. Not started."];
+  fig -> f_plan;
+  fig -> f_flows;
+  fig -> f_code;
+}

@@ -1,432 +1,2840 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
 <head>
-<meta charset="utf-8" />
-<meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>kelp — SDLC tracker</title>
-<meta name="description" content="Milestones, slice dependencies, and decisions for the kelp always-on private assistant." />
-<meta name="color-scheme" content="dark light" />
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Kelp SDLC tracker — the whole build, in plain words</title>
+<meta name="description" content="Plain-language delivery map for the always-on private assistant: milestones M0 to M4, work items KEL-5 to KEL-10, what each one means, why it matters, and where it lives.">
+<meta name="color-scheme" content="dark">
+<meta name="theme-color" content="#08080a">
+<link rel="icon" href="data:,">
 <style>
-  :root{
-    --bg:#0b1210;
-    --bg-soft:#101a17;
-    --panel:#121e1a;
-    --line:#233a33;
-    --line-soft:#1a2b26;
-    --text:#e6f2ec;
-    --muted:#9db3aa;
-    --dim:#6f857c;
-    --accent:#3ddc91;
-    --accent-soft:#1f6f4a;
-    --blue:#8ab4ff;
-    --amber:#f2b45c;
-    --radius:14px;
-    --mono:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,"Liberation Mono",monospace;
-    --sans:ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+  :root {
+    --bg: #08080a;
+    --bg-soft: #0b0b0e;
+    --panel: #0f0f13;
+    --panel-2: #131318;
+    --line: #222228;
+    --line-2: #35353d;
+    --ink: #f4f4f1;
+    --ink-2: #c8c8c3;
+    --muted: #a2a29d;
+    --dim: #84847f;
+    --paper: #f6f6f2;
+    --paper-ink: #1a1a18;
+    --paper-muted: #55554f;
+    --paper-line: #dcdcd5;
+    --wrap: 1040px;
+    --radius: 6px;
+    --sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    --serif: ui-serif, Georgia, "Iowan Old Style", "Palatino Linotype", Palatino, "Times New Roman", serif;
+    --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
   }
-  *{box-sizing:border-box}
-  html{scroll-behavior:smooth}
-  body{
-    margin:0;
-    background:
-      radial-gradient(1100px 600px at 15% -10%, #163a2c 0%, transparent 60%),
-      radial-gradient(900px 500px at 100% 0%, #14243a 0%, transparent 55%),
-      var(--bg);
-    color:var(--text);
-    font-family:var(--sans);
-    line-height:1.6;
-    -webkit-font-smoothing:antialiased;
+
+  * { box-sizing: border-box; }
+
+  html {
+    scroll-behavior: smooth;
+    -webkit-text-size-adjust: 100%;
   }
-  a{color:var(--accent);text-decoration:none;border-bottom:1px solid rgba(61,220,145,.3)}
-  a:hover{border-bottom-color:var(--accent)}
-  .wrap{max-width:1120px;margin:0 auto;padding:0 22px 72px}
-  header.top{padding:44px 0 8px}
-  .eyebrow{
-    display:inline-flex;align-items:center;gap:8px;
-    font-family:var(--mono);font-size:12px;letter-spacing:.14em;text-transform:uppercase;
-    color:var(--muted);
+
+  body {
+    margin: 0;
+    background-color: var(--bg);
+    background-image: radial-gradient(1100px 520px at 50% -12%, #15151a 0%, #08080a 62%);
+    background-repeat: no-repeat;
+    color: var(--ink);
+    font-family: var(--sans);
+    font-size: 16px;
+    line-height: 1.62;
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
   }
-  .dot{width:8px;height:8px;border-radius:50%;background:var(--accent);box-shadow:0 0 0 4px rgba(61,220,145,.14)}
-  h1{font-size:clamp(30px,5vw,46px);line-height:1.1;letter-spacing:-.02em;margin:14px 0 10px;font-weight:650}
-  h1 .thin{color:var(--dim);font-weight:400}
-  .lede{max-width:70ch;color:var(--muted);font-size:17px;margin:0 0 22px}
-  .chips{display:flex;flex-wrap:wrap;gap:8px;margin:18px 0 6px}
-  .chip{
-    font-family:var(--mono);font-size:12px;color:var(--muted);
-    border:1px solid var(--line);background:rgba(18,30,26,.7);
-    padding:5px 10px;border-radius:999px;white-space:nowrap;
+
+  a {
+    color: var(--ink);
+    text-decoration: underline;
+    text-decoration-color: #70707a;
+    text-decoration-thickness: 1px;
+    text-underline-offset: 3px;
   }
-  .chip b{color:var(--text);font-weight:600}
-  nav.jump{display:flex;flex-wrap:wrap;gap:6px;margin:20px 0 0;padding-top:16px;border-top:1px solid var(--line-soft)}
-  nav.jump a{
-    font-size:13px;color:var(--muted);border:1px solid transparent;border-radius:8px;
-    padding:4px 9px;border-bottom-color:transparent;
+
+  a:hover { text-decoration-color: var(--ink); }
+
+  a:focus-visible,
+  summary:focus-visible,
+  .skip:focus {
+    outline: 2px solid var(--ink);
+    outline-offset: 3px;
+    border-radius: 2px;
   }
-  nav.jump a:hover{color:var(--text);background:var(--panel);border-color:var(--line)}
-  section{margin-top:52px;scroll-margin-top:20px}
-  h2{
-    font-size:13px;font-family:var(--mono);letter-spacing:.16em;text-transform:uppercase;
-    color:var(--dim);font-weight:600;margin:0 0 8px;
+
+  summary:focus-visible { outline-offset: -2px; }
+
+  .wrap {
+    width: 100%;
+    max-width: var(--wrap);
+    margin: 0 auto;
+    padding: 0 28px;
   }
-  h2 + .sub{color:var(--muted);margin:0 0 18px;max-width:78ch;font-size:15px}
-  .card{
-    background:linear-gradient(180deg,rgba(20,33,29,.95),rgba(16,26,23,.95));
-    border:1px solid var(--line);border-radius:var(--radius);
-    padding:20px;overflow:auto;
+
+  .skip {
+    position: absolute;
+    left: 20px;
+    top: -70px;
+    z-index: 30;
+    background: var(--ink);
+    color: #08080a;
+    padding: 10px 16px;
+    border-radius: 3px;
+    font-size: 14px;
+    text-decoration: none;
   }
-  .card.diagram{position:relative;min-height:120px}
-  @media(max-width:700px){
-    .card.diagram{overflow-x:auto;-webkit-overflow-scrolling:touch}
-    .card.diagram pre.mermaid svg{min-width:620px}
+
+  .skip:focus { top: 14px; }
+
+  /* ---------- masthead ---------- */
+
+  .masthead {
+    position: sticky;
+    top: 0;
+    z-index: 20;
+    background: rgba(8, 8, 10, 0.88);
+    border-bottom: 1px solid var(--line);
+    backdrop-filter: blur(10px);
+    -webkit-backdrop-filter: blur(10px);
   }
-  pre.mermaid{
-    margin:0;background:transparent;color:var(--text);
-    font-family:var(--mono);font-size:12px;white-space:pre-wrap;
-    opacity:1;transition:opacity .2s ease;
+
+  .masthead-inner {
+    display: flex;
+    align-items: center;
+    gap: 26px;
+    min-height: 62px;
   }
-  /* Dim the raw source only while Mermaid is actively rendering. If the CDN
-     import fails, this class is never added and the source stays readable. */
-  html.mermaid-loading pre.mermaid:not([data-processed="true"]){opacity:.25}
-  pre.mermaid[data-processed="true"]{opacity:1}
-  .diagram h3{
-    font-size:12px;font-family:var(--mono);letter-spacing:.12em;text-transform:uppercase;
-    color:var(--dim);margin:0 0 14px;font-weight:600;
+
+  .brand {
+    display: flex;
+    align-items: baseline;
+    gap: 10px;
+    color: var(--ink);
+    text-decoration: none;
+    white-space: nowrap;
+    flex: 0 0 auto;
   }
-  .grid{display:grid;gap:14px}
-  @media(min-width:820px){.grid.two{grid-template-columns:1fr 1fr}}
-  table{width:100%;border-collapse:collapse;font-size:14.5px;min-width:520px}
-  th,td{text-align:left;padding:10px 12px;border-bottom:1px solid var(--line-soft);vertical-align:top}
-  th{
-    font-family:var(--mono);font-size:11px;letter-spacing:.1em;text-transform:uppercase;
-    color:var(--dim);font-weight:600;border-bottom-color:var(--line);
+
+  .brand strong {
+    font-family: var(--mono);
+    font-size: 13px;
+    font-weight: 600;
+    letter-spacing: 0.18em;
+    text-transform: uppercase;
   }
-  tbody tr:hover{background:rgba(61,220,145,.04)}
-  td.mono,.mono{font-family:var(--mono);font-size:13px}
-  .tag{
-    display:inline-block;font-family:var(--mono);font-size:11px;padding:2px 7px;border-radius:6px;
-    border:1px solid var(--line);color:var(--muted);white-space:nowrap;
+
+  .brand small {
+    font-family: var(--mono);
+    font-size: 11px;
+    letter-spacing: 0.06em;
+    color: var(--dim);
   }
-  .tag.done{color:#8ff0c0;border-color:#2c6a4d;background:rgba(45,150,100,.12)}
-  .tag.next{color:#ffd39b;border-color:#6b5227;background:rgba(210,150,60,.12)}
-  .tag.todo{color:var(--muted)}
-  .muted{color:var(--muted)}
-  .small{font-size:13px}
-  .callout{
-    border-left:2px solid var(--accent);background:rgba(61,220,145,.06);
-    padding:12px 16px;border-radius:0 10px 10px 0;margin:16px 0 0;color:var(--muted);font-size:14px;
+
+  .toc {
+    display: flex;
+    gap: 22px;
+    margin-left: auto;
+    overflow-x: auto;
+    padding: 6px 0;
+    scrollbar-width: none;
+    min-width: 0;
   }
-  .callout strong{color:var(--text)}
-  ul.clean{margin:0;padding-left:18px}
-  ul.clean li{margin:6px 0;color:var(--muted)}
-  ul.clean li b{color:var(--text);font-weight:600}
-  footer{margin-top:56px;padding-top:20px;border-top:1px solid var(--line-soft);color:var(--dim);font-size:13px}
-  footer .mono{font-size:12px}
-  .fallback{display:none;color:var(--amber);font-size:14px;margin-top:10px}
-  .fallback.show{display:block}
-  .steps{
-    list-style:none;margin:0;padding:0;display:grid;gap:10px;
-    grid-template-columns:repeat(2,1fr);
+
+  .toc::-webkit-scrollbar { display: none; }
+
+  .toc a {
+    color: var(--muted);
+    text-decoration: none;
+    font-size: 13px;
+    white-space: nowrap;
+    padding: 4px 0;
+    border-bottom: 1px solid transparent;
   }
-  .steps li{
-    position:relative;border:1px solid var(--line);border-radius:10px;
-    background:rgba(10,18,16,.55);padding:10px 12px;min-height:74px;
-    display:flex;flex-direction:column;gap:2px;
+
+  .toc a:hover {
+    color: var(--ink);
+    border-bottom-color: var(--ink);
   }
-  .steps .n{
-    font-family:var(--mono);font-size:11px;color:var(--accent);letter-spacing:.08em;
+
+  /* ---------- shared text ---------- */
+
+  .eyebrow,
+  .fact-label,
+  .label {
+    font-family: var(--mono);
+    font-size: 11px;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--dim);
+    margin: 0 0 14px;
   }
-  .steps b{font-size:14px;font-weight:600;line-height:1.25}
-  .steps .d{font-size:12px;color:var(--dim);line-height:1.35}
-  .steps li.gate{border-color:#6b5227;background:rgba(210,150,60,.08)}
-  .steps li.gate .n{color:var(--amber)}
-  @media(min-width:900px){
-    .steps{grid-template-columns:repeat(4,1fr)}
+
+  main { padding-bottom: 88px; }
+
+  section {
+    padding-top: 64px;
+    scroll-margin-top: 92px;
   }
-  .steps-note{margin:14px 0 0;font-size:13px;color:var(--dim)}
-  code{font-family:var(--mono);font-size:.92em;background:rgba(255,255,255,.05);padding:1px 5px;border-radius:5px}
-  @media print{
-    body{background:#fff;color:#111}
-    .card{border-color:#ccc;background:#fff}
-    nav.jump,.fallback{display:none}
-    a{color:#0a5}
+
+  .section-head {
+    display: grid;
+    grid-template-columns: minmax(0, 1.15fr) minmax(0, 0.85fr);
+    gap: 12px 44px;
+    align-items: end;
+    padding-bottom: 22px;
+    border-bottom: 1px solid var(--line);
+    margin-bottom: 8px;
+  }
+
+  .section-head .eyebrow { margin-bottom: 10px; }
+
+  .section-head h2 {
+    font-family: var(--serif);
+    font-weight: 600;
+    font-size: clamp(1.6rem, 3.3vw, 2.15rem);
+    line-height: 1.12;
+    letter-spacing: -0.018em;
+    margin: 0;
+  }
+
+  .section-head > p {
+    margin: 0 0 4px;
+    color: var(--muted);
+    font-size: 14.5px;
+  }
+
+  /* ---------- hero ---------- */
+
+  .hero { padding: 76px 0 8px; }
+
+  h1 {
+    font-family: var(--serif);
+    font-weight: 600;
+    font-size: clamp(2.5rem, 6.4vw, 4.35rem);
+    line-height: 0.99;
+    letter-spacing: -0.032em;
+    margin: 0 0 22px;
+    max-width: 17ch;
+  }
+
+  .lede {
+    font-size: clamp(1.04rem, 1.7vw, 1.2rem);
+    line-height: 1.58;
+    color: var(--ink-2);
+    max-width: 60ch;
+    margin: 0;
+  }
+
+  .hero-meta {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1.05fr);
+    gap: 30px 48px;
+    margin-top: 34px;
+    padding-top: 24px;
+    border-top: 1px solid var(--line);
+  }
+
+  .legend {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    list-style: none;
+    margin: 0;
+    padding: 0;
+  }
+
+  .legend li {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    font-size: 13.5px;
+    color: var(--muted);
+  }
+
+  .meta {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 18px;
+    margin: 0;
+  }
+
+  .meta div { margin: 0; }
+
+  .meta .label { margin-bottom: 4px; }
+
+  .meta p {
+    margin: 0;
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--ink);
+    line-height: 1.4;
+  }
+
+  .meta p.soft {
+    font-weight: 400;
+    color: var(--muted);
+    font-size: 13px;
+  }
+
+  .meta .label {
+    font-family: var(--mono);
+    font-size: 11px;
+    font-weight: 400;
+    letter-spacing: 0.14em;
+    color: var(--dim);
+    margin: 0 0 4px;
+  }
+
+  /* ---------- status chips ---------- */
+
+  .status {
+    display: inline-block;
+    font-family: var(--mono);
+    font-size: 10.5px;
+    font-weight: 600;
+    line-height: 1;
+    letter-spacing: 0.11em;
+    text-transform: uppercase;
+    padding: 6px 9px;
+    border: 1px solid var(--line-2);
+    border-radius: 2px;
+    white-space: nowrap;
+  }
+
+  .status.done {
+    background: var(--ink);
+    border-color: var(--ink);
+    color: #08080a;
+  }
+
+  .status.progress {
+    background: transparent;
+    border-color: var(--ink);
+    color: var(--ink);
+  }
+
+  .status.todo {
+    background: transparent;
+    border-style: dashed;
+    border-color: #45454d;
+    color: var(--muted);
+  }
+
+  /* ---------- hero map ---------- */
+
+  .map-card {
+    max-width: 984px;
+    margin: 44px auto 0;
+    position: relative;
+    background: var(--paper);
+    border: 1px solid #2b2b31;
+    border-radius: var(--radius);
+    padding: 14px 14px 0;
+    box-shadow: 0 30px 70px rgba(0, 0, 0, 0.55);
+  }
+
+  .map-card a.map-skip {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    margin: 0;
+    padding: 0;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+    color: var(--paper);
+    background: var(--paper-ink);
+    font-family: var(--mono);
+    font-size: 11.5px;
+    text-decoration: none;
+  }
+
+  .map-card a.map-skip:focus {
+    width: auto;
+    height: auto;
+    left: 12px;
+    top: 12px;
+    z-index: 3;
+    padding: 8px 12px;
+    border-radius: 3px;
+    overflow: visible;
+    clip-path: none;
+    outline: 2px solid var(--paper-ink);
+    outline-offset: 2px;
+  }
+
+  .map-frame {
+    background: var(--paper);
+    border-radius: 3px;
+    padding: 6px 4px;
+    overflow-x: auto;
+    overflow-y: hidden;
+    overscroll-behavior-x: contain;
+    scrollbar-width: thin;
+    scrollbar-color: #b9b9b1 var(--paper);
+  }
+
+  .map-frame:focus-visible {
+    outline: 2px solid var(--paper-ink);
+    outline-offset: 2px;
+  }
+
+  .mm {
+    display: block;
+    width: 100%;
+    height: auto;
+    max-width: 100%;
+  }
+
+  .mm a {
+    cursor: pointer;
+    text-decoration: none;
+  }
+
+  .mm a:hover,
+  .mm a:focus-visible {
+    outline: 2px solid var(--paper-ink);
+    outline-offset: 2px;
+  }
+
+  .mm a:hover > polygon,
+  .mm a:hover > path,
+  .mm a:hover > ellipse,
+  .mm a:focus-visible > polygon,
+  .mm a:focus-visible > path,
+  .mm a:focus-visible > ellipse,
+  .mm a[aria-current="true"] > polygon,
+  .mm a[aria-current="true"] > path,
+  .mm a[aria-current="true"] > ellipse {
+    stroke: #101010;
+    stroke-width: 3.2;
+  }
+
+  @media (prefers-reduced-motion: no-preference) {
+    .mm a > polygon,
+    .mm a > path,
+    .mm a > ellipse { transition: stroke 120ms ease, stroke-width 120ms ease; }
+  }
+
+  .map-hint {
+    display: none;
+    margin: 0;
+    padding: 10px 2px 0;
+    font-family: var(--mono);
+    font-size: 11.5px;
+    line-height: 1.5;
+    color: var(--paper-muted);
+  }
+
+  .map-card figcaption {
+    border-top: 1px solid var(--paper-line);
+    margin-top: 12px;
+    padding: 10px 2px 13px;
+    font-family: var(--mono);
+    font-size: 11.5px;
+    line-height: 1.55;
+    color: var(--paper-muted);
+  }
+
+  .map-card a {
+    color: var(--paper-ink);
+    text-decoration-color: #9c9c94;
+  }
+
+  .map-card a:hover { text-decoration-color: var(--paper-ink); }
+
+  .map-card a:focus-visible {
+    outline: 2px solid var(--paper-ink);
+    outline-offset: 2px;
+  }
+
+  /* ---------- jump list under the map ---------- */
+
+  .jump {
+    max-width: 984px;
+    margin: 20px auto 0;
+    scroll-margin-top: 92px;
+    display: grid;
+    grid-template-columns: 104px minmax(0, 1fr);
+    gap: 10px 18px;
+    align-items: start;
+  }
+
+  .jump-label {
+    margin: 9px 0 0;
+    font-family: var(--mono);
+    font-size: 10.5px;
+    font-weight: 600;
+    letter-spacing: 0.13em;
+    text-transform: uppercase;
+    color: var(--dim);
+  }
+
+  .jump-list {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    list-style: none;
+    margin: 0;
+    padding: 0;
+  }
+
+  .jump-list a {
+    display: inline-block;
+    padding: 6px 10px;
+    border: 1px solid var(--line-2);
+    border-radius: 3px;
+    color: var(--ink-2);
+    font-size: 12.5px;
+    line-height: 1.3;
+    text-decoration: none;
+  }
+
+  .jump-list a:hover {
+    border-color: var(--ink);
+    color: var(--ink);
+  }
+
+  .jump-list a:focus-visible {
+    outline: 2px solid var(--ink);
+    outline-offset: 2px;
+  }
+
+  /* ---------- the map in words ---------- */
+
+  .map-words {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    border-top: 1px solid var(--line);
+  }
+
+  .map-words li {
+    display: grid;
+    grid-template-columns: 150px minmax(0, 1fr);
+    gap: 6px 28px;
+    padding: 18px 0;
+    border-bottom: 1px solid var(--line);
+  }
+
+  .map-words .label { margin: 3px 0 0; }
+
+  .map-words p {
+    margin: 0;
+    color: var(--ink-2);
+    font-size: 14.5px;
+  }
+
+  /* ---------- details list ---------- */
+
+  .list {
+    border-top: 1px solid var(--line);
+  }
+
+  .item { border-bottom: 1px solid var(--line); scroll-margin-top: 80px; }
+
+  .item:hover { background: rgba(255, 255, 255, 0.018); }
+
+  .item[open] { background: var(--panel); }
+
+  .item[open] summary { border-bottom: 1px solid var(--line); }
+
+  .item summary {
+    display: grid;
+    grid-template-columns: 84px minmax(0, 1fr) auto 34px;
+    grid-template-areas:
+      "id title status plus"
+      "id line  line   plus";
+    align-items: center;
+    gap: 4px 16px;
+    padding: 20px 22px 20px 18px;
+    cursor: pointer;
+    list-style: none;
+  }
+
+  .item summary::-webkit-details-marker { display: none; }
+
+  .item summary::marker { content: ""; }
+
+  .item summary::after {
+    content: "";
+    grid-area: plus;
+    align-self: center;
+    justify-self: end;
+    width: 28px;
+    height: 28px;
+    border: 1px solid var(--line-2);
+    border-radius: 50%;
+    background-color: transparent;
+    background-image:
+      linear-gradient(var(--ink-2), var(--ink-2)),
+      linear-gradient(var(--ink-2), var(--ink-2));
+    background-size: 10px 1px, 1px 10px;
+    background-position: center, center;
+    background-repeat: no-repeat;
+  }
+
+  .item[open] summary::after {
+    background-color: var(--ink);
+    border-color: var(--ink);
+    background-image: linear-gradient(#08080a, #08080a);
+    background-size: 10px 1px;
+    background-position: center;
+  }
+
+  .item-id {
+    grid-area: id;
+    font-family: var(--mono);
+    font-size: 11.5px;
+    letter-spacing: 0.12em;
+    font-weight: 600;
+    text-transform: uppercase;
+    color: var(--dim);
+    align-self: center;
+  }
+
+  .item-title {
+    grid-area: title;
+    font-size: 1.03rem;
+    font-weight: 600;
+    line-height: 1.35;
+    color: var(--ink);
+  }
+
+  .item-line {
+    grid-area: line;
+    font-size: 13.5px;
+    line-height: 1.5;
+    color: var(--muted);
+    font-weight: 400;
+  }
+
+  .item summary > .status {
+    grid-area: status;
+    justify-self: end;
+  }
+
+  .item-body {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 26px 40px;
+    padding: 6px 22px 30px 118px;
+  }
+
+  .fact { margin: 0; }
+
+  .fact-wide { grid-column: 1 / -1; }
+
+  .fact-wide .links {
+    max-width: 640px;
+  }
+
+  .fact-label { margin-bottom: 7px; }
+
+  .fact p,
+  .fact li {
+    margin: 0;
+    font-size: 14.5px;
+    line-height: 1.65;
+    color: var(--ink-2);
+  }
+
+  .fact p + p { margin-top: 10px; }
+
+  .fact .plain {
+    color: var(--muted);
+    border-left: 1px solid var(--line-2);
+    padding-left: 12px;
+  }
+
+  .links {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+  }
+
+  .links li {
+    padding: 7px 0;
+    border-bottom: 1px solid #1b1b21;
+    font-size: 14px;
+  }
+
+  .links li:last-child { border-bottom: 0; }
+
+  .links small {
+    display: block;
+    margin-top: 2px;
+    color: var(--dim);
+    font-size: 12px;
+    line-height: 1.45;
+  }
+
+  /* ---------- cards ---------- */
+
+  .grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+    gap: 16px;
+    margin-top: 24px;
+  }
+
+  .card {
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    padding: 24px;
+    scroll-margin-top: 92px;
+  }
+
+  .card .label { margin-bottom: 10px; }
+
+  .card h3 {
+    font-family: var(--serif);
+    font-size: 1.22rem;
+    font-weight: 600;
+    line-height: 1.25;
+    letter-spacing: -0.01em;
+    margin: 0 0 6px;
+  }
+
+  .card > p {
+    margin: 0;
+    font-size: 14px;
+    color: var(--muted);
+  }
+
+  .decision dl { margin: 16px 0 0; }
+
+  .decision dl > div {
+    display: grid;
+    grid-template-columns: 66px minmax(0, 1fr);
+    gap: 12px;
+    padding: 11px 0;
+    border-top: 1px solid #1b1b21;
+  }
+
+  .decision dt {
+    font-family: var(--mono);
+    font-size: 10px;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--dim);
+    padding-top: 3px;
+  }
+
+  .decision dd {
+    margin: 0;
+    font-size: 14px;
+    line-height: 1.6;
+    color: var(--ink-2);
+  }
+
+  .decision dd strong { color: var(--ink); font-weight: 600; }
+
+  .callout {
+    margin-top: 20px;
+    background: var(--bg-soft);
+    border: 1px solid var(--line);
+    border-left: 2px solid var(--ink);
+    border-radius: 3px;
+    padding: 16px 18px;
+  }
+
+  .callout p {
+    margin: 0;
+    font-size: 14px;
+    color: var(--ink-2);
+  }
+
+  .callout strong { color: var(--ink); }
+
+  /* ---------- glossary ---------- */
+
+  .glossary {
+    margin: 0;
+    border-top: 1px solid var(--line);
+  }
+
+  .glossary div {
+    display: grid;
+    grid-template-columns: 190px minmax(0, 1fr);
+    gap: 4px 28px;
+    padding: 14px 0;
+    border-bottom: 1px solid var(--line);
+  }
+
+  .glossary dt {
+    font-family: var(--mono);
+    font-size: 12px;
+    letter-spacing: 0.04em;
+    color: var(--ink);
+    padding-top: 2px;
+  }
+
+  .glossary dd {
+    margin: 0;
+    font-size: 14.5px;
+    line-height: 1.62;
+    color: var(--muted);
+  }
+
+  /* ---------- links ---------- */
+
+  .link-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+    gap: 16px;
+    margin-top: 24px;
+  }
+
+  .link-grid h3 {
+    font-family: var(--mono);
+    font-size: 11px;
+    letter-spacing: 0.13em;
+    text-transform: uppercase;
+    color: var(--dim);
+    margin: 0 0 12px;
+    font-weight: 600;
+  }
+
+  .link-grid ul {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+  }
+
+  .link-grid li {
+    padding: 7px 0;
+    border-bottom: 1px solid #1b1b21;
+    font-size: 14px;
+  }
+
+  .link-grid li:last-child { border-bottom: 0; }
+
+  .link-grid small {
+    display: block;
+    margin-top: 1px;
+    color: var(--dim);
+    font-size: 12px;
+  }
+
+  /* ---------- footer ---------- */
+
+  footer {
+    border-top: 1px solid var(--line);
+    margin-top: 80px;
+    padding: 28px 0 44px;
+    color: var(--dim);
+    font-size: 13px;
+  }
+
+  footer p { margin: 0 0 8px; }
+  footer p:last-child { margin-bottom: 0; }
+  footer a { color: var(--muted); }
+
+  .note {
+    margin: 14px 0 0;
+    font-size: 12.5px;
+    color: var(--dim);
+  }
+
+  /* ---------- responsive ---------- */
+
+  @media (max-width: 880px) {
+    .section-head { grid-template-columns: 1fr; align-items: start; }
+    .section-head > p { margin-top: 2px; }
+    .hero-meta { grid-template-columns: 1fr; gap: 26px; }
+    .item-body { padding-left: 22px; grid-template-columns: 1fr; }
+  }
+
+  @media (max-width: 720px) {
+    .wrap { padding: 0 20px; }
+
+    .masthead-inner {
+      flex-wrap: wrap;
+      gap: 0 16px;
+      padding-top: 8px;
+      padding-bottom: 2px;
+      min-height: 0;
+    }
+
+    .brand { min-height: 32px; }
+    .brand small { display: inline; }
+
+    .toc {
+      flex-basis: 100%;
+      margin-left: 0;
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, auto));
+      justify-content: start;
+      gap: 2px 22px;
+      overflow: visible;
+      padding: 2px 0 8px;
+    }
+
+    .toc a { padding: 3px 0; }
+
+    .hero { padding-top: 48px; }
+
+    .meta { grid-template-columns: 1fr; gap: 0; }
+
+    .meta div {
+      display: grid;
+      grid-template-columns: 128px minmax(0, 1fr);
+      gap: 0 14px;
+      align-items: baseline;
+      padding: 7px 0;
+      border-top: 1px solid #1b1b21;
+    }
+
+    .meta div:first-child { border-top: 0; padding-top: 0; }
+    .meta .label { margin: 0; letter-spacing: 0.1em; }
+    .meta p.soft { grid-column: 2; }
+
+    .map-card { padding: 10px 10px 0; margin-top: 32px; }
+    .map-frame { padding: 4px 2px; max-height: 66vh; overflow: auto; }
+    .mm { min-width: 720px; }
+    .map-hint { display: block; padding: 8px 2px 0; }
+    .jump { grid-template-columns: 1fr; gap: 2px; margin-top: 18px; }
+    .jump-label { margin: 12px 0 2px; }
+    .jump-list { gap: 7px; }
+    .jump-list a { padding: 7px 10px; }
+
+    .item summary {
+      grid-template-columns: minmax(0, 1fr) auto 30px;
+      grid-template-areas:
+        "id status plus"
+        "title title plus"
+        "line line plus";
+      gap: 6px 12px;
+      padding: 18px 16px 18px 14px;
+    }
+
+    .item-id { font-size: 11px; }
+    .item summary > .status { justify-self: start; }
+    .item summary::after { width: 26px; height: 26px; }
+    .item-body { padding: 2px 16px 26px; gap: 22px; }
+    .item { scroll-margin-top: 116px; }
+
+    .map-words li { grid-template-columns: 1fr; gap: 4px; }
+    .glossary div { grid-template-columns: 1fr; gap: 3px; }
+    .card { padding: 20px; }
+    .decision dl > div { grid-template-columns: 58px minmax(0, 1fr); }
+    section { padding-top: 52px; scroll-margin-top: 112px; }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    html { scroll-behavior: auto; }
+  }
+
+  @media print {
+    :root {
+      --bg: #ffffff;
+      --bg-soft: #ffffff;
+      --panel: #ffffff;
+      --ink: #111111;
+      --ink-2: #222222;
+      --muted: #3d3d3d;
+      --dim: #555555;
+      --line: #c9c9c9;
+      --line-2: #999999;
+    }
+    body { background: #fff; background-image: none; }
+    .masthead, .skip, .toc, .jump, .map-hint { display: none; }
+    .map-card { box-shadow: none; }
+    .map-frame { overflow: visible; padding: 0; }
+    .mm { min-width: 0; }
+    .item, .card { break-inside: avoid; }
+    section { padding-top: 26px; }
   }
 </style>
 </head>
 <body>
-<div class="wrap">
+<a class="skip" href="#main">Skip to the content</a>
 
-  <header class="top">
-    <div class="eyebrow"><span class="dot"></span> kelp · SDLC tracker</div>
-    <h1>Always-on private assistant <span class="thin">— build map</span></h1>
-    <p class="lede">
-      Milestones, the dependency order of the M1 prototype slices, and the decisions that
-      shaped them. This page is the rendered companion to
-      <a href="https://github.com/Anshieee/kelp/blob/main/docs/SDLC_MINDMAP.md">docs/SDLC_MINDMAP.md</a>
-      in the <a href="https://github.com/Anshieee/kelp">Anshieee/kelp</a> repo.
-    </p>
-    <div class="chips">
-      <span class="chip">branch <b>main</b></span>
-      <span class="chip"><b>5</b> milestones</span>
-      <span class="chip"><b>5</b> P0 slices</span>
-      <span class="chip"><b>1</b> P0 landed</span>
-      <span class="chip">synced <b>2026-10-28</b></span>
-    </div>
-    <nav class="jump">
-      <a href="#lifecycle">Lifecycle</a>
-      <a href="#flow">Change flow</a>
-      <a href="#graph">Slice graph</a>
+<header class="masthead">
+  <div class="wrap masthead-inner">
+    <a class="brand" href="#main"><strong>Kelp</strong> <small>SDLC tracker</small></a>
+    <nav class="toc" aria-label="Page sections">
+      <a href="#words-map">The map</a>
       <a href="#milestones">Milestones</a>
+      <a href="#issues">The work</a>
       <a href="#decisions">Decisions</a>
-      <a href="#artifacts">Artifacts</a>
-      <a href="#conventions">Conventions</a>
+      <a href="#glossary">Words</a>
+      <a href="#links">Links</a>
     </nav>
-  </header>
+  </div>
+</header>
 
-  <section id="lifecycle">
-    <h2>01 · Lifecycle</h2>
-    <p class="sub">Five milestones from scaffold to full vision, plus the cross-cutting artifacts every phase leans on.</p>
-    <div class="card diagram">
-      <pre class="mermaid">
-mindmap
-  root((kelp SDLC))
-    M0 Foundation
-      Repo scaffold
-      CI baseline
-      Threat model
-      Provider selection
-    M1 Prototype
-      P0-4 Skill contracts
-      P0-1 Agent loop
-      P0-3 Approval gate
-      P0-2 Dashboard chat
-      P0-5 Demo run
-    M2 Polished MVP
-      Restart and resume
-      Retrieval quality
-      Evals
-      Observability
-      Nebius GPU deploy
-    M3 Hardening
-      Privacy controls
-      Secret isolation
-      Rate limits
-      Retention
-      Cost guardrails
-    M4 Full vision
-      Multi-device presence
-      Proactive tasks
-      Plugin surface
-      Team sharing
-    Cross-cutting
-      Decision log
-      ADRs
-      Branch convention
-      Live tracker page
-      </pre>
-      <p class="fallback" data-fallback>Diagram could not render in this browser. The same map is in the <a href="https://github.com/Anshieee/kelp/blob/main/docs/SDLC_MINDMAP.md">GitHub markdown version</a>.</p>
-    </div>
-  </section>
+<main id="main">
+  <div class="wrap">
 
-  <section id="flow">
-    <h2>02 · How a change travels</h2>
-    <p class="sub">Intent becomes a spec, the spec becomes a branch named after its issue, and CI decides whether it reaches <code>main</code>.</p>
-    <div class="card">
-      <ol class="steps">
-        <li><span class="n">1</span><b>Intent</b><span class="d">owner words</span></li>
-        <li><span class="n">2</span><b>Spec + ADR</b><span class="d">in <code>docs/</code></span></li>
-        <li><span class="n">3</span><b>Branch</b><span class="d"><code>kel-N-slug</code></span></li>
-        <li><span class="n">4</span><b>Build + tests</b><span class="d">pytest · playwright</span></li>
-        <li><span class="n">5</span><b>PR to main</b><span class="d">territory named</span></li>
-        <li class="gate"><span class="n">6</span><b>CI gates</b><span class="d">lint · types · secrets · tests</span></li>
-        <li><span class="n">7</span><b>Merge</b><span class="d">Linear closes KEL-N</span></li>
-        <li><span class="n">8</span><b>Deploy / demo</b><span class="d">this page</span></li>
-      </ol>
-      <p class="steps-note">
-        A failing gate returns the branch to step 4. Merging to <code>main</code> is review-gated:
-        no force push, no secrets in diffs.
+    <section class="hero" id="top" aria-labelledby="page-title">
+      <p class="eyebrow">Always-on private assistant</p>
+      <h1 id="page-title">The whole build, in plain words.</h1>
+      <p class="lede">
+        This is the delivery map for the private assistant: five milestones and six pieces of
+        work, each written once in everyday language. Every line opens to say what it is, why it
+        matters, how far along it is, and where the evidence lives. No prior knowledge needed.
       </p>
-    </div>
-    <div class="callout">
-      <strong>Branch prefix is load-bearing.</strong> Only <code>kel-&lt;n&gt;-&lt;slug&gt;</code> auto-links to
-      Linear team <code>KEL</code>. A <code>neb-</code> prefix fails silently and the issue never closes.
-    </div>
-  </section>
 
-  <section id="graph">
-    <h2>03 · M1 slice dependency graph</h2>
-    <p class="sub">The contract lands first. The demo is the prototype exit test, so it depends on all four slices.</p>
-    <div class="card diagram">
-      <pre class="mermaid">
-flowchart LR
-  P4["P0-4<br/>Skill contracts"] --> P1["P0-1<br/>Agent loop"]
-  P4 --> P3["P0-3<br/>Approval gate"]
-  P1 --> P2["P0-2<br/>Dashboard chat"]
-  P1 --> P5["P0-5<br/>Demo run"]
-  P2 --> P5
-  P3 --> P5
-      </pre>
-      <p class="fallback" data-fallback>Diagram could not render. See the <a href="https://github.com/Anshieee/kelp/blob/main/docs/SDLC_MINDMAP.md">markdown version</a>.</p>
-    </div>
-    <div class="card" style="margin-top:14px">
-      <table>
-        <thead>
-          <tr><th>Slice</th><th>Title</th><th>Blocked by</th><th>State</th></tr>
-        </thead>
-        <tbody>
-          <tr><td class="mono">P0-4</td><td>Skill contracts: schema + capability manifest</td><td class="muted">—</td><td><span class="tag done">landed · KEL-5</span></td></tr>
-          <tr><td class="mono">P0-1</td><td>Kernel LLM: streaming agent loop with tool calling</td><td class="mono">P0-4</td><td><span class="tag next">next</span></td></tr>
-          <tr><td class="mono">P0-3</td><td>OpenShell: approval-gated execution + audit</td><td class="mono">P0-4</td><td><span class="tag next">next</span></td></tr>
-          <tr><td class="mono">P0-2</td><td>Dashboard chat surface</td><td class="mono">P0-1</td><td><span class="tag todo">queued</span></td></tr>
-          <tr><td class="mono">P0-5</td><td>Demo choreography: 6-beat end-to-end run</td><td class="mono">P0-1 · P0-2 · P0-3 · P0-4</td><td><span class="tag todo">exit test</span></td></tr>
-        </tbody>
-      </table>
-    </div>
-  </section>
-
-  <section id="milestones">
-    <h2>04 · Milestones</h2>
-    <p class="sub">Targets are placeholders pending owner confirmation.</p>
-    <div class="card">
-      <table>
-        <thead>
-          <tr><th>#</th><th>Milestone</th><th>Target</th><th>Exit means</th></tr>
-        </thead>
-        <tbody>
-          <tr><td class="mono">M0</td><td>Foundation</td><td class="mono">2026-11-07</td><td>Repo, CI baseline, threat model, model/provider choice recorded</td></tr>
-          <tr><td class="mono">M1</td><td>Prototype</td><td class="mono">2026-11-28</td><td>Query → tool → answer loop, approvals, dashboard chat, <code>npm run demo</code> green under 4 min</td></tr>
-          <tr><td class="mono">M2</td><td>Polished MVP</td><td class="mono">2026-12-19</td><td>Restart/resume, retrieval quality, evals, observability, deployed on Nebius GPU</td></tr>
-          <tr><td class="mono">M3</td><td>Hardening</td><td class="mono">2027-01-23</td><td>Privacy controls, secret isolation, rate limits, retention, cost guardrails</td></tr>
-          <tr><td class="mono">M4</td><td>Full vision</td><td class="mono">2027-03-06</td><td>Multi-device presence, proactive tasks, plugin surface, team sharing</td></tr>
-        </tbody>
-      </table>
-    </div>
-  </section>
-
-  <section id="decisions">
-    <h2>05 · Decisions that shaped the map</h2>
-    <div class="card">
-      <table>
-        <thead><tr><th>ID</th><th>Decision</th><th>Effect on SDLC</th></tr></thead>
-        <tbody>
-          <tr><td class="mono">Q7</td><td>Dashboard primary; WhatsApp is a mirror, P1</td><td>One surface to build in M1; the mirror is an adapter, not a parallel track</td></tr>
-          <tr><td class="mono">Q8</td><td>Prototype cut: chat, PDF/CSV answers, read-only <code>web.search</code> + <code>github.read</code>, approvals, scheduler</td><td>Fixes P0-2 scope and the four prototype skills</td></tr>
-          <tr><td class="mono">Q9</td><td>Saved cards via Stripe vault</td><td><span class="muted">Superseded by Q18</span></td></tr>
-          <tr><td class="mono">Q10</td><td>Voice memo P1 only</td><td>Keeps audio capture out of M1</td></tr>
-          <tr><td class="mono">Q18</td><td>Payments: Stripe now, Razorpay deferred, balance P2</td><td>Wallet scope is Stripe-only; no Razorpay branch in M1</td></tr>
-        </tbody>
-      </table>
-    </div>
-  </section>
-
-  <section id="artifacts">
-    <h2>06 · Artifact map</h2>
-    <p class="sub">Every link points at the file on <code>main</code>.</p>
-    <div class="grid two">
-      <div class="card">
-        <ul class="clean small">
-          <li><b><a href="https://github.com/Anshieee/kelp/blob/main/docs/linear-issue-pack-kel.md">Issue pack</a></b> — create-ready Linear structure and P0 bodies</li>
-          <li><b><a href="https://github.com/Anshieee/kelp/blob/main/docs/SKILL_SPEC.md">Skill contract</a></b> — manifest + handler contract, invariants, errors</li>
-          <li><b><a href="https://github.com/Anshieee/kelp/blob/main/docs/adr/0001-docs-answer-single-skill.md">ADR 0001</a></b> — <code>docs.answer</code> as a single skill</li>
+      <div class="hero-meta">
+        <ul class="legend" aria-label="What the three status labels mean">
+          <li><strong class="status done">Done</strong> finished and merged</li>
+          <li><strong class="status progress">In progress</strong> being built right now</li>
+          <li><strong class="status todo">To come</strong> agreed, not started</li>
         </ul>
+        <div class="meta">
+          <div>
+            <p class="label">Snapshot</p>
+            <p>29 Oct 2026</p>
+          </div>
+          <div>
+            <p class="label">Program target</p>
+            <p>30 Oct 2026</p>
+            <p class="soft">M0 to M4</p>
+          </div>
+          <div>
+            <p class="label">Work items</p>
+            <p>1 done, 2 active</p>
+            <p class="soft">3 still to come</p>
+          </div>
+        </div>
       </div>
-      <div class="card">
-        <ul class="clean small">
-          <li><b><a href="https://github.com/Anshieee/kelp/blob/main/docs/frontend-scope-simple.md">Frontend brief</a></b> — screens and flows for Figma</li>
-          <li><b><a href="https://github.com/Anshieee/kelp/blob/main/skills/manifest.schema.json">Manifest schema</a></b> — meta-schema for skill manifests</li>
-          <li><b><a href="https://github.com/Anshieee/kelp/blob/main/tests/test_skill_loader.py">Contract tests</a></b> — loader and validation suite</li>
-        </ul>
-      </div>
-    </div>
-  </section>
 
-  <section id="conventions">
-    <h2>07 · Conventions</h2>
-    <div class="card">
-      <ul class="clean">
-        <li><b>Branch</b> — <code>kel-&lt;n&gt;-&lt;slug&gt;</code> off <code>main</code>; <code>main</code> stays releasable.</li>
-        <li><b>Commit</b> — imperative subject, scope in parentheses, issue key in the body when useful.</li>
-        <li><b>PR</b> — state the acceptance criterion exercised, commands run, and what was <em>not</em> verified. No force push, no secrets in diffs.</li>
-        <li><b>CI baseline</b> — secret scan, lint, typecheck, unit tests. A <code>demo</code> workflow is added only after P0-5 exists.</li>
-        <li><b>Deploy</b> — this page is static from <code>netlify/</code>: no build step, no secrets in the client.</li>
+      <figure class="map-card">
+        <a class="map-skip" href="#jump">Skip the map, jump to the list</a>
+        <div class="map-frame" id="map-frame" role="group" aria-label="Delivery mind map">
+          <svg class="mm" role="group" viewBox="0.00 0.00 1146.00 2748.00" preserveAspectRatio="xMidYMid meet" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink">
+          <title>Delivery mind map</title>
+          <desc>White panel with pale coloured boxes. The centre is the Kelp assistant, live on 30 October. Six branches lead to M0 to M4, the six work items KEL-5 to KEL-10, surfaces, payments, and design. Every box is a link to its entry or decision on the same page.</desc>
+          <g id="graph0" class="graph" transform="scale(1 1) rotate(0) translate(4 2743.98)">
+          <polygon fill="white" stroke="none" points="-4,4 -4,-2743.98 1141.65,-2743.98 1141.65,4 -4,4"/>
+          <!-- center -->
+          <g id="node1" class="node">
+          <title>center</title>
+          <g id="a_node1"><a href="#top" xlink:href="#top" aria-label="Private assistant you talk to from a dashboard. Target live Oct 30. Opens the top of the page.">
+          <polygon fill="white" stroke="black" stroke-width="2.5" points="221.82,-894.1 221.82,-929.89 158.03,-955.19 67.8,-955.19 4,-929.89 4,-894.1 67.8,-868.79 158.03,-868.79 221.82,-894.1"/>
+          <polygon fill="none" stroke="black" stroke-width="2.5" points="225.82,-891.38 225.82,-932.6 158.79,-959.19 67.04,-959.19 0,-932.6 0,-891.38 67.04,-864.79 158.79,-864.79 225.82,-891.38"/>
+          <text xml:space="preserve" text-anchor="middle" x="112.91" y="-916.99" font-family="Helvetica,sans-Serif" font-size="20.00">Kelp assistant</text>
+          <text xml:space="preserve" text-anchor="middle" x="112.91" y="-892.99" font-family="Helvetica,sans-Serif" font-size="20.00">live Oct 30</text>
+          </a>
+          </g>
+          </g>
+          <!-- m0 -->
+          <g id="node2" class="node">
+          <title>m0</title>
+          <g id="a_node2"><a href="#m0" xlink:href="#m0" aria-label="Stage 0: shared code, docs, checks, risk list. In progress. Opens the M0 entry.">
+          <path fill="#d6e6f7" stroke="black" stroke-width="2" d="M425.2,-2607.99C425.2,-2607.99 321.45,-2607.99 321.45,-2607.99 315.45,-2607.99 309.45,-2601.99 309.45,-2595.99 309.45,-2595.99 309.45,-2575.99 309.45,-2575.99 309.45,-2569.99 315.45,-2563.99 321.45,-2563.99 321.45,-2563.99 425.2,-2563.99 425.2,-2563.99 431.2,-2563.99 437.2,-2569.99 437.2,-2575.99 437.2,-2575.99 437.2,-2595.99 437.2,-2595.99 437.2,-2601.99 431.2,-2607.99 425.2,-2607.99"/>
+          <text xml:space="preserve" text-anchor="middle" x="373.32" y="-2589.74" font-family="Helvetica,sans-Serif" font-size="15.00">M0 Foundation</text>
+          <text xml:space="preserve" text-anchor="middle" x="373.32" y="-2571.74" font-family="Helvetica,sans-Serif" font-size="15.00">IN PROGRESS</text>
+          </a>
+          </g>
+          </g>
+          <!-- center&#45;&gt;m0 -->
+          <g id="edge1" class="edge">
+          <title>center&#45;&gt;m0</title>
+          <path fill="none" stroke="#555555" d="M121.37,-960.29C160.49,-1213.71 341.32,-2385.15 368.82,-2563.26"/>
+          </g>
+          <!-- m1 -->
+          <g id="node3" class="node">
+          <title>m1</title>
+          <g id="a_node3"><a href="#m1" xlink:href="#m1" aria-label="Stage 1: ask, answer, approve, pay, demo. In progress. Opens the M1 entry.">
+          <path fill="#d9edd7" stroke="black" stroke-width="2" d="M420.7,-1828.99C420.7,-1828.99 325.95,-1828.99 325.95,-1828.99 319.95,-1828.99 313.95,-1822.99 313.95,-1816.99 313.95,-1816.99 313.95,-1796.99 313.95,-1796.99 313.95,-1790.99 319.95,-1784.99 325.95,-1784.99 325.95,-1784.99 420.7,-1784.99 420.7,-1784.99 426.7,-1784.99 432.7,-1790.99 432.7,-1796.99 432.7,-1796.99 432.7,-1816.99 432.7,-1816.99 432.7,-1822.99 426.7,-1828.99 420.7,-1828.99"/>
+          <text xml:space="preserve" text-anchor="middle" x="373.32" y="-1810.74" font-family="Helvetica,sans-Serif" font-size="15.00">M1 Prototype</text>
+          <text xml:space="preserve" text-anchor="middle" x="373.32" y="-1792.74" font-family="Helvetica,sans-Serif" font-size="15.00">IN PROGRESS</text>
+          </a>
+          </g>
+          </g>
+          <!-- center&#45;&gt;m1 -->
+          <g id="edge2" class="edge">
+          <title>center&#45;&gt;m1</title>
+          <path fill="none" stroke="#555555" d="M127.9,-960.43C175.71,-1126.02 331.58,-1665.86 365.69,-1784.01"/>
+          </g>
+          <!-- m2 -->
+          <g id="node4" class="node">
+          <title>m2</title>
+          <g id="a_node4"><a href="#m2" xlink:href="#m2" aria-label="Stage 2: survives ordinary use. Agreed, not started. Opens the M2 entry.">
+          <path fill="#fcefc7" stroke="black" stroke-width="2" d="M432.7,-1265.99C432.7,-1265.99 313.95,-1265.99 313.95,-1265.99 307.95,-1265.99 301.95,-1259.99 301.95,-1253.99 301.95,-1253.99 301.95,-1233.99 301.95,-1233.99 301.95,-1227.99 307.95,-1221.99 313.95,-1221.99 313.95,-1221.99 432.7,-1221.99 432.7,-1221.99 438.7,-1221.99 444.7,-1227.99 444.7,-1233.99 444.7,-1233.99 444.7,-1253.99 444.7,-1253.99 444.7,-1259.99 438.7,-1265.99 432.7,-1265.99"/>
+          <text xml:space="preserve" text-anchor="middle" x="373.32" y="-1247.74" font-family="Helvetica,sans-Serif" font-size="15.00">M2 Polished MVP</text>
+          <text xml:space="preserve" text-anchor="middle" x="373.32" y="-1229.74" font-family="Helvetica,sans-Serif" font-size="15.00">TO COME</text>
+          </a>
+          </g>
+          </g>
+          <!-- center&#45;&gt;m2 -->
+          <g id="edge3" class="edge">
+          <title>center&#45;&gt;m2</title>
+          <path fill="none" stroke="#555555" d="M151.49,-960.27C208.04,-1032.92 312.84,-1167.57 354.54,-1221.14"/>
+          </g>
+          <!-- m3 -->
+          <g id="node5" class="node">
+          <title>m3</title>
+          <g id="a_node5"><a href="#m3" xlink:href="#m3" aria-label="Stage 3: privacy and cost promises hold. Agreed, not started. Opens the M3 entry.">
+          <path fill="#f0dcc8" stroke="black" stroke-width="2" d="M422.2,-1016.99C422.2,-1016.99 324.45,-1016.99 324.45,-1016.99 318.45,-1016.99 312.45,-1010.99 312.45,-1004.99 312.45,-1004.99 312.45,-984.99 312.45,-984.99 312.45,-978.99 318.45,-972.99 324.45,-972.99 324.45,-972.99 422.2,-972.99 422.2,-972.99 428.2,-972.99 434.2,-978.99 434.2,-984.99 434.2,-984.99 434.2,-1004.99 434.2,-1004.99 434.2,-1010.99 428.2,-1016.99 422.2,-1016.99"/>
+          <text xml:space="preserve" text-anchor="middle" x="373.32" y="-998.74" font-family="Helvetica,sans-Serif" font-size="15.00">M3 Hardening</text>
+          <text xml:space="preserve" text-anchor="middle" x="373.32" y="-980.74" font-family="Helvetica,sans-Serif" font-size="15.00">TO COME</text>
+          </a>
+          </g>
+          </g>
+          <!-- center&#45;&gt;m3 -->
+          <g id="edge4" class="edge">
+          <title>center&#45;&gt;m3</title>
+          <path fill="none" stroke="#555555" d="M206.11,-941.6C241.19,-952.87 280.24,-965.41 311.67,-975.51"/>
+          </g>
+          <!-- m4 -->
+          <g id="node6" class="node">
+          <title>m4</title>
+          <g id="a_node6"><a href="#m4" xlink:href="#m4" aria-label="Stage 4: more devices and sharing. Direction, not a deadline. Opens the M4 entry.">
+          <path fill="#ddd8ef" stroke="black" stroke-width="2" d="M420.32,-850.99C420.32,-850.99 326.32,-850.99 326.32,-850.99 320.32,-850.99 314.32,-844.99 314.32,-838.99 314.32,-838.99 314.32,-818.99 314.32,-818.99 314.32,-812.99 320.32,-806.99 326.32,-806.99 326.32,-806.99 420.32,-806.99 420.32,-806.99 426.32,-806.99 432.32,-812.99 432.32,-818.99 432.32,-818.99 432.32,-838.99 432.32,-838.99 432.32,-844.99 426.32,-850.99 420.32,-850.99"/>
+          <text xml:space="preserve" text-anchor="middle" x="373.32" y="-832.74" font-family="Helvetica,sans-Serif" font-size="15.00">M4 Full vision</text>
+          <text xml:space="preserve" text-anchor="middle" x="373.32" y="-814.74" font-family="Helvetica,sans-Serif" font-size="15.00">TO COME</text>
+          </a>
+          </g>
+          </g>
+          <!-- center&#45;&gt;m4 -->
+          <g id="edge5" class="edge">
+          <title>center&#45;&gt;m4</title>
+          <path fill="none" stroke="#555555" d="M206.11,-882.38C241.91,-870.88 281.85,-858.05 313.61,-847.85"/>
+          </g>
+          <!-- surf -->
+          <g id="node7" class="node">
+          <title>surf</title>
+          <g id="a_node7"><a href="#surfaces" xlink:href="#surfaces" aria-label="Where you talk to the assistant: screen now, phone apps later. Opens the surfaces decision.">
+          <path fill="#cde9e4" stroke="black" stroke-width="2" d="M401.57,-589.99C401.57,-589.99 345.07,-589.99 345.07,-589.99 339.07,-589.99 333.07,-583.99 333.07,-577.99 333.07,-577.99 333.07,-565.99 333.07,-565.99 333.07,-559.99 339.07,-553.99 345.07,-553.99 345.07,-553.99 401.57,-553.99 401.57,-553.99 407.57,-553.99 413.57,-559.99 413.57,-565.99 413.57,-565.99 413.57,-577.99 413.57,-577.99 413.57,-583.99 407.57,-589.99 401.57,-589.99"/>
+          <text xml:space="preserve" text-anchor="middle" x="373.32" y="-566.74" font-family="Helvetica,sans-Serif" font-size="15.00">Surfaces</text>
+          </a>
+          </g>
+          </g>
+          <!-- center&#45;&gt;surf -->
+          <g id="edge6" class="edge">
+          <title>center&#45;&gt;surf</title>
+          <path fill="none" stroke="#555555" d="M150.66,-863.64C208.63,-787.37 318.73,-642.51 357.98,-590.86"/>
+          </g>
+          <!-- pay -->
+          <g id="node8" class="node">
+          <title>pay</title>
+          <g id="a_node8"><a href="#payments" xlink:href="#payments" aria-label="How money moves: Stripe now, the rest later. Opens the money decision.">
+          <path fill="#f2d8d8" stroke="black" stroke-width="2" d="M406.07,-376.99C406.07,-376.99 340.57,-376.99 340.57,-376.99 334.57,-376.99 328.57,-370.99 328.57,-364.99 328.57,-364.99 328.57,-352.99 328.57,-352.99 328.57,-346.99 334.57,-340.99 340.57,-340.99 340.57,-340.99 406.07,-340.99 406.07,-340.99 412.07,-340.99 418.07,-346.99 418.07,-352.99 418.07,-352.99 418.07,-364.99 418.07,-364.99 418.07,-370.99 412.07,-376.99 406.07,-376.99"/>
+          <text xml:space="preserve" text-anchor="middle" x="373.32" y="-353.74" font-family="Helvetica,sans-Serif" font-size="15.00">Payments</text>
+          </a>
+          </g>
+          </g>
+          <!-- center&#45;&gt;pay -->
+          <g id="edge7" class="edge">
+          <title>center&#45;&gt;pay</title>
+          <path fill="none" stroke="#555555" d="M136.39,-863.88C190.73,-747.61 327.37,-455.19 363.47,-377.95"/>
+          </g>
+          <!-- fig -->
+          <g id="node9" class="node">
+          <title>fig</title>
+          <g id="a_node9"><a href="#figma" xlink:href="#figma" aria-label="Screen plan is written. Drawing file is next, no code yet. Opens the design decision.">
+          <path fill="#e2e2e2" stroke="black" stroke-width="2" d="M436.82,-171.99C436.82,-171.99 309.82,-171.99 309.82,-171.99 303.82,-171.99 297.82,-165.99 297.82,-159.99 297.82,-159.99 297.82,-147.99 297.82,-147.99 297.82,-141.99 303.82,-135.99 309.82,-135.99 309.82,-135.99 436.82,-135.99 436.82,-135.99 442.82,-135.99 448.82,-141.99 448.82,-147.99 448.82,-147.99 448.82,-159.99 448.82,-159.99 448.82,-165.99 442.82,-171.99 436.82,-171.99"/>
+          <text xml:space="preserve" text-anchor="middle" x="373.32" y="-148.74" font-family="Helvetica,sans-Serif" font-size="15.00">Figma scope done</text>
+          </a>
+          </g>
+          </g>
+          <!-- center&#45;&gt;fig -->
+          <g id="edge8" class="edge">
+          <title>center&#45;&gt;fig</title>
+          <path fill="none" stroke="#555555" d="M127.38,-863.85C155.86,-763.41 225.53,-524.61 297.82,-328.99 319.17,-271.23 348.96,-204.75 363.55,-172.91"/>
+          </g>
+          <!-- m0_repo -->
+          <g id="node10" class="node">
+          <title>m0_repo</title>
+          <g id="a_node10"><a href="#m0" xlink:href="#m0" aria-label="Shared code copy plus docs live. Finished. Opens the M0 entry.">
+          <ellipse fill="#ebf3fc" stroke="black" cx="653.58" cy="-2710.99" rx="120.56" ry="28.99"/>
+          <text xml:space="preserve" text-anchor="middle" x="653.58" y="-2715.14" font-family="Helvetica,sans-Serif" font-size="13.00">Repo and docs in place</text>
+          <text xml:space="preserve" text-anchor="middle" x="653.58" y="-2698.64" font-family="Helvetica,sans-Serif" font-size="13.00">DONE</text>
+          </a>
+          </g>
+          </g>
+          <!-- m0&#45;&gt;m0_repo -->
+          <g id="edge9" class="edge">
+          <title>m0&#45;&gt;m0_repo</title>
+          <path fill="none" stroke="#555555" d="M409.97,-2608.96C438.99,-2626.97 481.45,-2651.78 520.82,-2668.99 537.65,-2676.35 556.19,-2683.06 573.91,-2688.85"/>
+          </g>
+          <!-- m0_checks -->
+          <g id="node11" class="node">
+          <title>m0_checks</title>
+          <g id="a_node11"><a href="#m0" xlink:href="#m0" aria-label="Tests that run on every change. Not started. Opens the M0 entry.">
+          <ellipse fill="#ebf3fc" stroke="black" cx="653.58" cy="-2627.99" rx="95.11" ry="28.99"/>
+          <text xml:space="preserve" text-anchor="middle" x="653.58" y="-2632.14" font-family="Helvetica,sans-Serif" font-size="13.00">Auto checks open</text>
+          <text xml:space="preserve" text-anchor="middle" x="653.58" y="-2615.64" font-family="Helvetica,sans-Serif" font-size="13.00">TO COME</text>
+          </a>
+          </g>
+          </g>
+          <!-- m0&#45;&gt;m0_checks -->
+          <g id="edge10" class="edge">
+          <title>m0&#45;&gt;m0_checks</title>
+          <path fill="none" stroke="#555555" d="M438.16,-2595.63C476.59,-2601.43 525.99,-2608.88 567.68,-2615.18"/>
+          </g>
+          <!-- m0_risks -->
+          <g id="node12" class="node">
+          <title>m0_risks</title>
+          <g id="a_node12"><a href="#m0" xlink:href="#m0" aria-label="Written list of what could go wrong. Not started. Opens the M0 entry.">
+          <ellipse fill="#ebf3fc" stroke="black" cx="653.58" cy="-2544.99" rx="83.44" ry="28.99"/>
+          <text xml:space="preserve" text-anchor="middle" x="653.58" y="-2549.14" font-family="Helvetica,sans-Serif" font-size="13.00">Risk list written</text>
+          <text xml:space="preserve" text-anchor="middle" x="653.58" y="-2532.64" font-family="Helvetica,sans-Serif" font-size="13.00">TO COME</text>
+          </a>
+          </g>
+          </g>
+          <!-- m0&#45;&gt;m0_risks -->
+          <g id="edge11" class="edge">
+          <title>m0&#45;&gt;m0_risks</title>
+          <path fill="none" stroke="#555555" d="M438.16,-2576.59C479.24,-2570.53 532.84,-2562.63 576.18,-2556.25"/>
+          </g>
+          <!-- k5 -->
+          <g id="node13" class="node">
+          <title>k5</title>
+          <g id="a_node13"><a href="#kel-5" xlink:href="#kel-5" aria-label="Rulebook every new ability follows. Finished. Opens the KEL-5 entry.">
+          <path fill="#d9edd7" stroke="black" stroke-width="2" d="M687.08,-2491.49C687.08,-2491.49 620.08,-2491.49 620.08,-2491.49 614.08,-2491.49 608.08,-2485.49 608.08,-2479.49 608.08,-2479.49 608.08,-2462.49 608.08,-2462.49 608.08,-2456.49 614.08,-2450.49 620.08,-2450.49 620.08,-2450.49 687.08,-2450.49 687.08,-2450.49 693.08,-2450.49 699.08,-2456.49 699.08,-2462.49 699.08,-2462.49 699.08,-2479.49 699.08,-2479.49 699.08,-2485.49 693.08,-2491.49 687.08,-2491.49"/>
+          <text xml:space="preserve" text-anchor="middle" x="653.58" y="-2475.14" font-family="Helvetica,sans-Serif" font-size="13.00">KEL&#45;5 Skills</text>
+          <text xml:space="preserve" text-anchor="middle" x="653.58" y="-2458.64" font-family="Helvetica,sans-Serif" font-size="13.00">DONE</text>
+          </a>
+          </g>
+          </g>
+          <!-- m1&#45;&gt;k5 -->
+          <g id="edge12" class="edge">
+          <title>m1&#45;&gt;k5</title>
+          <path fill="none" stroke="#555555" d="M378.17,-1829.74C390.89,-1901.41 435.73,-2127.74 520.82,-2295.99 551.72,-2357.08 604.31,-2418.78 632.81,-2450.03"/>
+          </g>
+          <!-- k6 -->
+          <g id="node14" class="node">
+          <title>k6</title>
+          <g id="a_node14"><a href="#kel-6" xlink:href="#kel-6" aria-label="Engine: reads, thinks, answers bit by bit. Being built now. Opens the KEL-6 entry.">
+          <path fill="#d9edd7" stroke="black" stroke-width="2" d="M710.71,-2283.49C710.71,-2283.49 596.46,-2283.49 596.46,-2283.49 590.46,-2283.49 584.46,-2277.49 584.46,-2271.49 584.46,-2271.49 584.46,-2254.49 584.46,-2254.49 584.46,-2248.49 590.46,-2242.49 596.46,-2242.49 596.46,-2242.49 710.71,-2242.49 710.71,-2242.49 716.71,-2242.49 722.71,-2248.49 722.71,-2254.49 722.71,-2254.49 722.71,-2271.49 722.71,-2271.49 722.71,-2277.49 716.71,-2283.49 710.71,-2283.49"/>
+          <text xml:space="preserve" text-anchor="middle" x="653.58" y="-2267.14" font-family="Helvetica,sans-Serif" font-size="13.00">KEL&#45;6 Answer loop</text>
+          <text xml:space="preserve" text-anchor="middle" x="653.58" y="-2250.64" font-family="Helvetica,sans-Serif" font-size="13.00">IN PROGRESS</text>
+          </a>
+          </g>
+          </g>
+          <!-- m1&#45;&gt;k6 -->
+          <g id="edge13" class="edge">
+          <title>m1&#45;&gt;k6</title>
+          <path fill="none" stroke="#555555" d="M388.23,-1829.94C414.23,-1872.8 471.97,-1967.96 520.82,-2047.99 564.39,-2119.36 616.29,-2203.92 639.84,-2242.25"/>
+          </g>
+          <!-- k7 -->
+          <g id="node15" class="node">
+          <title>k7</title>
+          <g id="a_node15"><a href="#kel-7" xlink:href="#kel-7" aria-label="Checkpoint that asks you before acting. Being built now. Opens the KEL-7 entry.">
+          <path fill="#d9edd7" stroke="black" stroke-width="2" d="M696.83,-2035.49C696.83,-2035.49 610.33,-2035.49 610.33,-2035.49 604.33,-2035.49 598.33,-2029.49 598.33,-2023.49 598.33,-2023.49 598.33,-2006.49 598.33,-2006.49 598.33,-2000.49 604.33,-1994.49 610.33,-1994.49 610.33,-1994.49 696.83,-1994.49 696.83,-1994.49 702.83,-1994.49 708.83,-2000.49 708.83,-2006.49 708.83,-2006.49 708.83,-2023.49 708.83,-2023.49 708.83,-2029.49 702.83,-2035.49 696.83,-2035.49"/>
+          <text xml:space="preserve" text-anchor="middle" x="653.58" y="-2019.14" font-family="Helvetica,sans-Serif" font-size="13.00">KEL&#45;7 Ask first</text>
+          <text xml:space="preserve" text-anchor="middle" x="653.58" y="-2002.64" font-family="Helvetica,sans-Serif" font-size="13.00">IN PROGRESS</text>
+          </a>
+          </g>
+          </g>
+          <!-- m1&#45;&gt;k7 -->
+          <g id="edge14" class="edge">
+          <title>m1&#45;&gt;k7</title>
+          <path fill="none" stroke="#555555" d="M404.9,-1829.85C459.39,-1870.58 572.5,-1955.13 624.87,-1994.27"/>
+          </g>
+          <!-- k8 -->
+          <g id="node16" class="node">
+          <title>k8</title>
+          <g id="a_node16"><a href="#kel-8" xlink:href="#kel-8" aria-label="Main screen you talk through. Agreed, not started. Opens the KEL-8 entry.">
+          <path fill="#d9edd7" stroke="black" stroke-width="2" d="M709.58,-1827.49C709.58,-1827.49 597.58,-1827.49 597.58,-1827.49 591.58,-1827.49 585.58,-1821.49 585.58,-1815.49 585.58,-1815.49 585.58,-1798.49 585.58,-1798.49 585.58,-1792.49 591.58,-1786.49 597.58,-1786.49 597.58,-1786.49 709.58,-1786.49 709.58,-1786.49 715.58,-1786.49 721.58,-1792.49 721.58,-1798.49 721.58,-1798.49 721.58,-1815.49 721.58,-1815.49 721.58,-1821.49 715.58,-1827.49 709.58,-1827.49"/>
+          <text xml:space="preserve" text-anchor="middle" x="653.58" y="-1811.14" font-family="Helvetica,sans-Serif" font-size="13.00">KEL&#45;8 Chat screen</text>
+          <text xml:space="preserve" text-anchor="middle" x="653.58" y="-1794.64" font-family="Helvetica,sans-Serif" font-size="13.00">TO COME</text>
+          </a>
+          </g>
+          </g>
+          <!-- m1&#45;&gt;k8 -->
+          <g id="edge15" class="edge">
+          <title>m1&#45;&gt;k8</title>
+          <path fill="none" stroke="#555555" d="M433.68,-1806.99C478.21,-1806.99 539.21,-1806.99 585.51,-1806.99"/>
+          </g>
+          <!-- k10 -->
+          <g id="node17" class="node">
+          <title>k10</title>
+          <g id="a_node17"><a href="#kel-10" xlink:href="#kel-10" aria-label="Pay with saved cards after you say yes. Agreed, not started. Opens the KEL-10 entry.">
+          <path fill="#d9edd7" stroke="black" stroke-width="2" d="M714.83,-1620.49C714.83,-1620.49 592.33,-1620.49 592.33,-1620.49 586.33,-1620.49 580.33,-1614.49 580.33,-1608.49 580.33,-1608.49 580.33,-1591.49 580.33,-1591.49 580.33,-1585.49 586.33,-1579.49 592.33,-1579.49 592.33,-1579.49 714.83,-1579.49 714.83,-1579.49 720.83,-1579.49 726.83,-1585.49 726.83,-1591.49 726.83,-1591.49 726.83,-1608.49 726.83,-1608.49 726.83,-1614.49 720.83,-1620.49 714.83,-1620.49"/>
+          <text xml:space="preserve" text-anchor="middle" x="653.58" y="-1604.14" font-family="Helvetica,sans-Serif" font-size="13.00">KEL&#45;10 Saved cards</text>
+          <text xml:space="preserve" text-anchor="middle" x="653.58" y="-1587.64" font-family="Helvetica,sans-Serif" font-size="13.00">TO COME</text>
+          </a>
+          </g>
+          </g>
+          <!-- m1&#45;&gt;k10 -->
+          <g id="edge16" class="edge">
+          <title>m1&#45;&gt;k10</title>
+          <path fill="none" stroke="#555555" d="M405.17,-1784.05C459.64,-1743.52 572.09,-1659.87 624.52,-1620.87"/>
+          </g>
+          <!-- k9 -->
+          <g id="node18" class="node">
+          <title>k9</title>
+          <g id="a_node18"><a href="#kel-9" xlink:href="#kel-9" aria-label="Six&#45;scene demo that proves it works. Runs last. Opens the KEL-9 entry.">
+          <path fill="#d9edd7" stroke="black" stroke-width="2" d="M706.96,-1463.49C706.96,-1463.49 600.21,-1463.49 600.21,-1463.49 594.21,-1463.49 588.21,-1457.49 588.21,-1451.49 588.21,-1451.49 588.21,-1434.49 588.21,-1434.49 588.21,-1428.49 594.21,-1422.49 600.21,-1422.49 600.21,-1422.49 706.96,-1422.49 706.96,-1422.49 712.96,-1422.49 718.96,-1428.49 718.96,-1434.49 718.96,-1434.49 718.96,-1451.49 718.96,-1451.49 718.96,-1457.49 712.96,-1463.49 706.96,-1463.49"/>
+          <text xml:space="preserve" text-anchor="middle" x="653.58" y="-1447.14" font-family="Helvetica,sans-Serif" font-size="13.00">KEL&#45;9 Final check</text>
+          <text xml:space="preserve" text-anchor="middle" x="653.58" y="-1430.64" font-family="Helvetica,sans-Serif" font-size="13.00">TO COME</text>
+          </a>
+          </g>
+          </g>
+          <!-- m1&#45;&gt;k9 -->
+          <g id="edge17" class="edge">
+          <title>m1&#45;&gt;k9</title>
+          <path fill="none" stroke="#555555" d="M385.61,-1784.17C408.06,-1739.92 461.29,-1640.33 520.82,-1566.99 553.39,-1526.87 598.51,-1487.11 626.6,-1463.82"/>
+          </g>
+          <!-- m2_restart -->
+          <g id="node37" class="node">
+          <title>m2_restart</title>
+          <g id="a_node37"><a href="#m2" xlink:href="#m2" aria-label="Picks up after a restart with nothing lost. Not started. Opens the M2 entry.">
+          <ellipse fill="#fff8e1" stroke="black" cx="653.58" cy="-1368.99" rx="106.77" ry="28.99"/>
+          <text xml:space="preserve" text-anchor="middle" x="653.58" y="-1373.14" font-family="Helvetica,sans-Serif" font-size="13.00">Restarts, keeps chat</text>
+          <text xml:space="preserve" text-anchor="middle" x="653.58" y="-1356.64" font-family="Helvetica,sans-Serif" font-size="13.00">TO COME</text>
+          </a>
+          </g>
+          </g>
+          <!-- m2&#45;&gt;m2_restart -->
+          <g id="edge36" class="edge">
+          <title>m2&#45;&gt;m2_restart</title>
+          <path fill="none" stroke="#555555" d="M409.97,-1266.96C438.99,-1284.97 481.45,-1309.78 520.82,-1326.99 538.97,-1334.92 559.11,-1342.11 578.07,-1348.2"/>
+          </g>
+          <!-- m2_search -->
+          <g id="node38" class="node">
+          <title>m2_search</title>
+          <g id="a_node38"><a href="#m2" xlink:href="#m2" aria-label="Finds the right bit of your documents. Not started. Opens the M2 entry.">
+          <ellipse fill="#fff8e1" stroke="black" cx="653.58" cy="-1285.99" rx="91.92" ry="28.99"/>
+          <text xml:space="preserve" text-anchor="middle" x="653.58" y="-1290.14" font-family="Helvetica,sans-Serif" font-size="13.00">Better file search</text>
+          <text xml:space="preserve" text-anchor="middle" x="653.58" y="-1273.64" font-family="Helvetica,sans-Serif" font-size="13.00">TO COME</text>
+          </a>
+          </g>
+          </g>
+          <!-- m2&#45;&gt;m2_search -->
+          <g id="edge37" class="edge">
+          <title>m2&#45;&gt;m2_search</title>
+          <path fill="none" stroke="#555555" d="M445.62,-1254.75C483.54,-1260.48 530.37,-1267.54 569.88,-1273.51"/>
+          </g>
+          <!-- m2_gpu -->
+          <g id="node39" class="node">
+          <title>m2_gpu</title>
+          <g id="a_node39"><a href="#m2" xlink:href="#m2" aria-label="Model served from our fast chip. Not started. Opens the M2 entry.">
+          <ellipse fill="#fff8e1" stroke="black" cx="653.58" cy="-1202.99" rx="106.24" ry="28.99"/>
+          <text xml:space="preserve" text-anchor="middle" x="653.58" y="-1207.14" font-family="Helvetica,sans-Serif" font-size="13.00">Runs on Nebius GPU</text>
+          <text xml:space="preserve" text-anchor="middle" x="653.58" y="-1190.64" font-family="Helvetica,sans-Serif" font-size="13.00">TO COME</text>
+          </a>
+          </g>
+          </g>
+          <!-- m2&#45;&gt;m2_gpu -->
+          <g id="edge38" class="edge">
+          <title>m2&#45;&gt;m2_gpu</title>
+          <path fill="none" stroke="#555555" d="M445.62,-1233.49C480.24,-1228.39 522.28,-1222.19 559.4,-1216.72"/>
+          </g>
+          <!-- m3_who -->
+          <g id="node40" class="node">
+          <title>m3_who</title>
+          <g id="a_node40"><a href="#m3" xlink:href="#m3" aria-label="Privacy rules plus keys kept apart. Not started. Opens the M3 entry.">
+          <ellipse fill="#faeee2" stroke="black" cx="653.58" cy="-1119.99" rx="82.38" ry="28.99"/>
+          <text xml:space="preserve" text-anchor="middle" x="653.58" y="-1124.14" font-family="Helvetica,sans-Serif" font-size="13.00">Who sees what</text>
+          <text xml:space="preserve" text-anchor="middle" x="653.58" y="-1107.64" font-family="Helvetica,sans-Serif" font-size="13.00">TO COME</text>
+          </a>
+          </g>
+          </g>
+          <!-- m3&#45;&gt;m3_who -->
+          <g id="edge39" class="edge">
+          <title>m3&#45;&gt;m3_who</title>
+          <path fill="none" stroke="#555555" d="M409.97,-1017.96C438.99,-1035.97 481.45,-1060.78 520.82,-1077.99 542.05,-1087.27 566,-1095.52 587.6,-1102.2"/>
+          </g>
+          <!-- m3_rate -->
+          <g id="node41" class="node">
+          <title>m3_rate</title>
+          <g id="a_node41"><a href="#m3" xlink:href="#m3" aria-label="Limits on use and how long data stays. Not started. Opens the M3 entry.">
+          <ellipse fill="#faeee2" stroke="black" cx="653.58" cy="-1036.99" rx="118.97" ry="28.99"/>
+          <text xml:space="preserve" text-anchor="middle" x="653.58" y="-1041.14" font-family="Helvetica,sans-Serif" font-size="13.00">Traffic caps, keep rules</text>
+          <text xml:space="preserve" text-anchor="middle" x="653.58" y="-1024.64" font-family="Helvetica,sans-Serif" font-size="13.00">TO COME</text>
+          </a>
+          </g>
+          </g>
+          <!-- m3&#45;&gt;m3_rate -->
+          <g id="edge40" class="edge">
+          <title>m3&#45;&gt;m3_rate</title>
+          <path fill="none" stroke="#555555" d="M435.05,-1004.16C469.11,-1009.3 512.48,-1015.84 551.52,-1021.74"/>
+          </g>
+          <!-- m3_cost -->
+          <g id="node42" class="node">
+          <title>m3_cost</title>
+          <g id="a_node42"><a href="#m3" xlink:href="#m3" aria-label="Ceiling on model cost per turn and month. Not started. Opens the M3 entry.">
+          <ellipse fill="#faeee2" stroke="black" cx="653.58" cy="-953.99" rx="74.42" ry="28.99"/>
+          <text xml:space="preserve" text-anchor="middle" x="653.58" y="-958.14" font-family="Helvetica,sans-Serif" font-size="13.00">Spend ceiling</text>
+          <text xml:space="preserve" text-anchor="middle" x="653.58" y="-941.64" font-family="Helvetica,sans-Serif" font-size="13.00">TO COME</text>
+          </a>
+          </g>
+          </g>
+          <!-- m3&#45;&gt;m3_cost -->
+          <g id="edge41" class="edge">
+          <title>m3&#45;&gt;m3_cost</title>
+          <path fill="none" stroke="#555555" d="M435.05,-986.04C478.86,-979.59 538.08,-970.86 583.67,-964.15"/>
+          </g>
+          <!-- m4_dev -->
+          <g id="node43" class="node">
+          <title>m4_dev</title>
+          <g id="a_node43"><a href="#m4" xlink:href="#m4" aria-label="Same assistant in more places. Later. Opens the M4 entry.">
+          <ellipse fill="#ece9f7" stroke="black" cx="653.58" cy="-870.99" rx="72.83" ry="28.99"/>
+          <text xml:space="preserve" text-anchor="middle" x="653.58" y="-875.14" font-family="Helvetica,sans-Serif" font-size="13.00">More devices</text>
+          <text xml:space="preserve" text-anchor="middle" x="653.58" y="-858.64" font-family="Helvetica,sans-Serif" font-size="13.00">LATER</text>
+          </a>
+          </g>
+          </g>
+          <!-- m4&#45;&gt;m4_dev -->
+          <g id="edge42" class="edge">
+          <title>m4&#45;&gt;m4_dev</title>
+          <path fill="none" stroke="#555555" d="M433,-837.85C477.4,-844.55 538.47,-853.77 584.94,-860.78"/>
+          </g>
+          <!-- m4_self -->
+          <g id="node44" class="node">
+          <title>m4_self</title>
+          <g id="a_node44"><a href="#m4" xlink:href="#m4" aria-label="Work the assistant begins on its own. Later. Opens the M4 entry.">
+          <ellipse fill="#ece9f7" stroke="black" cx="653.58" cy="-787.99" rx="92.45" ry="28.99"/>
+          <text xml:space="preserve" text-anchor="middle" x="653.58" y="-792.14" font-family="Helvetica,sans-Serif" font-size="13.00">Starts tasks itself</text>
+          <text xml:space="preserve" text-anchor="middle" x="653.58" y="-775.64" font-family="Helvetica,sans-Serif" font-size="13.00">LATER</text>
+          </a>
+          </g>
+          </g>
+          <!-- m4&#45;&gt;m4_self -->
+          <g id="edge43" class="edge">
+          <title>m4&#45;&gt;m4_self</title>
+          <path fill="none" stroke="#555555" d="M433,-820.35C472.54,-814.52 525.29,-806.75 569.19,-800.28"/>
+          </g>
+          <!-- m4_team -->
+          <g id="node45" class="node">
+          <title>m4_team</title>
+          <g id="a_node45"><a href="#m4" xlink:href="#m4" aria-label="Team use plus abilities added by others. Later. Opens the M4 entry.">
+          <ellipse fill="#ece9f7" stroke="black" cx="653.58" cy="-704.99" rx="90.33" ry="28.99"/>
+          <text xml:space="preserve" text-anchor="middle" x="653.58" y="-709.14" font-family="Helvetica,sans-Serif" font-size="13.00">Sharing, add&#45;ons</text>
+          <text xml:space="preserve" text-anchor="middle" x="653.58" y="-692.64" font-family="Helvetica,sans-Serif" font-size="13.00">LATER</text>
+          </a>
+          </g>
+          </g>
+          <!-- m4&#45;&gt;m4_team -->
+          <g id="edge44" class="edge">
+          <title>m4&#45;&gt;m4_team</title>
+          <path fill="none" stroke="#555555" d="M410.3,-806.15C439.34,-788.39 481.65,-763.99 520.82,-746.99 540.98,-738.25 563.56,-730.39 584.25,-723.9"/>
+          </g>
+          <!-- s_dash -->
+          <g id="node46" class="node">
+          <title>s_dash</title>
+          <g id="a_node46"><a href="#surfaces" xlink:href="#surfaces" aria-label="Main screen in the browser. Built first. Opens the surfaces decision.">
+          <ellipse fill="#e6f4f1" stroke="black" cx="653.58" cy="-632.99" rx="104.07" ry="18"/>
+          <text xml:space="preserve" text-anchor="middle" x="653.58" y="-628.89" font-family="Helvetica,sans-Serif" font-size="13.00">Dashboard chat now</text>
+          </a>
+          </g>
+          </g>
+          <!-- surf&#45;&gt;s_dash -->
+          <g id="edge45" class="edge">
+          <title>surf&#45;&gt;s_dash</title>
+          <path fill="none" stroke="#555555" d="M414.49,-580.8C459.72,-590.71 533.87,-606.97 587.42,-618.71"/>
+          </g>
+          <!-- s_tg -->
+          <g id="node47" class="node">
+          <title>s_tg</title>
+          <g id="a_node47"><a href="#surfaces" xlink:href="#surfaces" aria-label="Mirror of the same assistant, same rules. Next. Opens the surfaces decision.">
+          <ellipse fill="#e6f4f1" stroke="black" cx="653.58" cy="-571.99" rx="74.89" ry="18"/>
+          <text xml:space="preserve" text-anchor="middle" x="653.58" y="-567.89" font-family="Helvetica,sans-Serif" font-size="13.00">Telegram next</text>
+          </a>
+          </g>
+          </g>
+          <!-- surf&#45;&gt;s_tg -->
+          <g id="edge46" class="edge">
+          <title>surf&#45;&gt;s_tg</title>
+          <path fill="none" stroke="#555555" d="M414.49,-571.99C457.23,-571.99 525.81,-571.99 578.42,-571.99"/>
+          </g>
+          <!-- s_wa -->
+          <g id="node48" class="node">
+          <title>s_wa</title>
+          <g id="a_node48"><a href="#surfaces" xlink:href="#surfaces" aria-label="Not in this round. Later. Opens the surfaces decision.">
+          <ellipse fill="#e6f4f1" stroke="black" cx="653.58" cy="-510.99" rx="80.52" ry="18"/>
+          <text xml:space="preserve" text-anchor="middle" x="653.58" y="-506.89" font-family="Helvetica,sans-Serif" font-size="13.00">WhatsApp later</text>
+          </a>
+          </g>
+          </g>
+          <!-- surf&#45;&gt;s_wa -->
+          <g id="edge47" class="edge">
+          <title>surf&#45;&gt;s_wa</title>
+          <path fill="none" stroke="#555555" d="M414.49,-563.19C461.82,-552.81 540.84,-535.49 594.76,-523.67"/>
+          </g>
+          <!-- s_voice -->
+          <g id="node49" class="node">
+          <title>s_voice</title>
+          <g id="a_node49"><a href="#surfaces" xlink:href="#surfaces" aria-label="No recording or listening work yet. Later. Opens the surfaces decision.">
+          <ellipse fill="#e6f4f1" stroke="black" cx="653.58" cy="-449.99" rx="95.37" ry="18"/>
+          <text xml:space="preserve" text-anchor="middle" x="653.58" y="-445.89" font-family="Helvetica,sans-Serif" font-size="13.00">Voice memos later</text>
+          </a>
+          </g>
+          </g>
+          <!-- surf&#45;&gt;s_voice -->
+          <g id="edge48" class="edge">
+          <title>surf&#45;&gt;s_voice</title>
+          <path fill="none" stroke="#555555" d="M399.15,-553.04C427.24,-532.46 475.06,-499.99 520.82,-480.99 540.03,-473.02 561.71,-466.85 581.85,-462.2"/>
+          </g>
+          <!-- p_stripe -->
+          <g id="node50" class="node">
+          <title>p_stripe</title>
+          <g id="a_node50"><a href="#payments" xlink:href="#payments" aria-label="Save once, pay after approval, receipt each time. Now. Opens the money decision.">
+          <ellipse fill="#f9ecec" stroke="black" cx="653.58" cy="-388.99" rx="116.35" ry="18"/>
+          <text xml:space="preserve" text-anchor="middle" x="653.58" y="-384.89" font-family="Helvetica,sans-Serif" font-size="13.00">Stripe saved cards now</text>
+          </a>
+          </g>
+          </g>
+          <!-- pay&#45;&gt;p_stripe -->
+          <g id="edge49" class="edge">
+          <title>pay&#45;&gt;p_stripe</title>
+          <path fill="none" stroke="#555555" d="M419.03,-363.81C456.13,-367.81 510.2,-373.64 556.96,-378.68"/>
+          </g>
+          <!-- p_razor -->
+          <g id="node51" class="node">
+          <title>p_razor</title>
+          <g id="a_node51"><a href="#payments" xlink:href="#payments" aria-label="No integration in this round. Later. Opens the money decision.">
+          <ellipse fill="#f9ecec" stroke="black" cx="653.58" cy="-327.99" rx="76.43" ry="18"/>
+          <text xml:space="preserve" text-anchor="middle" x="653.58" y="-323.89" font-family="Helvetica,sans-Serif" font-size="13.00">Razorpay later</text>
+          </a>
+          </g>
+          </g>
+          <!-- pay&#45;&gt;p_razor -->
+          <g id="edge50" class="edge">
+          <title>pay&#45;&gt;p_razor</title>
+          <path fill="none" stroke="#555555" d="M419.03,-354.01C463.51,-349.06 532.36,-341.39 583.8,-335.65"/>
+          </g>
+          <!-- p_bal -->
+          <g id="node52" class="node">
+          <title>p_bal</title>
+          <g id="a_node52"><a href="#payments" xlink:href="#payments" aria-label="Topping up and ledger wait. Later. Opens the money decision.">
+          <ellipse fill="#f9ecec" stroke="black" cx="653.58" cy="-266.99" rx="102.02" ry="18"/>
+          <text xml:space="preserve" text-anchor="middle" x="653.58" y="-262.89" font-family="Helvetica,sans-Serif" font-size="13.00">In&#45;app balance later</text>
+          </a>
+          </g>
+          </g>
+          <!-- pay&#45;&gt;p_bal -->
+          <g id="edge51" class="edge">
+          <title>pay&#45;&gt;p_bal</title>
+          <path fill="none" stroke="#555555" d="M414.7,-340.08C443.75,-326.99 484.13,-309.86 520.82,-297.99 541.4,-291.34 564.2,-285.46 584.97,-280.67"/>
+          </g>
+          <!-- f_plan -->
+          <g id="node53" class="node">
+          <title>f_plan</title>
+          <g id="a_node53"><a href="#figma" xlink:href="#figma" aria-label="Thirteen screens, three flows, four states each. Finished. Opens the design decision.">
+          <ellipse fill="#f2f2f2" stroke="black" cx="653.58" cy="-194.99" rx="102.53" ry="28.99"/>
+          <text xml:space="preserve" text-anchor="middle" x="653.58" y="-199.14" font-family="Helvetica,sans-Serif" font-size="13.00">13 screens planned</text>
+          <text xml:space="preserve" text-anchor="middle" x="653.58" y="-182.64" font-family="Helvetica,sans-Serif" font-size="13.00">DONE</text>
+          </a>
+          </g>
+          </g>
+          <!-- fig&#45;&gt;f_plan -->
+          <g id="edge52" class="edge">
+          <title>fig&#45;&gt;f_plan</title>
+          <path fill="none" stroke="#555555" d="M449.63,-165.09C484.23,-170.19 525.56,-176.28 561.87,-181.62"/>
+          </g>
+          <!-- f_flows -->
+          <g id="node54" class="node">
+          <title>f_flows</title>
+          <g id="a_node54"><a href="#figma" xlink:href="#figma" aria-label="Money screens get big numbers and plain words. Finished. Opens the design decision.">
+          <ellipse fill="#f2f2f2" stroke="black" cx="653.58" cy="-111.99" rx="132.76" ry="28.99"/>
+          <text xml:space="preserve" text-anchor="middle" x="653.58" y="-116.14" font-family="Helvetica,sans-Serif" font-size="13.00">Chat, pay need most care</text>
+          <text xml:space="preserve" text-anchor="middle" x="653.58" y="-99.64" font-family="Helvetica,sans-Serif" font-size="13.00">DONE</text>
+          </a>
+          </g>
+          </g>
+          <!-- fig&#45;&gt;f_flows -->
+          <g id="edge53" class="edge">
+          <title>fig&#45;&gt;f_flows</title>
+          <path fill="none" stroke="#555555" d="M449.63,-142.63C478.44,-138.28 511.91,-133.22 543.26,-128.49"/>
+          </g>
+          <!-- f_code -->
+          <g id="node55" class="node">
+          <title>f_code</title>
+          <g id="a_node55"><a href="#figma" xlink:href="#figma" aria-label="Drawing file next, then code. Not started. Opens the design decision.">
+          <ellipse fill="#f2f2f2" stroke="black" cx="653.58" cy="-28.99" rx="102" ry="28.99"/>
+          <text xml:space="preserve" text-anchor="middle" x="653.58" y="-33.14" font-family="Helvetica,sans-Serif" font-size="13.00">No screen code yet</text>
+          <text xml:space="preserve" text-anchor="middle" x="653.58" y="-16.64" font-family="Helvetica,sans-Serif" font-size="13.00">TO COME</text>
+          </a>
+          </g>
+          </g>
+          <!-- fig&#45;&gt;f_code -->
+          <g id="edge54" class="edge">
+          <title>fig&#45;&gt;f_code</title>
+          <path fill="none" stroke="#555555" d="M403.41,-135.12C432.33,-116.94 478.37,-89.55 520.82,-70.99 539.41,-62.87 560.09,-55.53 579.44,-49.35"/>
+          </g>
+          <!-- k5_rule -->
+          <g id="node19" class="node">
+          <title>k5_rule</title>
+          <g id="a_node19"><a href="#kel-5" xlink:href="#kel-5" aria-label="What each tool takes in, gives back, may touch. Finished. Opens the KEL-5 entry.">
+          <ellipse fill="#edf6ec" stroke="black" cx="998" cy="-2636.99" rx="110.49" ry="28.99"/>
+          <text xml:space="preserve" text-anchor="middle" x="998" y="-2641.14" font-family="Helvetica,sans-Serif" font-size="13.00">Rulebook for abilities</text>
+          <text xml:space="preserve" text-anchor="middle" x="998" y="-2624.64" font-family="Helvetica,sans-Serif" font-size="13.00">DONE</text>
+          </a>
+          </g>
+          </g>
+          <!-- k5&#45;&gt;k5_rule -->
+          <g id="edge18" class="edge">
+          <title>k5&#45;&gt;k5_rule</title>
+          <path fill="none" stroke="#555555" d="M699.28,-2474.88C726.24,-2478.92 760.29,-2487.17 786.34,-2503.99 829.67,-2531.97 815.71,-2565.97 858.34,-2594.99 873.62,-2605.4 891.56,-2613.29 909.37,-2619.25"/>
+          </g>
+          <!-- k5_four -->
+          <g id="node20" class="node">
+          <title>k5_four</title>
+          <g id="a_node20"><a href="#kel-5" xlink:href="#kel-5" aria-label="Web search, GitHub read, file answers, scheduler. Finished. Opens the KEL-5 entry.">
+          <ellipse fill="#edf6ec" stroke="black" cx="998" cy="-2553.99" rx="91.92" ry="28.99"/>
+          <text xml:space="preserve" text-anchor="middle" x="998" y="-2558.14" font-family="Helvetica,sans-Serif" font-size="13.00">4 starters built in</text>
+          <text xml:space="preserve" text-anchor="middle" x="998" y="-2541.64" font-family="Helvetica,sans-Serif" font-size="13.00">DONE</text>
+          </a>
+          </g>
+          </g>
+          <!-- k5&#45;&gt;k5_four -->
+          <g id="edge19" class="edge">
+          <title>k5&#45;&gt;k5_four</title>
+          <path fill="none" stroke="#555555" d="M699.35,-2481.84C756.45,-2495.68 855.95,-2519.8 924.07,-2536.31"/>
+          </g>
+          <!-- k5_add -->
+          <g id="node21" class="node">
+          <title>k5_add</title>
+          <g id="a_node21"><a href="#kel-5" xlink:href="#kel-5" aria-label="Adding a tool is a small contained job. Finished. Opens the KEL-5 entry.">
+          <ellipse fill="#edf6ec" stroke="black" cx="998" cy="-2470.99" rx="121.62" ry="28.99"/>
+          <text xml:space="preserve" text-anchor="middle" x="998" y="-2475.14" font-family="Helvetica,sans-Serif" font-size="13.00">New ability, no rewiring</text>
+          <text xml:space="preserve" text-anchor="middle" x="998" y="-2458.64" font-family="Helvetica,sans-Serif" font-size="13.00">DONE</text>
+          </a>
+          </g>
+          </g>
+          <!-- k5&#45;&gt;k5_add -->
+          <g id="edge20" class="edge">
+          <title>k5&#45;&gt;k5_add</title>
+          <path fill="none" stroke="#555555" d="M699.35,-2470.99C744.03,-2470.99 814.68,-2470.99 875.94,-2470.99"/>
+          </g>
+          <!-- k6_stream -->
+          <g id="node22" class="node">
+          <title>k6_stream</title>
+          <g id="a_node22"><a href="#kel-6" xlink:href="#kel-6" aria-label="Words appear as they arrive. Being built now. Opens the KEL-6 entry.">
+          <ellipse fill="#edf6ec" stroke="black" cx="998" cy="-2387.99" rx="95.11" ry="28.99"/>
+          <text xml:space="preserve" text-anchor="middle" x="998" y="-2392.14" font-family="Helvetica,sans-Serif" font-size="13.00">Answers bit by bit</text>
+          <text xml:space="preserve" text-anchor="middle" x="998" y="-2375.64" font-family="Helvetica,sans-Serif" font-size="13.00">IN PROGRESS</text>
+          </a>
+          </g>
+          </g>
+          <!-- k6&#45;&gt;k6_stream -->
+          <g id="edge21" class="edge">
+          <title>k6&#45;&gt;k6_stream</title>
+          <path fill="none" stroke="#555555" d="M702.27,-2283.88C743.26,-2301.48 804.16,-2326.79 858.34,-2345.99 880.63,-2353.89 905.24,-2361.65 927.47,-2368.31"/>
+          </g>
+          <!-- k6_tools -->
+          <g id="node23" class="node">
+          <title>k6_tools</title>
+          <g id="a_node23"><a href="#kel-6" xlink:href="#kel-6" aria-label="Asks a small program to do one thing, feeds back result. Being built now. Opens the KEL-6 entry.">
+          <ellipse fill="#edf6ec" stroke="black" cx="998" cy="-2304.99" rx="117.38" ry="28.99"/>
+          <text xml:space="preserve" text-anchor="middle" x="998" y="-2309.14" font-family="Helvetica,sans-Serif" font-size="13.00">Runs tools mid&#45;answer</text>
+          <text xml:space="preserve" text-anchor="middle" x="998" y="-2292.64" font-family="Helvetica,sans-Serif" font-size="13.00">IN PROGRESS</text>
+          </a>
+          </g>
+          </g>
+          <!-- k6&#45;&gt;k6_tools -->
+          <g id="edge22" class="edge">
+          <title>k6&#45;&gt;k6_tools</title>
+          <path fill="none" stroke="#555555" d="M723.05,-2271.39C771.45,-2277.33 837.24,-2285.4 892.21,-2292.14"/>
+          </g>
+          <!-- k6_cap -->
+          <g id="node24" class="node">
+          <title>k6_cap</title>
+          <g id="a_node24"><a href="#kel-6" xlink:href="#kel-6" aria-label="Hard limit on steps and length, tallies price. Being built now. Opens the KEL-6 entry.">
+          <ellipse fill="#edf6ec" stroke="black" cx="998" cy="-2221.99" rx="106.77" ry="28.99"/>
+          <text xml:space="preserve" text-anchor="middle" x="998" y="-2226.14" font-family="Helvetica,sans-Serif" font-size="13.00">Stops at cost ceiling</text>
+          <text xml:space="preserve" text-anchor="middle" x="998" y="-2209.64" font-family="Helvetica,sans-Serif" font-size="13.00">IN PROGRESS</text>
+          </a>
+          </g>
+          </g>
+          <!-- k6&#45;&gt;k6_cap -->
+          <g id="edge23" class="edge">
+          <title>k6&#45;&gt;k6_cap</title>
+          <path fill="none" stroke="#555555" d="M723.05,-2254.79C773.7,-2248.73 843.38,-2240.39 899.79,-2233.63"/>
+          </g>
+          <!-- k7_ask -->
+          <g id="node25" class="node">
+          <title>k7_ask</title>
+          <g id="a_node25"><a href="#kel-7" xlink:href="#kel-7" aria-label="Nothing changes something without a yes. Being built now. Opens the KEL-7 entry.">
+          <ellipse fill="#edf6ec" stroke="black" cx="998" cy="-2138.99" rx="106.24" ry="28.99"/>
+          <text xml:space="preserve" text-anchor="middle" x="998" y="-2143.14" font-family="Helvetica,sans-Serif" font-size="13.00">Allow, refuse, or ask</text>
+          <text xml:space="preserve" text-anchor="middle" x="998" y="-2126.64" font-family="Helvetica,sans-Serif" font-size="13.00">IN PROGRESS</text>
+          </a>
+          </g>
+          </g>
+          <!-- k7&#45;&gt;k7_ask -->
+          <g id="edge24" class="edge">
+          <title>k7&#45;&gt;k7_ask</title>
+          <path fill="none" stroke="#555555" d="M703.12,-2035.93C744.11,-2053.28 804.57,-2078.07 858.34,-2096.99 879.22,-2104.34 902.13,-2111.6 923.21,-2117.96"/>
+          </g>
+          <!-- k7_once -->
+          <g id="node26" class="node">
+          <title>k7_once</title>
+          <g id="a_node26"><a href="#kel-7" xlink:href="#kel-7" aria-label="Approval names exact action, works once, then expires. Being built now. Opens the KEL-7 entry.">
+          <ellipse fill="#edf6ec" stroke="black" cx="998" cy="-2055.99" rx="108.36" ry="28.99"/>
+          <text xml:space="preserve" text-anchor="middle" x="998" y="-2060.14" font-family="Helvetica,sans-Serif" font-size="13.00">One yes, 10 minutes</text>
+          <text xml:space="preserve" text-anchor="middle" x="998" y="-2043.64" font-family="Helvetica,sans-Serif" font-size="13.00">IN PROGRESS</text>
+          </a>
+          </g>
+          </g>
+          <!-- k7&#45;&gt;k7_once -->
+          <g id="edge25" class="edge">
+          <title>k7&#45;&gt;k7_once</title>
+          <path fill="none" stroke="#555555" d="M709.22,-2021.53C760.01,-2027.61 836.87,-2036.82 898.38,-2044.18"/>
+          </g>
+          <!-- k7_diary -->
+          <g id="node27" class="node">
+          <title>k7_diary</title>
+          <g id="a_node27"><a href="#kel-7" xlink:href="#kel-7" aria-label="Every decision logged, keys removed. Being built now. Opens the KEL-7 entry.">
+          <ellipse fill="#edf6ec" stroke="black" cx="998" cy="-1972.99" rx="112.61" ry="28.99"/>
+          <text xml:space="preserve" text-anchor="middle" x="998" y="-1977.14" font-family="Helvetica,sans-Serif" font-size="13.00">Diary no one can edit</text>
+          <text xml:space="preserve" text-anchor="middle" x="998" y="-1960.64" font-family="Helvetica,sans-Serif" font-size="13.00">IN PROGRESS</text>
+          </a>
+          </g>
+          </g>
+          <!-- k7&#45;&gt;k7_diary -->
+          <g id="edge26" class="edge">
+          <title>k7&#45;&gt;k7_diary</title>
+          <path fill="none" stroke="#555555" d="M709.22,-2008.29C759.25,-2002.15 834.59,-1992.91 895.63,-1985.43"/>
+          </g>
+          <!-- k8_chat -->
+          <g id="node28" class="node">
+          <title>k8_chat</title>
+          <g id="a_node28"><a href="#kel-8" xlink:href="#kel-8" aria-label="Conversations you name and pick up later. Not started. Opens the KEL-8 entry.">
+          <ellipse fill="#edf6ec" stroke="black" cx="998" cy="-1889.99" rx="83.44" ry="28.99"/>
+          <text xml:space="preserve" text-anchor="middle" x="998" y="-1894.14" font-family="Helvetica,sans-Serif" font-size="13.00">Chats you keep</text>
+          <text xml:space="preserve" text-anchor="middle" x="998" y="-1877.64" font-family="Helvetica,sans-Serif" font-size="13.00">TO COME</text>
+          </a>
+          </g>
+          </g>
+          <!-- k8&#45;&gt;k8_chat -->
+          <g id="edge27" class="edge">
+          <title>k8&#45;&gt;k8_chat</title>
+          <path fill="none" stroke="#555555" d="M721.83,-1823.29C781.62,-1837.78 868.64,-1858.88 928.74,-1873.45"/>
+          </g>
+          <!-- k8_cards -->
+          <g id="node29" class="node">
+          <title>k8_cards</title>
+          <g id="a_node29"><a href="#kel-8" xlink:href="#kel-8" aria-label="PDF and table previews plus where answers came from. Not started. Opens the KEL-8 entry.">
+          <ellipse fill="#edf6ec" stroke="black" cx="998" cy="-1806.99" rx="123.21" ry="28.99"/>
+          <text xml:space="preserve" text-anchor="middle" x="998" y="-1811.14" font-family="Helvetica,sans-Serif" font-size="13.00">File cards, source labels</text>
+          <text xml:space="preserve" text-anchor="middle" x="998" y="-1794.64" font-family="Helvetica,sans-Serif" font-size="13.00">TO COME</text>
+          </a>
+          </g>
+          </g>
+          <!-- k8&#45;&gt;k8_cards -->
+          <g id="edge28" class="edge">
+          <title>k8&#45;&gt;k8_cards</title>
+          <path fill="none" stroke="#555555" d="M721.83,-1806.99C765.26,-1806.99 823.06,-1806.99 874.47,-1806.99"/>
+          </g>
+          <!-- k8_appr -->
+          <g id="node30" class="node">
+          <title>k8_appr</title>
+          <g id="a_node30"><a href="#kel-8" xlink:href="#kel-8" aria-label="Yes or no buttons shown in the conversation. Not started. Opens the KEL-8 entry.">
+          <ellipse fill="#edf6ec" stroke="black" cx="998" cy="-1723.99" rx="106.77" ry="28.99"/>
+          <text xml:space="preserve" text-anchor="middle" x="998" y="-1728.14" font-family="Helvetica,sans-Serif" font-size="13.00">Approval inside chat</text>
+          <text xml:space="preserve" text-anchor="middle" x="998" y="-1711.64" font-family="Helvetica,sans-Serif" font-size="13.00">TO COME</text>
+          </a>
+          </g>
+          </g>
+          <!-- k8&#45;&gt;k8_appr -->
+          <g id="edge29" class="edge">
+          <title>k8&#45;&gt;k8_appr</title>
+          <path fill="none" stroke="#555555" d="M721.83,-1790.69C777.92,-1777.1 857.97,-1757.69 917.28,-1743.31"/>
+          </g>
+          <!-- k10_cards -->
+          <g id="node31" class="node">
+          <title>k10_cards</title>
+          <g id="a_node31"><a href="#kel-10" xlink:href="#kel-10" aria-label="Cards kept by Stripe, charged only with approval. Not started. Opens the KEL-10 entry.">
+          <ellipse fill="#edf6ec" stroke="black" cx="998" cy="-1640.99" rx="127.99" ry="28.99"/>
+          <text xml:space="preserve" text-anchor="middle" x="998" y="-1645.14" font-family="Helvetica,sans-Serif" font-size="13.00">Save once, pay after yes</text>
+          <text xml:space="preserve" text-anchor="middle" x="998" y="-1628.64" font-family="Helvetica,sans-Serif" font-size="13.00">TO COME</text>
+          </a>
+          </g>
+          </g>
+          <!-- k10&#45;&gt;k10_cards -->
+          <g id="edge30" class="edge">
+          <title>k10&#45;&gt;k10_cards</title>
+          <path fill="none" stroke="#555555" d="M727.2,-1608.69C772.75,-1614.14 832.41,-1621.28 884.05,-1627.47"/>
+          </g>
+          <!-- k10_caps -->
+          <g id="node32" class="node">
+          <title>k10_caps</title>
+          <g id="a_node32"><a href="#kel-10" xlink:href="#kel-10" aria-label="Spending rules that block over&#45;limit pays. Not started. Opens the KEL-10 entry.">
+          <ellipse fill="#edf6ec" stroke="black" cx="998" cy="-1557.99" rx="115.26" ry="28.99"/>
+          <text xml:space="preserve" text-anchor="middle" x="998" y="-1562.14" font-family="Helvetica,sans-Serif" font-size="13.00">Per&#45;buy, monthly caps</text>
+          <text xml:space="preserve" text-anchor="middle" x="998" y="-1545.64" font-family="Helvetica,sans-Serif" font-size="13.00">TO COME</text>
+          </a>
+          </g>
+          </g>
+          <!-- k10&#45;&gt;k10_caps -->
+          <g id="edge31" class="edge">
+          <title>k10&#45;&gt;k10_caps</title>
+          <path fill="none" stroke="#555555" d="M727.2,-1591.08C775.59,-1585.15 839.92,-1577.26 893.63,-1570.67"/>
+          </g>
+          <!-- k10_receipt -->
+          <g id="node33" class="node">
+          <title>k10_receipt</title>
+          <g id="a_node33"><a href="#kel-10" xlink:href="#kel-10" aria-label="What was done, when, and how much. Not started. Opens the KEL-10 entry.">
+          <ellipse fill="#edf6ec" stroke="black" cx="998" cy="-1474.99" rx="99.88" ry="28.99"/>
+          <text xml:space="preserve" text-anchor="middle" x="998" y="-1479.14" font-family="Helvetica,sans-Serif" font-size="13.00">Receipt every time</text>
+          <text xml:space="preserve" text-anchor="middle" x="998" y="-1462.64" font-family="Helvetica,sans-Serif" font-size="13.00">TO COME</text>
+          </a>
+          </g>
+          </g>
+          <!-- k10&#45;&gt;k10_receipt -->
+          <g id="edge32" class="edge">
+          <title>k10&#45;&gt;k10_receipt</title>
+          <path fill="none" stroke="#555555" d="M702.27,-1579.1C743.26,-1561.5 804.16,-1536.19 858.34,-1516.99 879.92,-1509.35 903.67,-1501.83 925.33,-1495.32"/>
+          </g>
+          <!-- k9_six -->
+          <g id="node34" class="node">
+          <title>k9_six</title>
+          <g id="a_node34"><a href="#kel-9" xlink:href="#kel-9" aria-label="Ask, files, GitHub, approve, schedule, restart. Not started. Opens the KEL-9 entry.">
+          <ellipse fill="#edf6ec" stroke="black" cx="998" cy="-1391.99" rx="134.35" ry="28.99"/>
+          <text xml:space="preserve" text-anchor="middle" x="998" y="-1396.14" font-family="Helvetica,sans-Serif" font-size="13.00">Six scenes, one command</text>
+          <text xml:space="preserve" text-anchor="middle" x="998" y="-1379.64" font-family="Helvetica,sans-Serif" font-size="13.00">TO COME</text>
+          </a>
+          </g>
+          </g>
+          <!-- k9&#45;&gt;k9_six -->
+          <g id="edge33" class="edge">
+          <title>k9&#45;&gt;k9_six</title>
+          <path fill="none" stroke="#555555" d="M719.39,-1433.34C766.41,-1426.34 831.16,-1416.69 886.31,-1408.48"/>
+          </g>
+          <!-- k9_saved -->
+          <g id="node35" class="node">
+          <title>k9_saved</title>
+          <g id="a_node35"><a href="#kel-9" xlink:href="#kel-9" aria-label="Make&#45;believe model answers so the run repeats. Not started. Opens the KEL-9 entry.">
+          <ellipse fill="#edf6ec" stroke="black" cx="998" cy="-1308.99" rx="139.65" ry="28.99"/>
+          <text xml:space="preserve" text-anchor="middle" x="998" y="-1313.14" font-family="Helvetica,sans-Serif" font-size="13.00">Saved answers, offline&#45;safe</text>
+          <text xml:space="preserve" text-anchor="middle" x="998" y="-1296.64" font-family="Helvetica,sans-Serif" font-size="13.00">TO COME</text>
+          </a>
+          </g>
+          </g>
+          <!-- k9&#45;&gt;k9_saved -->
+          <g id="edge34" class="edge">
+          <title>k9&#45;&gt;k9_saved</title>
+          <path fill="none" stroke="#555555" d="M719.27,-1432.74C741.3,-1427.72 765.59,-1420.43 786.34,-1409.99 823.3,-1391.4 821.85,-1370.47 858.34,-1350.99 873.1,-1343.12 889.54,-1336.5 905.81,-1331.01"/>
+          </g>
+          <!-- k9_shots -->
+          <g id="node36" class="node">
+          <title>k9_shots</title>
+          <g id="a_node36"><a href="#kel-9" xlink:href="#kel-9" aria-label="Screenshot per scene, error if one fails. Not started. Opens the KEL-9 entry.">
+          <ellipse fill="#edf6ec" stroke="black" cx="998" cy="-1225.99" rx="117.38" ry="28.99"/>
+          <text xml:space="preserve" text-anchor="middle" x="998" y="-1230.14" font-family="Helvetica,sans-Serif" font-size="13.00">Photos, stops if broken</text>
+          <text xml:space="preserve" text-anchor="middle" x="998" y="-1213.64" font-family="Helvetica,sans-Serif" font-size="13.00">TO COME</text>
+          </a>
+          </g>
+          </g>
+          <!-- k9&#45;&gt;k9_shots -->
+          <g id="edge35" class="edge">
+          <title>k9&#45;&gt;k9_shots</title>
+          <path fill="none" stroke="#555555" d="M719.17,-1437.95C742.32,-1433.44 767.36,-1425.14 786.34,-1409.99 841.65,-1365.86 804.12,-1313.46 858.34,-1267.99 871.16,-1257.24 886.67,-1249.25 902.62,-1243.29"/>
+          </g>
+          </g>
+          </svg>
+        </div>
+        <p class="map-hint">
+          On a narrow screen the map sits in its own window. Scroll or drag inside it to move
+          around, then choose a box to open its entry. The jump list below reaches all of them.
+        </p>
+        <figcaption>
+          The delivery on one page. Every box in the map is a link to its entry or decision on
+          this page. On its own:
+          <a href="assets/sdlc-mindmap.svg">the full-size SVG</a>,
+          or the <a href="assets/sdlc-mindmap.png">PNG fallback</a>.
+          Source: <a target="_blank" rel="noopener" href="https://github.com/Anshieee/kelp/blob/main/docs/SDLC_MINDMAP.md">docs/SDLC_MINDMAP.md</a>.
+        </figcaption>
+      </figure>
+
+      <nav class="jump" id="jump" aria-label="Jump to a milestone or work item">
+        <p class="jump-label">Milestones</p>
+        <ul class="jump-list">
+          <li><a href="#m0">M0 Foundation</a></li>
+          <li><a href="#m1">M1 Prototype</a></li>
+          <li><a href="#m2">M2 Polished MVP</a></li>
+          <li><a href="#m3">M3 Hardening</a></li>
+          <li><a href="#m4">M4 Full vision</a></li>
+        </ul>
+        <p class="jump-label">The work</p>
+        <ul class="jump-list">
+          <li><a href="#kel-5">KEL-5 Skill contracts</a></li>
+          <li><a href="#kel-6">KEL-6 Kernel loop</a></li>
+          <li><a href="#kel-7">KEL-7 Approval gate</a></li>
+          <li><a href="#kel-8">KEL-8 Dashboard chat</a></li>
+          <li><a href="#kel-9">KEL-9 Demo run</a></li>
+          <li><a href="#kel-10">KEL-10 Wallet</a></li>
+        </ul>
+      </nav>
+    </section>
+
+    <section id="words-map" aria-labelledby="words-map-title">
+      <div class="section-head">
+        <div>
+          <p class="eyebrow">01 / The map</p>
+          <h2 id="words-map-title">The same picture, in words</h2>
+        </div>
+        <p>
+          Read the map above, or read this list. They say the same thing, so the page still makes
+          sense on a small screen or without scripting.
+        </p>
+      </div>
+
+      <ul class="map-words">
+        <li>
+          <p class="label">Milestones</p>
+          <p>Five stages from M0 to M4: the ground floor, the first working version, then polish, hardening, and the longer vision.</p>
+        </li>
+        <li>
+          <p class="label">The work</p>
+          <p>Six work items numbered KEL-5 to KEL-10. One is done, two are being built, three have not started.</p>
+        </li>
+        <li>
+          <p class="label">Surfaces</p>
+          <p>Where you talk to the assistant: the dashboard first, Telegram next, WhatsApp and voice memos later.</p>
+        </li>
+        <li>
+          <p class="label">Money</p>
+          <p>Saved cards through Stripe in this round. Razorpay and an in-app balance wait for later.</p>
+        </li>
+        <li>
+          <p class="label">Design</p>
+          <p>The screen plan is written and agreed. The drawing file itself comes next.</p>
+        </li>
       </ul>
-    </div>
-    <div class="callout">
-      <strong>Manual steps still open:</strong> create the Linear project/milestones/labels/issues,
-      install the Linear↔GitHub app with auto-close, and enable branch protection on <code>main</code>.
-    </div>
-  </section>
 
-  <footer>
-    <span class="mono">kelp · SDLC tracker</span> — rendered from
-    <a href="https://github.com/Anshieee/kelp/blob/main/docs/SDLC_MINDMAP.md">docs/SDLC_MINDMAP.md</a>.
-    Diagrams: Mermaid via jsDelivr. Last synced 2026-10-28.
-  </footer>
-</div>
+      <p class="note">
+        Names on this page: a <strong>KEL number</strong> is the name of a work item in Linear, our
+        task tracker. An <strong>M number</strong> is a milestone, a stage of the build. Links to
+        GitHub and Linear open in a new tab, so you do not lose your place.
+      </p>
+    </section>
+
+    <section id="milestones" aria-labelledby="milestones-title">
+      <div class="section-head">
+        <div>
+          <p class="eyebrow">02 / Milestones</p>
+          <h2 id="milestones-title">Where the build stands</h2>
+        </div>
+        <p>
+          A milestone is a stage, not a feature. Each one is cumulative, so M2 includes everything
+          in M1. All five currently point at the same date; treat that as the target, not a promise.
+        </p>
+      </div>
+
+      <div class="list">
+
+        <details class="item" id="m0">
+          <summary>
+            <small class="item-id">M0</small>
+            <strong class="item-title">Foundation &mdash; the ground floor</strong>
+            <small class="item-line">Repo, written decisions, tests, and the safety basics.</small>
+            <strong class="status progress">In progress</strong>
+          </summary>
+          <div class="item-body">
+            <div class="fact">
+              <p class="fact-label">What this is</p>
+              <p>
+                The starting shape of the project: the folder kept on GitHub, the written
+                decisions, the test setup, and the choice of model and hosting. Nothing you
+                would look at as a user yet.
+              </p>
+            </div>
+            <div class="fact">
+              <p class="fact-label">Why it matters</p>
+              <p>
+                Everything after this stands on it. Getting the shape right while the project is
+                small is much cheaper than moving walls later.
+              </p>
+            </div>
+            <div class="fact">
+              <p class="fact-label">In plain words</p>
+              <p class="plain">
+                A threat model is a short list of what could go wrong and what we do about each
+                one. CI is a robot that runs the checks every time code changes.
+              </p>
+            </div>
+            <div class="fact">
+              <p class="fact-label">Status</p>
+              <p>
+                In progress. The repository, the documentation, the tests, and the skill contract
+                are in. Still open: the automated checks, the standard development setup, and the
+                written threat model.
+              </p>
+            </div>
+            <div class="fact fact-wide">
+              <p class="fact-label">Where to look</p>
+              <ul class="links">
+                <li><a target="_blank" rel="noopener" href="https://github.com/Anshieee/kelp">The repository on GitHub</a><small>Anshieee/kelp</small></li>
+                <li><a target="_blank" rel="noopener" href="https://linear.app/kelp-ai/project/always-on-private-assistant-23297ecfd7f0">The project in Linear</a><small>Milestones, status, and discussion</small></li>
+              </ul>
+            </div>
+          </div>
+        </details>
+
+        <details class="item" id="m1">
+          <summary>
+            <small class="item-id">M1</small>
+            <strong class="item-title">Prototype &mdash; the first version you can watch</strong>
+            <small class="item-line">Ask, read a file, approve an action, pay, and see the demo run.</small>
+            <strong class="status progress">In progress</strong>
+          </summary>
+          <div class="item-body">
+            <div class="fact">
+              <p class="fact-label">What this is</p>
+              <p>
+                The end-to-end story. You ask a question, the assistant answers with sources, reads
+                your documents, asks before it does anything that matters, and can pay with a saved
+                card. All six work items, KEL-5 to KEL-10, live inside this milestone.
+              </p>
+            </div>
+            <div class="fact">
+              <p class="fact-label">Why it matters</p>
+              <p>
+                A plan is not a product. This is the stage where the idea becomes something you can
+                sit in front of and judge for yourself.
+              </p>
+            </div>
+            <div class="fact">
+              <p class="fact-label">In plain words</p>
+              <p class="plain">
+                A branch is a separate copy of the code where new work is prepared before it joins
+                the shared copy. Merged means that work has joined the shared copy for good.
+              </p>
+            </div>
+            <div class="fact">
+              <p class="fact-label">Status</p>
+              <p>
+                In progress. KEL-5 is done and merged. KEL-6 and KEL-7 are built on their own
+                branches. KEL-8, then KEL-10, then KEL-9 follow in that order.
+              </p>
+            </div>
+            <div class="fact fact-wide">
+              <p class="fact-label">Where to look</p>
+              <ul class="links">
+                <li><a href="#issues">The six work items, one by one</a><small>Jump to the detail below</small></li>
+                <li><a target="_blank" rel="noopener" href="https://github.com/Anshieee/kelp/branches">All branches on GitHub</a><small>Where the work in progress lives</small></li>
+              </ul>
+            </div>
+          </div>
+        </details>
+
+        <details class="item" id="m2">
+          <summary>
+            <small class="item-id">M2</small>
+            <strong class="item-title">Polished MVP &mdash; it has to survive a normal week</strong>
+            <small class="item-line">Restarts, health checks, better search, measurements, and a real deploy.</small>
+            <strong class="status todo">To come</strong>
+          </summary>
+          <div class="item-body">
+            <div class="fact">
+              <p class="fact-label">What this is</p>
+              <p>
+                Making it hold up in ordinary use: picking up where it left off after a restart,
+                self-checks that say whether it is healthy, better search over your own documents,
+                repeatable quality measurements, and a deploy on the Nebius GPU.
+              </p>
+            </div>
+            <div class="fact">
+              <p class="fact-label">Why it matters</p>
+              <p>
+                A prototype that only works on a good day is a demonstration, not a product. This
+                milestone is the difference between the two.
+              </p>
+            </div>
+            <div class="fact">
+              <p class="fact-label">In plain words</p>
+              <p class="plain">
+                A GPU is the chip that runs large models quickly; Nebius provides ours. An eval is a
+                repeatable test of answer quality, not just whether the code runs.
+              </p>
+            </div>
+            <div class="fact">
+              <p class="fact-label">Status</p>
+              <p>To come. Nothing has started on this milestone yet.</p>
+            </div>
+            <div class="fact fact-wide">
+              <p class="fact-label">Where to look</p>
+              <ul class="links">
+                <li><a target="_blank" rel="noopener" href="https://linear.app/kelp-ai/project/always-on-private-assistant-23297ecfd7f0">The project in Linear</a><small>This milestone sits on the project timeline</small></li>
+                <li><a target="_blank" rel="noopener" href="https://github.com/Anshieee/kelp">The repository on GitHub</a><small>Where the work will land</small></li>
+              </ul>
+            </div>
+          </div>
+        </details>
+
+        <details class="item" id="m3">
+          <summary>
+            <small class="item-id">M3</small>
+            <strong class="item-title">Hardening &mdash; closing the privacy and cost gaps</strong>
+            <small class="item-line">Who sees what, where secrets live, how fast someone can knock, and what it costs.</small>
+            <strong class="status todo">To come</strong>
+          </summary>
+          <div class="item-body">
+            <div class="fact">
+              <p class="fact-label">What this is</p>
+              <p>
+                The work of making the promises true under pressure: controls on who can see what,
+                keys kept away from the rest of the system, caps on how hard the service can be
+                hammered, a rule for how long data is kept, and a ceiling on spend.
+              </p>
+            </div>
+            <div class="fact">
+              <p class="fact-label">Why it matters</p>
+              <p>
+                Privacy is the whole point of this product. This is the stage where that claim gets
+                tested instead of assumed.
+              </p>
+            </div>
+            <div class="fact">
+              <p class="fact-label">In plain words</p>
+              <p class="plain">
+                A rate limit is a cap on how many requests arrive in a set time. Retention is a rule
+                for how long something is kept before it is deleted.
+              </p>
+            </div>
+            <div class="fact">
+              <p class="fact-label">Status</p>
+              <p>To come. The scope is agreed; the work is queued.</p>
+            </div>
+            <div class="fact fact-wide">
+              <p class="fact-label">Where to look</p>
+              <ul class="links">
+                <li><a target="_blank" rel="noopener" href="https://linear.app/kelp-ai/project/always-on-private-assistant-23297ecfd7f0">The project in Linear</a><small>This milestone sits on the project timeline</small></li>
+                <li><a target="_blank" rel="noopener" href="https://github.com/Anshieee/kelp">The repository on GitHub</a><small>Where the work will land</small></li>
+              </ul>
+            </div>
+          </div>
+        </details>
+
+        <details class="item" id="m4">
+          <summary>
+            <small class="item-id">M4</small>
+            <strong class="item-title">Full vision &mdash; the longer game</strong>
+            <small class="item-line">More devices, work it starts on its own, outside abilities, and team sharing.</small>
+            <strong class="status todo">To come</strong>
+          </summary>
+          <div class="item-body">
+            <div class="fact">
+              <p class="fact-label">What this is</p>
+              <p>
+                Where this goes after the product is reliable: the assistant present on more than
+                one device, small jobs it starts without being asked, abilities added by other
+                people, and sharing with a team.
+              </p>
+            </div>
+            <div class="fact">
+              <p class="fact-label">Why it matters</p>
+              <p>
+                It is a direction, not a deadline. Writing it down now keeps today's small choices
+                from boxing it out later.
+              </p>
+            </div>
+            <div class="fact">
+              <p class="fact-label">In plain words</p>
+              <p class="plain">
+                A plugin is an ability written by someone else and added without rebuilding the
+                assistant. Sharing with a team means several people use the same assistant, each
+                under the same approval rules.
+              </p>
+            </div>
+            <div class="fact">
+              <p class="fact-label">Status</p>
+              <p>To come. No work has started, and none is planned for this round.</p>
+            </div>
+            <div class="fact fact-wide">
+              <p class="fact-label">Where to look</p>
+              <ul class="links">
+                <li><a target="_blank" rel="noopener" href="https://linear.app/kelp-ai/project/always-on-private-assistant-23297ecfd7f0">The project in Linear</a><small>This milestone sits on the project timeline</small></li>
+                <li><a target="_blank" rel="noopener" href="https://github.com/Anshieee/kelp">The repository on GitHub</a><small>Where the work will land</small></li>
+              </ul>
+            </div>
+          </div>
+        </details>
+
+      </div>
+    </section>
+
+    <section id="issues" aria-labelledby="issues-title">
+      <div class="section-head">
+        <div>
+          <p class="eyebrow">03 / The work</p>
+          <h2 id="issues-title">Six pieces of work, KEL-5 to KEL-10</h2>
+        </div>
+        <p>
+          Each line opens to the same four things: what it is, why it matters, where it stands, and
+          the file to read. Open one at a time, or open them all.
+        </p>
+      </div>
+
+      <div class="list">
+
+        <details class="item" id="kel-5">
+          <summary>
+            <small class="item-id">KEL-5</small>
+            <strong class="item-title">Skill contracts &mdash; the rulebook for new abilities</strong>
+            <small class="item-line">What a new ability must declare before the assistant may use it.</small>
+            <strong class="status done">Done</strong>
+          </summary>
+          <div class="item-body">
+            <div class="fact">
+              <p class="fact-label">What this is</p>
+              <p>
+                The set of rules an ability has to follow before the assistant is allowed to use it:
+                what it does, what it takes in, what it gives back, and what it is allowed to touch.
+                Four starter abilities are already built on top of it: web search, reading GitHub,
+                answering from your PDFs and spreadsheets, and creating a scheduled job.
+              </p>
+            </div>
+            <div class="fact">
+              <p class="fact-label">Why it matters</p>
+              <p>
+                Without this, every new ability would mean rewiring the assistant by hand. With it,
+                adding an ability is a small, contained job. It is also how the safety layer knows
+                what a tool intends to do before it does anything.
+              </p>
+            </div>
+            <div class="fact">
+              <p class="fact-label">In plain words</p>
+              <p class="plain">
+                A schema is the shape of the data, written down so a machine can check it. A
+                manifest is the label on the box: what is inside and what it needs.
+              </p>
+            </div>
+            <div class="fact">
+              <p class="fact-label">Status</p>
+              <p>Done. Merged into the main copy of the code and covered by tests.</p>
+            </div>
+            <div class="fact fact-wide">
+              <p class="fact-label">Where to look</p>
+              <ul class="links">
+                <li><a target="_blank" rel="noopener" href="https://linear.app/kelp-ai/issue/KEL-5/skill-contracts-schema-capability-manifest-4-prototype-skills">KEL-5 in Linear</a><small>Description and discussion</small></li>
+                <li><a target="_blank" rel="noopener" href="https://github.com/Anshieee/kelp/blob/main/docs/SKILL_SPEC.md">docs/SKILL_SPEC.md</a><small>The contract itself</small></li>
+                <li><a target="_blank" rel="noopener" href="https://github.com/Anshieee/kelp/blob/main/skills/manifest.schema.json">skills/manifest.schema.json</a><small>The shape every manifest is checked against</small></li>
+                <li><a target="_blank" rel="noopener" href="https://github.com/Anshieee/kelp/blob/main/tests/test_skill_loader.py">tests/test_skill_loader.py</a><small>The checks that keep it honest</small></li>
+              </ul>
+            </div>
+          </div>
+        </details>
+
+        <details class="item" id="kel-6">
+          <summary>
+            <small class="item-id">KEL-6</small>
+            <strong class="item-title">Kernel loop &mdash; the thinking engine</strong>
+            <small class="item-line">Turns your message into an answer, and decides when to use a tool.</small>
+            <strong class="status progress">In progress</strong>
+          </summary>
+          <div class="item-body">
+            <div class="fact">
+              <p class="fact-label">What this is</p>
+              <p>
+                The part that reads your message, asks the model what to do, sends the answer to you
+                while it is still being written, and — when a tool is needed — runs it, feeds the
+                result back, and keeps going until there is a real answer. It also sets a ceiling on
+                steps and length per turn, and keeps a running tally of the cost.
+              </p>
+            </div>
+            <div class="fact">
+              <p class="fact-label">Why it matters</p>
+              <p>
+                It is the engine of the product. The chat screen, the approval step, the wallet, and
+                the demo all plug into this loop.
+              </p>
+            </div>
+            <div class="fact">
+              <p class="fact-label">In plain words</p>
+              <p class="plain">
+                Streaming means showing words as they arrive instead of waiting for the whole
+                answer. A tool call is the assistant asking a small program to do one specific
+                thing, like search the web.
+              </p>
+            </div>
+            <div class="fact">
+              <p class="fact-label">Status</p>
+              <p>
+                In progress. Built on the kel-6 branch with tests. Not merged into the main copy of
+                the code yet.
+              </p>
+            </div>
+            <div class="fact fact-wide">
+              <p class="fact-label">Where to look</p>
+              <ul class="links">
+                <li><a target="_blank" rel="noopener" href="https://linear.app/kelp-ai/issue/KEL-6/kernel-llm-streaming-agent-loop-with-tool-calling">KEL-6 in Linear</a><small>Description and discussion</small></li>
+                <li><a target="_blank" rel="noopener" href="https://github.com/Anshieee/kelp/blob/kel-6/docs/KERNEL.md">docs/KERNEL.md</a><small>The design, on the kel-6 branch</small></li>
+                <li><a target="_blank" rel="noopener" href="https://github.com/Anshieee/kelp/blob/kel-6/kernel/loop.py">kernel/loop.py</a><small>The loop itself</small></li>
+                <li><a target="_blank" rel="noopener" href="https://github.com/Anshieee/kelp/blob/kel-6/tests/test_kernel_loop.py">tests/test_kernel_loop.py</a><small>How it is checked</small></li>
+              </ul>
+            </div>
+          </div>
+        </details>
+
+        <details class="item" id="kel-7">
+          <summary>
+            <small class="item-id">KEL-7</small>
+            <strong class="item-title">Approval gate &mdash; nothing happens until you say yes</strong>
+            <small class="item-line">A checkpoint before every real action, plus a log of what happened.</small>
+            <strong class="status progress">In progress</strong>
+          </summary>
+          <div class="item-body">
+            <div class="fact">
+              <p class="fact-label">What this is</p>
+              <p>
+                The check at the door. Before any action that changes something, this layer looks at
+                what the assistant wants to do and decides: allow it, refuse it, or stop and ask
+                you. Asking creates a one-time request that names exactly what will run and expires
+                after ten minutes. Afterwards every decision and result goes into a log that cannot
+                be edited, with keys and passwords removed.
+              </p>
+            </div>
+            <div class="fact">
+              <p class="fact-label">Why it matters</p>
+              <p>
+                A private assistant that acts for you is only trustworthy if it cannot act behind
+                your back. This is the piece that makes that true, and both the wallet and the demo
+                depend on it.
+              </p>
+            </div>
+            <div class="fact">
+              <p class="fact-label">In plain words</p>
+              <p class="plain">
+                An audit log is a diary of what happened that can only be added to, never rewritten.
+                Deny by default means if the rules say nothing, the answer is no.
+              </p>
+            </div>
+            <div class="fact">
+              <p class="fact-label">Status</p>
+              <p>
+                In progress. Built on the kel-7 branch: the policy check, one-time approvals, gated
+                execution, the audit log, and tests. Not merged yet.
+              </p>
+            </div>
+            <div class="fact fact-wide">
+              <p class="fact-label">Where to look</p>
+              <ul class="links">
+                <li><a target="_blank" rel="noopener" href="https://linear.app/kelp-ai/issue/KEL-7/openshell-approval-gated-tool-execution-audit">KEL-7 in Linear</a><small>Description and discussion</small></li>
+                <li><a target="_blank" rel="noopener" href="https://github.com/Anshieee/kelp/blob/kel-7/docs/OPENSHELL.md">docs/OPENSHELL.md</a><small>The rules, on the kel-7 branch</small></li>
+                <li><a target="_blank" rel="noopener" href="https://github.com/Anshieee/kelp/blob/kel-7/openshell/policy.py">openshell/policy.py</a><small>Where allow, ask, and refuse are decided</small></li>
+                <li><a target="_blank" rel="noopener" href="https://github.com/Anshieee/kelp/blob/kel-7/tests/test_openshell_approvals.py">tests/test_openshell_approvals.py</a><small>How the gate is checked</small></li>
+              </ul>
+            </div>
+          </div>
+        </details>
+
+        <details class="item" id="kel-8">
+          <summary>
+            <small class="item-id">KEL-8</small>
+            <strong class="item-title">Dashboard chat &mdash; the main screen</strong>
+            <small class="item-line">The conversation where you can see every step the assistant takes.</small>
+            <strong class="status todo">To come</strong>
+          </summary>
+          <div class="item-body">
+            <div class="fact">
+              <p class="fact-label">What this is</p>
+              <p>
+                The place you actually talk to the assistant. Conversations you can name and pick up
+                later, answers that appear as they are written, a small card for each tool step you
+                can open, previews of PDF and spreadsheet answers, labels showing where an answer
+                came from, and approval requests shown right in the conversation.
+              </p>
+            </div>
+            <div class="fact">
+              <p class="fact-label">Why it matters</p>
+              <p>
+                It is the front door of the product. The demo, the wallet, and every approval happen
+                here, so nothing else can be shown to a person until this exists.
+              </p>
+            </div>
+            <div class="fact">
+              <p class="fact-label">In plain words</p>
+              <p class="plain">
+                A thread is one conversation. An artifact card is a small preview of a file the
+                assistant made for you.
+              </p>
+            </div>
+            <div class="fact">
+              <p class="fact-label">Status</p>
+              <p>
+                To come. Starts once KEL-6 and KEL-7 are merged. The screen plan is written; no
+                screen is built yet.
+              </p>
+            </div>
+            <div class="fact fact-wide">
+              <p class="fact-label">Where to look</p>
+              <ul class="links">
+                <li><a target="_blank" rel="noopener" href="https://linear.app/kelp-ai/issue/KEL-8/dashboard-chat-surface-primary-interface">KEL-8 in Linear</a><small>Description and discussion</small></li>
+                <li><a target="_blank" rel="noopener" href="https://github.com/Anshieee/kelp/blob/main/docs/frontend-scope-simple.md">docs/frontend-scope-simple.md</a><small>The screen plan: thirteen screens, three flows</small></li>
+              </ul>
+            </div>
+          </div>
+        </details>
+
+        <details class="item" id="kel-9">
+          <summary>
+            <small class="item-id">KEL-9</small>
+            <strong class="item-title">Demo run &mdash; the whole story, played by one command</strong>
+            <small class="item-line">Six short scenes that prove the product works, offline, every time.</small>
+            <strong class="status todo">To come</strong>
+          </summary>
+          <div class="item-body">
+            <div class="fact">
+              <p class="fact-label">What this is</p>
+              <p>
+                Six short scenes, played in order by a single command: ask a question and get
+                sources; summarise a PDF and answer a spreadsheet question; look up a GitHub issue;
+                approve a write and see it in the log; schedule a job; then stop the server
+                mid-answer and pick the conversation back up. It takes screenshots and stops with an
+                error if any scene fails.
+              </p>
+            </div>
+            <div class="fact">
+              <p class="fact-label">Why it matters</p>
+              <p>
+                It is both the proof and the guard rail. Anyone can watch the product work in a few
+                minutes, and a regression breaks the script before it reaches a person.
+              </p>
+            </div>
+            <div class="fact">
+              <p class="fact-label">In plain words</p>
+              <p class="plain">
+                A fixture is a saved, make-believe answer from the model, used so the run happens
+                the same way every time and works without a network.
+              </p>
+            </div>
+            <div class="fact">
+              <p class="fact-label">Status</p>
+              <p>To come. It runs last, after the dashboard and the wallet are in place.</p>
+            </div>
+            <div class="fact fact-wide">
+              <p class="fact-label">Where to look</p>
+              <ul class="links">
+                <li><a target="_blank" rel="noopener" href="https://linear.app/kelp-ai/issue/KEL-9/demo-choreography-6-beat-scripted-end-to-end-run-npm-run-demo">KEL-9 in Linear</a><small>Description and the six scenes</small></li>
+                <li><a target="_blank" rel="noopener" href="https://github.com/Anshieee/kelp">The repository</a><small>No demo script exists yet</small></li>
+                <li><a target="_blank" rel="noopener" href="https://github.com/Anshieee/kelp/blob/main/docs/SDLC_MINDMAP.md">The delivery map</a><small>Where the six scenes are described</small></li>
+              </ul>
+            </div>
+          </div>
+        </details>
+
+        <details class="item" id="kel-10">
+          <summary>
+            <small class="item-id">KEL-10</small>
+            <strong class="item-title">Wallet &mdash; saved cards, limits, and a receipt</strong>
+            <small class="item-line">Pay with a saved card, under a cap, only after you approve it.</small>
+            <strong class="status todo">To come</strong>
+          </summary>
+          <div class="item-body">
+            <div class="fact">
+              <p class="fact-label">What this is</p>
+              <p>
+                Saving a card once, seeing the cards you have saved, two kinds of limit (per
+                purchase and per month), a small confirmation window before paying, and a receipt
+                afterwards. Every payment passes through the approval step from KEL-7, so nothing is
+                charged without a yes.
+              </p>
+            </div>
+            <div class="fact">
+              <p class="fact-label">Why it matters</p>
+              <p>
+                Paying is the clearest example of something the assistant should never do on its
+                own. It shows the safety story with real money at stake.
+              </p>
+            </div>
+            <div class="fact">
+              <p class="fact-label">In plain words</p>
+              <p class="plain">
+                Stripe is the payment company that stores card details, so the app never holds them.
+                SetupIntent is Stripe's name for the one-time step that saves a card for later.
+              </p>
+            </div>
+            <div class="fact">
+              <p class="fact-label">Status</p>
+              <p>
+                To come. Only a placeholder settings file exists today, on the kel-7 branch; there
+                are no real Stripe calls yet. Razorpay and an in-app balance are outside this round.
+              </p>
+            </div>
+            <div class="fact fact-wide">
+              <p class="fact-label">Where to look</p>
+              <ul class="links">
+                <li><a target="_blank" rel="noopener" href="https://linear.app/kelp-ai/issue/KEL-10/wallet-stripe-saved-cards-setupintent-attach-list-propose-approve">KEL-10 in Linear</a><small>Description and discussion</small></li>
+                <li><a target="_blank" rel="noopener" href="https://github.com/Anshieee/kelp/blob/kel-7/payments/stripe_wallet.py">payments/stripe_wallet.py</a><small>The placeholder, on the kel-7 branch</small></li>
+                <li><a target="_blank" rel="noopener" href="https://linear.app/kelp-ai/project/always-on-private-assistant-23297ecfd7f0">The project in Linear</a><small>Everything in one place</small></li>
+              </ul>
+            </div>
+          </div>
+        </details>
+
+      </div>
+
+      <p class="note">
+        Linear can lag behind by a day until someone updates it. The status here is the version this
+        page was built from, on 29 October 2026.
+      </p>
+    </section>
+
+    <section id="decisions" aria-labelledby="decisions-title">
+      <div class="section-head">
+        <div>
+          <p class="eyebrow">04 / Decisions</p>
+          <h2 id="decisions-title">What is settled, what waits</h2>
+        </div>
+        <p>
+          Three choices keep the first version small. Anything marked later is deliberately outside
+          this round, not forgotten.
+        </p>
+      </div>
+
+      <div class="grid">
+
+        <article class="card decision" id="surfaces">
+          <p class="label">Surfaces</p>
+          <h3>Dashboard first, Telegram second</h3>
+          <p>Where the conversation happens.</p>
+          <dl>
+            <div>
+              <dt>Now</dt>
+              <dd><strong>Dashboard.</strong> The main surface, and the place every flow is designed.</dd>
+            </div>
+            <div>
+              <dt>Next</dt>
+              <dd><strong>Telegram.</strong> A mirror of the same assistant, under the same rules and the same approval step.</dd>
+            </div>
+            <div>
+              <dt>Later</dt>
+              <dd><strong>WhatsApp.</strong> Not in this round. Older notes that call it the main mirror are out of date.</dd>
+            </div>
+            <div>
+              <dt>Later</dt>
+              <dd><strong>Voice memos.</strong> No recording or listening work yet.</dd>
+            </div>
+          </dl>
+        </article>
+
+        <article class="card decision" id="payments">
+          <p class="label">Money</p>
+          <h3>Stripe now, everything else later</h3>
+          <p>How paying works, and what is out of scope.</p>
+          <dl>
+            <div>
+              <dt>Now</dt>
+              <dd><strong>Saved cards with Stripe.</strong> Save once, list, a per-purchase cap, a monthly cap, a confirmation window, and a receipt. Tracked by <a href="#kel-10">KEL-10</a>.</dd>
+            </div>
+            <div>
+              <dt>Rule</dt>
+              <dd><strong>Card details stay with Stripe.</strong> The app never stores a card number, so a leak of the app does not leak a card.</dd>
+            </div>
+            <div>
+              <dt>Later</dt>
+              <dd><strong>Razorpay.</strong> No integration in this round.</dd>
+            </div>
+            <div>
+              <dt>Later</dt>
+              <dd><strong>In-app balance.</strong> Showing a balance, topping it up, and keeping a ledger all wait.</dd>
+            </div>
+          </dl>
+        </article>
+
+        <article class="card decision" id="figma">
+          <p class="label">Design</p>
+          <h3>The screen plan is ready</h3>
+          <p>Written and agreed. Not yet drawn.</p>
+          <dl>
+            <div>
+              <dt>Done</dt>
+              <dd><strong>Thirteen screens</strong> covering the conversation, files, sources, GitHub, approvals, scheduled jobs, wallet, memory, activity, and the empty states.</dd>
+            </div>
+            <div>
+              <dt>Done</dt>
+              <dd><strong>Three flows:</strong> drop a file and get a summary; ask for a sweep; propose, approve, then receive.</dd>
+            </div>
+            <div>
+              <dt>Done</dt>
+              <dd><strong>Four states</strong> for every screen: working, waiting on you, failed, done.</dd>
+            </div>
+            <div>
+              <dt>Next</dt>
+              <dd><strong>Draw the file.</strong> Screen code starts only once the drawing file exists.</dd>
+            </div>
+          </dl>
+          <p class="note"><a target="_blank" rel="noopener" href="https://github.com/Anshieee/kelp/blob/main/docs/frontend-scope-simple.md">Read the screen plan</a></p>
+        </article>
+
+      </div>
+
+      <div class="callout">
+        <p><strong>Why Telegram and not WhatsApp:</strong> Telegram is the mirror chosen for this round, so it is the one that gets built and tested. WhatsApp has no slot yet. Two older planning documents still name WhatsApp first; on this point they are out of date.</p>
+      </div>
+    </section>
+
+    <section id="glossary" aria-labelledby="glossary-title">
+      <div class="section-head">
+        <div>
+          <p class="eyebrow">05 / Words</p>
+          <h2 id="glossary-title">The technical words, in plain English</h2>
+        </div>
+        <p>
+          Everything on this page is meant to be readable without a technical background. If a word
+          still gets in the way, it is probably here.
+        </p>
+      </div>
+
+      <dl class="glossary">
+        <div>
+          <dt>SDLC</dt>
+          <dd>Software development life cycle: the whole trip from an idea to something shipped and looked after. This page is that trip for this product.</dd>
+        </div>
+        <div>
+          <dt>KEL number</dt>
+          <dd>The name of one work item in Linear, our task tracker. KEL-5 to KEL-10 are the six pieces of the prototype.</dd>
+        </div>
+        <div>
+          <dt>Milestone</dt>
+          <dd>A stage of the build, not a feature. M0 is the ground floor, M1 is the first working version, and so on.</dd>
+        </div>
+        <div>
+          <dt>Repo and branch</dt>
+          <dd>The repository is the project folder kept on GitHub, with its full history. A branch is a separate copy where new work is prepared before it joins the shared copy, called main.</dd>
+        </div>
+        <div>
+          <dt>Manifest and schema</dt>
+          <dd>A manifest is the label on a tool's box: what it does and what it needs. A schema is the shape of the data, written down so a machine can check it.</dd>
+        </div>
+        <div>
+          <dt>Kernel</dt>
+          <dd>The thinking loop at the heart of the assistant: read the message, decide, act, answer.</dd>
+        </div>
+        <div>
+          <dt>Token</dt>
+          <dd>A word-sized chunk of text. Models read and write in chunks, and price is counted per chunk.</dd>
+        </div>
+        <div>
+          <dt>Streaming</dt>
+          <dd>Sending the answer word by word as it is written, instead of waiting for all of it.</dd>
+        </div>
+        <div>
+          <dt>Tool call</dt>
+          <dd>The assistant asking a small program to do one specific thing: search the web, read a file, look up an issue.</dd>
+        </div>
+        <div>
+          <dt>Approval gate</dt>
+          <dd>A checkpoint that stops an action and asks you first. Nothing passes without a yes, and a yes is good for one action only.</dd>
+        </div>
+        <div>
+          <dt>Audit log</dt>
+          <dd>A diary of what happened that can only be added to. It is how you check the assistant afterwards.</dd>
+        </div>
+        <div>
+          <dt>Fixture</dt>
+          <dd>A saved sample answer, used so a test or a demo runs the same way every time.</dd>
+        </div>
+        <div>
+          <dt>Eval</dt>
+          <dd>A repeatable test of how good an answer is, rather than just whether the code runs.</dd>
+        </div>
+        <div>
+          <dt>GPU</dt>
+          <dd>The chip that runs large models quickly. Nebius provides ours.</dd>
+        </div>
+        <div>
+          <dt>Stripe and SetupIntent</dt>
+          <dd>Stripe is the payment company that stores card details, so the app never holds them. SetupIntent is Stripe's name for the one-time step that saves a card for later.</dd>
+        </div>
+      </dl>
+    </section>
+
+    <section id="links" aria-labelledby="links-title">
+      <div class="section-head">
+        <div>
+          <p class="eyebrow">06 / Links</p>
+          <h2 id="links-title">Where everything lives</h2>
+        </div>
+        <p>
+          This page is a view, not the record. GitHub holds the code and its history, Linear holds
+          the work items, and the docs hold the decisions.
+        </p>
+      </div>
+
+      <div class="link-grid">
+
+        <article class="card">
+          <h3>GitHub</h3>
+          <ul>
+            <li><a target="_blank" rel="noopener" href="https://github.com/Anshieee/kelp">Repository</a><small>Anshieee/kelp</small></li>
+            <li><a target="_blank" rel="noopener" href="https://github.com/Anshieee/kelp/tree/main">The main copy of the code</a></li>
+            <li><a target="_blank" rel="noopener" href="https://github.com/Anshieee/kelp/branches">All branches</a><small>Including kel-6 and kel-7</small></li>
+            <li><a target="_blank" rel="noopener" href="https://github.com/Anshieee/kelp/commits/main">Change history</a></li>
+            <li><a target="_blank" rel="noopener" href="https://github.com/Anshieee/kelp/pulls">Pull requests</a><small>Proposed changes waiting to be merged</small></li>
+          </ul>
+        </article>
+
+        <article class="card">
+          <h3>Linear</h3>
+          <ul>
+            <li><a target="_blank" rel="noopener" href="https://linear.app/kelp-ai/project/always-on-private-assistant-23297ecfd7f0">Project: Always-On Private Assistant</a><small>Milestones and status</small></li>
+            <li><a target="_blank" rel="noopener" href="https://linear.app/kelp-ai/issue/KEL-5/skill-contracts-schema-capability-manifest-4-prototype-skills">KEL-5 Skill contracts</a></li>
+            <li><a target="_blank" rel="noopener" href="https://linear.app/kelp-ai/issue/KEL-6/kernel-llm-streaming-agent-loop-with-tool-calling">KEL-6 Kernel loop</a></li>
+            <li><a target="_blank" rel="noopener" href="https://linear.app/kelp-ai/issue/KEL-7/openshell-approval-gated-tool-execution-audit">KEL-7 Approval gate</a></li>
+            <li><a target="_blank" rel="noopener" href="https://linear.app/kelp-ai/issue/KEL-8/dashboard-chat-surface-primary-interface">KEL-8 Dashboard chat</a></li>
+            <li><a target="_blank" rel="noopener" href="https://linear.app/kelp-ai/issue/KEL-9/demo-choreography-6-beat-scripted-end-to-end-run-npm-run-demo">KEL-9 Demo run</a></li>
+            <li><a target="_blank" rel="noopener" href="https://linear.app/kelp-ai/issue/KEL-10/wallet-stripe-saved-cards-setupintent-attach-list-propose-approve">KEL-10 Wallet</a></li>
+          </ul>
+        </article>
+
+        <article class="card">
+          <h3>Docs</h3>
+          <ul>
+            <li><a target="_blank" rel="noopener" href="https://github.com/Anshieee/kelp/blob/main/docs/SDLC_MINDMAP.md">The mind map, in words</a><small>The source this page is built from</small></li>
+            <li><a target="_blank" rel="noopener" href="https://github.com/Anshieee/kelp/blob/main/docs/SKILL_SPEC.md">Skill contract</a></li>
+            <li><a target="_blank" rel="noopener" href="https://github.com/Anshieee/kelp/blob/kel-6/docs/KERNEL.md">Kernel loop design</a><small>On the kel-6 branch</small></li>
+            <li><a target="_blank" rel="noopener" href="https://github.com/Anshieee/kelp/blob/kel-7/docs/OPENSHELL.md">Approval gate design</a><small>On the kel-7 branch</small></li>
+            <li><a target="_blank" rel="noopener" href="https://github.com/Anshieee/kelp/blob/main/docs/adr/0001-docs-answer-single-skill.md">ADR 0001: one document skill, not two</a></li>
+            <li><a target="_blank" rel="noopener" href="https://github.com/Anshieee/kelp/blob/main/docs/frontend-scope-simple.md">Screen plan</a></li>
+          </ul>
+        </article>
+
+      </div>
+
+      <div class="callout">
+        <p><strong>Keeping this page true:</strong> when a work item moves, change it here and in Linear in the same pass, then update the mind map so the picture and the words still agree. Deployment is handled separately; this page does not publish itself.</p>
+      </div>
+    </section>
+
+  </div>
+</main>
+
+<footer>
+  <div class="wrap">
+    <p>Snapshot 29 October 2026. Program target 30 October 2026, for M0 to M4.</p>
+    <p>
+      Source of truth: <a target="_blank" rel="noopener" href="https://github.com/Anshieee/kelp/blob/main/docs/SDLC_MINDMAP.md">docs/SDLC_MINDMAP.md</a>.
+      Work items: <a target="_blank" rel="noopener" href="https://linear.app/kelp-ai/project/always-on-private-assistant-23297ecfd7f0">Linear project</a>.
+      Code: <a target="_blank" rel="noopener" href="https://github.com/Anshieee/kelp">GitHub</a>.
+    </p>
+  </div>
+</footer>
+
+<noscript>
+  <div class="wrap">
+    <p class="note">
+      Everything on this page works without JavaScript. The boxes in the map still jump to their
+      entry, but you will need to open that entry yourself with its title line. The jump list below
+      the map does the same job.
+    </p>
+  </div>
+</noscript>
 
 <script>
-  // Fallback for a blocked or unreachable CDN: reveal the source and the link
-  // to the GitHub markdown if no diagram has rendered after 9 seconds.
-  window.setTimeout(function () {
-    if (!document.querySelector('pre.mermaid svg')) {
-      document.documentElement.classList.remove('mermaid-loading');
-      document.querySelectorAll('[data-fallback]').forEach(function (el) {
-        el.classList.add('show');
+  (function () {
+    var scroller = document.getElementById('map-frame');
+    var map = document.querySelector('.mm');
+    var calm = window.matchMedia('(prefers-reduced-motion: reduce)');
+
+    function scrollTo(target) {
+      if (!target || !target.scrollIntoView) { return; }
+      try {
+        target.scrollIntoView({ block: 'start', behavior: calm.matches ? 'auto' : 'smooth' });
+      } catch (error) {
+        target.scrollIntoView();
+      }
+    }
+
+    function focusLater(target) {
+      if (!target || !target.focus) { return; }
+      try {
+        target.focus({ preventScroll: true });
+      } catch (error) {
+        target.focus();
+      }
+    }
+
+    function idOf(hash) {
+      if (!hash || hash.charAt(0) !== '#') { return ''; }
+      var id = hash.slice(1);
+      return /^[A-Za-z0-9_-]+$/.test(id) ? id : '';
+    }
+
+    function markCurrent(id) {
+      if (!map) { return; }
+      var links = map.querySelectorAll('a[href]');
+      for (var i = 0; i < links.length; i += 1) {
+        if (links[i].getAttribute('href') === '#' + id) {
+          links[i].setAttribute('aria-current', 'true');
+        } else {
+          links[i].removeAttribute('aria-current');
+        }
+      }
+    }
+
+    function reveal(hash) {
+      var id = idOf(hash);
+      if (!id) { return null; }
+      var target = document.getElementById(id);
+      if (!target) { return null; }
+      if (target.tagName === 'DETAILS') { target.open = true; }
+      markCurrent(id);
+      return target;
+    }
+
+    if (map) {
+      map.addEventListener('click', function (event) {
+        if (event.defaultPrevented || event.button !== 0 ||
+            event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) {
+          return;
+        }
+        var node = event.target;
+        while (node && node !== map && node.localName !== 'a') { node = node.parentNode; }
+        if (!node || node === map) { return; }
+        var hash = node.getAttribute('href');
+        if (!hash || hash.charAt(0) !== '#') { return; }
+        var target = reveal(hash);
+        if (!target) { return; }
+        event.preventDefault();
+        var summary = target.tagName === 'DETAILS' ? target.querySelector('summary') : target;
+        if (summary) {
+          if (summary.tagName !== 'SUMMARY') { summary.setAttribute('tabindex', '-1'); }
+          focusLater(summary);
+        }
+        scrollTo(target);
+        if (window.history && window.history.pushState) {
+          window.history.pushState(null, '', hash);
+        } else {
+          window.location.hash = hash;
+        }
       });
     }
-  }, 9000);
-</script>
-<script type="module">
-  import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs';
 
-  mermaid.initialize({
-    startOnLoad: false,
-    securityLevel: 'loose',
-    theme: 'base',
-    fontFamily: 'ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif',
-    themeVariables: {
-      background: '#121e1a',
-      primaryColor: '#16302a',
-      primaryTextColor: '#e6f2ec',
-      primaryBorderColor: '#3ddc91',
-      lineColor: '#5d7d70',
-      secondaryColor: '#14243a',
-      tertiaryColor: '#1a2b26',
-      mainBkg: '#16302a',
-      nodeBorder: '#3ddc91',
-      clusterBkg: '#101a17',
-      clusterBorder: '#233a33',
-      edgeLabelBackground: '#0b1210',
-      textColor: '#e6f2ec',
-      titleColor: '#e6f2ec',
-      cScale0: '#1f6f4a', cScale1: '#24596b', cScale2: '#2f4a6b', cScale3: '#3d3f6b',
-      cScale4: '#543d63', cScale5: '#1c5a3f', cScale6: '#2a5f57', cScale7: '#35526b',
-      cScale8: '#4a4a6b', cScale9: '#5a3f55', cScale10: '#204d3a', cScale11: '#2b4a5c'
+    function fromHash(withFocus) {
+      var hash = window.location.hash;
+      if (!hash || hash.length < 2) { return; }
+      var target = document.getElementById(hash.slice(1));
+      if (!target) { return; }
+      if (target.tagName === 'DETAILS') { target.open = true; }
+      markCurrent(hash.slice(1));
+      if (withFocus) {
+        var summary = target.tagName === 'DETAILS' ? target.querySelector('summary') : target;
+        if (summary) {
+          if (summary.tagName !== 'SUMMARY') { summary.setAttribute('tabindex', '-1'); }
+          focusLater(summary);
+        }
+      }
+      scrollTo(target);
     }
-  });
 
-  const showFallback = () => {
-    document.querySelectorAll('[data-fallback]').forEach(el => el.classList.add('show'));
-  };
-  const settle = () => document.documentElement.classList.remove('mermaid-loading');
+    fromHash(false);
+    window.addEventListener('hashchange', function () { fromHash(true); });
+    window.addEventListener('popstate', function () { fromHash(true); });
 
-  document.documentElement.classList.add('mermaid-loading');
-  const watchdog = setTimeout(() => {
-    if (document.querySelectorAll('pre.mermaid svg').length === 0) {
-      showFallback();
-      settle();
+    function syncScroller() {
+      if (!scroller) { return; }
+      var overflows = scroller.scrollWidth - scroller.clientWidth > 2 ||
+                      scroller.scrollHeight - scroller.clientHeight > 2;
+      if (overflows) {
+        scroller.setAttribute('tabindex', '0');
+      } else {
+        scroller.removeAttribute('tabindex');
+      }
     }
-  }, 8000);
 
-  try {
-    await mermaid.run({ querySelector: 'pre.mermaid' });
-    clearTimeout(watchdog);
-    settle();
-  } catch (err) {
-    clearTimeout(watchdog);
-    console.error('mermaid render failed', err);
-    showFallback();
-    settle();
-  }
+    syncScroller();
+    window.addEventListener('resize', syncScroller);
+  })();
 </script>
 </body>
 </html>

@@ -1,12 +1,25 @@
-# Static tracker page. No build step: the page is plain HTML + a Mermaid CDN import.
+# Netlify configuration for the SDLC tracker.
+#
+# The site is one static page: netlify/index.html, no framework, no bundler.
+# The page is plain HTML with inline CSS, so nothing has to be compiled.
+
 [build]
   publish = "netlify"
-  command = ""
+  # The mind map image lives in docs/. Copy it next to the page so production
+  # serves it even though docs/ sits above the publish directory. Missing files
+  # are not an error: the page falls back to its written-in-words version.
+  command = "sh -c 'mkdir -p netlify/assets; for f in svg png; do cp \"docs/sdlc-mindmap.$f\" \"netlify/assets/sdlc-mindmap.$f\" 2>/dev/null; done; exit 0'"
 
 [[headers]]
   for = "/*"
+
   [headers.values]
     X-Content-Type-Options = "nosniff"
-    X-Frame-Options = "DENY"
     Referrer-Policy = "strict-origin-when-cross-origin"
-    Permissions-Policy = "camera=(), microphone=(), geolocation=()"
+    X-Frame-Options = "SAMEORIGIN"
+
+[[headers]]
+  for = "/assets/*"
+
+  [headers.values]
+    Cache-Control = "public, max-age=3600"
