@@ -141,6 +141,7 @@ no default: the process refuses to start without them (`missing_api_key` or
 | `KELP_SCHEDULER_ENABLED` | no | `1` | no | Run the cron ticker that starts proactive turns; `0` keeps schedules stored but idle |
 | `KELP_PROACTIVE_MAX_CONCURRENT` | no | `1` | no | Proactive turns allowed in flight at once; over the cap is a recorded skip, never a queue |
 | `KELP_PROACTIVE_MAX_RUNS_PER_HOUR` | no | `5` | no | Proactive run starts per rolling hour; over the cap is a recorded skip |
+| `KELP_PROACTIVE_FAILURE_LIMIT` | no | `3` | no | Consecutive failed proactive turns before that schedule is parked `disabled`; a clean turn resets the count |
 | `KELP_RETENTION_AUDIT_DAYS` / `_AUDIT_KEEP` | no | `30` / `40` | no | Audit segment TTL and count cap (§8.1) |
 | `KELP_RETENTION_USAGE_DAYS` / `_USAGE_KEEP` | no | `90` / `100` | no | Usage segment TTL and count cap (§8.1) |
 | `KELP_RETENTION_ORPHAN_SECONDS` | no | `3600` | no | Grace before an unclaimed upload or unreferenced file is swept |

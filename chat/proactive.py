@@ -28,6 +28,13 @@ denial through the same service path an owner's Deny would use and pauses the
 schedule in ``paused_needs_approval``. Nothing is auto-approved, the tool does
 not run, and the schedule does not advance until the owner intervenes.
 
+Failure breaker. A per-schedule count of consecutive failed turns parks the
+schedule ``disabled`` at ``KELP_PROACTIVE_FAILURE_LIMIT`` (default 3). A clean
+turn resets the count; an interrupted or cancelled turn does not, because a
+restart or an owner shutdown says nothing about the task. This is in addition
+to the process-wide hourly cap: one broken task cannot spend the whole hour's
+allowance retrying itself.
+
 Audit. Every fire produces exactly one content-free ``schedule_run`` row: the
 schedule id, run id, turn id, outcome, duration, token counts, and estimated
 cost. The task title and prompt never enter it. A pre-turn skip writes the same
@@ -61,8 +68,10 @@ from .service import ChatService
 from .store import ChatStore
 
 __all__ = [
+    "DEFAULT_FAILURE_LIMIT",
     "DEFAULT_MAX_CONCURRENT",
     "DEFAULT_MAX_RUNS_PER_HOUR",
+    "FAILURE_LIMIT_ENV",
     "MAX_CONCURRENT_ENV",
     "MAX_RUNS_PER_HOUR_ENV",
     "ProactiveConfig",
@@ -79,14 +88,21 @@ TRIGGER_BLOCK_TYPE = "schedule_trigger"
 
 MAX_CONCURRENT_ENV = "KELP_PROACTIVE_MAX_CONCURRENT"
 MAX_RUNS_PER_HOUR_ENV = "KELP_PROACTIVE_MAX_RUNS_PER_HOUR"
+FAILURE_LIMIT_ENV = "KELP_PROACTIVE_FAILURE_LIMIT"
 DEFAULT_MAX_CONCURRENT = 1
 DEFAULT_MAX_RUNS_PER_HOUR = 5
+#: Consecutive failed turns that park one schedule. A failing provider should
+#: not be retried at cron cadence forever; the owner can resume the task by
+#: setting its state back to ``active`` in the task file.
+DEFAULT_FAILURE_LIMIT = 3
 
 #: The rolling window for :data:`MAX_RUNS_PER_HOUR_ENV`.
 HOURLY_WINDOW_SECONDS = 3600.0
 #: How often a running proactive turn is checked for a pending approval. The
 #: service polls its own waiter at the same cadence, so a denial lands within
-#: one slice without busy-waiting.
+#: one slice without busy-waiting. It is a fixed 50 ms rather than an adaptive
+#: backoff on purpose: approval cards are rare, and a stale card must not make
+#: a scheduled turn sit for seconds before the denial is visible.
 _APPROVAL_POLL_SECONDS = 0.05
 _APPROVAL_SCAN_LIMIT = 200
 
@@ -166,16 +182,19 @@ def trigger_block(
 
 @dataclass(frozen=True)
 class ProactiveConfig:
-    """The two process-wide bounds on proactive work."""
+    """The process-wide bounds on proactive work."""
 
     max_concurrent: int = DEFAULT_MAX_CONCURRENT
     max_runs_per_hour: int = DEFAULT_MAX_RUNS_PER_HOUR
+    failure_limit: int = DEFAULT_FAILURE_LIMIT
 
     def __post_init__(self) -> None:
         if self.max_concurrent < 1:
             raise ValueError(f"{MAX_CONCURRENT_ENV} must be >= 1.")
         if self.max_runs_per_hour < 0:
             raise ValueError(f"{MAX_RUNS_PER_HOUR_ENV} must be >= 0.")
+        if self.failure_limit < 1:
+            raise ValueError(f"{FAILURE_LIMIT_ENV} must be >= 1.")
 
     @classmethod
     def from_env(cls, env: Mapping[str, str] | None = None) -> "ProactiveConfig":
@@ -192,6 +211,12 @@ class ProactiveConfig:
                 MAX_RUNS_PER_HOUR_ENV,
                 DEFAULT_MAX_RUNS_PER_HOUR,
                 minimum=0,
+            ),
+            failure_limit=_env_int(
+                source,
+                FAILURE_LIMIT_ENV,
+                DEFAULT_FAILURE_LIMIT,
+                minimum=1,
             ),
         )
 
@@ -334,9 +359,19 @@ class ProactiveRunner:
                 )
                 return {"run_id": run.run_id, "outcome": "skipped", "reason": reason}
 
+            coro = self._execute(run, dict(task))
             try:
-                future = self._submit(self._execute(run, dict(task)))
+                future = self._submit(coro)
             except Exception as exc:  # noqa: BLE001 - a dead loop is a failed run
+                # An un-awaited coroutine would warn (and leak a frame) when the
+                # event-loop runner is missing or already closed, so close it
+                # before turning the failure into a run row.
+                close = getattr(coro, "close", None)
+                if callable(close):
+                    try:
+                        close()
+                    except Exception:  # pragma: no cover - best effort
+                        pass
                 self._release(run.run_id)
                 reason = _error_code(exc)
                 self._write_run_row(task, run, "failed", reason, 0)
@@ -460,8 +495,6 @@ class ProactiveRunner:
                     # ``stop`` and ``length`` are both normal completions; the
                     # assistant message is complete either way.
                     outcome, reason = "ok", why or "stop"
-            if outcome == "paused_needs_approval":
-                self._pause_schedule(run.schedule_id)
         except asyncio.CancelledError:
             outcome, reason = "interrupted", "shutdown"
             raise
@@ -505,8 +538,9 @@ class ProactiveRunner:
                 thread_id=thread_id,
                 usage=usage,
             )
-            if outcome == "paused_needs_approval":
-                self._pause_schedule(run.schedule_id)
+            # Health is updated exactly once, after the row, so the audit trail
+            # and the task state cannot disagree about this fire.
+            self._note_outcome(run.schedule_id, outcome)
         finally:
             self._release(run.run_id)
 
@@ -524,6 +558,10 @@ class ProactiveRunner:
         while True:
             turn = self._store.get_turn(turn_id)
             if turn is None or turn.get("state") == "finished":
+                # A turn row that vanished (thread deleted mid-run) ends the
+                # watch: there is no card left to deny and no future to wait
+                # for, so the run settles from the audit path instead of
+                # spinning on a row that will never appear again.
                 return denied or self._denied_for_turn(thread_id, turn_id)
             for card in self._store.list_approvals(
                 thread_id=thread_id, status="pending", limit=_APPROVAL_SCAN_LIMIT
@@ -531,7 +569,9 @@ class ProactiveRunner:
                 if str(card.get("turn_id") or "") != turn_id:
                     continue
                 try:
-                    self._service.decide(str(card["id"]), "deny")
+                    self._service.decide(
+                        str(card["id"]), "deny", actor=SCHEDULE_ORIGIN
+                    )
                     denied = True
                 except ChatError:
                     # Expired or already settled by another writer: the turn
@@ -614,7 +654,13 @@ class ProactiveRunner:
     # -- task state --------------------------------------------------------
 
     def _note_skipped(self, task: Mapping[str, Any], run: _ActiveRun) -> None:
-        """Bump the task's skip counter; the schedule keeps its next window."""
+        """Bump the task's skip counter; the schedule keeps its next window.
+
+        Like :meth:`_note_failure`, this is an unlocked read-modify-write over
+        the task file. A tick in the same few milliseconds can overwrite it;
+        the skip is still in the ``schedule_run`` row, which is the durable
+        record, so a lost counter bump never hides that a run was skipped.
+        """
 
         schedule_id = str(task.get("task_id") or "")
         try:
@@ -634,6 +680,24 @@ class ProactiveRunner:
                 status="warning",
             )
 
+    def _note_outcome(self, schedule_id: str, outcome: str) -> None:
+        """Apply one settled outcome to the task's health.
+
+        A pause on approval and a failure pause are both single-shot here:
+        ``_pause_schedule`` and ``_note_failure`` re-read the task and only
+        move it out of a runnable state, so a duplicate call is a no-op rather
+        than a second state change.
+        """
+
+        if outcome == "paused_needs_approval":
+            self._pause_schedule(schedule_id)
+        elif outcome == "ok":
+            self._clear_failures(schedule_id)
+        elif outcome == "failed":
+            self._note_failure(schedule_id)
+        # ``interrupted`` and ``cancelled`` say nothing about the task: a
+        # restart or an owner shutdown must not count toward the breaker.
+
     def _pause_schedule(self, schedule_id: str) -> None:
         """Park the schedule until the owner decides; never auto-resume."""
 
@@ -649,6 +713,61 @@ class ProactiveRunner:
                 "proactive_pause_failed",
                 error_code=_error_code(exc),
                 status="error",
+            )
+
+    def _note_failure(self, schedule_id: str) -> None:
+        """Count consecutive failed turns and park the schedule at the limit.
+
+        The breaker is per schedule, in addition to the process-wide hourly
+        cap: one broken task must not spend the whole hour's allowance and
+        then wait for the next window to fail again. ``failure_count`` is
+        consecutive because :meth:`_clear_failures` resets it on a clean turn.
+
+        The read-modify-write below is not locked against the ticker's own
+        claim: a tick landing between this read and write can lose one update.
+        Both writers are in this process and the window is a few milliseconds,
+        so the next turn repairs the value; a crash between them loses only
+        this count, never the audit row. A store-level lock would remove the
+        race but is not worth taking the ticker's file lock per turn.
+        """
+
+        try:
+            current = self._schedule_store.read_task(schedule_id, now=self._now())
+            if current.get("state") not in RUNNABLE_STATES:
+                return
+            count = int(current.get("failure_count") or 0) + 1
+            current["failure_count"] = count
+            if count >= self.config.failure_limit:
+                # ``disabled`` is the existing terminal pause: it is not a
+                # scheduler-shaped state like ``paused_needs_approval``, and
+                # the owner resumes by editing the task back to ``active``.
+                current["state"] = "disabled"
+            current["updated_at"] = _iso(self._now())
+            self._schedule_store.write_task(current, now=self._now())
+        except Exception as exc:  # noqa: BLE001 - the run row already says failed
+            log(
+                "proactive_failure_note_failed",
+                error_code=_error_code(exc),
+                status="error",
+            )
+
+    def _clear_failures(self, schedule_id: str) -> None:
+        """Reset the consecutive-failure count after a clean turn."""
+
+        try:
+            current = self._schedule_store.read_task(schedule_id, now=self._now())
+            if not int(current.get("failure_count") or 0):
+                return
+            if current.get("state") not in RUNNABLE_STATES:
+                return
+            current["failure_count"] = 0
+            current["updated_at"] = _iso(self._now())
+            self._schedule_store.write_task(current, now=self._now())
+        except Exception as exc:  # noqa: BLE001 - the next success retries the reset
+            log(
+                "proactive_failure_reset_failed",
+                error_code=_error_code(exc),
+                status="warning",
             )
 
     # -- audit -------------------------------------------------------------
@@ -769,6 +888,9 @@ class ProactiveRunner:
         return written
 
     def _known_run_ids(self) -> set[str]:
+        # Zero rows is the normal first-boot case, not an error: an absent or
+        # unreadable audit log means there is nothing to dedupe against, and
+        # recovery should still write the one row a kill prevented.
         try:
             entries = self._audit.entries(event="schedule_run")
         except Exception:  # noqa: BLE001 - a missing log means nothing to dedupe

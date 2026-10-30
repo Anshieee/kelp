@@ -15,6 +15,7 @@ import subprocess
 import sys
 import threading
 import time
+import warnings
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
@@ -66,6 +67,18 @@ class ForbiddenProvider:
     async def stream(self, request: Any) -> Any:
         self.calls += 1
         raise AssertionError("a skipped proactive run must not call the provider")
+        yield  # pragma: no cover - makes this an async generator
+
+
+class FailingProvider:
+    """Every turn fails; used to drive the per-schedule failure breaker."""
+
+    def __init__(self) -> None:
+        self.calls = 0
+
+    async def stream(self, request: Any) -> Any:
+        self.calls += 1
+        raise RuntimeError("provider down")
         yield  # pragma: no cover - makes this an async generator
 
 
@@ -306,6 +319,17 @@ def test_headless_approval_denies_and_parks_the_schedule(tmp_path: Path) -> None
         assert rows[0]["outcome"] == "paused_needs_approval"
         assert rows[0]["extra"]["reason"] == "approval_required"
 
+        # The denial is attributed to the schedule, not the owner: a headless
+        # turn must never look like a person pressed Deny.
+        resolved = [
+            event
+            for event in rig.store.events_after(thread_id)
+            if event["type"] == "approval_resolved"
+        ]
+        assert resolved[-1]["actor"] == "schedule"
+        audit_resolutions = rig.audit.entries(event="approval_resolved")
+        assert audit_resolutions[-1]["actor"] == "schedule"
+
         # A paused schedule is not runnable: the next tick starts nothing.
         rig.clock.advance(minutes=2)
         rig.scheduler.tick(now=rig.clock())
@@ -397,6 +421,180 @@ def test_spend_cap_refuses_before_any_turn_or_provider_call(tmp_path: Path) -> N
         attempted = rig.schedule_store.read_task(task["task_id"])
         assert attempted["skipped_count"] == 1
         assert attempted["state"] in {"active", "pending"}
+    finally:
+        rig.close()
+
+
+def test_hourly_cap_skips_after_the_window_limit(tmp_path: Path) -> None:
+    rig = Rig(
+        tmp_path,
+        scripts=[text_script("ok")],
+        config=ProactiveConfig(max_concurrent=100, max_runs_per_hour=2),
+    )
+    try:
+        for index in range(5):
+            rig.create_due_task(title=f"Task {index}")
+        report = rig.tick()
+        assert report["due"] == 5
+        assert rig.proactive.wait_for_idle(5.0) is True
+
+        rows = rig.audit.entries(event="schedule_run")
+        assert len(rows) == 5
+        outcomes = sorted(row["outcome"] for row in rows)
+        assert outcomes.count("ok") == 2
+        assert outcomes.count("skipped") == 3
+        skipped = [row for row in rows if row["outcome"] == "skipped"]
+        assert {row["extra"]["reason"] for row in skipped} == {"hourly_cap"}
+    finally:
+        rig.close()
+
+
+def test_spend_cap_is_checked_before_the_hourly_cap(tmp_path: Path) -> None:
+    usage_path = tmp_path / "usage" / "usage.jsonl"
+    usage_path.parent.mkdir(parents=True)
+    JsonlUsageStore(usage_path).record(
+        UsageRecord(
+            turn_id="turn_old",
+            session_id="ses_old",
+            model=MODEL,
+            input_tokens=10,
+            output_tokens=5,
+            total_tokens=15,
+            estimated_cost_usd=2.0,
+            cost_known=True,
+            usage_reported=True,
+            steps=1,
+            tool_calls=0,
+            started_at=BASE.isoformat(),
+            finished_at=BASE.isoformat(),
+            duration_ms=10,
+            outcome="stop",
+        )
+    )
+    guard = SpendGuard(
+        JsonlUsageStore(usage_path),
+        SpendCaps(day_usd=1.0),
+        now_fn=lambda: BASE,
+    )
+    provider = ForbiddenProvider()
+    # An hourly cap of zero would refuse the run on its own. The spend ceiling
+    # must win anyway: it is guard 1 and must not spend a window admission.
+    rig = Rig(
+        tmp_path,
+        provider=provider,
+        spend_guard=guard,
+        config=ProactiveConfig(max_concurrent=1, max_runs_per_hour=0),
+    )
+    try:
+        task = rig.create_due_task()
+        rig.tick()
+        assert rig.proactive.wait_for_idle(2.0) is True
+
+        assert provider.calls == 0
+        rows = rig.audit.entries(event="schedule_run")
+        assert len(rows) == 1
+        assert rows[0]["outcome"] == "skipped"
+        assert rows[0]["extra"]["reason"] == "spend_cap"
+        # The hourly counter was never touched, so the skip is not admission.
+        assert rig.proactive.in_flight == 0
+        assert rig.schedule_store.read_task(task["task_id"])["skipped_count"] == 1
+    finally:
+        rig.close()
+
+
+def test_failure_breaker_disables_the_schedule_at_the_limit(tmp_path: Path) -> None:
+    provider = FailingProvider()
+    rig = Rig(
+        tmp_path,
+        provider=provider,
+        config=ProactiveConfig(max_concurrent=1, max_runs_per_hour=100, failure_limit=2),
+    )
+    try:
+        task = rig.create_due_task()
+        rig.tick()
+        assert rig.proactive.wait_for_idle(5.0) is True
+        first = rig.schedule_store.read_task(task["task_id"])
+        assert first["failure_count"] == 1
+        assert first["state"] in {"active", "pending"}
+        assert [row["outcome"] for row in rig.audit.entries(event="schedule_run")] == [
+            "failed"
+        ]
+
+        rig.clock.advance(minutes=2)  # the clock is BASE; DUE is 12:01, next is 12:02
+        rig.tick(rig.clock())
+        assert rig.proactive.wait_for_idle(5.0) is True
+        parked = rig.schedule_store.read_task(task["task_id"])
+        assert parked["failure_count"] == 2
+        assert parked["state"] == "disabled"
+
+        # A disabled schedule is not runnable: the next window fires nothing
+        # and writes no third row.
+        rig.clock.advance(minutes=1)
+        rig.tick(rig.clock())
+        assert rig.proactive.wait_for_idle(2.0) is True
+        assert len(rig.audit.entries(event="schedule_run")) == 2
+        assert provider.calls == 2
+    finally:
+        rig.close()
+
+
+def test_a_clean_turn_resets_the_consecutive_failure_count(tmp_path: Path) -> None:
+    class FirstFails:
+        """The first turn raises before yielding; later turns complete."""
+
+        def __init__(self) -> None:
+            self.calls = 0
+            self.inner = StubProvider([text_script("recovered")])
+
+        async def stream(self, request: Any) -> Any:
+            self.calls += 1
+            if self.calls == 1:
+                raise RuntimeError("provider down")
+            async for event in self.inner.stream(request):
+                yield event
+
+    rig = Rig(
+        tmp_path,
+        provider=FirstFails(),
+        config=ProactiveConfig(max_concurrent=1, max_runs_per_hour=100, failure_limit=3),
+    )
+    try:
+        task = rig.create_due_task()
+        rig.tick()
+        assert rig.proactive.wait_for_idle(5.0) is True
+        assert rig.schedule_store.read_task(task["task_id"])["failure_count"] == 1
+
+        rig.clock.advance(minutes=2)
+        rig.tick(rig.clock())
+        assert rig.proactive.wait_for_idle(5.0) is True
+        settled = rig.schedule_store.read_task(task["task_id"])
+        assert settled["failure_count"] == 0
+        assert settled["state"] in {"active", "pending"}
+    finally:
+        rig.close()
+
+
+def test_a_dead_loop_fails_the_run_without_an_unawaited_coroutine(
+    tmp_path: Path,
+) -> None:
+    rig = Rig(tmp_path, scripts=[text_script("never runs")])
+    try:
+        rig.create_due_task()
+        rig.proactive._runner = None  # noqa: SLF001 - simulate a closed loop
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            report = rig.tick()
+            assert report["fired"] == 1
+            assert rig.proactive.wait_for_idle(2.0) is True
+
+        rows = rig.audit.entries(event="schedule_run")
+        assert len(rows) == 1
+        assert rows[0]["outcome"] == "failed"
+        assert rows[0]["extra"]["reason"] == "RuntimeError"
+        unawaited = [
+            item for item in caught if "never awaited" in str(item.message).lower()
+        ]
+        assert unawaited == []
     finally:
         rig.close()
 
