@@ -4,14 +4,13 @@
   const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)");
   const canvas = document.getElementById("kelp-field");
 
-  // A seeded, ivory-backed marbled field. Render once; only its transform moves.
+  // Cache the original artwork once; the GPU warps its coordinates, not the DOM.
   // Ordered dithering leaves soft colour and a tactile edge without image assets.
-  function drawField() {
-    if (!canvas) return;
+  function drawField(target) {
     const size = 800;
-    canvas.width = size;
-    canvas.height = size;
-    const context = canvas.getContext("2d");
+    target.width = size;
+    target.height = size;
+    const context = target.getContext("2d");
     if (!context) return;
     const image = context.createImageData(size, size);
     const ivory = [251, 249, 245];
@@ -59,7 +58,215 @@
     }
     context.putImageData(image, 0, 0);
   }
-  drawField();
+  function initField() {
+    if (!canvas) return () => {};
+    const source = document.createElement("canvas");
+    drawField(source);
+    const art = canvas.parentElement;
+    const hero = art.closest(".hero");
+    const finePointer = window.matchMedia("(hover: hover) and (pointer: fine)");
+    let gl;
+    let program;
+    try {
+      gl = canvas.getContext("webgl", { alpha: true, antialias: false });
+      if (!gl) throw new Error("WebGL unavailable");
+      const shader = (type, code) => {
+        const result = gl.createShader(type);
+        gl.shaderSource(result, code);
+        gl.compileShader(result);
+        if (!gl.getShaderParameter(result, gl.COMPILE_STATUS)) {
+          throw new Error("Field shader unavailable");
+        }
+        return result;
+      };
+      program = gl.createProgram();
+      gl.attachShader(
+        program,
+        shader(
+          gl.VERTEX_SHADER,
+          `
+        attribute vec2 position;
+        varying vec2 uv;
+        void main() {
+          uv = position * 0.5 + 0.5;
+          gl_Position = vec4(position, 0.0, 1.0);
+        }
+      `,
+        ),
+      );
+      gl.attachShader(
+        program,
+        shader(
+          gl.FRAGMENT_SHADER,
+          `
+        precision mediump float;
+        uniform sampler2D field;
+        uniform vec2 pointer;
+        uniform float strength;
+        uniform float time;
+        varying vec2 uv;
+        void main() {
+          vec2 offset = uv - pointer;
+          float influence = exp(-dot(offset, offset) * 13.0) * strength;
+          vec2 drift = vec2(sin(uv.y * 7.0 + time * 0.3),
+                            cos(uv.x * 6.0 + time * 0.24)) * 0.009 *
+                            min(1.0, strength * 6.0);
+          vec2 warped = uv + offset * influence * 0.28 +
+                        vec2(-offset.y, offset.x) * influence * 0.09 + drift;
+          gl_FragColor = texture2D(field, clamp(warped, 0.0, 1.0));
+        }
+      `,
+        ),
+      );
+      gl.linkProgram(program);
+      if (!gl.getProgramParameter(program, gl.LINK_STATUS)) {
+        throw new Error("Field renderer unavailable");
+      }
+    } catch {
+      // Keep the same static, decorative artwork without GPU support.
+      source.id = canvas.id;
+      canvas.replaceWith(source);
+      return () => {};
+    }
+    gl.useProgram(program);
+    const buffer = gl.createBuffer();
+    gl.bindBuffer(gl.ARRAY_BUFFER, buffer);
+    gl.bufferData(
+      gl.ARRAY_BUFFER,
+      new Float32Array([-1, -1, 1, -1, -1, 1, -1, 1, 1, -1, 1, 1]),
+      gl.STATIC_DRAW,
+    );
+    const position = gl.getAttribLocation(program, "position");
+    gl.enableVertexAttribArray(position);
+    gl.vertexAttribPointer(position, 2, gl.FLOAT, false, 0, 0);
+    const texture = gl.createTexture();
+    gl.bindTexture(gl.TEXTURE_2D, texture);
+    gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, true);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, source);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+    const uniforms = Object.fromEntries(
+      ["pointer", "strength", "time"].map((name) => [
+        name,
+        gl.getUniformLocation(program, name),
+      ]),
+    );
+    let paused = reducedMotion.matches;
+    let available = true;
+    let visible = true;
+    let frame = 0;
+    let last = 0;
+    let previousPaint = 0;
+    let time = 0;
+    let strength = 0;
+    let pointer = null;
+    let x = 0.5;
+    let y = 0.5;
+    const interval = 1000 / 30;
+    function render() {
+      if (!available) return;
+      gl.uniform2f(uniforms.pointer, x, y);
+      gl.uniform1f(uniforms.strength, strength);
+      gl.uniform1f(uniforms.time, time);
+      gl.drawArrays(gl.TRIANGLES, 0, 6);
+    }
+    function tick(now) {
+      frame = requestAnimationFrame(tick);
+      if (last && now - last < interval) return;
+      const elapsed = previousPaint
+        ? Math.min(now - previousPaint, 64)
+        : interval;
+      previousPaint = now;
+      // Retain the fractional frame budget instead of falling toward 20fps.
+      last = now - ((now - last) % interval);
+      time += elapsed / 1000;
+      const rect = art.getBoundingClientRect();
+      const active = pointer && finePointer.matches;
+      const targetX = active
+        ? (pointer.x - rect.left) / rect.width
+        : 0.5 + Math.sin(time * 0.23) * 0.18;
+      const targetY = active
+        ? 1 - (pointer.y - rect.top) / rect.height
+        : 0.5 + Math.cos(time * 0.19) * 0.14;
+      const follow = 1 - Math.exp(-elapsed / 180);
+      x += (targetX - x) * follow;
+      y += (targetY - y) * follow;
+      strength += ((active ? 1 : 0.18) - strength) * follow;
+      render();
+    }
+    function sync() {
+      cancelAnimationFrame(frame);
+      frame = 0;
+      last = 0;
+      previousPaint = 0;
+      if (
+        available &&
+        !paused &&
+        visible &&
+        !document.hidden &&
+        !gl.isContextLost()
+      ) {
+        frame = requestAnimationFrame(tick);
+      }
+    }
+    function resize() {
+      const dpr = Math.min(window.devicePixelRatio || 1, 1.5);
+      canvas.width = Math.max(1, Math.round(art.clientWidth * dpr));
+      canvas.height = Math.max(1, Math.round(art.clientHeight * dpr));
+      gl.viewport(0, 0, canvas.width, canvas.height);
+      render();
+    }
+    hero.addEventListener(
+      "pointermove",
+      (event) => {
+        if (paused || !finePointer.matches || event.pointerType !== "mouse")
+          return;
+        const rect = art.getBoundingClientRect();
+        pointer =
+          event.clientX >= rect.left &&
+          event.clientX <= rect.right &&
+          event.clientY >= rect.top &&
+          event.clientY <= rect.bottom
+            ? { x: event.clientX, y: event.clientY }
+            : null;
+      },
+      { passive: true },
+    );
+    hero.addEventListener("pointerleave", () => {
+      pointer = null;
+    });
+    finePointer.addEventListener("change", () => {
+      pointer = null;
+    });
+    document.addEventListener("visibilitychange", sync);
+    canvas.addEventListener("webglcontextlost", (event) => {
+      event.preventDefault();
+      available = false;
+      cancelAnimationFrame(frame);
+      // Context loss should not leave a blank hero or restart a broken loop.
+      source.id = canvas.id;
+      canvas.replaceWith(source);
+    });
+    new ResizeObserver(resize).observe(art);
+    new IntersectionObserver(([entry]) => {
+      visible = entry.isIntersecting;
+      sync();
+    }).observe(hero);
+    resize();
+    return (shouldPause) => {
+      paused = shouldPause;
+      if (reducedMotion.matches) {
+        pointer = null;
+        strength = 0;
+        time = 0;
+        render();
+      }
+      sync();
+    };
+  }
+  const setFieldPaused = initField();
 
   let revealTween;
   let scrollTriggers = [];
@@ -106,6 +313,7 @@
       : 'Pause motion <span aria-hidden="true">Ⅱ</span>';
     motionButton.disabled = reducedMotion.matches;
     if (paused) clearMotion();
+    setFieldPaused(paused);
   }
   motionButton.addEventListener("click", () => {
     manuallyPaused = !manuallyPaused;

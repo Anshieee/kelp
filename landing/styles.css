@@ -245,10 +245,9 @@ svg {
   overflow: hidden;
 }
 #kelp-field {
+  display: block;
   width: 100%;
   height: 100%;
-  animation: art-breathe 18s ease-in-out infinite alternate;
-  transform-origin: 55% 50%;
 }
 .art-orbit {
   position: absolute;
@@ -756,14 +755,22 @@ svg {
   filter: blur(35px);
   opacity: 0.6;
 }
-.guardian-status {
+.closing-actions {
   display: flex;
   justify-content: center;
   align-items: center;
+  flex-wrap: wrap;
+  gap: 18px;
+}
+.guardian-status {
+  display: inline-flex;
+  align-items: center;
   gap: 9px;
-  font-size: 14px;
+  padding: 8px 14px;
+  border-radius: 9999px;
+  background: var(--sage);
+  font-size: 12px;
   color: var(--body);
-  margin-bottom: 34px;
 }
 .status-dot {
   width: 8px;
@@ -1176,14 +1183,6 @@ dialog::backdrop {
 .privacy-copy strong {
   font-weight: 500;
   overflow-wrap: anywhere;
-}
-@keyframes art-breathe {
-  from {
-    transform: rotate(-3deg) scale(0.98);
-  }
-  to {
-    transform: rotate(2deg) scale(1.025);
-  }
 }
 @keyframes gradient-drift {
   from {
@@ -1760,11 +1759,6 @@ dialog::backdrop {
   .guardian-status {
     font-size: 12px;
     gap: 8px;
-    margin-bottom: 27px;
-    flex-wrap: wrap;
-  }
-  .status-detail {
-    display: none;
   }
   .closing h2 {
     font-size: 67px;
