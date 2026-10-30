@@ -1,7 +1,41 @@
-# Review — Kelp explainer, iteration 1
+# Review — Kelp explainer
 
 Reviewed from `check --json`, `snapshot --review` (beat sheet, seam strips,
 360 px phone sheet) and frame samples decoded from the rendered MP4.
+
+## v2 retime (90 s)
+
+The film was re-cut from 160 s to exactly 90 s without dropping a shot, a
+line of copy, a beat or an SFX. Every composition keeps its authored timeline
+and applies one uniform warp before registering it: each child tween starts
+`1/k` earlier and runs `k` faster. Relative timing, stagger, easing and
+overlap are therefore identical to v1 — only the clock changes.
+
+- Scene budgets: intro 11, inbox 19, flight 17, receipts 22, split 15,
+  end 6 (sum 90). Receipts got the largest share because it carries three
+  filings plus the stamp, the phone buzz and the done card; the split and
+  end card are the calmest and took the biggest trim.
+- Speed factors: 1.56× (split), 1.67× (end), 1.82× (intro), 1.84× (inbox),
+  2.06× (flight), 1.59× (receipts). The flight scene is the fastest per
+  second because it is mostly UI cards that need little reading time; its
+  ticket payoff still holds ~6 s.
+- All 29 SFX were remapped with the same per-scene factor and stay on their
+  picture event. The 160 s music bed is trimmed to 90 s with a 2.5 s fade.
+- Page motion blur is now off. At 1.8× it smeared whole frames on the phone
+  entrance and the done curtain; the flat 2D wipes read cleaner crisp.
+
+Measured: `check` 0 errors; MP4 is 90.000 s; −18.2 LUFS / −5.2 dBFS true
+peak after the same +4 dB delivery gain; 23 decoded frames matched to the
+script table. Looked at: every scene midpoint, both done cards, all seams
+and the 360 px sheet.
+
+What got worse: the inbox row cadence (one row every 0.84 s) is now clearly
+a time-lapse rather than a considered sort, and the flight approval tap is
+quick. That is the cost of 90 s; nothing is unreadable, but the senior-calm
+feel of v1 is stronger in the two task scenes. v1 remains at
+`renders/kelp-explainer-v1.mp4` for comparison.
+
+## v1 notes (160 s)
 
 ## Creative calls
 
@@ -64,8 +98,12 @@ the "best for you" card legible behind the phone.
 
 ## Render
 
-`renders/kelp-explainer-v1.mp4` — H.264 / AAC, 1920×1080, 30 fps, 160.0 s,
-42,885,720 bytes. The HyperFrames mix measured −22.2 LUFS integrated; a
-+4 dB delivery gain brings it to −18.2 LUFS / −3.3 dBFS true peak with the
-video stream copied. Source is deterministic; re-rendering the same commit
-reproduces the cut (the audio gain is a separate, repeatable ffmpeg step).
+- **v2:** `renders/kelp-explainer-v2.mp4` — H.264 / AAC, 1920×1080, 30 fps,
+  90.000 s, 26,727,127 bytes,
+  SHA-256 `aa002f80ce9aa2292c60bd8985ce1d2593fba26c94d914d61ca43ace0be81933`.
+- **v1 (archive):** `renders/kelp-explainer-v1.mp4` — 160.0 s, 42,885,720 bytes.
+
+Both mixes measured −22.2 LUFS integrated; a +4 dB delivery gain brings them
+to −18.2 LUFS with the video stream copied (v2 true peak −5.2 dBFS, v1
+−3.3 dBFS). Source is deterministic; re-rendering the same commit reproduces
+the cut (the audio gain is a separate, repeatable ffmpeg step).

@@ -587,6 +587,15 @@
 
       tl.fromTo("#s5-out", { opacity: 0 }, { opacity: 1, duration: 1.0, ease: "power2.inOut" }, 23.7);
 
+      // Uniform pacing warp: the 25 s cut becomes 15 s with every beat intact.
+      const warp = (timeline, k) => {
+        timeline.getChildren(false, true, true).forEach((child) => {
+          child.startTime(child.startTime() / k);
+          child.timeScale(child.timeScale() * k);
+        });
+      };
+      warp(tl, 25 / 15);
+
       window.__timelines["s5"] = tl;
     })();
   </script>

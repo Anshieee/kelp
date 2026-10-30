@@ -1003,6 +1003,15 @@
         tl.set("#s2-grain", { x: (s % 5) * 3 - 6, y: ((s * 7) % 5) * 3 - 6 }, t);
       }
 
+      // Uniform pacing warp: the 35 s cut becomes 19 s with every beat intact.
+      const warp = (timeline, k) => {
+        timeline.getChildren(false, true, true).forEach((child) => {
+          child.startTime(child.startTime() / k);
+          child.timeScale(child.timeScale() * k);
+        });
+      };
+      warp(tl, 35 / 19);
+
       window.__timelines["s2"] = tl;
     })();
   </script>

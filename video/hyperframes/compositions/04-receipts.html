@@ -777,6 +777,15 @@
 
       tl.fromTo("#s4-wipe", { y: 1080 }, { y: 0, duration: 0.4, ease: "power3.in", immediateRender: false }, 34.6);
 
+      // Uniform pacing warp: the 35 s cut becomes 22 s with every beat intact.
+      const warp = (timeline, k) => {
+        timeline.getChildren(false, true, true).forEach((child) => {
+          child.startTime(child.startTime() / k);
+          child.timeScale(child.timeScale() * k);
+        });
+      };
+      warp(tl, 35 / 22);
+
       window.__timelines["s4"] = tl;
     })();
   </script>

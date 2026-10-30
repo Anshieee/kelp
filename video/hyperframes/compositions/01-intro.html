@@ -879,6 +879,16 @@
 
       tl.fromTo("#s1-wipe", { x: 1920 }, { x: 0, duration: 0.4, ease: "power3.in" }, 19.6);
 
+      // Uniform pacing warp: every child starts 1/k earlier and plays k faster,
+      // so the 20 s cut becomes 11 s with every beat and tween intact.
+      const warp = (timeline, k) => {
+        timeline.getChildren(false, true, true).forEach((child) => {
+          child.startTime(child.startTime() / k);
+          child.timeScale(child.timeScale() * k);
+        });
+      };
+      warp(tl, 20 / 11);
+
       window.__timelines["s1"] = tl;
     })();
   </script>

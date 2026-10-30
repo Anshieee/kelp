@@ -803,6 +803,7 @@
       blink(19.2);
       blink(24.8);
       blink(30.4);
+      blink(31.9);
       blink(32.2);
 
       for (let i = 0; i < 34; i++) {
@@ -812,6 +813,15 @@
       }
 
       tl.fromTo("#s3-wipe", { y: 1080 }, { y: 0, duration: 0.4, ease: "power3.in", immediateRender: false }, 34.6);
+
+      // Uniform pacing warp: the 35 s cut becomes 17 s with every beat intact.
+      const warp = (timeline, k) => {
+        timeline.getChildren(false, true, true).forEach((child) => {
+          child.startTime(child.startTime() / k);
+          child.timeScale(child.timeScale() * k);
+        });
+      };
+      warp(tl, 35 / 17);
 
       window.__timelines["s3"] = tl;
     })();
