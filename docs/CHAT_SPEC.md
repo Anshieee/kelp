@@ -786,12 +786,19 @@ Browser `EventSource` retries automatically; the client must also handle a manua
 - Streaming text is append-only. There is no server-side "replace this message" event
   except `sources_ready` (array replacement) and card updates by id.
 
-### 10.3 Multi-tab
+### 10.3 Multi-tab and multiple devices
 
 Two tabs on one thread both tail the stream. Because every state change is an event with a
 `seq`, both converge. Decisions made in one tab appear as `approval_resolved` in the other;
 the second tab's buttons disable on that event. Optimistic UI is allowed but must
 reconcile to the event, not to the local click.
+
+Each signed-in browser is a **device**: an owner session persisted in `chat.db`. Several
+devices (phone, laptop, a second browser) can be signed in at once, survive a restart, and
+list or revoke each other through `GET /api/auth/devices` and
+`DELETE /api/auth/devices/{id_short}` (§12.2). A device is shown as online when its last
+authenticated request was within 60 seconds; there is no separate heartbeat, so presence is
+derived from ordinary traffic and goes offline by itself.
 
 ### 10.4 Server restart mid-turn
 
@@ -908,7 +915,7 @@ KEL-8 adds a network surface to a private assistant; these are requirements, not
 
 | Area | Requirement |
 |---|---|
-| Auth | Single owner. The root `KELP_AUTH_TOKEN` is accepted as a bearer token and can mint a server-side session (`POST /api/auth/session`). The session cookie is `HttpOnly; Secure; SameSite=Lax`, 30-day rolling; cookie mutations require a same-origin `Origin` **and** a per-session CSRF double-submit pair (`csrf` cookie + `X-CSRF-Token`). `DELETE /api/auth/session` revokes one session; `DELETE /api/auth/sessions` revokes all. Unauthenticated API → `401` JSON, not a redirect, for `/api/*`. |
+| Auth | Single owner. The root `KELP_AUTH_TOKEN` is accepted as a bearer token and can mint a server-side device session (`POST /api/auth/session`). The session cookie is `HttpOnly; Secure; SameSite=Lax`, 30-day rolling; cookie mutations require a same-origin `Origin` **and** a per-session CSRF double-submit pair (`csrf` cookie + `X-CSRF-Token`). `GET /api/auth/devices` lists signed-in devices; `DELETE /api/auth/devices/{id_short}` revokes one; `DELETE /api/auth/session` revokes the presented one; `DELETE /api/auth/sessions` revokes all. Unauthenticated API → `401` JSON, not a redirect, for `/api/*`. |
 | Authorisation | Thread, approval, and artifact access is checked against the authenticated owner on **every** call. Guessing an id must not leak existence: `404`, not `403`. |
 | Secrets | No API keys or Stripe values in any response; the provider's base URL is server config and is never echoed to the client. `NEBIUS_API_KEY` stays server-side. `arguments`, `result`, and audit text pass the existing scrubbers; error envelopes keep their no-echo rule. |
 | SSE | Same-origin only; no `Access-Control-Allow-Origin: *`; no `EventSource` with credentials in a URL; stream disconnects on auth expiry. |
@@ -978,19 +985,32 @@ key, and a presented token is hashed and never retained as a key.
 This layer does not change `TurnBudget`: the kernel's per-turn step, token,
 tool-call, and wall-clock limits remain the only turn limits.
 
-### 12.2 Owner sessions (KEL-19)
+### 12.2 Owner sessions and devices (KEL-19, KEL-24)
 
 The bearer token is the root credential. A browser exchanges it once for an
 opaque server-side session; the raw session id exists only in the client's
-`HttpOnly` cookie, while the server stores its SHA-256. Sessions are
-process-local and bounded (`KELP_SESSION_MAX`); a restart invalidates every one
-of them, so the bearer token is always the recovery path.
+`HttpOnly` cookie, while the server stores its SHA-256. Sessions are persisted
+in the `sessions` table of `chat.db` (`id_hash` primary key, `label`,
+`created_at`, `last_seen`, `expires_at`, `revoked_at`), so several devices
+survive a restart. A restart still cannot outlive the server secret: the CSRF
+half is the unpadded base64url encoding of
+`HMAC-SHA256(SHA-256(KELP_SESSION_SECRET), "kelp-csrf:" + id_hash)`, derived on
+demand and never stored. The HMAC key is a 32-byte SHA-256 digest of the
+secret, not the secret itself, and the message is the `kelp-csrf:` prefix
+followed by the stored id hash, so the database holds no value that can be
+replayed as a cookie or a mutation token. If `KELP_SESSION_SECRET` is unset the
+root `KELP_AUTH_TOKEN` is used as the derivation key, which keeps existing
+devices valid across a restart without a second secret. The session cap
+(`KELP_SESSION_MAX`) evicts the oldest idle device, and expired or revoked rows
+are pruned, so the table stays bounded.
 
 | Route | Auth | What it does |
 |---|---|---|
-| `POST /api/auth/session` | Bearer | Mint a session. `201` with `session.expires_at` and `session.csrf_token`; sets both cookies. |
+| `POST /api/auth/session` | Bearer | Mint a session. Accepts an optional `device_label` (1-40 characters after scrubbing control/zero-width/bidi characters; empty or absent becomes `Unknown device`). `201` with `session.expires_at`, `session.csrf_token`, `session.device` (`{ id, label }`), and both cookies. |
+| `GET /api/auth/devices` | Bearer or session cookie | List live devices: `id` (the first 12 hex characters of `id_hash`), `label`, `created_at`, `last_seen`, `expires_at`, `online` (last seen within 60 s), and `current` (true only for the cookie that made the call; a bearer caller has none). |
+| `DELETE /api/auth/devices/{id_short}` | Bearer or session cookie | Revoke one device by its short id. `200 { ok, revoked: 1, device: { id } }`; an unknown or ambiguous id is `404`. Revoking the caller clears its cookies; revoking another device closes its open SSE stream on the next fresh auth check. |
 | `DELETE /api/auth/session` | Session cookie | Revoke the presented session and clear both cookies. A bearer-only caller gets `400 invalid_request`. |
-| `DELETE /api/auth/sessions` | Bearer or session cookie | Revoke every session in this process and clear the caller's cookies. |
+| `DELETE /api/auth/sessions` | Bearer or session cookie | Revoke every session and clear the caller's cookies. |
 
 Cookie rules:
 
@@ -1000,7 +1020,8 @@ Cookie rules:
   run; production keeps it on.
 - `csrf` is readable by the app (`HttpOnly` omitted), `Secure`, `SameSite=Lax`,
   and rolled with the session. It is not a credential: it only proves the
-  caller can read the cookie.
+  caller can read the cookie. Its value is derived from the session hash and
+  the server secret, never persisted.
 - A cookie-authenticated `POST`/`PATCH`/`PUT`/`DELETE` must carry an `Origin`
   that matches `Host` and an `X-CSRF-Token` equal to the `csrf` cookie. A
   request with no `Origin` is rejected even if the CSRF pair matches; this
@@ -1009,6 +1030,10 @@ Cookie rules:
   `KELP_CSRF_TOKEN` must match `X-CSRF-Token`, otherwise an `Origin`, when
   present, must be same-origin. A bearer sign-in is exempt because it already
   proves possession of the root token.
+- Device labels are owner data, not telemetry: they appear only in the sign-in
+  response (`session.device.label`), the device list response, and the
+  `sessions` row. No log or audit record carries a label; a device is
+  identified there by its hashed short id at most.
 - Every rejected credential emits exactly one structured `auth_failed` record
   with `outcome` (`rejected`/`locked`), `reason`, `count`, `status`, and a
   truncated SHA-256 `identity_hash`. The presented token, cookie, and peer

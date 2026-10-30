@@ -830,8 +830,10 @@ and rolls forward 30 days on each authenticated response. A readable `csrf` cook
 half: a cookie-authenticated `POST`, `PATCH`, `PUT`, or `DELETE` must send an `Origin` that matches
 `Host` and an `X-CSRF-Token` equal to that cookie, and a request with no `Origin` is refused even when
 the pair matches, which closes the non-browser cross-site shape a bare token check accepts. Sessions
-are process-local and bounded by `KELP_SESSION_MAX`, with the oldest idle one evicted when the cap is
-reached; `DELETE /api/auth/session` revokes the presented session, and `DELETE /api/auth/sessions`
+persist in the `sessions` table of the chat database, so several devices survive a restart, and are
+bounded by `KELP_SESSION_MAX`, with the oldest idle one evicted when the cap is reached;
+`GET /api/auth/devices` lists them, `DELETE /api/auth/devices/{id_short}` revokes one by its short
+id, `DELETE /api/auth/session` revokes the presented session, and `DELETE /api/auth/sessions`
 revokes every session and is the bearer path used before a credential rotation.
 
 Failures are counted, not just rejected. Every rejected credential writes exactly one structured
@@ -868,9 +870,10 @@ could double the allowance, while with auth disabled the peer address stays the 
 callers remain independent. And a failed `POST /api/auth/session` now goes through the same rejection
 path as any other bad credential, so a wrong bearer is logged, counted, and can be locked out even
 when a valid session cookie admitted the request; the cookie that opened the wrapper no longer clears
-the debt of the credential actually presented. Two honest limits. Sessions live in the process, so a
-restart signs every browser out and the bearer token is the recovery path; that is the documented
-trade for persisting no session secret anywhere. And sign-in is a bearer exchange rather than a
+the debt of the credential actually presented. Two honest limits, one of them revised by KEL-24.
+Sessions now persist in the `sessions` table, so a restart keeps every signed-in device valid and the
+root bearer stays the recovery path; what a restart cannot outlive is the server secret, and each row
+holds only a hash, never a session id or CSRF token. And sign-in is a bearer exchange rather than a
 password form, so the root token remains the thing to protect, rotate, and keep out of tickets.
 
 ### KEL-22 — Privacy review — DONE

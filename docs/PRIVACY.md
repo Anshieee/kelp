@@ -31,7 +31,7 @@ recipient named here that the code no longer knows.
 | Do skills reach the network? | Only through one chokepoint, and only to hosts a manifest declares. `web.search` (Tavily) and `github.read` (GitHub) are declared but their handlers are not implemented; today they send nothing |
 | Do payments reach the network? | Not in this build. The Stripe and Razorpay clients exist but `build_app` constructs neither |
 | Where are keys? | Only in the server process environment. `NEBIUS_API_KEY`, `TAVILY_API_KEY`, `GITHUB_TOKEN` are read from `os.environ`, sent only to their own recipient, and scrubbed from every log line |
-| What records exist? | Chat content until the owner deletes the thread; audit and usage records on a stated clock; a content-free egress ledger inside the audit trail |
+| What records exist? | Chat content until the owner deletes the thread; audit and usage records on a stated clock; a content-free egress ledger inside the audit trail; a device row per signed-in browser with a short label and timestamps, no credential |
 | Can I audit what left? | Yes: one `egress` line per outbound call — recipient, purpose, byte counts, outcome, no content |
 
 ---
@@ -89,6 +89,7 @@ with the status on a rejection — a failing probe is never filed as a success.
 | Data | Location | Removed by | Retention row |
 |---|---|---|---|
 | Chat content — threads, messages, blocks, events, turns, approvals | `KELP_DB_PATH` (`chat.db`) | `ChatStore.purge_thread` — immediate hard delete, no `deleted_at` shadow | **Chat content** |
+| Owner device sessions — hashed session id, short label, timestamps, revocation | `KELP_DB_PATH` (`chat.db`), `sessions` table | `DELETE /api/auth/devices/{id_short}`, `DELETE /api/auth/session(s)`; expired and evicted rows pruned on use | Not in the retention table; bounded by the session TTL and `KELP_SESSION_MAX` |
 | Uploaded files | `KELP_ARTIFACT_DIR` (default `workspace/var/artifacts`) | `ArtifactRegistry.purge` when the thread goes; `sweep_orphans` when parentless | **Uploaded files** |
 | Derived document index | `workspace/var/index` | Removed eagerly with the artifact; orphan directories swept | **Derived index** |
 | Audit records, including the egress ledger | `KELP_AUDIT_DIR/audit.jsonl` and its segments | `RetentionMaintenance.rotate` — 30 days, 40 segments | **Audit records** |
@@ -113,6 +114,10 @@ Two properties matter for the privacy claim:
   `sk_live_…` / `sk_test_…` keys, and `token=…` / `password: …` pairs before
   serialization. Command output is stored as a SHA-256 hash and a length, never as
   a body.
+- **Sessions store no credential.** The `sessions` row holds the SHA-256 of the
+  session id and a derived CSRF token is never written at all; neither value can
+  be lifted from `chat.db` and replayed as a cookie. Device labels are owner-visible
+  data in the list response, and no log or audit line carries them.
 
 ---
 

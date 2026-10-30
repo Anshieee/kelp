@@ -41,6 +41,7 @@ from skills.errors import SkillManifestError
 from skills.loader import SkillRegistry
 
 from .api import (
+    SESSION_SECRET_ENV,
     SESSION_SECURE_ENV,
     AuthFailureTracker,
     ChatAPI,
@@ -456,6 +457,12 @@ def _service_secrets(
     if config.kernel.api_key:
         values["NEBIUS_API_KEY"] = config.kernel.api_key
     values["KELP_AUTH_TOKEN"] = config.auth_token
+    # The per-device CSRF half is an HMAC under a key derived from this value,
+    # so an operator echoing the environment must not leak it into a log or
+    # audit line either.
+    session_secret = environ.get(SESSION_SECRET_ENV)
+    if isinstance(session_secret, str) and session_secret.strip():
+        values[SESSION_SECRET_ENV] = session_secret.strip()
     if config.csrf_token:
         values["KELP_CSRF_TOKEN"] = config.csrf_token
     return values
@@ -564,9 +571,13 @@ def build_app(
             csrf_token=config.csrf_token,
             health=HealthProbe.from_service(service, audit=audit),
             metrics=metrics,
-            # Sessions are deliberately process-local: a restart invalidates
-            # every cookie and the root bearer token remains the recovery path.
-            sessions=SessionStore.from_env(source),
+            # Sessions persist in the chat database (KEL-24): several devices
+            # survive a restart, and the root bearer token remains recovery.
+            # The CSRF half is derived from KELP_SESSION_SECRET, falling back
+            # to the root token so a restart keeps existing pairs valid.
+            sessions=SessionStore.from_env(
+                source, store=store, fallback_secret=config.auth_token
+            ),
             auth_failures=AuthFailureTracker.from_env(source),
             cookie_secure=_flag(source, SESSION_SECURE_ENV, True),
         )
