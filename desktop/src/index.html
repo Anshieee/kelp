@@ -1,0 +1,83 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Kelp</title>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <div id="app">
+      <header class="topbar">
+        <h1>Kelp</h1>
+        <div class="server-row">
+          <input id="serverUrl" size="32" placeholder="https://kelp.example.com" />
+          <button id="saveServer" type="button">Save</button>
+          <span id="connState" class="pill">offline</span>
+        </div>
+      </header>
+
+      <section id="signin" class="card">
+        <h2>Sign in</h2>
+        <p class="hint">Paste the root bearer once. It is exchanged for a session cookie and kept in the OS keychain only.</p>
+        <input id="bearer" type="password" autocomplete="off" placeholder="Kelp root bearer" />
+        <input id="deviceLabel" placeholder="Device label (this MacBook)" maxlength="40" />
+        <button id="signinBtn" type="button">Sign in</button>
+        <button id="signoutBtn" type="button" class="ghost">Sign out</button>
+        <p id="signinMsg" class="msg"></p>
+      </section>
+
+      <main id="main" hidden>
+        <div class="cols">
+          <section class="card">
+            <h2>Threads</h2>
+            <div class="row">
+              <button id="newThread" type="button">New thread</button>
+              <button id="refreshThreads" type="button" class="ghost">Refresh</button>
+            </div>
+            <ul id="threadList"></ul>
+            <div class="row">
+              <input id="chatInput" placeholder="Send a message…" />
+              <button id="sendBtn" type="button">Send</button>
+            </div>
+            <div id="stream"></div>
+          </section>
+
+          <section class="card">
+            <h2>Approvals</h2>
+            <div id="approvals"><p class="hint">No pending approvals.</p></div>
+          </section>
+        </div>
+
+        <div class="cols">
+          <section class="card">
+            <h2>Schedules</h2>
+            <p class="hint">Recurring tasks (<code>schedule.create</code>) via chat.</p>
+            <div id="schedules"><p class="hint">Ask Kelp in chat, e.g. “remind me every morning”.</p></div>
+          </section>
+
+          <section class="card">
+            <h2>Devices</h2>
+            <button id="refreshDevices" type="button" class="ghost">Refresh</button>
+            <ul id="deviceList"></ul>
+          </section>
+
+          <section class="card">
+            <h2>Shares</h2>
+            <div class="row">
+              <button id="shareBtn" type="button">Share current thread</button>
+            </div>
+            <ul id="shareList"></ul>
+          </section>
+
+          <section class="card">
+            <h2>Spend</h2>
+            <button id="refreshSpend" type="button" class="ghost">Refresh</button>
+            <pre id="spend">(no data)</pre>
+          </section>
+        </div>
+      </main>
+    </div>
+    <script type="module" src="./app.js"></script>
+  </body>
+</html>

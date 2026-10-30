@@ -1,0 +1,39 @@
+:root { color-scheme: light dark; }
+body { font-family: system-ui, sans-serif; margin: 0; background: #fbf9f5; color: #1c1e1c; }
+.topbar { display: flex; justify-content: space-between; align-items: center; padding: 12px 16px; }
+.topbar h1 { margin: 0; font-size: 20px; }
+.card { background: #fff; border: 1px solid #e5e0d6; border-radius: 10px; padding: 12px; margin: 12px 16px; }
+.cols { display: grid; grid-template-columns: 1fr 1fr; gap: 0 8px; }
+@media (max-width: 900px) { .cols { grid-template-columns: 1fr; } }
+.row { display: flex; gap: 8px; margin: 8px 0; }
+input { padding: 8px; border: 1px solid #d8d2c4; border-radius: 8px; }
+button { padding: 8px 12px; border-radius: 8px; border: 1px solid #1c1e1c; background: #1c1e1c; color: #fff; cursor: pointer; }
+button.ghost { background: transparent; color: inherit; }
+.hint { color: #6b675e; font-size: 13px; }
+.msg { min-height: 1.2em; font-size: 13px; }
+.pill { font-size: 12px; padding: 3px 10px; border-radius: 999px; background: #eee; }
+.pill.on { background: #cfe8d4; }
+#stream { white-space: pre-wrap; border-top: 1px dashed #ddd; margin-top: 8px; padding-top: 8px; min-height: 60px; }
+.approval { border: 1px solid #e0a; border-radius: 8px; padding: 8px; margin: 8px 0; }
+ul { list-style: none; padding: 0; }
+li { padding: 6px 4px; border-bottom: 1px solid #f0ece3; display: flex; justify-content: space-between; gap: 8px; }
+
+/* Pet overlay + orb fallback face */
+.pet-window { width: 148px; height: 148px; -webkit-app-region: drag; }
+[data-orb] { position: relative; width: 148px; height: 148px; }
+.e-orb-canvas { position: absolute; inset: 0; width: 100%; height: 100%; opacity: 0; }
+.e-orb--webgl .e-orb-canvas { opacity: 1; }
+.e-orb-face { position: absolute; inset: 18px; border-radius: 50%; background: #92d2a5; }
+.e-orb--webgl .e-orb-face { opacity: 0; }
+.e-orb-face::before, .e-orb-face::after {
+  content: ""; position: absolute; top: 44px; width: 12px; height: 26px;
+  border-radius: 8px; background: #0b0e0c;
+}
+.e-orb-face::before { left: 30px; } .e-orb-face::after { right: 30px; }
+[data-orb][data-pet-state="working"] .e-orb-face { background: #49966f; }
+[data-orb][data-pet-state="waiting"] .e-orb-face { background: #e08d69; }
+[data-orb][data-pet-state="done"] .e-orb-face { background: #76adC6; }
+@media (prefers-reduced-motion: reduce) {
+  .e-orb-canvas { display: none; }
+  .e-orb-face { display: block; }
+}

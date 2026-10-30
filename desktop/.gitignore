@@ -1,0 +1,8 @@
+dist/
+node_modules/
+*.log
+# Never commit secrets: keychain material stays in the OS keychain,
+# server URLs stay in runtime app config, and no .env ships with the tree.
+.env
+.env.*
+!.env.example
