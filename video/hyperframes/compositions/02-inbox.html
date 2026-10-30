@@ -1003,16 +1003,12 @@
         tl.set("#s2-grain", { x: (s % 5) * 3 - 6, y: ((s * 7) % 5) * 3 - 6 }, t);
       }
 
-      // Uniform pacing warp: the 35 s cut becomes 19 s with every beat intact.
-      const warp = (timeline, k) => {
-        timeline.getChildren(false, true, true).forEach((child) => {
-          child.startTime(child.startTime() / k);
-          child.timeScale(child.timeScale() * k);
-        });
+      // Uniform pacing: the 35 s cut runs at 35/19 speed with every beat intact.
+      const pace = (timeline, k) => {
+        timeline.paused(false).timeScale(k);
+        return gsap.timeline({ paused: true }).add(timeline, 0);
       };
-      warp(tl, 35 / 19);
-
-      window.__timelines["s2"] = tl;
+      window.__timelines["s2"] = pace(tl, 35 / 19);
     })();
   </script>
 </template>

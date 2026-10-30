@@ -3,6 +3,36 @@
 Reviewed from `check --json`, `snapshot --review` (beat sheet, seam strips,
 360 px phone sheet) and frame samples decoded from the rendered MP4.
 
+## v3 phone-finger fix
+
+Three separate causes, all measured rather than guessed:
+
+1. **Intro typing thumb tapped the wrong rows.** It moved 132 px between
+   presses, but the task rows are only 75 px apart (row centres 663 / 738 /
+   812, read from the row dots). Tap 2 landed on row 3 and tap 3 on empty
+   screen. The tip also sat 30 px right of the caret.
+2. **Flight thumb was not on the phone at all.** It was authored at
+   `left:246px`, while the Approve button is at 792–988 × 856–914. It also
+   flung itself 82 px sideways between press and release with three different
+   eases, which is the "fluctuating" the owner saw.
+3. **The 90 s pacing warp itself jumped.** It scaled each tween's `startTime`
+   and `timeScale` independently; sequential tweens on one property then
+   fought on seek, so the thumb (and any chained property) snapped backwards
+   mid-move. Replaced with a nested timeline (`timeline.timeScale(k)` inside a
+   paused host), which is smooth and preserves every beat.
+
+Fixes: anchors from measured pixels (S1 tip x 1310, y 663/738/812; S3 tip
+890,900 on the button), one move + one press + one release on a single axis,
+settling exactly on the target, and a vertical thumb for Approve so the label
+stays readable. Both thumbs stay above their phone (`z-index` 8/25) and the
+S3 thumb fades in place instead of sliding away.
+
+Verified on the encoded v3 MP4: S1 tips at x 1310 with centres 664 / 740 /
+814 px (targets 663 / 738 / 812); S3 tip bbox 856–923 × top 900, inside the
+button, press reaches 904 at 39.90 s, gone by 40.4 s; zero skin-coloured
+pixels in the non-tap phone shots (12, 26, 50, 65, 75 s). 90.000 s, 2700
+frames, −18.2 LUFS, −5.2 dBFS true peak.
+
 ## v2 retime (90 s)
 
 The film was re-cut from 160 s to exactly 90 s without dropping a shot, a
@@ -98,8 +128,11 @@ the "best for you" card legible behind the phone.
 
 ## Render
 
-- **v2:** `renders/kelp-explainer-v2.mp4` — H.264 / AAC, 1920×1080, 30 fps,
-  90.000 s, 26,727,127 bytes,
+- **v3:** `renders/kelp-explainer-v3.mp4` — H.264 / AAC, 1920×1080, 30 fps,
+  90.000 s, 26,282,718 bytes,
+  SHA-256 `35828b522c50a03c9dbdf85812dde905ad5561d4a8ee76615210af8a8476a881`.
+- **v2 (archive, wrong finger + jumping warp):**
+  `renders/kelp-explainer-v2.mp4` — 90.000 s, 26,727,127 bytes,
   SHA-256 `aa002f80ce9aa2292c60bd8985ce1d2593fba26c94d914d61ca43ace0be81933`.
 - **v1 (archive):** `renders/kelp-explainer-v1.mp4` — 160.0 s, 42,885,720 bytes.
 

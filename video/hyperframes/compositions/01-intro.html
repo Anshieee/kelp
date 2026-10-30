@@ -474,10 +474,13 @@
       z-index: 8;
       pointer-events: none;
     }
+    /* Fingertip anchored to the task rows: row centres 663 / 738 / 812 px
+       (75 px apart, measured from the green dots), tip x 1310, just past the
+       caret. The body exits over the phone's right bezel. */
     .s1-thumb {
       position: absolute;
-      left: 10px;
-      top: 41px;
+      left: -20px;
+      top: 20px;
       width: 214px;
       height: 70px;
       border-radius: 35px 26px 26px 35px;
@@ -830,14 +833,15 @@
       typeRow("#s1-task-2", 3.6, 22);
       typeRow("#s1-task-3", 5.65, 16);
 
+      // One move, one press, one release; no x drift and no competing eases.
       const tap = (time, dy) => {
-        tl.to("#s1-thumb", { y: dy, duration: 0.38, ease: "power2.inOut" }, time - 0.42);
-        tl.to("#s1-thumb", { y: dy + 12, duration: 0.15, ease: "power2.in" }, time);
-        tl.to("#s1-thumb", { y: dy, duration: 0.25, ease: "power3.out" }, time + 0.15);
+        if (dy) tl.to("#s1-thumb", { y: dy, duration: 0.34, ease: "power2.inOut" }, time - 0.36);
+        tl.to("#s1-thumb", { y: dy + 12, duration: 0.13, ease: "power2.in" }, time);
+        tl.to("#s1-thumb", { y: dy, duration: 0.2, ease: "power2.out" }, time + 0.13);
       };
       tap(2.2, 0);
-      tap(4.25, 132);
-      tap(6.3, 264);
+      tap(4.25, 75);
+      tap(6.3, 149);
 
       tl.fromTo(
         "#s1-phone .s1-task-dot",
@@ -879,17 +883,13 @@
 
       tl.fromTo("#s1-wipe", { x: 1920 }, { x: 0, duration: 0.4, ease: "power3.in" }, 19.6);
 
-      // Uniform pacing warp: every child starts 1/k earlier and plays k faster,
-      // so the 20 s cut becomes 11 s with every beat and tween intact.
-      const warp = (timeline, k) => {
-        timeline.getChildren(false, true, true).forEach((child) => {
-          child.startTime(child.startTime() / k);
-          child.timeScale(child.timeScale() * k);
-        });
+      // Uniform pacing: nest the authored timeline and run it k× faster, so
+      // every tween keeps its exact relative timing and only the clock changes.
+      const pace = (timeline, k) => {
+        timeline.paused(false).timeScale(k);
+        return gsap.timeline({ paused: true }).add(timeline, 0);
       };
-      warp(tl, 20 / 11);
-
-      window.__timelines["s1"] = tl;
+      window.__timelines["s1"] = pace(tl, 20 / 11);
     })();
   </script>
 </template>

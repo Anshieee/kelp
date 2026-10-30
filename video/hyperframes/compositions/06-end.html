@@ -240,16 +240,12 @@
         tl.set("#s6-grain", { x: (s % 5) * 3 - 6, y: ((s * 7) % 5) * 3 - 6 }, t);
       }
 
-      // Uniform pacing warp: the 10 s card becomes 6 s with every beat intact.
-      const warp = (timeline, k) => {
-        timeline.getChildren(false, true, true).forEach((child) => {
-          child.startTime(child.startTime() / k);
-          child.timeScale(child.timeScale() * k);
-        });
+      // Uniform pacing: the 10 s card runs at 10/6 speed with every beat intact.
+      const pace = (timeline, k) => {
+        timeline.paused(false).timeScale(k);
+        return gsap.timeline({ paused: true }).add(timeline, 0);
       };
-      warp(tl, 10 / 6);
-
-      window.__timelines["s6"] = tl;
+      window.__timelines["s6"] = pace(tl, 10 / 6);
     })();
   </script>
 </template>
