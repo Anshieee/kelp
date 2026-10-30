@@ -1,0 +1,471 @@
+/* e-fx.css — content pass.
+   Owns: the examples player’s finished controls, the “Kelp in action” video
+   placeholder, the comparison table, the desktop-pet identity, and the phone
+   section. Type, colour and pill language come from styles.css. */
+
+/* ---------- 1. Examples player ------------------------------------------- */
+
+/* The active dot reads as a small pill so the current example is obvious
+   without relying on contrast alone. */
+.e-player .c-example-dots span {
+  transition:
+    width 0.25s var(--ease-out, ease),
+    background-color 0.25s var(--ease-out, ease);
+}
+
+.e-player .c-example-dots [aria-pressed="true"] span {
+  width: 24px;
+  background: var(--strong);
+}
+
+.e-player .c-example-pause {
+  min-width: 128px;
+}
+
+/* ---------- 2. “Kelp in action” video placeholder ------------------------ */
+
+.e-video {
+  margin: 0;
+  display: grid;
+  gap: 16px;
+}
+
+.e-video-frame {
+  position: relative;
+  aspect-ratio: 16 / 9;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 28px;
+  background: var(--canvas);
+  box-shadow: 0 18px 70px rgba(69, 67, 63, 0.055);
+  isolation: isolate;
+}
+
+.e-video-poster {
+  display: block;
+  width: 100%;
+  height: 100%;
+  /* The dither is square; the frame is 16:9, so cover the crop. */
+  object-fit: cover;
+}
+
+.e-play {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  display: grid;
+  place-items: center;
+  width: 76px;
+  height: 76px;
+  transform: translate(-50%, -50%);
+  border: 1px solid rgba(255, 255, 255, 0.9);
+  border-radius: 9999px;
+  background: rgba(255, 255, 255, 0.78);
+  box-shadow: 0 10px 34px rgba(69, 67, 63, 0.12);
+  color: var(--strong);
+}
+
+.e-play svg {
+  width: 26px;
+  height: 26px;
+  margin-left: 3px;
+  stroke-width: 1.4;
+}
+
+.e-video figcaption {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 4px 18px;
+  padding: 0 4px;
+}
+
+.e-video figcaption strong {
+  font: 400 21px/1.3 var(--serif);
+  letter-spacing: -0.02em;
+}
+
+.e-video figcaption span {
+  font-size: 14px;
+  color: var(--body);
+}
+
+/* Inert hooks for the retired prompt preview (see index.html). */
+.e-legacy-hooks[hidden] {
+  display: none;
+}
+
+/* ---------- 3. The pointer that aims at the examples player -------------- */
+
+/* It used to sit under the prompt demo, pointing down at it. The rotating
+   player is the thing to look at now, so the note lives under the player and
+   points back up at it. */
+.e-handwritten {
+  /* styles.css hides the old note below 1200px; the player is the thing to
+     look at, so it stays. */
+  display: block;
+  margin: 18px 0 0;
+  text-align: right;
+  transform: rotate(-5deg);
+}
+
+.e-handwritten span {
+  display: inline-block;
+  padding-left: 0;
+  margin-left: 10px;
+  font-size: 34px;
+  line-height: 0.9;
+  vertical-align: -0.14em;
+}
+
+/* ---------- 4. Comparison table ----------------------------------------- */
+
+.e-compare-wrap {
+  margin-top: 4px;
+}
+
+.e-compare {
+  width: 100%;
+  table-layout: fixed;
+  border-collapse: separate;
+  border-spacing: 0;
+}
+
+.e-compare th,
+.e-compare td {
+  text-align: left;
+  vertical-align: top;
+  padding: 20px 18px;
+  font-size: 16px;
+  font-weight: 400;
+  line-height: 1.55;
+  color: var(--body);
+}
+
+.e-compare thead th,
+.e-compare thead .e-compare-corner {
+  padding-bottom: 16px;
+  border-bottom: 1px solid var(--strong);
+}
+
+.e-compare thead th {
+  font: 400 clamp(22px, 1.75vw, 27px)/1.14 var(--serif);
+  letter-spacing: -0.02em;
+  color: var(--strong);
+}
+
+.e-compare thead th small {
+  display: block;
+  margin-top: 5px;
+  font: 400 14px/1.4 var(--sans);
+  letter-spacing: 0;
+  color: var(--body);
+}
+
+.e-compare .e-compare-corner,
+.e-compare tbody th {
+  width: 19%;
+}
+
+.e-compare tbody th {
+  font-size: 15px;
+  font-weight: 500;
+  color: var(--strong);
+}
+
+.e-compare tbody tr + tr th,
+.e-compare tbody tr + tr td {
+  border-top: 1px solid var(--line);
+}
+
+.e-compare .e-kelp-col {
+  background: rgba(214, 232, 216, 0.5);
+}
+
+.e-compare thead .e-kelp-col {
+  border-radius: 18px 18px 0 0;
+  background: var(--sage);
+}
+
+.e-compare tbody tr:last-child .e-kelp-col {
+  border-radius: 0 0 18px 18px;
+}
+
+/* Real text, shown only where the column headers are folded away. */
+.e-cell-label {
+  display: none;
+}
+
+@media (max-width: 900px) {
+  .e-compare,
+  .e-compare tbody,
+  .e-compare tr,
+  .e-compare th,
+  .e-compare td {
+    display: block;
+    width: auto;
+  }
+
+  .e-compare thead {
+    display: none;
+  }
+
+  .e-compare tbody tr {
+    padding: 20px 0;
+    border-top: 1px solid var(--line);
+  }
+
+  .e-compare tbody tr:first-child {
+    border-top: 0;
+    padding-top: 4px;
+  }
+
+  .e-compare tbody th {
+    width: auto;
+    padding: 0 0 12px;
+    border-top: 0;
+    font: 400 27px/1.15 var(--serif);
+    letter-spacing: -0.02em;
+  }
+
+  .e-compare td {
+    padding: 8px 0;
+    border-top: 0;
+  }
+
+  .e-compare td.e-kelp-col {
+    margin-top: 6px;
+    padding: 12px 14px;
+    border-radius: 16px;
+    background: rgba(214, 232, 216, 0.6);
+  }
+
+  .e-cell-label {
+    display: block;
+    margin-bottom: 2px;
+    font: 500 13px/1.4 var(--sans);
+    color: var(--body);
+  }
+}
+
+/* ---------- 5. Desktop pet ---------------------------------------------- */
+
+.c-companion-art {
+  border-bottom: 0;
+  min-height: 0;
+}
+
+.e-pet {
+  display: grid;
+  justify-items: center;
+  gap: 16px;
+  width: 100%;
+}
+
+.e-pet-id {
+  width: min(300px, 54vw);
+  height: auto;
+  aspect-ratio: 1;
+}
+
+.e-pet-caption {
+  max-width: 270px;
+  font-size: 14px;
+  line-height: 1.6;
+  color: var(--body);
+  text-align: center;
+}
+
+.e-pet-states {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 12px;
+  margin: 8px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.pet-dither {
+  display: grid;
+  justify-items: center;
+  gap: 6px;
+  width: 96px;
+  padding: 10px 6px 9px;
+  border: 1px solid var(--line);
+  border-radius: 18px;
+  background: var(--dim);
+  font-size: 12.5px;
+  line-height: 1.3;
+  color: var(--body);
+  text-align: center;
+}
+
+.pet-dither canvas {
+  width: 56px;
+  height: 56px;
+}
+
+.pet-dither[data-state="working"] {
+  background: var(--sage);
+  border-color: transparent;
+}
+
+.pet-dither[data-state="waiting"] {
+  background: var(--butter);
+  border-color: transparent;
+}
+
+.pet-dither[data-state="done"] {
+  background: var(--sky);
+  border-color: transparent;
+}
+
+/* ---------- 6. Phone ----------------------------------------------------- */
+
+.e-phone-section {
+  display: grid;
+  grid-template-columns: minmax(0, 1.15fr) minmax(0, 0.85fr);
+  align-items: center;
+  gap: 5%;
+}
+
+.e-phone-copy h2 {
+  font-size: clamp(46px, 4.5vw, 68px);
+  letter-spacing: -0.045em;
+}
+
+.e-phone-copy > p {
+  max-width: 470px;
+  margin-top: 24px;
+  font-size: 17px;
+  color: var(--body);
+}
+
+.e-phone-copy > .e-phone-note {
+  margin-top: 14px;
+  font: italic 20px/1.5 var(--serif);
+  color: var(--strong);
+}
+
+.e-phone-copy .c-scope-note {
+  max-width: 470px;
+}
+
+.e-phone {
+  margin: 0;
+  display: grid;
+  justify-items: center;
+  gap: 14px;
+}
+
+.phone-mockup {
+  width: min(264px, 62vw);
+  aspect-ratio: 9 / 18.4;
+  padding: 11px;
+  border: 1px solid var(--line);
+  border-radius: 40px;
+  background: linear-gradient(165deg, var(--sage), var(--sky) 55%, var(--butter));
+  box-shadow: 0 22px 60px rgba(69, 67, 63, 0.08);
+}
+
+.phone-screen {
+  height: 100%;
+  border-radius: 30px;
+  background: var(--canvas);
+  box-shadow: inset 0 0 0 1px var(--line);
+}
+
+.phone-screen::before {
+  content: "";
+  display: block;
+  width: 72px;
+  height: 6px;
+  margin: 14px auto 0;
+  border-radius: 9999px;
+  background: var(--line);
+}
+
+.e-phone figcaption {
+  font-size: 14px;
+  color: var(--body);
+}
+
+@media (max-width: 991px) {
+  .e-handwritten {
+    display: block;
+  }
+
+  .e-phone-section {
+    grid-template-columns: 1fr;
+    gap: 38px;
+  }
+
+  .e-phone-section .e-phone {
+    justify-items: center;
+  }
+}
+
+@media (max-width: 600px) {
+  .e-play {
+    width: 62px;
+    height: 62px;
+  }
+
+  .e-play svg {
+    width: 22px;
+    height: 22px;
+  }
+
+  .e-video figcaption strong {
+    font-size: 19px;
+  }
+
+  .e-handwritten {
+    display: block;
+    margin: 16px 0 0;
+    font-size: 22px;
+  }
+
+  /* Read the section title before the artwork when the two columns stack. */
+  .c-companion-copy {
+    order: -1;
+  }
+
+  .e-handwritten span {
+    font-size: 26px;
+  }
+
+  .e-phone-section {
+    padding-block: 60px;
+  }
+
+  .e-phone-section .e-phone {
+    justify-items: center;
+  }
+
+  .e-phone-copy h2 {
+    font-size: clamp(38px, 11.4vw, 52px);
+  }
+
+  .phone-mockup {
+    width: min(232px, 58vw);
+    padding: 9px;
+    border-radius: 34px;
+  }
+
+  .phone-screen {
+    border-radius: 26px;
+  }
+
+  .pet-dither {
+    width: 88px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .e-player .c-example-dots span {
+    transition: none;
+  }
+}

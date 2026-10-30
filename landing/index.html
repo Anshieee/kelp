@@ -23,6 +23,8 @@
     <link rel="stylesheet" href="a-motion.css" />
     <link rel="stylesheet" href="b-scroll.css" />
     <link rel="stylesheet" href="c-copy.css" />
+    <link rel="stylesheet" href="d-fx.css" />
+    <link rel="stylesheet" href="e-fx.css" />
     <!-- a-motion.js must run before the GSAP/app renderer: it composites the
          existing canvas artwork and only observes state the app sets up. -->
     <script defer src="a-motion.js"></script>
@@ -38,6 +40,8 @@
     <!-- b-scroll.js must run after app.js; it retires the legacy GSAP tweens. -->
     <script defer src="b-scroll.js"></script>
     <script defer src="c-copy.js"></script>
+    <script defer src="d-fx.js"></script>
+    <script defer src="e-fx.js"></script>
   </head>
   <body>
     <a class="skip-link pill" href="#main">Skip to content</a>
@@ -71,6 +75,9 @@
         <symbol id="close" viewBox="0 0 24 24">
           <path d="m6 6 12 12M18 6 6 18" />
         </symbol>
+        <symbol id="play" viewBox="0 0 24 24">
+          <path d="M9 5.5v13L19.5 12 9 5.5Z" />
+        </symbol>
       </defs>
     </svg>
 
@@ -79,7 +86,7 @@
         ><svg aria-hidden="true"><use href="#sprout" /></svg>kelp</a
       >
       <nav class="main-nav" aria-label="Main navigation">
-        <a href="#a-conversation">Try a conversation</a
+        <a href="#a-conversation">Kelp in action</a
         ><a href="#possibilities">How it works</a>
       </nav>
       <a
@@ -170,6 +177,37 @@
           The experience we’re building. This page is a preview, not a connected
           agent.
         </p>
+      </section>
+
+      <section
+        class="c-computer e-phone-section section-shell"
+        id="on-your-phone"
+        aria-labelledby="phone-title"
+      >
+        <div class="e-phone-copy reveal">
+          <h2 id="phone-title">
+            Talk to it on your phone,<br />in an app you
+            <em>already use.</em>
+          </h2>
+          <p>
+            Send a message in Telegram or WhatsApp, the way you’d text a friend.
+            Kelp picks it up from there, so there’s no new app to learn and
+            nothing extra to install.
+          </p>
+          <p class="e-phone-note">
+            A typed message or a voice note. Either is fine.
+          </p>
+          <p class="c-scope-note">
+            Planned for Kelp. Messaging isn’t connected in this preview, and the
+            handset is a placeholder.
+          </p>
+        </div>
+        <figure class="e-phone reveal">
+          <div class="phone-mockup" aria-hidden="true">
+            <div class="phone-screen"></div>
+          </div>
+          <figcaption>Demo video coming soon.</figcaption>
+        </figure>
       </section>
 
       <section
@@ -271,6 +309,9 @@
             </button>
           </div>
         </div>
+        <div class="handwritten e-handwritten" aria-hidden="true">
+          One thing at a time. <span>↖</span>
+        </div>
         <p class="c-scope-note">
           Illustrative requests, not live tasks. Access and approvals stay in
           your hands.
@@ -290,82 +331,36 @@
             A question, a document, a thing you’ve been putting off. Start where
             you are.
           </p>
-          <div class="handwritten" aria-hidden="true">
-            One thing at a time. <span>↘</span>
-          </div>
         </div>
-        <div class="stage reveal">
-          <div class="stage-top">
-            <span class="assistant-avatar" aria-hidden="true"
-              ><svg><use href="#sprout" /></svg></span
-            ><span>Kelp</span
-            ><span class="preview-pill">Interactive preview</span>
+        <figure class="e-video reveal">
+          <div class="e-video-frame">
+            <canvas
+              class="e-video-poster"
+              data-dither="poster"
+              width="720"
+              height="405"
+              aria-hidden="true"
+            ></canvas>
+            <span class="e-play" aria-hidden="true"
+              ><svg><use href="#play" /></svg
+            ></span>
           </div>
-          <h3 id="stage-question">What’s on your mind?</h3>
-          <p class="stage-patience">
-            There’s no rush. We can work through it together.
-          </p>
+          <figcaption>
+            <strong>Kelp in action.</strong>
+            <span>Demo video coming soon.</span>
+          </figcaption>
+        </figure>
+        <!-- app.js still binds the retired prompt preview by id and has no
+             feature detection, so these inert hooks keep the rest of that file
+             working until it is retired. Nothing here is focusable, visible or
+             announced. -->
+        <div class="e-legacy-hooks" hidden>
           <form id="conversation-form">
-            <label class="sr-only" for="prompt"
-              >What would you like help with? Do not enter personal information
-              in this preview.</label
-            >
-            <div class="input-bar">
-              <input
-                id="prompt"
-                name="prompt"
-                autocomplete="off"
-                maxlength="500"
-                placeholder="Ask Kelp something…"
-                aria-describedby="preview-help"
-              /><button
-                class="icon-button"
-                type="button"
-                id="attach-button"
-                aria-label="About attaching a file"
-              >
-                <svg aria-hidden="true"><use href="#attach" /></svg></button
-              ><button
-                class="icon-button"
-                type="button"
-                id="mic-button"
-                aria-label="About voice input"
-              >
-                <svg aria-hidden="true"><use href="#mic" /></svg></button
-              ><button
-                class="icon-button send-button"
-                type="submit"
-                aria-label="Preview your conversation"
-              >
-                <svg aria-hidden="true"><use href="#arrow" /></svg>
-              </button>
-            </div>
-            <div class="starter-pills" aria-label="Try a starting point">
-              <button type="button" data-starter="bill">
-                Summarise a bill <span aria-hidden="true">↗</span></button
-              ><button type="button" data-starter="spend">
-                My weekly spend <span aria-hidden="true">↗</span></button
-              ><button type="button" data-starter="doctor">
-                A note for my doctor <span aria-hidden="true">↗</span></button
-              ><button type="button" data-starter="scam">
-                Is this a scam? <span aria-hidden="true">↗</span>
-              </button>
-            </div>
+            <input id="prompt" type="text" tabindex="-1" />
+            <button id="attach-button" type="button" tabindex="-1"></button>
+            <button id="mic-button" type="button" tabindex="-1"></button>
           </form>
-          <div
-            class="preview-response"
-            id="preview-response"
-            role="status"
-            hidden
-          ></div>
-          <p class="preview-help" id="preview-help">
-            A local preview, not a live assistant. Please don’t share personal
-            details.
-          </p>
-          <p class="reassurance">
-            <svg aria-hidden="true"><use href="#shield" /></svg>Nothing will
-            happen without your tap.
-          </p>
+          <div id="preview-response"></div>
         </div>
       </section>
 
@@ -383,40 +378,90 @@
             building Kelp so you don’t have to choose.
           </p>
         </div>
-        <div class="c-comparison-grid">
-          <article>
-            <h3>Hermes agent</h3>
-            <p class="c-comparison-summary">
-              Broad freedom.<br />Hands-on setup.
-            </p>
-            <p>
-              A flexible, general-purpose approach for people comfortable
-              installing and configuring their own agent.
-            </p>
-          </article>
-          <article>
-            <h3>Instinct</h3>
-            <p class="c-comparison-summary">
-              A simple start.<br />A narrower scope.
-            </p>
-            <p>
-              A lighter approach when you want an easy way into a smaller set of
-              everyday tasks.
-            </p>
-          </article>
-          <article class="c-comparison-kelp">
-            <h3>Kelp</h3>
-            <p class="c-comparison-summary">Full power.<br />Zero setup.</p>
-            <p>
-              Our aim: a general-purpose agent you can run by sending a message.
-              No installing tools. No technical steps to learn.
-            </p>
-          </article>
+        <div class="e-compare-wrap reveal">
+          <table class="e-compare">
+            <caption class="sr-only">
+              How Kelp compares with other agent setups and with simple
+              assistants, across setup, capability, limits and who each suits.
+            </caption>
+            <thead>
+              <tr>
+                <td class="e-compare-corner"></td>
+                <th scope="col">
+                  Hermes,<br />OpenClaw &amp; co.
+                </th>
+                <th scope="col">Simple assistants<br /><small
+                    >e.g. Instinct</small
+                  ></th>
+                <th scope="col" class="e-kelp-col">Kelp</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <th scope="row">Setup effort</th>
+                <td><span class="e-cell-label">Hermes &amp; co.</span>
+                  You install it and set it up yourself. Expect a few technical
+                  steps, and some upkeep.
+                </td>
+                <td><span class="e-cell-label">Simple assistants</span>
+                  Quick. A guided sign-up, then straight into a conversation.
+                </td>
+                <td class="e-kelp-col">
+                  <span class="e-cell-label">Kelp</span>
+                  Our aim: none. You send a message and Kelp works on a computer
+                  of its own.
+                </td>
+              </tr>
+              <tr>
+                <th scope="row">What it can do</th>
+                <td><span class="e-cell-label">Hermes &amp; co.</span>
+                  Broad. You choose the models and tools, and shape how the agent
+                  works.
+                </td>
+                <td><span class="e-cell-label">Simple assistants</span>
+                  Everyday help: questions, writing, simple reminders.
+                </td>
+                <td class="e-kelp-col">
+                  <span class="e-cell-label">Kelp</span>
+                  Longer, multi-step work. Researching, drafting a document,
+                  following up on an invoice.
+                </td>
+              </tr>
+              <tr>
+                <th scope="row">Limits</th>
+                <td><span class="e-cell-label">Hermes &amp; co.</span>
+                  Freedom brings choices. Someone has to keep it running and up
+                  to date.
+                </td>
+                <td><span class="e-cell-label">Simple assistants</span>
+                  A narrower scope. Fewer jobs that carry on without you.
+                </td>
+                <td class="e-kelp-col">
+                  <span class="e-cell-label">Kelp</span>
+                  Still a preview. Kelp asks before anything that costs money or
+                  changes your files.
+                </td>
+              </tr>
+              <tr>
+                <th scope="row">Who it suits</th>
+                <td><span class="e-cell-label">Hermes &amp; co.</span>
+                  People who enjoy tinkering and want to own the whole setup.
+                </td>
+                <td><span class="e-cell-label">Simple assistants</span>
+                  Anyone who wants a quick, low-effort start.
+                </td>
+                <td class="e-kelp-col">
+                  <span class="e-cell-label">Kelp</span>
+                  People who want the work done without learning the plumbing.
+                </td>
+              </tr>
+            </tbody>
+          </table>
         </div>
         <p class="c-scope-note">
           A positioning sketch, not a feature-by-feature test. Tools change;
-          check each product’s current capabilities before choosing. Kelp is a
-          product preview.
+          check each product’s current capabilities before choosing. Kelp’s
+          column describes what we’re building — it isn’t available today.
         </p>
       </section>
 
@@ -517,24 +562,67 @@
         id="desktop-companion"
         aria-labelledby="companion-title"
       >
-        <div class="c-companion-art" aria-hidden="true">
-          <div class="c-companion-perch">
-            <svg><use href="#sprout" /></svg><span>A little company.</span>
+        <div class="c-companion-art">
+          <div class="e-pet">
+            <canvas
+              class="e-pet-id"
+              data-dither="pet"
+              width="300"
+              height="300"
+              role="img"
+              aria-label="Kelp’s mark: a soft dithered bloom in coral, butter and green, the same artwork as the top of the page."
+            ></canvas>
+            <p class="e-pet-caption">
+              The same mark, scaled down — how the agent would look on screen.
+            </p>
+            <ul
+              class="e-pet-states"
+              aria-label="The three states the companion would show"
+            >
+              <li class="pet-dither" data-state="working">
+                <canvas
+                  data-dither="state"
+                  width="84"
+                  height="84"
+                  aria-hidden="true"
+                ></canvas>
+                <span>Working</span>
+              </li>
+              <li class="pet-dither" data-state="waiting">
+                <canvas
+                  data-dither="state"
+                  width="84"
+                  height="84"
+                  aria-hidden="true"
+                ></canvas>
+                <span>Waiting on you</span>
+              </li>
+              <li class="pet-dither" data-state="done">
+                <canvas
+                  data-dither="state"
+                  width="84"
+                  height="84"
+                  aria-hidden="true"
+                ></canvas>
+                <span>Done</span>
+              </li>
+            </ul>
           </div>
         </div>
         <div class="c-companion-copy">
           <h2 id="companion-title">
             A familiar face<br />on your <em>desktop.</em>
           </h2>
-          <span class="pill c-roadmap">On the roadmap</span>
           <p>
-            We’d like your agent to live on your computer as a little companion
-            you can talk to any time. There when you need a hand, out of the way
-            when you don’t.
+            We’d like your agent to sit quietly on your computer as a small
+            companion. There when you need a hand, out of the way when you don’t.
+            It would tell you where things stand at a glance: working, waiting on
+            you, or done.
           </p>
           <p class="c-scope-note">
-            Not built yet. The desktop companion is a planned part of Kelp, not
-            a feature you can use today.
+            Not built yet. The desktop companion is a planned part of Kelp, not a
+            feature you can use today. The three states above are a design
+            sketch.
           </p>
         </div>
       </section>
@@ -578,9 +666,6 @@
             >Meet your assistant
             <svg aria-hidden="true"><use href="#arrow" /></svg
           ></a>
-          <p class="guardian-status">
-            <span class="status-dot" aria-hidden="true"></span>At your service
-          </p>
         </div>
         <p class="destination-note">Dashboard preview · placeholder URL</p>
       </section>
