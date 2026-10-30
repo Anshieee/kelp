@@ -1,7 +1,7 @@
 # Privacy review — what leaves the machine, and what does not (KEL-22 / M3-E)
 
-- **Status:** written review, 2026-10-30
-- **Branch:** `kel-22`
+- **Status:** written review, 2026-10-30; sharing cross-references added 2026-10-30
+- **Branch:** `kel-22`; `kel-26` adds the ADR 0002 material and the share rows below
 - **Scope:** the server process in `chat/`, `kernel/`, `skills/`, `openshell/`, and `payments/`
 - **Companions:** the retention rule ([`docs/DEPLOY.md`](DEPLOY.md) §8.1, `chat/retention.py`),
   the policy gate ([`docs/OPENSHELL.md`](OPENSHELL.md)), the chat spec
@@ -112,6 +112,7 @@ holds the URL.
 | Data | Location | Removed by | Retention row |
 |---|---|---|---|
 | Chat content — threads, messages, blocks, events, turns, approvals | `KELP_DB_PATH` (`chat.db`) | `ChatStore.purge_thread` — immediate hard delete, no `deleted_at` shadow | **Chat content** |
+| Share snapshot and daily view counts (not in this build) | `KELP_DB_PATH` (`chat.db`), `shares` and `share_views` | `ChatStore.purge_thread` deletes both in the thread's transaction; revoked and expired rows are pruned by KEL-28's share sweep (boot and daily), never on the read path. The snapshot holds no artifact bytes, so it has nothing to delete when an artifact is purged | **Chat content** (no separate row) |
 | Owner device sessions — hashed session id, short label, timestamps, revocation | `KELP_DB_PATH` (`chat.db`), `sessions` table | `DELETE /api/auth/devices/{id_short}`, `DELETE /api/auth/session(s)`; expired and evicted rows pruned on use | Not in the retention table; bounded by the session TTL and `KELP_SESSION_MAX` |
 | Uploaded files | `KELP_ARTIFACT_DIR` (default `workspace/var/artifacts`) | `ArtifactRegistry.purge` when the thread goes; `sweep_orphans` when parentless | **Uploaded files** |
 | Derived document index | `workspace/var/index` | Removed eagerly with the artifact; orphan directories swept | **Derived index** |
@@ -127,20 +128,32 @@ That table is the contract; this one says which of its rows hold what this revie
 talks about, so a reader can move between the two without guessing.
 
 **Where a share snapshot will sit.** A share link (§2.3) is a second copy of one
-thread's content, so it belongs to the **Chat content** row and inherits that row's
-rule: it is removed in the same transaction that purges the thread, and it is never
-retained after the thread is gone. It is also bounded on its own clock — revoked and
-expired links die on the next request. If KEL-28 chooses to keep share rows for
-their own retention window, that window must be added to `RETENTION_ROWS`,
-`docs/DEPLOY.md` §8.1, and this table in the same change, because
-`tests/test_privacy.py` binds the three together.
+thread's content, and its per-day view counter (`share_views`) is a small aggregate
+keyed by the link's token hash. Both belong to the **Chat content** row and inherit
+that row's rule: they are removed in the same transaction that purges the thread,
+and neither is retained after the thread is gone. So sharing adds **no** row to
+`chat.retention.RETENTION_ROWS` or to `docs/DEPLOY.md` §8.1. Revoked and expired
+links are pruned by KEL-28's share sweep (boot and daily), never on the read path,
+and a revoked row is kept until that prune rather than deleted at revoke. The
+snapshot never contains artifact bytes — the projection drops storage paths,
+hashes, and artifact handles — so a purged artifact leaves nothing behind inside a
+share row.
 
-Two properties matter for the privacy claim:
+If KEL-28 instead gives share rows their own retention window, that window must be
+added to `RETENTION_ROWS`, `docs/DEPLOY.md` §8.1, and this table in the same
+change. The test binding is one-directional, so that change still needs a reviewer:
+`tests/test_privacy.py` asserts that every `RETENTION_ROWS` class name appears in
+this file, and nothing parses the §8.1 rows.
 
-- **Delete means delete.** Purging a thread removes its rows in one transaction
-  and unlinks its files. A live turn makes the purge answer `409 turn_in_progress`
-  instead of racing it, so a dead turn cannot make a thread undeletable and a
-  running one cannot write into rows that no longer exist.
+Three properties matter for the privacy claim:
+
+- **Delete means delete, and `deleted_at` is not a delete.** Purging a thread removes
+  its rows in one transaction and unlinks its files. `threads` and `artifacts` carry a
+  `deleted_at` column that the soft-delete paths (`ChatStore.soft_delete_thread`) use
+  as a read filter; `purge_thread` is the privacy-relevant delete, it removes the rows
+  outright, and nothing is left flagged. A live turn makes the purge answer `409
+  turn_in_progress` instead of racing it, so a dead turn cannot make a thread
+  undeletable and a running one cannot write into rows that no longer exist.
 - **The logs are scrubbed, not trusted.** Every string written to the audit log
   passes a scrubber that replaces known secret values, `Bearer …` tokens,
   `sk_live_…` / `sk_test_…` keys, and `token=…` / `password: …` pairs before
@@ -296,8 +309,9 @@ does.
 - every module under `chat/`, `kernel/`, `skills/`, `openshell/`, and
   `payments/` is scanned for a hardcoded `https://` endpoint, so a new module is
   covered without editing a list;
-- the retention row names used in §3 are exactly the `class` values in
-  `chat.retention.RETENTION_ROWS`;
+- every `class` value in `chat.retention.RETENTION_ROWS` appears in §3; the reverse
+  direction — a row left in §3 after the code drops it — is not test-bound, and
+  `docs/DEPLOY.md` §8.1 is mirrored by hand, so both are checked at review;
 - a model turn writes an `egress` row with byte counts and no content, including
   through the real `TokenFactoryClient` stream path;
 - a skill egress call writes a `tavily` / `github` row, and a policy denial still

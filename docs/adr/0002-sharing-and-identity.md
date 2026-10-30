@@ -95,7 +95,7 @@ rather than a blank space to fill with a guess.
 | **Owner** (interactive) | Root bearer `KELP_AUTH_TOKEN`, or a session cookie minted from it (KEL-19/KEL-24) | Every thread, every artifact, every approval, the activity log, metrics with auth | Everything: turns, approvals, device revocation, share creation and revocation | Its own; the provider key is process environment, never the cookie | The owner | The owner: log out one device, all devices, or rotate the root token | `actor="owner"`, plus the credential class and the session's short id hash |
 | **Owner device session** | One opaque session cookie; `sessions` row holds only the SHA-256 | Same as the owner — it *is* the owner | Same as the owner | Same as the owner | The owner | Any other owner session, or the owner from any device | `actor="owner"`, `credential="session"`, `id_short` of the hashed id |
 | **Anonymous share viewer** | Possession of the token in `/s/{token}`. No account, no cookie, no header | One frozen snapshot of one thread: messages, blocks, and citation metadata. Never artifact bytes, never another thread, never an approval card | Nothing. Every non-GET is `405` before any lookup | None. A share read has no provider key and makes no outbound call | Nobody: a share read spends $0.00 | The owner, per link, or all links for the thread, or by deleting the thread | `actor="share"`, `token_hash`, `event="share_viewed"` aggregated per day — no viewer identity, no IP, no user agent |
-| **Scheduled / system actor** (KEL-23, KEL-27) | No credential. It is an in-process turn started by the ticker for a schedule row the owner created | The target thread, exactly as the owner would | Starts and settles a turn; calls skills subject to the same policy gate. **Cannot approve anything** | The owner's provider key from the process environment; never a session | The owner. One budget, no side ledger (KEL-27) | The owner: pause or delete the schedule; a failure breaker pauses it automatically | `actor="schedule"`, `on_behalf_of="owner"`, `origin_ref={schedule_id, run_id}` |
+| **Scheduled / system actor** (KEL-23, KEL-27) | No credential. It is an in-process turn started by the ticker for a schedule row the owner created | The target thread, exactly as the owner would | Starts and settles a turn; calls skills subject to the same policy gate. **Cannot approve anything** | The owner's provider key from the process environment; never a session | The owner. One budget, no side ledger (KEL-27) | The owner: pause or delete the schedule; a failure breaker pauses it automatically | `actor="schedule"`, `on_behalf_of="owner"`, `origin_ref={schedule_id, run_id}`; the process settling an expiry writes `actor="system"` (§6) |
 | **Plugin handler** (KEL-25) | No credential of its own. It is third-party code invoked inside the owner's turn, loaded by path from a digest-pinned package | Only the arguments the policy gate allows for its declared scope | Only what its manifest declares, and only behind the same approval gate as a builtin | The skill's declared credential from the process environment, scoped to its declared host | The owner — it runs inside the owner's turn, on the owner's token budget | The owner: uninstall the package (a restart is required, KEL-25) | `actor="plugin"`, `extra.plugin=<name>`, `extra.plugin_digest=<prefix>` |
 | **Named collaborator** (defined, **not admitted**) | Would be an invited credential in a second identity family. Today there is no column, no route, and no invite: any such credential is an unauthenticated request | None | None | n/a — it cannot act | Nobody — it cannot cause work | n/a — it cannot exist | `auth_failed` with a hashed identity, exactly like any bad credential |
 
@@ -137,25 +137,55 @@ Three corollaries, because they are the cases that get implemented wrong:
   and the turn settles accordingly; a parked scheduled run does not hold a slot
   forever waiting for a human.
 - **The decision is attributed to the decider, not the requester.** The request
-  records `actor="schedule"`; the decision records `actor="owner"` with
-  `on_behalf_of="owner"` and the run id. Both records exist and are correlated by
-  `origin_ref`.
+  records `actor="schedule"`, `on_behalf_of="owner"`, and
+  `origin_ref={schedule_id, run_id}`. The decision records `actor="owner"` with
+  **no** `on_behalf_of` — the owner borrows nobody's authority — and no
+  `origin_ref`; the two records are correlated by `turn_id` and the approval id.
+  Both records exist, and only the request claims delegation.
 
 ## 6. Attribution
 
-`AuditLog.record` already carries `actor`. The vocabulary becomes closed, and one
-new optional field carries delegation:
+`AuditLog.record` already carries `actor` and an `extra` mapping. It has no
+`on_behalf_of` or `origin_ref` parameter, and nothing writes those keys today.
+They ride in `extra` rather than as new columns — `extra` is already persisted and
+already carries structured keys such as the egress ledger's `recipient` and
+`purpose` — so no schema change is required. The
+vocabulary below becomes closed **at the two chokepoints that write attribution**,
+`openshell/audit.py::AuditLog.record` and `skills/loader.py::invoke`, and the
+issues named in the last column are the only ones that may introduce a value:
 
-| Field | Meaning | Values |
-|---|---|---|
-| `actor` | Who caused this record | `owner`, `schedule`, `plugin`, `share` |
-| `on_behalf_of` | Whose authority was borrowed, when it was not the actor's own | `owner` (the only value in a single-owner build) |
-| `origin_ref` | The specific delegate, when `actor` is not `owner` | `{schedule_id, run_id}`, `{plugin, plugin_digest}`, or `{token_hash}` — never a raw token |
+| Field | Meaning | Values | Written by |
+|---|---|---|---|
+| `actor` | Who caused this record | `owner`, `system`, `schedule`, `plugin`, `share` | `owner` today; `system` for expiry events (conversion in §15); `schedule` by KEL-23/KEL-27; `plugin` by KEL-25; `share` by KEL-28 |
+| `on_behalf_of` | Whose authority was borrowed, when it was not the actor's own | `owner` (the only value in a single-owner build) | KEL-23/KEL-27 for `schedule`; KEL-25 for `plugin`. A `share` record borrows no authority and writes no value |
+| `origin_ref` | The specific delegate, when `actor` is not `owner` | `{schedule_id, run_id}`, `{plugin, plugin_digest}`, or `{token_hash}` — never a raw token | KEL-23/KEL-27, KEL-25, and KEL-28, each matching its own `actor` |
 
 Rules:
 
 - **Never a free-text actor.** An unknown `actor` value is a bug, not a label. The
-  four values above are the only ones any call site may write.
+  five values above are the only ones any call site may write, and the rule is
+  enforced at `AuditLog.record` and `skills/loader.py::invoke` — not retroactively
+  on every historical record. `owner` is written by `chat/service.py`,
+  `openshell/approvals.py`, and the auth paths. `system` is the value for the
+  process settling an expiry or a recovery: `chat/recovery.py` already writes
+  `actor="system"` into its `approval_expired` *event payload*, while the audit line
+  it writes passes no `actor` at all. That unattributed audit record is the one
+  conversion gap, named in §15. No call site writes `agent` today, so an `agent`
+  value appearing later is a bug in the change that added it, and converting one is
+  that change's job.
+- **`system` is an actor, not a principal.** It names the process settling an
+  expiry or a recovery, which cannot be asked to do anything. The principal count
+  in §3 stays five.
+- **An omitted actor is not a value.** `skills/loader.py::invoke` takes
+  `actor=None` by default; such a record is unattributed, and every calling issue
+  named above must pass one.
+- **The delegation pair is closed too.** `on_behalf_of` has one value, and
+  `origin_ref` has one shape per actor. Neither is free text: a string that is not
+  one of the listed shapes is a bug, not an extra detail.
+- **`credential` and `id_short` are not part of this vocabulary.** KEL-24 already
+  writes them in `extra` on owner records to name the *credential* (root bearer or
+  device session) and the session's hashed short id. They do not change `actor`,
+  which stays `owner` for both.
 - **A share view is attributed to the link, not the person.** The record is
   `actor="share"` plus `token_hash`. There is no viewer identity to log, and none is
   invented: no IP, no user agent, no cookie, no fingerprint. Aggregate daily counts
@@ -170,10 +200,12 @@ Rules:
 
 ## 7. Limits: how M3-A rate classes and M3-C spend ceilings compose
 
-The M3-A limiter has five classes (`auth`, `chat`, `upload`, `read`, `admin`) and
-keys authorized traffic on `OWNER_IDENTITY`, deliberately, so a second tab cannot
-double the allowance. The M3-C ceiling is one day window and one month window
-computed from `usage.jsonl`.
+The M3-A limiter has five classes today (`auth`, `chat`, `upload`, `read`, `admin`)
+and keys **authorized** traffic on `OWNER_IDENTITY`, deliberately, so a second tab
+cannot double the allowance; the `auth` class is the exception and keys on the
+client address, because a rejected credential names no owner. KEL-28 adds a sixth
+class, `share`. The M3-C ceiling is one day window and one month window computed
+from `usage.jsonl`.
 
 | Principal | Rate budget | Spend budget |
 |---|---|---|
@@ -217,10 +249,10 @@ thread is refused with a typed error rather than silently truncated.
 
 | Action | Immediately invalidates | Deliberately leaves behind |
 |---|---|---|
-| Revoke one link | The row is marked revoked; the next request is the identical `404`. Nothing to purge from a cache, because the response is `no-store` | The `share_revoked` audit record (token hash, no token) under audit retention; the thread itself; any copy the viewer already holds |
-| Revoke all links for a thread | Every row for that thread, in one transaction | As above, per link |
-| Link expires | The next request after `expires_at` is the identical `404`; expired rows are pruned on use and by the retention pass | The creation audit record, until its own 30-day rotation |
-| Delete a thread (KEL-21 purge) | Its share rows are deleted in the same transaction as its messages and blocks, and its files are unlinked. Links are `404` on the next request | Nothing of the thread; the audit record of creation/revocation |
+| Revoke one link | `revoked_at` is set on the row; the next request is the identical `404`. The row is **not** deleted at revoke — it is pruned by the thread purge and by KEL-28's share sweep (boot + daily, the orphan-sweep pattern), never on the read path (a share GET mutates nothing) — so a concurrent read cannot lose the row mid-request. Nothing to purge from a cache, because the response is `no-store` | The `share_revoked` audit record (token hash, no token) under audit retention; the thread itself; any copy the viewer already holds |
+| Revoke all links for a thread | `revoked_at` is set on every row for that thread, in one transaction; the rows are pruned later by the sweep, not deleted here | As above, per link |
+| Link expires | The next request after `expires_at` is the identical `404`; expired and revoked rows are pruned by the share sweep, not by the request that observed them | The creation audit record, until its own 30-day rotation |
+| Delete a thread (KEL-21 purge) | Its share rows **and its `share_views` counts** are deleted in the same transaction as its messages and blocks, and its files are unlinked. Links are `404` on the next request | Nothing of the thread; the audit record of creation/revocation |
 | Revoke a device session (KEL-24) | That session's cookie and its live SSE stream | **Share links are untouched.** A link is not tied to a session, so signing a laptop out does not un-share a thread |
 | Rotate the root token / `KELP_SESSION_SECRET` | Every session credential | **Share links are untouched**, by design: they do not derive from the session secret. The owner therefore needs an explicit "revoke all links" action, and it is not optional — it is the only kill switch for links |
 
@@ -230,17 +262,31 @@ already rendered in a viewer's browser, nor recall a saved copy, a screenshot, o
 print. Sharing is a decision to hand someone a copy. The product must say so in the
 share panel copy, and this ADR refuses to pretend otherwise.
 
-**Retention accounting.** The snapshot is chat content — a second copy of it — so it
-is governed by the existing **Chat content** row: it is removed with the thread, and
-it is never retained after the thread is purged. If KEL-28 gives share rows their
-own clock (recommended, because a revoked row is dead weight), the row must be added
-to `chat/retention.py::RETENTION_ROWS`, `docs/DEPLOY.md` §8.1, and `docs/PRIVACY.md`
-§3 **in the same change**, because `tests/test_privacy.py` binds all three.
+**Retention accounting.** Two tables, one clock. The snapshot is chat content — a
+second copy of it — and `share_views` is a per-day counter keyed by `token_hash`.
+Both are governed by the existing **Chat content** row: the thread purge deletes
+`shares` and `share_views` in the same transaction as messages and blocks, and
+neither is retained after the thread is gone. They therefore add **no** row to
+`chat/retention.py::RETENTION_ROWS`, `docs/DEPLOY.md` §8.1, or `docs/PRIVACY.md`
+§3, and no row is owed there. The snapshot contains no artifact bytes by
+construction (the projection drops `storage_path`, `sha256`, and the handle), so a
+purged artifact has nothing to delete inside a share row: the artifact follows the
+**Uploaded files** row and the snapshot never held it.
+
+If KEL-28 gives share rows their own clock instead — for example a 30-day window
+on revoked rows — that row must be added to all three in the same change. The
+test binding is one-directional, which is why the review still has to check the
+other way: `tests/test_privacy.py` asserts that every `RETENTION_ROWS` class name
+appears in `docs/PRIVACY.md`, and nothing parses `docs/DEPLOY.md` §8.1's rows. A
+row added to the code and to `DEPLOY.md` but not to the review would pass the
+test and still be wrong.
 
 ## 9. Migration path for owner-less tables
 
-Every table except `sessions` has no principal column, and there is no schema
-version table: `ChatStore.__init__` runs `_SCHEMA` with `CREATE TABLE IF NOT EXISTS`
+No table carries a principal column, `sessions` included: a `sessions` row records
+the owner's *device* — hashed id, label, timestamps, revocation — not a principal,
+and the string `'owner'` appears nowhere in the current schema. There is also no
+schema version table: `ChatStore.__init__` runs `_SCHEMA` with `CREATE TABLE IF NOT EXISTS`
 on every open, which is additive and idempotent but cannot alter an existing table.
 
 The decision has three parts:
@@ -276,8 +322,8 @@ its own short model. Scope: the link, not the owner's machine.
 | Threat | Why it is real here | Mitigation |
 |---|---|---|
 | **Token leakage via `Referer`** | The token is in a URL, so any outbound navigation or third-party subresource from the share page can carry it downstream | `Referrer-Policy: no-referrer` on every share response — `strict-origin-when-cross-origin` (as `netlify.toml` sets for the static tracker) still sends the origin, and the owner's origin is identifying. The page loads **no third-party asset at all**: no font, script, image, or iframe. Any outbound link carries `rel="noreferrer noopener"`. CSP `default-src 'none'; style-src 'unsafe-inline'; img-src 'self' data:; frame-ancestors 'none'; base-uri 'none'; form-action 'none'` |
-| **Token leakage via logs** | A path segment lands in access logs, proxy logs, and metrics labels by default | The token is a path segment, so the route is logged as a **pattern**, never a value: the access line already logs `route`, not `path` (`chat/logging.py::_ALLOWED_FIELDS`), and `_route_label` collapses any non-`/api` path to `/other`. KEL-28 adds a bounded `/s/{token}` label and a `share` metric class. A reverse proxy in front of the app must not log the path or must redact `/s/*`; the deploy runbook says so |
-| **Enumeration** | A guessable or oracle-revealing token turns a private thread into a scan target | 256 bits of `secrets` entropy; lookup by hashed primary key; **one** response builder so unknown, expired, revoked, and malformed are byte-identical `404`s with no distinguishing header, and no branch that returns early for malformed input. Rate limiting is charged before the lookup, so a scan is slow even though it is hopeless |
+| **Token leakage via logs** | A path segment lands in access logs, proxy logs, and metrics labels by default | The token is a path segment, so the route is logged as a **pattern**, never a value: the access line already logs `route`, not `path` (`chat/logging.py::_ALLOWED_FIELDS`), and `_route_label` collapses any non-`/api` path to `/other`. KEL-28 adds a bounded `/s/{token}` label and a `share` metric class. A reverse proxy in front of the app must not log the path or must redact `/s/*` — that runbook note is a follow-up (§15), not yet written |
+| **Enumeration** | A guessable or oracle-revealing token turns a private thread into a scan target | 256 bits of `secrets` entropy; **one** lookup path for every input: the presented value is hashed with SHA-256 and looked up by that primary key, malformed input included, so there is no shape check to branch on. **One** response builder means unknown, expired, revoked, and malformed are byte-identical `404`s with no distinguishing header, and the work before the response is the same — hash, one keyed lookup, one render. Rate limiting is charged before the lookup, so a scan is slow even though it is hopeless |
 | **Revocation latency** | A link that keeps working after "revoke" is worse than no revoke button | Revocation is a row update visible to the next request, with no cache to expire (`no-store`), no CDN in front of the route, and no in-process token cache. There is no SSE share stream in this design, so there is nothing to close; if one is ever added it must close within one tick, the KEL-24 pattern |
 | **CSRF** | Not applicable, and that is worth writing down rather than leaving as an omission | The surface is GET-only, sets no cookie, and grants no ambient authority, so a cross-site request carries no credential the attacker does not already possess (the token). There is no state to change and no CSRF token to protect. **Any** non-GET on a share route is `405` before the token is even looked up — which is also what makes the absence of CSRF safe rather than merely convenient |
 | **Cross-read** | One token resolving another thread is the catastrophic bug | A share route accepts a token and nothing else. No thread id is accepted alongside it, and the snapshot is a copy in the row, so the read path cannot reach a thread even by accident |
@@ -364,8 +410,10 @@ detail.
   only surface that can work in a signed-out window without inventing a frontend.
 - **Token.** `secrets.token_urlsafe(32)`; stored as `sha256` hex primary key;
   returned once in the creation response; never in a thread id, a redirect, or a
-  log. Malformed input is rejected by shape before any lookup and gets the same
-  `404`.
+  log. Malformed input is **not** rejected by shape before the lookup: every
+  presented value is hashed, a malformed one simply misses, and it renders the
+  same `404` through the same builder. An early shape check is exactly the oracle
+  this design is avoiding.
 - **Expiry.** 7 days default; `KELP_SHARE_MAX_TTL_SECONDS` hard ceiling (30 days);
   enforced on every read, not at creation only.
 - **Snapshot.** Materialized at creation from settled state, per §8: the projection
@@ -377,8 +425,11 @@ detail.
   provider calls, zero tool calls, zero artifact reads, and no mutation on any share
   request.
 - **Indistinguishability.** Unknown, expired, revoked, and malformed produce
-  byte-identical `404` bodies and no distinguishing headers — one fixture test
-  compares the bytes.
+  byte-identical `404` bodies, no distinguishing headers, and the same work:
+  hash, one keyed lookup, one response builder. Malformed input is not
+  short-circuited, so it does not return measurably faster than a well-formed
+  miss. The acceptance test compares the bytes of all four bodies, the header
+  set, and the status.
 - **Headers.** `Cache-Control: no-store`, `X-Robots-Tag: noindex, nofollow`,
   `Referrer-Policy: no-referrer`, `X-Content-Type-Options: nosniff`, and the CSP in
   §10. No `Set-Cookie`, and no way to mint a session from a share request.
@@ -386,20 +437,28 @@ detail.
   before the lookup, failing closed.
 - **Audit.** `share_created` and `share_revoked` carry `token_hash` and never the
   token; `share_viewed` is aggregated per day in `share_views (day, token_hash,
-  views)` with no per-request row and no viewer data.
+  views)` with no per-request row and no viewer data. `share_views` rows are
+  deleted by the thread purge in the same transaction as the `shares` rows — the
+  counter has no separate clock and therefore no retention row.
 - **Owner endpoints.** Create, list-for-thread, and revoke are authenticated,
   CSRF-protected mutations under the existing `chat` class, so the existing
   `_authorize` path covers them unchanged.
 
-**Two deviations from KEL-28's text, both narrowing and both deliberate:**
+**Three deviations from KEL-28's text, all narrowing and all deliberate:**
 
 1. KEL-28 says revocation "closes any live share viewer streams". This design has
    no share stream — the page is a static snapshot per request — so there is nothing
    to close, and the guarantee is "the next request is a `404`". A stream, if ever
    added, inherits KEL-24's one-tick close rule.
-2. KEL-28's headers list does not name `Referrer-Policy`; this ADR adds
-   `no-referrer` because a token in a path plus any outbound link is the single most
-   likely leak in the whole design.
+2. The header set is KEL-28's plus one: `Referrer-Policy: no-referrer`. It is
+   called out as a deviation rather than as a detail because a token in a path plus
+   any outbound link is the single most likely leak in the whole design; a later
+   change that drops it has to delete this paragraph, not just a line in a list.
+3. KEL-28's text names a per-token `share` bucket and no process-wide bound. This
+   ADR adds the global `share` ceiling on top of it (§7). Without it, every distinct
+   token carries its own full allowance, so the aggregate a stranger can drive is
+   bounded by how many links exist rather than by the process. The global ceiling is
+   the bound that survives a leaked link.
 
 ## 15. Consequences and follow-ups
 
@@ -407,8 +466,10 @@ detail.
 budget, one approval authority, and a sharing primitive that cannot write, spend, or
 read across threads. The share surface adds no outbound recipient, so
 `docs/PRIVACY.md`'s egress ledger stays exactly as it is. The attribution vocabulary
-(`actor` / `on_behalf_of` / `origin_ref`) is what KEL-23 and KEL-27 need anyway, so
-the scheduler and the share link land on one model instead of two.
+declared in §6 — `actor` plus the `extra` keys `on_behalf_of` and `origin_ref` — is
+what KEL-23 and KEL-27 need anyway, so the scheduler and the share link land on one
+model instead of two; KEL-24's `credential` and `id_short` keys stay as they are and
+are not part of it.
 
 **Cost.** A snapshot duplicates chat content at rest. That is a real privacy surface,
 paid for by making purge delete it in the same transaction and by never retaining it
@@ -424,23 +485,25 @@ the cost in §12(b). This is named in the UI copy, not hidden.
 | Share link implementation | This ADR's slice | **KEL-28** (exists) |
 | Scheduled-turn actor, `paused_needs_approval`, `origin=schedule` | §4, §5, §6 bind the scheduler | **KEL-23**, **KEL-27** (exist) |
 | Plugin attribution (`actor="plugin"`, digest in `extra`) | §6 vocabulary applies to plugin skills | **KEL-25** (exists) |
+| Attribution keys `on_behalf_of` and `origin_ref` in `extra` | §6 declares them; `AuditLog.record` has no such parameter and nothing writes them today, so these issues own the extension | **KEL-28** (`share`), **KEL-23/KEL-27** (`schedule`), **KEL-25** (`plugin`) — each writes its own key; no separate issue needed |
+| Actor-vocabulary conversion and `system` attribution | §6 closes the vocabulary at `AuditLog.record` and `loader.invoke`; `chat/recovery.py` records `system` in its event payload but leaves the `approval_expired` audit line's `actor` unset | Inside the next issue that touches `chat/recovery.py` (a one-line `actor="system"`); nothing writes `agent` today |
+| `share_views` deletion on thread purge | §8 puts the counter under **Chat content**, so it is deleted with the thread and no retention row is owed | **KEL-28** (exists) |
 | Add ADR 0002 to the reference table | Discoverability next to ADR 0001 | Proposed: docs chore, `docs/CHAT_SPEC.md` §19 (no code) |
 | Redact `/s/*` in any reverse-proxy access log | §10 log-leak row; the app's own log is safe, a proxy's may not be | Proposed: `docs/DEPLOY.md` runbook note |
 | `Referrer-Policy` and CSP on the authenticated app, not just the share page | The share route is the first place they are required; the dashboard needs them too | Proposed: security hardening issue |
 | Per-principal spend sub-caps | Required before any collaborator is admitted (§7, §12) | Proposed: ships with the collaborator decision |
-| Share retention row, if revoked rows are retained | `RETENTION_ROWS`, `DEPLOY.md` §8.1, `PRIVACY.md` §3 must change together | Proposed: inside KEL-28 if it retains rows |
+| Share retention row, only if KEL-28 adds a share clock | `RETENTION_ROWS`, `DEPLOY.md` §8.1, `PRIVACY.md` §3 must change together; today purge deletes `shares` and `share_views`, so no row is owed | Proposed: inside KEL-28 only if it changes the clock |
 
-Per this subagent's boundaries, these rows name the follow-ups; creating the
-not-yet-existing Linear issues is left to the parent session, not done here.
+These follow-ups were raised on 2026-10-30, when this ADR was accepted.
 
 ## 16. Open questions
 
 | Question | Owner | Date / status |
 |---|---|---|
-| Should a revoked share row be kept for audit convenience, or pruned immediately? | KEL-28 implementer | Decided inside KEL-28; if kept, it needs the retention row above. Recommended: prune on revoke, rely on the audit record |
-| Should the share page show the thread title? | KEL-28 implementer | **Yes** — a reader with no context cannot use a page without one, and the title is already in the snapshot. Not a privacy change: the owner chose to share the thread |
-| Re-snapshotting: new row or update in place? | KEL-28 implementer | **New row, new token** — an updated snapshot must not silently change what a previously shared URL shows, or revocation stops meaning anything. The old link keeps its old content until it expires |
-| Does the model provider's copy of a shared thread matter? | Owner | Out of scope (§11). It was sent before sharing existed |
+| Should a revoked share row be kept for audit convenience, or pruned immediately? | KEL-28 implementer | **Decided 2026-10-30: kept, pruned at purge.** Revoke sets `revoked_at`; the row is deleted by the thread purge and by the share sweep, not by the revoke request. Pruning at revoke would race a concurrent read and would lose why the link stopped working; the `share_revoked` audit record is the durable account |
+| Should the share page show the thread title? | KEL-28 implementer | **Yes** (2026-10-30) — a reader with no context cannot use a page without one, and the title is already in the snapshot. Not a privacy change: the owner chose to share the thread |
+| Re-snapshotting: new row or update in place? | KEL-28 implementer | **New row, new token** (2026-10-30) — an updated snapshot must not silently change what a previously shared URL shows, or revocation stops meaning anything. The old link keeps its old content until it expires |
+| Does the model provider's copy of a shared thread matter? | Owner | Out of scope (§11), 2026-10-30. It was sent before sharing existed |
 
 ## 17. How to check this ADR
 
@@ -453,8 +516,10 @@ Every claim above is checkable from the repository:
 - §6's field vocabulary: `openshell/audit.py::AuditLog.record`,
   `chat/logging.py::_ALLOWED_FIELDS`, `chat/api.py::_route_label`.
 - §8's retention class: `chat/retention.py::RETENTION_ROWS` and
-  `tests/test_privacy.py`, which fails if `docs/PRIVACY.md` and the code disagree in
-  either direction.
+  `tests/test_privacy.py`, which fails when a class in `RETENTION_ROWS` is missing
+  from `docs/PRIVACY.md`. The reverse direction — a row left in the review after
+  the code drops it — is not test-bound, and `docs/DEPLOY.md` §8.1 is mirrored by
+  hand, so both are checked at review time rather than by a test.
 - §9's migration: `chat/store.py::ChatStore.__init__` (`CREATE TABLE IF NOT
   EXISTS`, no version table) and `tests/`' KEL-24 upgrade test for the precedent.
 - §12's deployment premise: `docs/DEPLOY.md` and `docs/PRIVACY.md`.
