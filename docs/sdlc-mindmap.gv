@@ -26,7 +26,7 @@ digraph sdlc {
   m1   [label="M1 Prototype\nCOMPLETE" shape="box" style="filled,bold,rounded" fontsize="15" penwidth="2" fillcolor="#D9EDD7" URL="#m1" tooltip="Stage 1: ask, answer, approve, pay, demo. Every work item done."];
   m2   [label="M2 Polished MVP\nCOMPLETE" shape="box" style="filled,bold,rounded" fontsize="15" penwidth="2" fillcolor="#FCEFC7" URL="#m2" tooltip="Stage 2: survives ordinary use. Serve entry, health checks, restart recovery, real document search, observability, repeatable quality measurements, and the deploy assets and runbook are done."];
   m3   [label="M3 Hardening\nCOMPLETE" shape="box" style="filled,bold,rounded" fontsize="15" penwidth="2" fillcolor="#F0DCC8" URL="#m3" tooltip="Stage 3: privacy and cost promises hold. Abuse resistance, spend ceilings, invoke-time policy, retention, owner sign-in, and the written privacy review are all done."];
-  m4   [label="M4 Full vision\nIN PROGRESS" shape="box" style="filled,bold,rounded" fontsize="15" penwidth="2" fillcolor="#DDD8EF" URL="#m4" tooltip="Stage 4: more devices, scheduled work, outside abilities, and sharing. Four pieces are in; proactive turns and the live share link are still to come."];
+  m4   [label="M4 Full vision\nCOMPLETE" shape="box" style="filled,bold,rounded" fontsize="15" penwidth="2" fillcolor="#DDD8EF" URL="#m4" tooltip="Stage 4: more devices, scheduled work, outside abilities, and sharing. Every work item is done."];
   surf [label="Surfaces" shape="box" style="filled,bold,rounded" fontsize="15" penwidth="2" fillcolor="#CDE9E4" URL="#surfaces" tooltip="Where you talk to the assistant: screen now, phone apps later."];
   pay  [label="Payments" shape="box" style="filled,bold,rounded" fontsize="15" penwidth="2" fillcolor="#F2D8D8" URL="#payments" tooltip="How money moves: Stripe saved cards and Razorpay Checkout, both merged and closed out. Balance later."];
   fig  [label="Figma scope done" shape="box" style="filled,bold,rounded" fontsize="15" penwidth="2" fillcolor="#E2E2E2" URL="#figma" tooltip="Screen plan is written. Drawing file is next, no code yet."];
@@ -173,14 +173,14 @@ digraph sdlc {
   k24 [label="KEL-24 Device sessions\nDONE" shape="box" style="filled,bold,rounded" fillcolor="#DDD8EF" URL="#kel-24" tooltip="Owner sessions persist in the chat database: several devices survive a restart, list each other, and revoke one another. Merged and reviewed."];
   k25 [label="KEL-25 Plugins\nDONE" shape="box" style="filled,bold,rounded" fillcolor="#DDD8EF" URL="#kel-25" tooltip="Abilities from others install from a directory or zip, are pinned by SHA-256, and load by file path without changing sys.path. Merged and reviewed."];
   k26 [label="KEL-26 Sharing decision\nDONE" shape="box" style="filled,bold,rounded" fillcolor="#DDD8EF" URL="#kel-26" tooltip="Written decision: one owner, and everyone else gets only a per-thread, revocable, read-only link. Merged and reviewed."];
-  m4_proactive [label="Proactive turns\nTO COME" fillcolor="#ECE9F7" URL="#m4" tooltip="KEL-27, work the assistant begins on its own. Not started."];
-  m4_live [label="Shared threads live\nLATER" fillcolor="#ECE9F7" URL="#kel-26" tooltip="KEL-28, the read-only share link the decision specifies. Not built."];
+  k27 [label="KEL-27 Proactive turns\nDONE" shape="box" style="filled,bold,rounded" fillcolor="#DDD8EF" URL="#kel-27" tooltip="A due scheduled task becomes an ordinary assistant turn through the same service, guards, and stream; spend, concurrency, and hourly caps plus a failure breaker keep it bounded. Merged and reviewed."];
+  k28 [label="KEL-28 Share links\nDONE" shape="box" style="filled,bold,rounded" fillcolor="#DDD8EF" URL="#kel-28" tooltip="A per-thread, revocable, read-only link that shows one frozen snapshot, stored as a hash and rate-limited with no owner session. Merged and reviewed."];
   m4 -> k23;
   m4 -> k24;
   m4 -> k25;
   m4 -> k26;
-  m4 -> m4_proactive;
-  m4 -> m4_live;
+  m4 -> k27;
+  m4 -> k28;
 
   // Surfaces leaves (soft teal family)
   s_dash [label="Dashboard chat now" fillcolor="#E6F4F1" URL="#surfaces" tooltip="Main screen in the browser. Built first."];

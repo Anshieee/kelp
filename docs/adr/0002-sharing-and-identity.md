@@ -5,8 +5,8 @@
 - **Issue:** KEL-26 (M4-E). The decision requested by the issue text.
 - **Branch:** `kel-26`
 - **Related:** KEL-28 (the implementation slice this ADR specifies), KEL-24 (device
-  sessions), KEL-23 / KEL-27 (scheduler, not yet merged), KEL-25 (plugins, not yet
-  merged), KEL-17 (rate classes), KEL-18 (spend ceilings), KEL-19 (owner sign-in),
+  sessions), KEL-23 / KEL-27 (scheduler; both merged 30 October 2026), KEL-25
+  (plugins, merged 30 October 2026), KEL-17 (rate classes), KEL-18 (spend ceilings), KEL-19 (owner sign-in),
   KEL-21 (retention), KEL-20 (invoke-time policy), `docs/PRIVACY.md`,
   `docs/CHAT_SPEC.md` §12
 - **Decision log:** no existing Q-decision changes, so this ADR adds no Q-number.
@@ -59,6 +59,13 @@ yet (that is KEL-27). The rules in §4 and §5 for that principal therefore stil
 describe a binding contract rather than shipped behaviour, and the plugin
 principal's constraints are now enforced by the digest pin described in
 `docs/SKILL_SPEC.md` §15.1. Nothing else in this ADR changes.
+
+**Update, 30 October 2026 — M4 closed.** KEL-27 merged at `c62be17`, so the
+scheduled/system principal now runs: `chat/server.py` starts the ticker after boot
+recovery, and the §4/§5 rules for it are enforced by `chat/proactive.py` rather
+than merely written down. KEL-28 merged at `dc50925` and is the share surface this
+ADR specifies; §14.1 records exactly what shipped and where it departs from §14.
+No guarantee in this ADR was widened by either merge.
 
 ## 2. The question
 

@@ -11,13 +11,15 @@ that goes with it is [`sdlc-mindmap.svg`](sdlc-mindmap.svg), with a PNG fallback
 site embeds a copy of the SVG directly in the page, so every box there can be clicked; that copy
 and these two files must be updated together.
 
-What this snapshot rests on: `main` is at `05d7508`, all **1004 tests pass**, and the repository is
+What this snapshot rests on: `main` is at `dc50925`, all **1045 tests pass**, and the repository is
 public. KEL-5 through KEL-10 are merged, reviewed, and done; KEL-11, KEL-12, KEL-13, KEL-14, KEL-15,
 and KEL-16 are merged and reviewed too, and close M2. KEL-17, KEL-18, KEL-20, KEL-21, KEL-19, and
 KEL-22 then carried M3 to completion and are merged and reviewed: abuse resistance, spend ceilings,
 invoke-time policy, retention, owner sign-in, and the written privacy review. KEL-24 then opened M4
 by making those owner sessions durable devices, and KEL-23, KEL-25, and KEL-26 followed it with
-scheduled work, installable plugins, and the written sharing decision. KEL-10, payments,
+scheduled work, installable plugins, and the written sharing decision. KEL-27 and KEL-28 then closed
+that stage with proactive turns and the read-only share link, so **M4 Full vision is complete**.
+KEL-10, payments,
 carries both its paths: the Stripe saved-card scaffold, the Razorpay gateway, and the Razorpay
 hosted Checkout.
 
@@ -111,9 +113,14 @@ taking the suite from 969 to **1004**. KEL-26 is the sharing and identity decisi
 that keeps exactly one principal, the owner, and gives everyone else only a per-thread, revocable,
 read-only capability link, with approval authority, attribution, rate and spend composition,
 retention, revocation, and migration all settled on paper. It merged at `05d7508` from `kel-26`
-(head `a1a5b1f`) and changed documentation only, so the suite stays at **1004**. KEL-27, the
-proactive turn runner, is built on branch `kel-27` and awaiting review; KEL-28, the share link this
-ADR specifies, is still to come.
+(head `a1a5b1f`) and changed documentation only, so the suite stayed at **1004** at that merge.
+KEL-27 is the proactive turn runner: a due schedule becomes an ordinary turn on the same service,
+policy gate, and stream, behind spend, concurrency, and hourly caps plus a per-schedule failure
+breaker. It merged at `c62be17` from `kel-27` (head `79dd6f8`) and added 12 tests, taking the suite
+from 1004 to **1016**. KEL-28 is the read-only share link the decision specified: a token shown once,
+stored as a SHA-256 hash, resolving to one frozen and scrubbed snapshot of one thread, revocable in
+one request and swept with its thread. It merged at `dc50925` from `kel-28` (head `98ded52`) and
+added 29 tests, taking the suite to **1045**. M4 is complete.
 
 ## How to read the labels
 
@@ -131,7 +138,7 @@ our task tracker. Linear can lag behind by a day; the statuses below match the t
 snapshot date.
 
 **LATER** on the last M4 leaf means outside this round; KEL-23, KEL-24, KEL-25, and KEL-26 are DONE,
-KEL-27 is IN PROGRESS on its branch, and KEL-28 is the one M4 item still marked TO COME.
+KEL-27 and KEL-28 are both DONE, so no work item is left open.
 
 ## The map
 
@@ -140,8 +147,8 @@ KEL-27 is IN PROGRESS on its branch, and KEL-28 is the one M4 item still marked 
 The same map in words, in case the image does not load:
 
 - **Milestones** — five stages, M0 to M4: M1, M2, and M3 are complete, and M4 is in progress.
-- **The work** — twenty-two work items, KEL-5 to KEL-26: all twenty-two are done. KEL-27, proactive
-  turns, is built and under review on its branch; KEL-28, the live share link, is still to come.
+- **The work** — twenty-four work items, KEL-5 to KEL-28: all twenty-four are done, and M4 closed
+  with KEL-27, proactive turns, and KEL-28, the read-only share link.
 - **Surfaces** — where you talk to the assistant: dashboard first, Telegram next, WhatsApp and voice memos later.
 - **Money** — saved cards through Stripe and hosted Checkout through Razorpay, both merged and closed out; an in-app balance later.
 - **Design** — the screen plan is written, and so is the chat spec. The chat surface code is merged; the drawing file and the browser screen are next.
@@ -162,9 +169,9 @@ promise that full-vision scope lands this week. Scope is cumulative: M2 includes
 | **M1 Prototype** | 30 Oct 2026 | COMPLETE | The end-to-end story: ask, get an answer with sources, read a file, approve an action, pay with a saved card, watch the six-scene demo. All six work items live here, and all six are done: KEL-5 to KEL-9 were merged earlier, and KEL-10 closed on owner confirmation on 30 October 2026. |
 | **M2 Polished MVP** | 30 Oct 2026 | COMPLETE | Survives ordinary use: picks up after a restart, self-checks, better search over your documents, an honest account of what it did, repeatable quality measurements, and a deploy a stranger can repeat. All six work items are done: KEL-11, the serve entrypoint; KEL-12, health and readiness; KEL-13, real document search with citations; KEL-14, structured logs and metrics; KEL-15, the eval harness that measures answer quality; KEL-16, the image and runbook. The runbook's end-to-end pass on a real Nebius host is still to be done. |
 | **M3 Hardening** | 30 Oct 2026 | COMPLETE | The privacy and cost promises hold under pressure: who sees what, where keys live, caps on traffic, a retention rule, a spend ceiling, and a written privacy review. All six pieces are done: KEL-17, the traffic, body, and concurrency caps; KEL-18, the spend ceilings; KEL-19, owner sign-in with a session cookie, CSRF, and lockout; KEL-20, the policy enforced at every skill call; KEL-21, the retention rule; and KEL-22, the written privacy review with the egress ledger and the exec-boundary decision. |
-| **M4 Full vision** | 30 Oct 2026 | IN PROGRESS | More devices, work the assistant starts on its own, abilities added by others, and team sharing. A direction, not a deadline. Four of its six pieces are in: KEL-24, owner sessions as listable, revocable devices; KEL-23, durable scheduled tasks with a real cron runtime; KEL-25, digest-pinned plugin packages loaded by path; and KEL-26, the written decision that keeps one owner and gives everyone else only a per-thread read-only link. KEL-27, proactive turns, is built and under review on its branch; KEL-28, the share link, is still to come. |
+| **M4 Full vision** | 30 Oct 2026 | COMPLETE | More devices, work the assistant starts on its own, abilities added by others, and sharing. All six pieces are merged and reviewed: KEL-24, owner sessions as listable, revocable devices; KEL-23, durable scheduled tasks with a real cron runtime; KEL-25, digest-pinned plugin packages loaded by path; KEL-26, the written decision that keeps one owner and gives everyone else only a per-thread read-only link; KEL-27, the proactive turn runner that makes a due schedule a real turn behind spend, concurrency, and hourly caps; and KEL-28, the read-only share link, stored as a hash and revocable in one request. |
 
-## The twenty-two work items
+## The twenty-four work items
 
 KEL-5 feeds KEL-6 and KEL-7. Those two feed KEL-8. KEL-7 also feeds KEL-10. KEL-8 comes before the
 demo, KEL-9. The first twelve are done. KEL-10, payments, closed M1 on owner confirmation on 30
@@ -175,7 +182,8 @@ the deploy. KEL-17 and KEL-18 opened M3 the same day, with abuse resistance and 
 KEL-20 and KEL-21 followed it with invoke-time policy and retention, then KEL-19 and KEL-22 closed
 it with owner sign-in and the written privacy review. KEL-24 then opened M4 by making those owner
 sessions durable, listable devices, and KEL-23, KEL-25, and KEL-26 followed with scheduled work,
-plugin packages, and the sharing decision. KEL-27 is built and under review on its branch; KEL-28 is the one M4 item still to come.
+plugin packages, and the sharing decision. KEL-27 then made a due schedule a real turn, and KEL-28
+built the link the decision specified, which completed M4.
 
 ### KEL-5 — Skill contracts — DONE
 
@@ -217,7 +225,7 @@ price is counted per chunk.
 - Merge: [`d3c763e`](https://github.com/Anshieee/kelp/commit/d3c763e) (branch [`kel-6`](https://github.com/Anshieee/kelp/tree/kel-6), head `4c72afc`)
 
 Status detail: merged into `main` at `d3c763e`. The kernel suite is 43 tests — 25 for the loop and
-18 for the streaming client — and passes with the rest of the 1004. The review written up in
+18 for the streaming client — and passes with the rest of the 1045. The review written up in
 [`docs/REVIEW_KEL6_KEL7.md`](REVIEW_KEL6_KEL7.md) signed off, and KEL-8 built on top of it.
 
 ### KEL-7 — Approval gate — DONE
@@ -260,7 +268,7 @@ showing where an answer came from, and approval requests shown in the conversati
 Status detail: merged into `main` at `e0bbb72`. The chat surface is in: named threads that can be
 reopened, an append-only stream of events, a card for each tool step, approvals shown in the
 conversation over the KEL-7 gate, artifacts, and a cooperative cancel token so Stop works. The chat
-suite is 86 tests, part of the 1004. The spec is on `main` at 1,164 lines; the review fixes that
+suite is 86 tests, part of the 1045. The spec is on `main` at 1,164 lines; the review fixes that
 shaped it landed at `56b0785`:
 
 - **Honest dependencies (M1).** The web search, GitHub read, and document handlers are still stubs.
@@ -1170,13 +1178,14 @@ asking the assistant anything.
 - Merge: [`05d7508`](https://github.com/Anshieee/kelp/commit/05d7508) (branch
   [`kel-26`](https://github.com/Anshieee/kelp/tree/kel-26), head `a1a5b1f`)
 
-Status detail: documentation only, so no tests were added and the suite stays at 1004. Two honest
-limits. Nothing is built: KEL-28, the read-only share link, is specified and not started, so today
-sharing exists only on paper and the product still has exactly one user. And the decision admits no
-named collaborator at all, so "several people work in one thread" — the thing most people mean by
-sharing — is explicitly out of scope until someone asks for it concretely.
+Status detail: documentation only, so no tests were added and the suite stayed at 1004 at that
+merge. The slice it specified is no longer only paper: KEL-28 built the link and §14.1 of the ADR is
+a dated amendment recording what shipped, where it differs from §14, and why nothing in it widens a
+guarantee. One honest limit survives. The decision admits no named collaborator at all, so "several
+people work in one thread" — the thing most people mean by sharing — is explicitly out of scope, and
+the product still has exactly one user.
 
-### KEL-27 — Proactive turn runner — IN PROGRESS
+### KEL-27 — Proactive turn runner — DONE
 
 KEL-23 could store and validate a schedule, but nothing in the running server fired it. KEL-27 closes
 that loop: a due task now becomes a real assistant turn through `chat/proactive.py`, on the same
@@ -1219,21 +1228,82 @@ fire ends with one interrupted turn and no duplicate message or run.
 - Wiring: [`chat/server.py`](../chat/server.py) (`build_app`, `Application.close`)
 - Tests: [`tests/test_proactive.py`](../tests/test_proactive.py)
 
-Status detail: implemented on branch `kel-27`, not yet merged. The twelve M4-B tests cover one due
+Status detail: merged into `main` at `c62be17` from `kel-27` (head `79dd6f8`), adding 12 tests to a
+suite of 1004, taking it to 1016; with KEL-28 the full suite is 1045. The twelve M4-B tests cover one due
 task producing one turn and one row, a second fire reusing the same dedicated thread, a headless
 approval parking the schedule with no side effect and `actor="schedule"` on its resolution, twenty
 simultaneous due tasks capped at one run with nineteen recorded skips, an hourly cap that skips
 past its limit, a spend cap winning over the hourly cap before any provider call, a failure breaker
 disabling the schedule at its limit, a clean turn resetting that count, a dead event loop failing
 the run without leaving an un-awaited coroutine, a live SSE stream seeing the proactive turn, and a
-`SIGKILL` mid-run that restarts to one interrupted turn with one recovered run row. The full suite
-is 1016 passing. Three honest limits. The hourly cap is counted from this
+`SIGKILL` mid-run that restarts to one interrupted turn with one recovered run row. Three honest
+limits. The hourly cap is counted from this
 process, so a restart resets it; it bounds a runaway runner, not a fleet. A proactive turn that
 needs approval is denied rather than offered as an owner decision card: the schedule pauses and the
 owner can act on the schedule, but the specific tool call cannot be approved after the fact. And
 the per-schedule health counters are written with an unlocked read-modify-write over the task file,
 so a tick landing in the same few milliseconds can lose one counter bump; the `schedule_run` audit
 row still records every fire and skip, and the next turn repairs the counter.
+
+### KEL-28 — Read-only share links — DONE
+
+The slice ADR 0002 specified, built. `POST /api/threads/{id}/share` freezes a thread and returns a
+256-bit URL-safe token **once**; the row is keyed by `sha256(token)`, so the token can never be read
+back. The link lives seven days by default (`KELP_SHARE_TTL_SECONDS`) and a longer request is clamped
+to thirty days (`KELP_SHARE_MAX_TTL_SECONDS`). `GET /api/threads/{id}/shares` lists a thread's links
+by the first sixteen hex characters of the hash, with state (active, expired, revoked), timestamps,
+snapshot size, and an aggregate view count; `DELETE` on one id or on the collection revokes, flagging
+the row rather than deleting it so a concurrent read cannot lose it mid-request.
+
+The anonymous surface has two routes. `GET /api/shared/{token}` returns the frozen snapshot and
+`GET /api/shared/{token}/stream` replays the same snapshot as events (`snapshot`, then one `message`
+frame per message, then fifteen-second heartbeats) and tails nothing new, because the snapshot is
+immutable. It re-checks the row every tick and closes within one tick of a revoke, an expiry, or a
+purge, so it inherits KEL-24's one-tick close rule. `Last-Event-ID` and `?after=` resume at a message
+index. Views are one `share_views (day, token_hash, views)` row per day and link; the first view of a
+day also writes one `share_viewed` audit record with `actor="share"`, and a refused open is not a
+view.
+
+What makes it safe is mostly subtraction. The token is stored as a hash and never appears in a log,
+a metric label, or an audit row. Unknown, empty, malformed, expired, revoked, and purged tokens are
+hashed, looked up by the same key, and rendered by the same builder, so the bodies are byte-identical
+and no header distinguishes them. Every non-GET under the prefix is a `405` naming GET — including
+`HEAD`, `OPTIONS`, `PUT`, and `TRACE` — before any lookup, and the request body is never read; no
+content, preview, download, or approval route exists there, so no artifact bytes are reachable. The
+two share rate classes (30/s burst 10 per token hash, 600/s burst 200 process-wide) are the exception
+to fail-open: a limiter fault refuses the read, and a read is charged before the lookup so many
+distinct links cannot collectively exhaust the process. Open anonymous streams are capped
+process-wide (`KELP_MAX_SHARE_STREAMS`, default 16). Every response, including `404`, `405`, and
+`429`, carries `no-store`, `no-referrer`, `noindex, nofollow`, `nosniff`, and a deny-everything
+content policy, and a share never sets a cookie even for an owner.
+
+The snapshot is a projection: `storage_path`, `sha256`, attachment handles and URLs, approval ids,
+turn and call ids, and tool-call arguments and results are dropped structurally; pending approval
+cards are excluded and counted, so a half-finished turn cannot leak an argv payload. It is also
+scrubbed for handle-shaped strings, because a handle can be typed into message text or a citation
+where no allow-list reaches. A thread over 4 MiB (`KELP_SHARE_MAX_SNAPSHOT_BYTES`) is refused rather
+than truncated. Nothing else's data moves: deleting a thread deletes its shares and view counts in the
+same transaction, creating a share re-checks the parent inside its write transaction so a link cannot
+outlive its thread, and expired, revoked, and parentless rows are swept by `ChatStore.share_sweep` on
+the boot pass and then daily.
+
+- Linear: https://linear.app/kelp-ai/issue/KEL-28/m4-f-read-only-thread-share-link
+- Routes and headers: [`chat/api.py`](../chat/api.py)
+- Store, projection, views, sweep: [`chat/store.py`](../chat/store.py)
+- Decision and its amendment: [`docs/adr/0002-sharing-and-identity.md`](adr/0002-sharing-and-identity.md) (§14.1)
+- Spec: [`docs/CHAT_SPEC.md`](CHAT_SPEC.md) §12.3 and §15.7
+- Tests: [`tests/test_share_api.py`](../tests/test_share_api.py)
+- Merge: [`dc50925`](https://github.com/Anshieee/kelp/commit/dc50925) (branch
+  [`kel-28`](https://github.com/Anshieee/kelp/tree/kel-28), head `98ded52`)
+
+Status detail: merged into `main` at `dc50925` from `kel-28` (head `98ded52`), adding 29 tests to a
+suite of 1016, taking it to 1045. The tests cover create and revoke, the listing shape, the anonymous
+snapshot and its stream, identical `404`s across every bad-token class, the GET-only rule for every
+other verb, the projection dropping handles, approvals, and tool arguments, the view counter, the
+stream cap, the sweep, and a purge racing a create. Three honest limits. The read surface is JSON,
+not a rendered page, because there is no frontend in this build, so a server-rendered page is a later
+issue with a real consumer. Rotating the root token or the session secret does not revoke links: the
+explicit revoke routes are the only kill switch. And a revoke cannot recall a copy already read.
 
 ## Decisions that shape the map
 
@@ -1271,7 +1341,7 @@ row still records every fire and skip, and the next turn repairs the counter.
 ### GitHub
 
 - Repository (public): https://github.com/Anshieee/kelp
-- Shared copy of the code: https://github.com/Anshieee/kelp/tree/main — head `05d7508`
+- Shared copy of the code: https://github.com/Anshieee/kelp/tree/main — head `dc50925`
 - All branches: https://github.com/Anshieee/kelp/branches
   - `kel-5` — merged (`b8de92f`)
   - `kel-6` — merged at `d3c763e`; branch head `4c72afc`
@@ -1298,9 +1368,11 @@ row still records every fire and skip, and the next turn repairs the counter.
   - `kel-23` — merged at `13fc687`; branch head `4dd78e6`
   - `kel-25` — merged at `08f87e5`; branch head `5d639fc`
   - `kel-26` — merged at `05d7508`; branch head `a1a5b1f`
+  - `kel-27` — merged at `c62be17`; branch head `79dd6f8`
+  - `kel-28` — merged at `dc50925`; branch head `98ded52`
 - Change history: https://github.com/Anshieee/kelp/commits/main
 - Pull requests: https://github.com/Anshieee/kelp/pulls
-- Tests: 1004 pass on `main` (`python -m pytest`); `make demo` plays all six beats, and
+- Tests: 1045 pass on `main` (`python -m pytest`); `make demo` plays all six beats, and
   `make eval` passes offline with the network blocked
 
 ### Linear
@@ -1329,7 +1401,9 @@ row still records every fire and skip, and the next turn repairs the counter.
   [KEL-24](https://linear.app/kelp-ai/issue/KEL-24/m4-c-device-sessions-durable-listable-revocable-presence),
   [KEL-23](https://linear.app/kelp-ai/issue/KEL-23/m4-a-scheduler-store-cron-runtime),
   [KEL-25](https://linear.app/kelp-ai/issue/KEL-25/m4-d-plugin-packages-install-digest-pin-load-by-path),
-  [KEL-26](https://linear.app/kelp-ai/issue/KEL-26/m4-e-sharing-and-identity-adr-spike)
+  [KEL-26](https://linear.app/kelp-ai/issue/KEL-26/m4-e-sharing-and-identity-adr-spike),
+  [KEL-27](https://linear.app/kelp-ai/issue/KEL-27/m4-b-proactive-turn-runner),
+  [KEL-28](https://linear.app/kelp-ai/issue/KEL-28/m4-f-read-only-thread-share-link)
 
 ### Docs and code
 
