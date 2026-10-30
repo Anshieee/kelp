@@ -1068,11 +1068,10 @@ was running; it is written down and skipped, not fired late in a pile.
   [`kel-23`](https://github.com/Anshieee/kelp/tree/kel-23), head `4dd78e6`)
 
 Status detail: merged into `main` at `13fc687`, adding 67 tests to a suite of 902, taking it to 969.
-Two honest limits. The runtime is built and tested but the server does not start it yet:
-`chat/server.py` does not import `chat.scheduler`, so a task is stored, validated, and visible to the
-skill while nothing fires it in the running service until the proactive-turn wiring (KEL-27) lands.
-And the lock is an advisory `flock` on one directory, which is right for one process on one box and
-is not a distributed scheduler; a hard kill inside a callback leaves a started run with no finish.
+One honest limit: the lock is an advisory `flock` on one directory, which is right for one process
+on one box and is not a distributed scheduler; a hard kill inside a callback leaves a started run
+with no finish. The runtime is now started by `chat/server.py` after boot recovery and stopped
+before the store closes (KEL-27), so a stored task is also a task something fires.
 
 ### KEL-25 — Plugins — DONE
 
@@ -1176,6 +1175,52 @@ limits. Nothing is built: KEL-28, the read-only share link, is specified and not
 sharing exists only on paper and the product still has exactly one user. And the decision admits no
 named collaborator at all, so "several people work in one thread" — the thing most people mean by
 sharing — is explicitly out of scope until someone asks for it concretely.
+
+### KEL-27 — Proactive turn runner — IN PROGRESS
+
+KEL-23 could store and validate a schedule, but nothing in the running server fired it. KEL-27 closes
+that loop: a due task now becomes a real assistant turn through `chat/proactive.py`, on the same
+`ChatService` path, kernel loop, policy gate, and SSE stream as an interactive message. There is no
+second execution path and no duplicate message store. Each schedule gets a stable dedicated thread
+(`ses_<task_id>`, titled `Scheduled: …`, `title_source: "schedule"`); the user message carries one
+`schedule_trigger` block with `origin=schedule`, the schedule id, the run id, and the scheduled
+instant, followed by the task's prompt as ordinary text.
+
+Three gates run before any thread, message, turn, or provider call exists, in this order: the
+persisted spend ceiling (`ChatService._refuse_if_over_spend`), a concurrency ceiling
+(`KELP_PROACTIVE_MAX_CONCURRENT`, default 1), and a rolling hourly ceiling
+(`KELP_PROACTIVE_MAX_RUNS_PER_HOUR`, default 5). Being over either proactive cap is a **skip**, never
+a queue: the due window is consumed and the skip is recorded with a reason code (`spend_cap`,
+`concurrency_cap`, `hourly_cap`) on the task's `skipped_count`.
+
+Headless approval follows ADR 0002 §5. When a tool asks for a decision, the runner records a denial
+through the same service path an owner's Deny uses, leaves the tool unexecuted, and parks the
+schedule in `paused_needs_approval`; it never auto-approves and never resumes on its own. Every fire
+writes exactly one content-free `schedule_run` audit row — schedule id, run id, turn id, outcome,
+duration, input/output tokens, estimated cost, `actor="schedule"`, `on_behalf_of="owner"`,
+`origin_ref={schedule_id, run_id}` — and never the title or prompt. The M4-A scheduler's own row for
+a handled fire is suppressed so there is one row, not two.
+
+`chat/server.py` starts the ticker after boot recovery has settled interrupted turns and stops it
+before the store closes. A turn killed with the process is settled `interrupted` by recovery and is
+**never retried**; boot reconciliation only writes the one run row the kill prevented, so a killed
+fire ends with one interrupted turn and no duplicate message or run.
+
+- Linear: https://linear.app/kelp-ai/issue/KEL-27/m4-b-proactive-turn-runner
+- Runner: [`chat/proactive.py`](../chat/proactive.py)
+- Wiring: [`chat/server.py`](../chat/server.py) (`build_app`, `Application.close`)
+- Tests: [`tests/test_proactive.py`](../tests/test_proactive.py)
+
+Status detail: implemented on branch `kel-27`, not yet merged. The seven M4-B tests cover one due
+task producing one turn and one row, a second fire reusing the same dedicated thread, a headless
+approval parking the schedule with no side effect, twenty simultaneous due tasks capped at one run
+with nineteen recorded skips, a spend cap refusing before any provider call, a live SSE stream
+seeing the proactive turn, and a `SIGKILL` mid-run that restarts to one interrupted turn with one
+recovered run row. The full suite is 1011 passing. Two honest limits. The hourly cap is counted
+from this process, so a restart resets it; it bounds a runaway runner, not a fleet. And a proactive
+turn that needs approval is denied rather than offered as an owner decision card: the schedule
+pauses and the owner can act on the schedule, but the specific tool call cannot be approved after
+the fact.
 
 ## Decisions that shape the map
 
