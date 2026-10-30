@@ -113,6 +113,33 @@
   display: none;
 }
 
+/* With JS the slides share one grid cell, so they can crossfade in place
+   instead of being swapped through `hidden`. Without JS the markup's `hidden`
+   attributes still win and only the first example is shown. */
+.e-player .c-example-copy {
+  grid-template-areas: "slide";
+}
+.e-player .c-example-copy p {
+  grid-area: slide;
+  margin: 0;
+  opacity: 0;
+  transform: translateY(var(--slide-in, 12px));
+  visibility: hidden;
+  transition:
+    opacity 0.3s var(--ease-out, ease),
+    transform 0.3s var(--ease-out, ease),
+    visibility 0s linear 0.3s;
+}
+.e-player .c-example-copy p.is-active {
+  opacity: 1;
+  transform: translateY(0);
+  visibility: visible;
+  transition:
+    opacity 0.42s var(--ease-out, ease),
+    transform 0.42s var(--ease-out, ease),
+    visibility 0s linear 0s;
+}
+
 .c-example-controls {
   display: flex;
   align-items: center;
@@ -310,6 +337,20 @@
   }
   .c-example-copy p {
     font-size: 27px;
+  }
+  /* Narrow screens hold 3–4 lines; keep the handoff tight so two examples
+     are not legible on top of each other for long. */
+  .e-player .c-example-copy p {
+    transition:
+      opacity 0.24s var(--ease-out, ease),
+      transform 0.24s var(--ease-out, ease),
+      visibility 0s linear 0.24s;
+  }
+  .e-player .c-example-copy p.is-active {
+    transition:
+      opacity 0.34s var(--ease-out, ease),
+      transform 0.34s var(--ease-out, ease),
+      visibility 0s linear 0s;
   }
   .c-comparison-grid {
     grid-template-columns: 1fr;
