@@ -7,10 +7,12 @@ the pre-read body rules, which only exist at the transport boundary.
 
 from __future__ import annotations
 
+import asyncio
 import gc
 import json
 import socket
 import threading
+import time
 from pathlib import Path
 from typing import Any, Mapping
 
@@ -473,14 +475,59 @@ def test_turn_cap_returns_typed_busy_and_releases_after_turn(
         store.close()
 
 
+def _wait_for(predicate: Any, *, message: str, timeout: float = 3.0) -> Any:
+    """Poll ``predicate`` until it is truthy, then return its value.
+
+    Slot releases and turn dispatch both land on the API's background loop, so
+    the assertions poll for the settled state instead of assuming the order in
+    which the test thread and that loop are scheduled.
+    """
+
+    deadline = time.monotonic() + timeout
+    while True:
+        value = predicate()
+        if value:
+            return value
+        if time.monotonic() >= deadline:
+            raise AssertionError(message)
+        time.sleep(0.005)
+
+
+def _wait_for_turn_slots(
+    api: ChatAPI, expected: tuple[int, int], *, timeout: float = 3.0
+) -> None:
+    _wait_for(
+        lambda: api._turn_slots.stats() == expected,
+        message=f"turn slots did not settle on {expected}",
+        timeout=timeout,
+    )
+
+
 def test_retry_takes_and_returns_a_turn_slot(tmp_path: Path) -> None:
-    class TimingOut:
+    class GatedTimeout:
+        """Fails the first turn, then holds the retried turn until released.
+
+        The retried turn would otherwise finalize on the background loop before
+        the test reads the slot counter, so the test decides when that turn
+        ends rather than racing it. The stream yields its first delta before
+        parking, which is what a provider that is still working looks like.
+        """
+
+        def __init__(self) -> None:
+            self.release = threading.Event()
+            self.calls = 0
+
         async def stream(self, request: object) -> Any:
+            self.calls += 1
+            held = self.calls > 1
             yield TextDelta("partial")
+            while held and not self.release.is_set():
+                await asyncio.sleep(0.005)
             yield ProviderFailure("provider_timeout", "timed out", retryable=True)
 
+    provider = GatedTimeout()
     store = ChatStore(tmp_path / "chat.db")
-    service = ChatService(store=store, provider=TimingOut(), model=MODEL)
+    service = ChatService(store=store, provider=provider, model=MODEL)
     api = ChatAPI(
         service, auth_token="tok", csrf_token="csrf", max_concurrent_turns=1
     )
@@ -495,7 +542,7 @@ def test_retry_takes_and_returns_a_turn_slot(tmp_path: Path) -> None:
         assert sent.status == 202, sent.body
         turn_id = payload(sent)["turn_id"]
         api.runner.run(service.wait_for_turn(turn_id, timeout=5.0))
-        assert api._turn_slots.stats() == (0, 1)
+        _wait_for_turn_slots(api, (0, 1))
 
         # A retry that fails before queueing work returns its slot at once.
         missing = call(
@@ -520,10 +567,17 @@ def test_retry_takes_and_returns_a_turn_slot(tmp_path: Path) -> None:
         assert accepted.status == 202, accepted.body
         retried = payload(accepted)
         assert retried["retry_of"] == turn_id
+        # The retried turn is parked inside the provider, so the slot it took
+        # is still held; nothing but an explicit release can return it.
+        _wait_for(
+            lambda: provider.calls == 2,
+            message="the retried turn never reached the provider",
+        )
         assert api._turn_slots.stats() == (1, 1)
 
+        provider.release.set()
         api.runner.run(service.wait_for_turn(retried["turn_id"], timeout=5.0))
-        assert api._turn_slots.stats() == (0, 1)
+        _wait_for_turn_slots(api, (0, 1))
     finally:
         api.close()
         store.close()
