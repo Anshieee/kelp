@@ -1,11 +1,12 @@
 # Privacy review — what leaves the machine, and what does not (KEL-22 / M3-E)
 
-- **Status:** written review, 2026-10-30
-- **Branch:** `kel-22`
+- **Status:** written review, 2026-10-30; sharing cross-references added 2026-10-30
+- **Branch:** `kel-22`; `kel-26` adds the ADR 0002 material and the share rows below
 - **Scope:** the server process in `chat/`, `kernel/`, `skills/`, `openshell/`, and `payments/`
 - **Companions:** the retention rule ([`docs/DEPLOY.md`](DEPLOY.md) §8.1, `chat/retention.py`),
   the policy gate ([`docs/OPENSHELL.md`](OPENSHELL.md)), the chat spec
-  ([`docs/CHAT_SPEC.md`](CHAT_SPEC.md) §12)
+  ([`docs/CHAT_SPEC.md`](CHAT_SPEC.md) §12), and the sharing decision
+  ([ADR 0002](adr/0002-sharing-and-identity.md))
 - **Enforced by:** `openshell/egress_ledger.py` (the ledger) and
   `tests/test_privacy.py` (recipient, ledger, and exec-boundary checks)
 
@@ -82,6 +83,28 @@ with the status on a rejection — a failing probe is never filed as a success.
 - Local embeddings for document search run in-process. They are not an egress
   path.
 
+### 2.3 A share link is a reader, not a recipient
+
+The recipient table above is about outbound calls the server process makes. A share
+link is the other direction: an inbound read of a local snapshot, served to whoever
+holds the URL.
+
+- **It adds no recipient.** A share read writes no egress row, opens no socket,
+  starts no turn, calls no tool, and reads no artifact bytes. The list in §2 is
+  unchanged by sharing.
+- **It does add a reader.** When the share surface lands (ADR 0002, KEL-28), the
+  owner can hand out a URL that shows one thread's snapshot to anyone who holds it,
+  with no account, until it is revoked or expires. That person receives the owner's
+  content. They are not tracked: the audit records the link, not the viewer, and
+  aggregate daily view counts are the only usage record. No IP, no user agent, no
+  cookie.
+- **It is a copy.** Revocation stops the next request; it cannot recall a page
+  already delivered to a browser. Sharing is a decision to hand someone a copy, and
+  the UI says so.
+- **It is not in this build.** Nothing in §1, §3, or §4 depends on the share
+  surface existing. This subsection exists so that when it does land, no reader has
+  to guess whether the recipient list grew. It does not.
+
 ---
 
 ## 3. Where the data lives on this machine
@@ -89,6 +112,7 @@ with the status on a rejection — a failing probe is never filed as a success.
 | Data | Location | Removed by | Retention row |
 |---|---|---|---|
 | Chat content — threads, messages, blocks, events, turns, approvals | `KELP_DB_PATH` (`chat.db`) | `ChatStore.purge_thread` — immediate hard delete, no `deleted_at` shadow | **Chat content** |
+| Share snapshot and daily view counts (not in this build) | `KELP_DB_PATH` (`chat.db`), `shares` and `share_views` | `ChatStore.purge_thread` deletes both in the thread's transaction; revoked and expired rows are pruned by KEL-28's share sweep (boot and daily), never on the read path. The snapshot holds no artifact bytes, so it has nothing to delete when an artifact is purged | **Chat content** (no separate row) |
 | Owner device sessions — hashed session id, short label, timestamps, revocation | `KELP_DB_PATH` (`chat.db`), `sessions` table | `DELETE /api/auth/devices/{id_short}`, `DELETE /api/auth/session(s)`; expired and evicted rows pruned on use | Not in the retention table; bounded by the session TTL and `KELP_SESSION_MAX` |
 | Uploaded files | `KELP_ARTIFACT_DIR` (default `workspace/var/artifacts`) | `ArtifactRegistry.purge` when the thread goes; `sweep_orphans` when parentless | **Uploaded files** |
 | Derived document index | `workspace/var/index` | Removed eagerly with the artifact; orphan directories swept | **Derived index** |
@@ -103,12 +127,33 @@ The row names in the last column are the `class` values of
 That table is the contract; this one says which of its rows hold what this review
 talks about, so a reader can move between the two without guessing.
 
-Two properties matter for the privacy claim:
+**Where a share snapshot will sit.** A share link (§2.3) is a second copy of one
+thread's content, and its per-day view counter (`share_views`) is a small aggregate
+keyed by the link's token hash. Both belong to the **Chat content** row and inherit
+that row's rule: they are removed in the same transaction that purges the thread,
+and neither is retained after the thread is gone. So sharing adds **no** row to
+`chat.retention.RETENTION_ROWS` or to `docs/DEPLOY.md` §8.1. Revoked and expired
+links are pruned by KEL-28's share sweep (boot and daily), never on the read path,
+and a revoked row is kept until that prune rather than deleted at revoke. The
+snapshot never contains artifact bytes — the projection drops storage paths,
+hashes, and artifact handles — so a purged artifact leaves nothing behind inside a
+share row.
 
-- **Delete means delete.** Purging a thread removes its rows in one transaction
-  and unlinks its files. A live turn makes the purge answer `409 turn_in_progress`
-  instead of racing it, so a dead turn cannot make a thread undeletable and a
-  running one cannot write into rows that no longer exist.
+If KEL-28 instead gives share rows their own retention window, that window must be
+added to `RETENTION_ROWS`, `docs/DEPLOY.md` §8.1, and this table in the same
+change. The test binding is one-directional, so that change still needs a reviewer:
+`tests/test_privacy.py` asserts that every `RETENTION_ROWS` class name appears in
+this file, and nothing parses the §8.1 rows.
+
+Three properties matter for the privacy claim:
+
+- **Delete means delete, and `deleted_at` is not a delete.** Purging a thread removes
+  its rows in one transaction and unlinks its files. `threads` and `artifacts` carry a
+  `deleted_at` column that the soft-delete paths (`ChatStore.soft_delete_thread`) use
+  as a read filter; `purge_thread` is the privacy-relevant delete, it removes the rows
+  outright, and nothing is left flagged. A live turn makes the purge answer `409
+  turn_in_progress` instead of racing it, so a dead turn cannot make a thread
+  undeletable and a running one cannot write into rows that no longer exist.
 - **The logs are scrubbed, not trusted.** Every string written to the audit log
   passes a scrubber that replaces known secret values, `Bearer …` tokens,
   `sk_live_…` / `sk_test_…` keys, and `token=…` / `password: …` pairs before
@@ -246,6 +291,11 @@ does.
 - **The static tracker page** in `netlify/` links out to Linear and GitHub when a
   reader clicks. That is a browser navigation, not a server egress, and it loads
   no third-party asset.
+- **A shared thread is deliberately readable by a stranger.** Once the share
+  surface ships, the owner can hand a URL to one thread and the holder can read it
+  with no account. That is the feature, not a leak: the content is still the owner's,
+  the model provider already has it, and the only promise is that the link dies on
+  revocation or expiry. The page cannot be un-rendered once it has been seen.
 
 ---
 
@@ -259,8 +309,9 @@ does.
 - every module under `chat/`, `kernel/`, `skills/`, `openshell/`, and
   `payments/` is scanned for a hardcoded `https://` endpoint, so a new module is
   covered without editing a list;
-- the retention row names used in §3 are exactly the `class` values in
-  `chat.retention.RETENTION_ROWS`;
+- every `class` value in `chat.retention.RETENTION_ROWS` appears in §3; the reverse
+  direction — a row left in §3 after the code drops it — is not test-bound, and
+  `docs/DEPLOY.md` §8.1 is mirrored by hand, so both are checked at review;
 - a model turn writes an `egress` row with byte counts and no content, including
   through the real `TokenFactoryClient` stream path;
 - a skill egress call writes a `tavily` / `github` row, and a policy denial still
@@ -286,6 +337,8 @@ review references that table rather than restating it.
 - Retention policy source: [`chat/retention.py`](../chat/retention.py)
 - Policy gate and audit log: [`docs/OPENSHELL.md`](OPENSHELL.md)
 - Chat surface, approvals, and the security section: [`docs/CHAT_SPEC.md`](CHAT_SPEC.md) §12
+- Sharing and identity, including what a share link does and does not do:
+  [`docs/adr/0002-sharing-and-identity.md`](adr/0002-sharing-and-identity.md)
 - Skill contract and the `execute` prohibition: [`docs/SKILL_SPEC.md`](SKILL_SPEC.md)
 - Egress ledger: [`openshell/egress_ledger.py`](../openshell/egress_ledger.py)
 - Exec gate: [`openshell/exec_gate.py`](../openshell/exec_gate.py)
