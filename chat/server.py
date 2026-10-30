@@ -564,9 +564,13 @@ def build_app(
             csrf_token=config.csrf_token,
             health=HealthProbe.from_service(service, audit=audit),
             metrics=metrics,
-            # Sessions are deliberately process-local: a restart invalidates
-            # every cookie and the root bearer token remains the recovery path.
-            sessions=SessionStore.from_env(source),
+            # Sessions persist in the chat database (KEL-24): several devices
+            # survive a restart, and the root bearer token remains recovery.
+            # The CSRF half is derived from KELP_SESSION_SECRET, falling back
+            # to the root token so a restart keeps existing pairs valid.
+            sessions=SessionStore.from_env(
+                source, store=store, fallback_secret=config.auth_token
+            ),
             auth_failures=AuthFailureTracker.from_env(source),
             cookie_secure=_flag(source, SESSION_SECURE_ENV, True),
         )

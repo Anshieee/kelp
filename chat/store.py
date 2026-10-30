@@ -123,6 +123,20 @@ CREATE TABLE IF NOT EXISTS artifacts (
     rows INTEGER
 );
 CREATE INDEX IF NOT EXISTS artifacts_thread ON artifacts (thread_id, created_at);
+
+-- KEL-24 M4-C: owner device sessions. Only the SHA-256 of the session id is
+-- stored; the CSRF half is derived from it with a server-side secret, so no
+-- session or CSRF credential is ever written here.
+CREATE TABLE IF NOT EXISTS sessions (
+    id_hash TEXT PRIMARY KEY,
+    label TEXT NOT NULL,
+    created_at REAL NOT NULL,
+    last_seen REAL NOT NULL,
+    expires_at REAL NOT NULL,
+    revoked_at REAL
+);
+CREATE INDEX IF NOT EXISTS sessions_live ON sessions (expires_at);
+CREATE INDEX IF NOT EXISTS sessions_seen ON sessions (last_seen);
 """
 
 _ARTIFACT_HANDLE_RE = re.compile(r"artifact:[A-Za-z0-9_-]{8,128}")
@@ -922,6 +936,144 @@ class ChatStore:
                 "UPDATE artifacts SET deleted_at = ? WHERE thread_id = ?",
                 (self._now_iso(), thread_id),
             )
+
+    # -- owner sessions (KEL-24 M4-C) --------------------------------------
+
+    def session_insert(
+        self,
+        id_hash: str,
+        label: str,
+        created_at: float,
+        last_seen: float,
+        expires_at: float,
+    ) -> None:
+        """Persist one session row. The primary key is the hashed id only."""
+
+        with self.transaction():
+            self._conn.execute(
+                "INSERT INTO sessions "
+                "(id_hash, label, created_at, last_seen, expires_at, revoked_at) "
+                "VALUES (?, ?, ?, ?, ?, NULL) "
+                "ON CONFLICT(id_hash) DO UPDATE SET "
+                "label = excluded.label, created_at = excluded.created_at, "
+                "last_seen = excluded.last_seen, expires_at = excluded.expires_at, "
+                "revoked_at = NULL",
+                (id_hash, label, created_at, last_seen, expires_at),
+            )
+
+    def session_get(self, id_hash: str, *, now: float) -> dict[str, Any] | None:
+        """Return a live, unrevoked session row, or ``None``."""
+
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT * FROM sessions WHERE id_hash = ? "
+                "AND revoked_at IS NULL AND expires_at > ?",
+                (id_hash, now),
+            ).fetchone()
+        return dict(row) if row is not None else None
+
+    def session_touch(
+        self, id_hash: str, *, last_seen: float, expires_at: float
+    ) -> bool:
+        """Roll one live session forward; ``False`` if it is gone or expired."""
+
+        with self.transaction():
+            cursor = self._conn.execute(
+                "UPDATE sessions SET last_seen = ?, expires_at = ? "
+                "WHERE id_hash = ? AND revoked_at IS NULL AND expires_at > ?",
+                (last_seen, expires_at, id_hash, last_seen),
+            )
+            return cursor.rowcount > 0
+
+    def session_revoke(self, id_hash: str, *, revoked_at: float) -> bool:
+        """Mark one session revoked. Revoking twice is idempotent."""
+
+        with self.transaction():
+            cursor = self._conn.execute(
+                "UPDATE sessions SET revoked_at = ? "
+                "WHERE id_hash = ? AND revoked_at IS NULL",
+                (revoked_at, id_hash),
+            )
+            return cursor.rowcount > 0
+
+    def session_revoke_all(self, *, revoked_at: float) -> int:
+        with self.transaction():
+            return self._conn.execute(
+                "UPDATE sessions SET revoked_at = ? WHERE revoked_at IS NULL",
+                (revoked_at,),
+            ).rowcount
+
+    def session_list(self, *, now: float) -> list[dict[str, Any]]:
+        """Live sessions, most recently seen first. No label is ever logged."""
+
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT * FROM sessions WHERE revoked_at IS NULL AND expires_at > ? "
+                "ORDER BY last_seen DESC, id_hash ASC",
+                (now,),
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+    def session_find_prefix(
+        self, prefix: str, *, now: float
+    ) -> dict[str, Any] | None:
+        """Resolve a short id prefix only when exactly one live row matches."""
+
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT * FROM sessions WHERE revoked_at IS NULL AND expires_at > ? "
+                "AND substr(id_hash, 1, ?) = ? LIMIT 2",
+                (now, len(prefix), prefix),
+            ).fetchall()
+        return dict(rows[0]) if len(rows) == 1 else None
+
+    def session_count(self, *, now: float) -> int:
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT COUNT(*) AS n FROM sessions "
+                "WHERE revoked_at IS NULL AND expires_at > ?",
+                (now,),
+            ).fetchone()
+        return int(row["n"])
+
+    def session_enforce_max(self, max_entries: int, *, now: float) -> int:
+        """Delete the oldest live sessions until at most ``max_entries`` remain."""
+
+        removed = 0
+        with self.transaction():
+            while True:
+                row = self._conn.execute(
+                    "SELECT id_hash FROM sessions "
+                    "WHERE revoked_at IS NULL AND expires_at > ? "
+                    "ORDER BY last_seen ASC, id_hash ASC LIMIT 1",
+                    (now,),
+                ).fetchone()
+                live = self._conn.execute(
+                    "SELECT COUNT(*) AS n FROM sessions "
+                    "WHERE revoked_at IS NULL AND expires_at > ?",
+                    (now,),
+                ).fetchone()["n"]
+                if row is None or live <= max_entries:
+                    return removed
+                self._conn.execute(
+                    "DELETE FROM sessions WHERE id_hash = ?", (row["id_hash"],)
+                )
+                removed += 1
+
+    def session_prune(self, *, now: float, revoked_before: float) -> int:
+        """Delete expired rows and revoked rows past their audit grace.
+
+        A revoked row is kept only until ``expires_at`` (already bounded by the
+        session TTL), so the table cannot grow without limit even when
+        devices are revoked rather than evicted.
+        """
+
+        with self.transaction():
+            return self._conn.execute(
+                "DELETE FROM sessions "
+                "WHERE expires_at <= ? OR (revoked_at IS NOT NULL AND revoked_at <= ?)",
+                (now, revoked_before),
+            ).rowcount
 
     # -- retention ---------------------------------------------------------
 

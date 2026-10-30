@@ -13,6 +13,7 @@ mutations, and JSON ``401`` instead of a redirect.
 from __future__ import annotations
 
 import asyncio
+import base64
 import hashlib
 import hmac
 import inspect
@@ -45,6 +46,7 @@ from .logging import (
 )
 from .metrics import Metrics, PROMETHEUS_CONTENT_TYPE, get_metrics
 from .service import ChatService
+from .store import ChatStore
 from .stream import IDLE_SECONDS, sse_frames
 
 __all__ = [
@@ -96,17 +98,20 @@ _DEFAULT_RATE_LIMIT_MAX_KEYS = 4096
 #: attempt starts with a full bucket. This also bounds the failure map.
 _AUTH_IDLE_SECONDS = 300.0
 
-# -- owner sessions and failure bounds (KEL-19 M3-E) ----------------------
+# -- owner sessions and failure bounds (KEL-19 M3-E, KEL-24 M4-C) ---------
 #
 # The cookie carries an opaque 256-bit session id; the store keeps its SHA-256,
-# never the raw value. A restart drops every session, so the root bearer token
-# (or a fresh sign-in) is always the recovery path. The CSRF cookie is the
-# readable half of a per-session double-submit pair; the session cookie is
-# HttpOnly and the pair is never logged.
+# never the raw value. Sessions are persisted in the chat database so multiple
+# devices survive a restart, but neither the session id nor the CSRF half is
+# ever written there: CSRF is derived with HMAC from the hashed id and the
+# server-side ``KELP_SESSION_SECRET``. The CSRF cookie is the readable half of
+# a per-session double-submit pair; the session cookie is HttpOnly and the pair
+# is never logged.
 SESSION_COOKIE = "session"
 CSRF_COOKIE = "csrf"
 SESSION_TTL_ENV = "KELP_SESSION_TTL_SECONDS"
 SESSION_MAX_ENV = "KELP_SESSION_MAX"
+SESSION_SECRET_ENV = "KELP_SESSION_SECRET"
 SESSION_SECURE_ENV = "KELP_SESSION_COOKIE_SECURE"
 AUTH_LOCKOUT_ATTEMPTS_ENV = "KELP_AUTH_LOCKOUT_ATTEMPTS"
 AUTH_LOCKOUT_SECONDS_ENV = "KELP_AUTH_LOCKOUT_SECONDS"
@@ -114,6 +119,21 @@ AUTH_FAILURE_IDLE_ENV = "KELP_AUTH_FAILURE_IDLE_SECONDS"
 AUTH_FAILURE_MAX_KEYS_ENV = "KELP_AUTH_FAILURE_MAX_KEYS"
 _DEFAULT_SESSION_TTL_SECONDS = 30 * 24 * 60 * 60
 _DEFAULT_SESSION_MAX = 1024
+#: A device is "online" when its last authenticated request is this recent.
+#: Presence is derived from the ordinary session touch; there is no heartbeat.
+DEVICE_ONLINE_SECONDS = 60.0
+_DEVICE_LABEL_MAX = 40
+_DEFAULT_DEVICE_LABEL = "Unknown device"
+#: 48 bits of the hashed id: enough to be unique, useless for replaying a login.
+DEVICE_ID_SHORT_LENGTH = 12
+_DEVICE_ID_SHORT_RE = re.compile(r"^[0-9a-f]{6,64}$")
+#: Control, zero-width, and bidi characters are stripped from a device label
+#: before it is stored, so a label can never smuggle a log line or terminal
+#: escape into an operator view.
+_LABEL_STRIP_RE = re.compile(
+    "[\x00-\x1f\x7f-\x9f\u200b-\u200f\u202a-\u202e\u2060-\u2064\ufeff]"
+)
+_WHITESPACE_RE = re.compile(r"\s+")
 _DEFAULT_AUTH_LOCKOUT_ATTEMPTS = 10
 _DEFAULT_AUTH_LOCKOUT_SECONDS = 300.0
 _DEFAULT_AUTH_FAILURE_IDLE_SECONDS = 300.0
@@ -993,28 +1013,75 @@ def _secret_hash(value: str) -> str:
     return hashlib.sha256(value.encode("utf-8", "surrogatepass")).hexdigest()
 
 
+def _session_key(secret: str | bytes | None) -> bytes:
+    """Normalise ``KELP_SESSION_SECRET`` into a fixed 32-byte HMAC key.
+
+    A missing secret is generated per process; :meth:`SessionStore.from_env`
+    passes the root owner token as a fallback so a restart keeps the derived
+    CSRF halves stable even when operators have not set the dedicated value.
+    """
+
+    if secret is None:
+        return secrets.token_bytes(32)
+    raw = secret.encode("utf-8", "surrogatepass") if isinstance(secret, str) else bytes(secret)
+    return hashlib.sha256(raw).digest()
+
+
+def scrub_device_label(value: Any) -> str:
+    """Return a safe 1-40 character device label.
+
+    Control, zero-width, and bidi characters are removed and whitespace is
+    collapsed. An absent or empty label becomes ``Unknown device``. A label
+    that is still too long raises :class:`ChatError`, so it cannot become a
+    storage or log hazard.
+    """
+
+    if value is None:
+        return _DEFAULT_DEVICE_LABEL
+    if not isinstance(value, str):
+        raise ChatError(
+            "invalid_request",
+            status=400,
+            message="device_label must be a string.",
+            user_fixable=True,
+        )
+    clean = _WHITESPACE_RE.sub(" ", _LABEL_STRIP_RE.sub("", value)).strip()
+    if not clean:
+        return _DEFAULT_DEVICE_LABEL
+    if len(clean) > _DEVICE_LABEL_MAX:
+        raise ChatError(
+            "invalid_request",
+            status=400,
+            message="device_label must be 1-40 characters.",
+            user_fixable=True,
+        )
+    return clean
+
+
 @dataclass
 class _Session:
     """A server-side owner session. Only hashes are used for lookup."""
 
     id_hash: str
-    csrf_hash: str
-    #: Retained only so a rolling response can re-issue the readable half of
-    #: the double-submit pair. It never authenticates a request by itself.
-    csrf_token: str = field(repr=False)
+    label: str = _DEFAULT_DEVICE_LABEL
     created_at: float = 0.0
     last_seen: float = 0.0
     expires_at: float = 0.0
 
 
 class SessionStore:
-    """Bounded, in-process owner sessions with 30-day rolling expiry.
+    """Bounded owner sessions with 30-day rolling expiry.
 
     The raw session id exists only in the client's cookie and in the response
-    that minted it. Lookup keys are SHA-256 digests, so a memory dump of this
-    store cannot be replayed as a login. Expired records are pruned on every
-    lookup/create, and the oldest record is evicted when the cap is reached;
-    both operations are O(n) only when the map is already over a bound.
+    that minted it. Lookup keys are SHA-256 digests, so a dump of this store
+    cannot be replayed as a login. With a :class:`ChatStore` the rows persist
+    in the chat database (so several devices survive a restart); without one
+    the store keeps an in-process map with the same bounds, which is what
+    tests and ephemeral embeddings use.
+
+    The CSRF half is never stored: it is ``HMAC(secret, id_hash)``, so the
+    database holds no credential that can be replayed as a cookie and a
+    restart with the same secret keeps every live device's CSRF pair valid.
     """
 
     def __init__(
@@ -1023,6 +1090,8 @@ class SessionStore:
         ttl: float = _DEFAULT_SESSION_TTL_SECONDS,
         max_entries: int = _DEFAULT_SESSION_MAX,
         clock: Callable[[], float] | None = None,
+        store: ChatStore | None = None,
+        secret: str | bytes | None = None,
     ):
         self.ttl = max(60.0, float(ttl))
         self.max_entries = max(1, int(max_entries))
@@ -1031,37 +1100,75 @@ class SessionStore:
         self._clock = time.time if clock is None else clock
         self._sessions: dict[str, _Session] = {}
         self._lock = threading.Lock()
+        self._store = store
+        self._secret = _session_key(secret)
 
     @classmethod
-    def from_env(cls, source: Mapping[str, str] | None = None) -> "SessionStore":
+    def from_env(
+        cls,
+        source: Mapping[str, str] | None = None,
+        *,
+        store: ChatStore | None = None,
+        fallback_secret: str | None = None,
+    ) -> "SessionStore":
         env = os.environ if source is None else source
+        secret = (env.get(SESSION_SECRET_ENV) or "").strip() or fallback_secret
         return cls(
             ttl=_env_number(env, SESSION_TTL_ENV, _DEFAULT_SESSION_TTL_SECONDS, minimum=60.0),
             max_entries=_env_int(env, SESSION_MAX_ENV, _DEFAULT_SESSION_MAX, minimum=1),
+            store=store,
+            secret=secret,
         )
 
     def now(self) -> float:
         return self._clock()
 
-    def create(self) -> tuple[str, str, _Session]:
+    def _csrf_for(self, id_hash: str) -> str:
+        digest = hmac.new(
+            self._secret, b"kelp-csrf:" + id_hash.encode("ascii"), hashlib.sha256
+        ).digest()
+        return base64.urlsafe_b64encode(digest).rstrip(b"=").decode("ascii")
+
+    def _record(self, row: Mapping[str, Any]) -> _Session:
+        return _Session(
+            id_hash=str(row["id_hash"]),
+            label=str(row["label"]),
+            created_at=float(row["created_at"]),
+            last_seen=float(row["last_seen"]),
+            expires_at=float(row["expires_at"]),
+        )
+
+    def create(self, *, label: str | None = None) -> tuple[str, str, _Session]:
         """Mint a session and return ``(session_id, csrf_token, record)``."""
 
         now = self._clock()
         session_id = secrets.token_urlsafe(32)
-        csrf_token = secrets.token_urlsafe(32)
+        clean_label = scrub_device_label(label)
         record = _Session(
             id_hash=_secret_hash(session_id),
-            csrf_hash=_secret_hash(csrf_token),
-            csrf_token=csrf_token,
+            label=clean_label,
             created_at=now,
             last_seen=now,
             expires_at=now + self.ttl,
         )
-        with self._lock:
-            self._prune_locked(now)
-            self._sessions[record.id_hash] = record
-            self._enforce_max_locked()
-        return session_id, csrf_token, record
+        if self._store is not None:
+            self._store.session_prune(
+                now=now, revoked_before=now - self.ttl
+            )
+            self._store.session_insert(
+                record.id_hash,
+                record.label,
+                record.created_at,
+                record.last_seen,
+                record.expires_at,
+            )
+            self._store.session_enforce_max(self.max_entries, now=now)
+        else:
+            with self._lock:
+                self._prune_locked(now)
+                self._sessions[record.id_hash] = record
+                self._enforce_max_locked()
+        return session_id, self._csrf_for(record.id_hash), record
 
     def lookup(self, session_id: str, *, now: float | None = None) -> _Session | None:
         """Return a live session without changing its expiry."""
@@ -1070,6 +1177,11 @@ class SessionStore:
             return None
         moment = self._clock() if now is None else now
         key = _secret_hash(session_id)
+        if self._store is not None:
+            # Read-through keeps a revoke or expiry visible to the stream's
+            # fresh auth check even when another device performed it.
+            row = self._store.session_get(key, now=moment)
+            return self._record(row) if row is not None else None
         with self._lock:
             record = self._sessions.get(key)
             if record is None:
@@ -1083,6 +1195,19 @@ class SessionStore:
         """Roll one session's expiry forward, if it is still present and live."""
 
         moment = self._clock() if now is None else now
+        if self._store is not None:
+            ok = self._store.session_touch(
+                record.id_hash, last_seen=moment, expires_at=moment + self.ttl
+            )
+            if not ok:
+                return None
+            return _Session(
+                id_hash=record.id_hash,
+                label=record.label,
+                created_at=record.created_at,
+                last_seen=moment,
+                expires_at=moment + self.ttl,
+            )
         with self._lock:
             current = self._sessions.get(record.id_hash)
             if current is None:
@@ -1097,23 +1222,104 @@ class SessionStore:
     def csrf_matches(self, record: _Session, token: str) -> bool:
         if not token:
             return False
-        return hmac.compare_digest(record.csrf_hash, _secret_hash(token))
+        return hmac.compare_digest(self._csrf_for(record.id_hash), token)
+
+    def csrf_token(self, record: _Session) -> str:
+        """The derived readable CSRF half for one live session."""
+
+        return self._csrf_for(record.id_hash)
 
     def revoke(self, session_id: str) -> bool:
         if not session_id:
             return False
         key = _secret_hash(session_id)
+        if self._store is not None:
+            return self._store.session_revoke(key, revoked_at=self._clock())
         with self._lock:
             return self._sessions.pop(key, None) is not None
 
     def revoke_all(self) -> int:
+        if self._store is not None:
+            return self._store.session_revoke_all(revoked_at=self._clock())
         with self._lock:
             count = len(self._sessions)
             self._sessions.clear()
             return count
 
+    def devices(
+        self, *, current_session_id: str | None = None, now: float | None = None
+    ) -> list[dict[str, Any]]:
+        """Describe live devices without exposing a session id or label in logs.
+
+        ``current`` marks only the cookie that made this call; a bearer caller
+        has no session and therefore no current device.
+        """
+
+        moment = self._clock() if now is None else now
+        if self._store is not None:
+            rows = self._store.session_list(now=moment)
+        else:
+            with self._lock:
+                rows = [
+                    {
+                        "id_hash": record.id_hash,
+                        "label": record.label,
+                        "created_at": record.created_at,
+                        "last_seen": record.last_seen,
+                        "expires_at": record.expires_at,
+                    }
+                    for record in self._sessions.values()
+                    if record.expires_at > moment
+                ]
+        current_hash = _secret_hash(current_session_id) if current_session_id else None
+        devices = [
+            {
+                "id": str(row["id_hash"])[:DEVICE_ID_SHORT_LENGTH],
+                "label": str(row["label"]),
+                "created_at": int(float(row["created_at"])),
+                "last_seen": int(float(row["last_seen"])),
+                "expires_at": int(float(row["expires_at"])),
+                "online": (moment - float(row["last_seen"])) <= DEVICE_ONLINE_SECONDS,
+                "current": current_hash is not None
+                and str(row["id_hash"]) == current_hash,
+            }
+            for row in rows
+        ]
+        devices.sort(key=lambda item: item["last_seen"], reverse=True)
+        return devices
+
+    def revoke_short(self, id_short: str, *, now: float | None = None) -> _Session | None:
+        """Revoke one device by its public short id; ``None`` when not unique."""
+
+        if not _DEVICE_ID_SHORT_RE.fullmatch(id_short):
+            return None
+        moment = self._clock() if now is None else now
+        if self._store is not None:
+            row = self._store.session_find_prefix(id_short, now=moment)
+            if row is None:
+                return None
+            record = self._record(row)
+            if not self._store.session_revoke(record.id_hash, revoked_at=moment):
+                return None
+            return record
+        with self._lock:
+            matches = [
+                record
+                for key, record in self._sessions.items()
+                if key.startswith(id_short) and record.expires_at > moment
+            ]
+            if len(matches) != 1:
+                return None
+            record = matches[0]
+            self._sessions.pop(record.id_hash, None)
+            return record
+
     def prune(self, *, now: float | None = None) -> int:
         moment = self._clock() if now is None else now
+        if self._store is not None:
+            return self._store.session_prune(
+                now=moment, revoked_before=moment - self.ttl
+            )
         with self._lock:
             return self._prune_locked(moment)
 
@@ -1131,6 +1337,8 @@ class SessionStore:
             del self._sessions[oldest]
 
     def __len__(self) -> int:
+        if self._store is not None:
+            return self._store.session_count(now=self._clock())
         self.prune()
         return len(self._sessions)
 
@@ -2136,7 +2344,7 @@ class ChatAPI:
         if updated is None:
             return
         response.cookies.extend(
-            self._session_cookies(auth.session_id, updated.csrf_token)
+            self._session_cookies(auth.session_id, self.sessions.csrf_token(updated))
         )
 
     def _session_cookies(self, session_id: str, csrf_token: str) -> list[str]:
@@ -2181,6 +2389,10 @@ class ChatAPI:
                 return self._revoke_current(request)
         if len(rest) == 1 and rest[0] == "sessions" and method == "DELETE":
             return self._revoke_all()
+        if len(rest) == 1 and rest[0] == "devices" and method == "GET":
+            return self._list_devices(request)
+        if len(rest) == 2 and rest[0] == "devices" and method == "DELETE":
+            return self._revoke_device(request, rest[1])
         raise ChatError("not_found", status=404, message="Unknown endpoint.")
 
     def _sign_in(self, request: Request) -> Response:
@@ -2192,12 +2404,18 @@ class ChatAPI:
         A wrong bearer is a rejected credential like any other: it is logged,
         counted, and can lock the identity out, even when the request also
         carries a session cookie that authorized the route.
+
+        An optional ``device_label`` names the device shown by
+        ``GET /api/auth/devices``. It is scrubbed to 1-40 characters and is
+        never written to a log or audit record.
         """
 
         if not self._bearer_authorized(request):
             self._reject_auth(request)
             raise ChatError("unauthorized", status=401)
-        session_id, csrf_token, record = self.sessions.create()
+        body = self._json_body(request, optional=True, limit=_DECISION_LIMIT)
+        label = body.get("device_label")
+        session_id, csrf_token, record = self.sessions.create(label=label)
         response = _json_response(
             201,
             {
@@ -2205,10 +2423,51 @@ class ChatAPI:
                 "session": {
                     "expires_at": int(record.expires_at),
                     "csrf_token": csrf_token,
+                    "device": {
+                        "id": record.id_hash[:DEVICE_ID_SHORT_LENGTH],
+                        "label": record.label,
+                    },
                 },
             },
         )
         response.cookies.extend(self._session_cookies(session_id, csrf_token))
+        return response
+
+    def _list_devices(self, request: Request) -> Response:
+        auth = self._authenticate(request)
+        devices = self.sessions.devices(current_session_id=auth.session_id)
+        return _json_response(
+            200,
+            {
+                "ok": True,
+                "devices": devices,
+                "presence_seconds": int(DEVICE_ONLINE_SECONDS),
+            },
+        )
+
+    def _revoke_device(self, request: Request, id_short: str) -> Response:
+        """Revoke one device by its public short id.
+
+        The route is authenticated and, for a cookie caller, CSRF-checked like
+        every other mutation. Revoking the calling device clears its cookies;
+        revoking another device leaves the caller's session intact and closes
+        that device's open SSE stream on its next fresh auth check.
+        """
+
+        record = self.sessions.revoke_short(unquote(id_short))
+        if record is None:
+            raise ChatError("not_found", status=404, message="Unknown device.")
+        response = _json_response(
+            200,
+            {
+                "ok": True,
+                "revoked": 1,
+                "device": {"id": record.id_hash[:DEVICE_ID_SHORT_LENGTH]},
+            },
+        )
+        auth = self._authenticate(request)
+        if auth.session_id and _secret_hash(auth.session_id) == record.id_hash:
+            response.cookies.extend(self._clear_auth_cookies())
         return response
 
     def _revoke_current(self, request: Request) -> Response:
