@@ -16,13 +16,20 @@ These tests drive the public contract through ``ChatAPI.handle``:
 from __future__ import annotations
 
 import hashlib
+import http.client
 import json
+import socket
+import threading
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Mapping
 
+import pytest
+
 from chat import ChatAPI, ChatService, ChatStore, Request
 from chat.api import RateLimiter, _route_label
+from chat.retention import RetentionMaintenance, RetentionPolicy
+from chat.store import ThreadGoneError
 from openshell.audit import AuditLog
 
 from .chatkit import MODEL, StubProvider, text_script
@@ -717,3 +724,435 @@ def test_thread_delete_removes_shares_and_view_counts(tmp_path: Path) -> None:
         == 0
     )
     assert call(api, "GET", f"/api/shared/{token}", auth=False).status == 404
+
+
+# -- KEL-28 review: purge/create interleaving, sweep, capacity, wire methods --
+
+
+class _NoArtifacts:
+    """The maintenance pass only needs a sweep with no rows for these tests."""
+
+    def sweep_orphans(self, *, older_than_seconds: float, now: object) -> dict[str, int]:
+        return {
+            "artifact_rows": 0,
+            "files_removed": 0,
+            "files_missing": 0,
+            "indexes_removed": 0,
+            "skipped": 0,
+            "errors": 0,
+        }
+
+
+def _snapshotless_share(
+    store: ChatStore, thread_id: str, token_hash: str, *, ttl: float = 3600.0
+) -> None:
+    store.share_create(
+        token_hash=token_hash,
+        thread_id=thread_id,
+        snapshot={"version": 1, "title": "T", "messages": []},
+        ttl_seconds=ttl,
+    )
+
+
+def test_store_refuses_to_insert_a_share_for_a_purged_thread(
+    tmp_path: Path,
+) -> None:
+    """B1: the INSERT re-checks the parent, so a purge cannot leave an orphan."""
+
+    clock = Clock()
+    store = ChatStore(tmp_path / "chat.db", now=clock)
+    other = ChatStore(tmp_path / "chat.db", now=clock)
+    try:
+        thread_id = store.create_thread(title="vanishing")["id"]
+        # A second connection on the same file is the other writer the
+        # conditional INSERT has to defend against.
+        other.purge_thread(thread_id)
+
+        with pytest.raises(ThreadGoneError):
+            _snapshotless_share(store, thread_id, "a" * 64)
+        assert store.share_list(thread_id) == []
+        assert other.share_list(thread_id) == []
+    finally:
+        other.close()
+        store.close()
+
+
+def test_store_refuses_to_insert_a_share_for_a_soft_deleted_thread(
+    tmp_path: Path,
+) -> None:
+    clock = Clock()
+    store = ChatStore(tmp_path / "chat.db", now=clock)
+    try:
+        thread_id = store.create_thread(title="hidden")["id"]
+        assert store.soft_delete_thread(thread_id) is True
+        with pytest.raises(ThreadGoneError):
+            _snapshotless_share(store, thread_id, "b" * 64)
+        assert store.share_list(thread_id) == []
+    finally:
+        store.close()
+
+
+def test_create_is_refused_when_the_thread_is_purged_mid_request(
+    tmp_path: Path,
+) -> None:
+    """B1 at the API: the purge lands between the snapshot and the insert."""
+
+    api, _service, store, _clock = make_api(tmp_path)
+    thread_id = make_thread(api)
+    seed_messages(store, thread_id)
+
+    original = store.share_sweep
+
+    def sweep_then_purge() -> dict[str, int]:
+        result = original()
+        # Exactly what a concurrent owner delete does after the API has read
+        # the thread and built the snapshot, but before the insert.
+        store.purge_thread(thread_id)
+        return result
+
+    store.share_sweep = sweep_then_purge  # type: ignore[method-assign]
+    response = call(api, "POST", f"/api/threads/{thread_id}/share", {})
+
+    assert response.status == 404
+    assert payload(response)["error"]["code"] == "unknown_thread"
+    assert store.get_thread(thread_id) is None
+    assert store._conn.execute("SELECT COUNT(*) AS n FROM shares").fetchone()["n"] == 0
+
+
+def test_share_sweep_prunes_every_dead_row_kind(tmp_path: Path) -> None:
+    """B2/§15.7 + minor 7: expiry, revoke, orphan and soft-deleted parents."""
+
+    clock = Clock()
+    store = ChatStore(tmp_path / "chat.db", now=clock)
+    try:
+        expired_thread = store.create_thread(title="expired")["id"]
+        expired_hash = "e" * 64
+        _snapshotless_share(store, expired_thread, expired_hash, ttl=0.0)
+
+        revoked_thread = store.create_thread(title="revoked")["id"]
+        revoked_hash = "r" * 64
+        _snapshotless_share(store, revoked_thread, revoked_hash)
+        assert store.share_revoke(revoked_hash) is True
+
+        hidden_thread = store.create_thread(title="soft deleted")["id"]
+        hidden_hash = "s" * 64
+        _snapshotless_share(store, hidden_thread, hidden_hash)
+        assert store.soft_delete_thread(hidden_thread) is True
+
+        live_thread = store.create_thread(title="live")["id"]
+        live_hash = "l" * 64
+        _snapshotless_share(store, live_thread, live_hash)
+
+        orphan_hash = "o" * 64
+        stamp = store.now_iso()
+        with store.transaction():
+            store._conn.execute(  # noqa: SLF001 - the row under test is the table
+                "INSERT INTO shares (token_hash, owner_id, thread_id, "
+                "snapshot_json, snapshot_bytes, created_at, expires_at, "
+                "revoked_at) VALUES (?, 'owner', 'ses_missing', '{}', 2, ?, ?, NULL)",
+                (orphan_hash, stamp, stamp),
+            )
+            store._conn.execute(  # noqa: SLF001 - the counter must go with it
+                "INSERT INTO share_views (day, token_hash, views) VALUES (?, ?, 3)",
+                (stamp[:10], orphan_hash),
+            )
+
+        report = store.share_sweep()
+
+        assert report["shares"] == 4
+        assert report["views"] == 1
+        assert store.share_get_any(expired_hash) is None
+        assert store.share_get_any(revoked_hash) is None
+        assert store.share_get_any(hidden_hash) is None
+        assert store.share_get_any(orphan_hash) is None
+        assert store.share_get(live_hash) is not None
+        assert store.share_views_total(orphan_hash) == 0
+    finally:
+        store.close()
+
+
+def test_boot_pass_sweeps_expired_share_rows(tmp_path: Path) -> None:
+    """B2: ``RetentionMaintenance.run_once`` is the boot and daily pruner."""
+
+    clock = Clock()
+    store = ChatStore(tmp_path / "chat.db", now=clock)
+    try:
+        thread_id = store.create_thread(title="expired share")["id"]
+        token_hash = "a" * 64
+        _snapshotless_share(store, thread_id, token_hash, ttl=0.0)
+
+        maintenance = RetentionMaintenance(
+            store=store,
+            artifacts=_NoArtifacts(),
+            audit_path=tmp_path / "audit.jsonl",
+            policy=RetentionPolicy(),
+            now=clock,
+        )
+        report = maintenance.run_once()
+
+        assert report["shares"] == {"shares": 1, "views": 0}
+        assert store.share_get_any(token_hash) is None
+        assert report["vacuumed"] is True
+    finally:
+        store.close()
+
+
+def test_revoke_requires_the_full_public_id(tmp_path: Path) -> None:
+    api, _service, store, _clock = make_api(tmp_path)
+    thread_id = make_thread(api)
+    first = create_share(api, thread_id)
+    second = create_share(api, thread_id)
+    public_id = hash_token(first["token"])[:16]
+
+    before = store.share_list(thread_id)
+    for bad in (
+        public_id[:8],
+        public_id.upper(),
+        hash_token(first["token"]),
+        "zzzzzzzzzzzzzzzz",
+        public_id + "0",
+    ):
+        response = call(api, "DELETE", f"/api/threads/{thread_id}/shares/{bad}")
+        assert response.status in (404, 405), bad
+    assert store.share_list(thread_id) == before
+    assert call(api, "GET", f"/api/shared/{first['token']}", auth=False).status == 200
+
+    revoked = call(api, "DELETE", f"/api/threads/{thread_id}/shares/{public_id}")
+    assert revoked.status == 200
+    assert call(api, "GET", f"/api/shared/{first['token']}", auth=False).status == 404
+    assert call(api, "GET", f"/api/shared/{second['token']}", auth=False).status == 200
+
+
+def test_projection_scrubs_artifact_handles_in_free_text(tmp_path: Path) -> None:
+    api, _service, store, _clock = make_api(tmp_path)
+    thread_id = make_thread(api)
+    store.create_message(
+        thread_id=thread_id,
+        turn_id="turn_scrub",
+        role="assistant",
+        status="complete",
+        blocks=[
+            {"type": "text", "text": "I opened artifact:inlineHandle1234 for you."},
+            {
+                "type": "tool_call",
+                "tool": "docs.answer",
+                "label": "Document answer",
+                "summary": "artifact:summaryHandle99",
+                "status": "done",
+                "effects": ["read"],
+                "detail": {"arguments": {"handle": "artifact:detailHandle77"}},
+            },
+        ],
+        message_id="msg_scrub",
+    )
+    store.update_message(
+        "msg_scrub",
+        sources=[
+            {
+                "id": "src_0",
+                "kind": "doc",
+                "title": "artifact:titleHandle55",
+                "snippet": "see artifact:snippetHandle55",
+                "locator": "page 1",
+                "tool": "docs.answer",
+            }
+        ],
+        sources_total=1,
+    )
+    token = create_share(api, thread_id)["token"]
+
+    response = call(api, "GET", f"/api/shared/{token}", auth=False)
+    assert response.status == 200
+    body = response.body.decode()
+    for handle in (
+        "artifact:inlineHandle1234",
+        "artifact:summaryHandle99",
+        "artifact:detailHandle77",
+        "artifact:titleHandle55",
+        "artifact:snippetHandle55",
+    ):
+        assert handle not in body
+    assert "artifact:" not in body
+    assert "[attachment]" in body
+
+    stream = call(api, "GET", f"/api/shared/{token}/stream", auth=False).stream
+    frames = []
+    for frame in stream:
+        frames.append(frame)
+        if len(frames) >= 2:
+            break
+    stream.close()
+    assert "artifact:" not in "".join(frames)
+
+
+def test_share_stream_capacity_is_bounded_and_released(tmp_path: Path) -> None:
+    import gc
+
+    api, _service, store, _clock = make_api(tmp_path, max_share_streams=2)
+    api.stream_idle = 5.0
+    thread_id = make_thread(api)
+    token = create_share(api, thread_id)["token"]
+    url = f"/api/shared/{token}/stream"
+
+    first = call(api, "GET", url, auth=False)
+    second = call(api, "GET", url, auth=False)
+    assert first.status == 200 and second.status == 200
+    assert api._share_stream_slots.stats() == (2, 2)
+
+    third = call(api, "GET", url, auth=False)
+    assert third.status == 429
+    details = payload(third)["error"]["details"]
+    assert details["class"] == "share_streams"
+    assert details["reason"] == "stream_capacity"
+    assert details["limit"] == 2
+    assert third.headers["Cache-Control"] == "no-store"
+    assert third.headers["Referrer-Policy"] == "no-referrer"
+    assert api._share_stream_slots.stats() == (2, 2)
+
+    # A refused open is not a view.
+    token_hash = hash_token(token)
+    views = store._conn.execute(  # noqa: SLF001 - the assertion is the counter
+        "SELECT COALESCE(SUM(views), 0) AS n FROM share_views WHERE token_hash = ?",
+        (token_hash,),
+    ).fetchone()["n"]
+    assert views == 2
+
+    # Started then closed: the generator's finally releases the lease.
+    next(first.stream)
+    first.stream.close()
+    assert api._share_stream_slots.stats() == (1, 2)
+
+    # Never started and dropped: the lease's __del__ releases it.
+    del second
+    gc.collect()
+    assert api._share_stream_slots.stats() == (0, 2)
+
+    reopened = call(api, "GET", url, auth=False)
+    assert reopened.status == 200
+    reopened.stream.close()
+
+
+def test_every_unsupported_method_is_405_at_the_wire_level(tmp_path: Path) -> None:
+    from chat import make_server
+
+    api, _service, store, _clock = make_api(tmp_path)
+    thread_id = make_thread(api)
+    token = create_share(api, thread_id)["token"]
+
+    server = make_server(api, "127.0.0.1", 0)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    host, port = server.server_address
+    try:
+        for method in ("PUT", "HEAD", "OPTIONS", "POST", "PATCH", "DELETE"):
+            connection = http.client.HTTPConnection(host, port, timeout=2)
+            try:
+                connection.request(
+                    method,
+                    f"/api/shared/{token}",
+                    body=b"{}" if method in {"PUT", "POST", "PATCH"} else None,
+                    headers={"Content-Type": "application/json"},
+                )
+                response = connection.getresponse()
+                body = response.read()
+                assert response.status == 405, method
+                assert response.getheader("Allow") == "GET"
+                assert response.getheader("Cache-Control") == "no-store"
+                assert response.getheader("Referrer-Policy") == "no-referrer"
+                assert response.getheader("X-Robots-Tag") == "noindex, nofollow"
+                assert response.getheader("X-Content-Type-Options") == "nosniff"
+                assert "frame-ancestors 'none'" in response.getheader(
+                    "Content-Security-Policy"
+                )
+                assert response.getheader("Set-Cookie") is None
+                if method != "HEAD":
+                    assert json.loads(body)["error"]["code"] == "method_not_allowed"
+                    assert token.encode() not in body
+            finally:
+                connection.close()
+
+        getter = http.client.HTTPConnection(host, port, timeout=2)
+        try:
+            getter.request("GET", f"/api/shared/{token}")
+            ok = getter.getresponse()
+            assert ok.status == 200
+            assert json.loads(ok.read())["share"]["title"] == "Shared thread"
+        finally:
+            getter.close()
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=2)
+        api.close()
+        store.close()
+
+
+def _raw_exchange(host: str, port: int, request: bytes, limit: int = 65536) -> bytes:
+    sock = socket.create_connection((host, port), timeout=2)
+    try:
+        sock.sendall(request)
+        chunks: list[bytes] = []
+        total = 0
+        while total < limit:
+            chunk = sock.recv(4096)
+            if not chunk:
+                break
+            chunks.append(chunk)
+            total += len(chunk)
+        return b"".join(chunks)
+    finally:
+        sock.close()
+
+
+def test_stdlib_error_paths_keep_the_share_header_set(tmp_path: Path) -> None:
+    """Minor 4/5: even an answer the API never sees keeps the share headers."""
+
+    from chat import make_server
+
+    api, _service, store, _clock = make_api(tmp_path)
+    thread_id = make_thread(api)
+    token = create_share(api, thread_id)["token"]
+
+    server = make_server(api, "127.0.0.1", 0)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    host, port = server.server_address
+    try:
+        # An unsupported verb is answered by BaseHTTPRequestHandler itself;
+        # the override must turn it into the typed 405 without echoing the
+        # request line (which carries the token).
+        unknown_method = _raw_exchange(
+            host,
+            port,
+            f"FOOBAZ /api/shared/{token} HTTP/1.1\r\nHost: test\r\n\r\n".encode(),
+        )
+        head, _, body = unknown_method.partition(b"\r\n\r\n")
+        assert head.split(b"\r\n", 1)[0].split()[1] == b"405"
+        assert b"Allow: GET" in head
+        assert b"Cache-Control: no-store" in head
+        assert b"Referrer-Policy: no-referrer" in head
+        assert token.encode() not in unknown_method
+        assert b"method_not_allowed" in body
+
+        # A declared body over the cap is rejected before reading; the error
+        # response still carries the share set.
+        oversized = _raw_exchange(
+            host,
+            port,
+            (
+                f"GET /api/shared/{token} HTTP/1.1\r\nHost: test\r\n"
+                "Content-Length: 999999999\r\n\r\n"
+            ).encode(),
+        )
+        head, _, body = oversized.partition(b"\r\n\r\n")
+        assert head.split(b"\r\n", 1)[0].split()[1] == b"400"
+        assert b"Cache-Control: no-store" in head
+        assert b"Referrer-Policy: no-referrer" in head
+        assert token.encode() not in oversized
+        assert b"invalid_request" in body
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=2)
+        api.close()
+        store.close()

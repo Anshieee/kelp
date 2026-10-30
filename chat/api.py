@@ -46,7 +46,12 @@ from .logging import (
 )
 from .metrics import Metrics, PROMETHEUS_CONTENT_TYPE, get_metrics
 from .service import ChatService
-from .store import ChatStore
+from .store import (
+    SHARE_ID_LENGTH,
+    ChatStore,
+    ThreadGoneError,
+    scrub_artifact_handles,
+)
 from .stream import IDLE_SECONDS, format_comment, format_event, sse_frames
 
 __all__ = [
@@ -66,6 +71,12 @@ __all__ = [
 _THREAD_RE = re.compile(r"^[A-Za-z0-9:_-]{1,80}$")
 _CLIENT_TURN_RE = re.compile(r"^[A-Za-z0-9_-]{1,100}$")
 _MUTATING = frozenset({"POST", "PATCH", "DELETE", "PUT"})
+#: Methods the owner API actually routes. Anything else — HEAD, OPTIONS, PUT,
+#: TRACE — is a typed 405 at the API boundary instead of the stdlib's 501
+#: HTML page, so the wire answer is JSON and, on a share path, carries the
+#: share header set. HEAD is not aliased to GET: a stream response would have
+#: to open a real stream for a body the client will discard.
+_SUPPORTED_METHODS = frozenset({"GET", "POST", "PATCH", "DELETE"})
 _JSON_LIMIT = 1024 * 1024
 _DECISION_LIMIT = 1024
 _UPLOAD_OVERHEAD = 64 * 1024
@@ -151,8 +162,13 @@ _EPOCH_COOKIE_DATE = "Thu, 01 Jan 1970 00:00:00 GMT"
 OWNER_IDENTITY = "owner"
 _DEFAULT_MAX_CONCURRENT_TURNS = 4
 _DEFAULT_MAX_STREAMS_PER_OWNER = 3
+#: Share viewers are anonymous, so a share stream is capped process-wide rather
+#: than per owner. Sixteen is deliberately above the owner's per-owner cap and
+#: far below what one process can hold as idle heartbeats.
+_DEFAULT_MAX_SHARE_STREAMS = 16
 _MAX_CONCURRENT_TURNS_ENV = "KELP_MAX_CONCURRENT_TURNS"
 _MAX_STREAMS_PER_OWNER_ENV = "KELP_MAX_STREAMS_PER_OWNER"
+_MAX_SHARE_STREAMS_ENV = "KELP_MAX_SHARE_STREAMS"
 _RATE_LIMITED_FALLBACK_RETRY = 60.0
 #: A readiness probe is cached so a slow upstream cannot slow every scrape.
 _PROVIDER_TTL_SECONDS = 30.0
@@ -175,8 +191,9 @@ _DEFAULT_SHARE_TTL_SECONDS = 7 * 24 * 60 * 60
 _DEFAULT_SHARE_MAX_TTL_SECONDS = 30 * 24 * 60 * 60
 _DEFAULT_SHARE_MAX_SNAPSHOT_BYTES = 4 * 1024 * 1024
 #: Public id of a link in the owner's listing is the hash prefix; the full
-#: hash is never needed to revoke one.
-_SHARE_ID_LENGTH = 16
+#: hash is never needed to revoke one. The width is the store's constant, so
+#: the validator and the listing cannot drift.
+_SHARE_ID_LENGTH = SHARE_ID_LENGTH
 #: How often an open share stream re-checks its link. Revocation and purge
 #: close it within one tick (the KEL-24 rule, applied to a share stream).
 _SHARE_STREAM_TICK = 0.5
@@ -1641,6 +1658,7 @@ class ChatAPI:
         limiter: RateLimiter | None = None,
         max_concurrent_turns: int | None = None,
         max_streams_per_owner: int | None = None,
+        max_share_streams: int | None = None,
         sessions: SessionStore | None = None,
         auth_failures: AuthFailureTracker | None = None,
         cookie_secure: bool | None = None,
@@ -1717,6 +1735,17 @@ class ChatAPI:
             if max_streams_per_owner is None
             else max_streams_per_owner
         )
+        # A share stream has no owner to key on, so its cap is process-wide.
+        # Zero disables it, matching the other concurrency caps.
+        self._share_stream_slots = _Capacity(
+            _env_int(
+                source,
+                _MAX_SHARE_STREAMS_ENV,
+                _DEFAULT_MAX_SHARE_STREAMS,
+            )
+            if max_share_streams is None
+            else max_share_streams
+        )
         self._owns_runner = runner is None
         self.runner = runner or LoopRunner()
 
@@ -1789,6 +1818,9 @@ class ChatAPI:
             # POST) is answered 405 without ever reaching ``_authorize``.
             if len(segments) >= 2 and segments[0] == "api" and segments[1] == "shared":
                 return self._shared(request, segments[2:])
+            method = request.method.upper()
+            if method not in _SUPPORTED_METHODS:
+                return _method_not_allowed_response("GET, POST, PATCH, DELETE")
             # Liveness is the one unauthenticated route: a supervisor must be
             # able to tell "process alive" from "owner token missing".
             if not self._is_public(request, segments):
@@ -1895,21 +1927,26 @@ class ChatAPI:
     def _limiter_gauges(self) -> str:
         turn_used, turn_limit = self._turn_slots.stats()
         stream_used, stream_limit = self._stream_slots.stats()
+        share_used, share_limit = self._share_stream_slots.stats()
         turn_ratio = turn_used / turn_limit if turn_limit > 0 else 0.0
         stream_ratio = stream_used / stream_limit if stream_limit > 0 else 0.0
+        share_ratio = share_used / share_limit if share_limit > 0 else 0.0
         lines = [
             "# HELP kelp_limiter_in_use Slots currently held by a limiter.",
             "# TYPE kelp_limiter_in_use gauge",
             f'kelp_limiter_in_use{{class="turns"}} {_gauge(turn_used)}',
             f'kelp_limiter_in_use{{class="streams"}} {_gauge(stream_used)}',
+            f'kelp_limiter_in_use{{class="share_streams"}} {_gauge(share_used)}',
             "# HELP kelp_limiter_capacity Slot limit per class; streams are per owner.",
             "# TYPE kelp_limiter_capacity gauge",
             f'kelp_limiter_capacity{{class="turns"}} {_gauge(turn_limit)}',
             f'kelp_limiter_capacity{{class="streams"}} {_gauge(stream_limit)}',
+            f'kelp_limiter_capacity{{class="share_streams"}} {_gauge(share_limit)}',
             "# HELP kelp_limiter_saturation Fraction of a limiter's capacity in use.",
             "# TYPE kelp_limiter_saturation gauge",
             f'kelp_limiter_saturation{{class="turns"}} {_gauge(turn_ratio)}',
             f'kelp_limiter_saturation{{class="streams"}} {_gauge(stream_ratio)}',
+            f'kelp_limiter_saturation{{class="share_streams"}} {_gauge(share_ratio)}',
         ]
         return "\n".join(lines) + "\n"
 
@@ -2093,12 +2130,18 @@ class ChatAPI:
             self.service.store.share_sweep()
         except Exception:  # noqa: BLE001 - maintenance never blocks a create
             pass
-        record = self.service.store.share_create(
-            token_hash=token_hash,
-            thread_id=thread_id,
-            snapshot=snapshot,
-            ttl_seconds=ttl,
-        )
+        try:
+            record = self.service.store.share_create(
+                token_hash=token_hash,
+                thread_id=thread_id,
+                snapshot=snapshot,
+                ttl_seconds=ttl,
+            )
+        except ThreadGoneError:
+            # The thread was purged between the read above and this insert (a
+            # concurrent delete, possibly another process). Nothing was
+            # written; answer the same 404 as an unknown thread.
+            raise ChatError("unknown_thread", status=404) from None
         self._audit_share(
             "share_created", actor="owner", token_hash=token_hash,
             extra={"thread_id": thread_id},
@@ -2205,6 +2248,11 @@ class ChatAPI:
             "viewer": "anonymous-share",
             "read_only": True,
         }
+        # The allow-list drops handles structurally, but a handle can also be
+        # typed into text, a tool summary, or a citation. Scrub free text with
+        # the same pattern the orphan sweep uses before the size check, so the
+        # cap is measured on what is actually stored.
+        snapshot = _scrub_projection(snapshot)
         # The store stamps two timestamps into the frozen copy, so leave a
         # small margin rather than accepting a snapshot that grows past the cap
         # on insert.
@@ -2278,9 +2326,11 @@ class ChatAPI:
         if record is None:
             # Unknown, malformed, expired, revoked and purged all land here.
             return self._share_not_found()
-        self._record_share_view(token_hash)
         if len(rest) == 2:
+            # The stream path owns the view count so an open that is refused
+            # for capacity is not counted as a read.
             return self._share_stream(request, record, token_hash)
+        self._record_share_view(token_hash)
         return self._share_snapshot(record, token_hash)
 
     def _limit_share(self, token: str) -> Response | None:
@@ -2349,8 +2399,25 @@ class ChatAPI:
         record: Mapping[str, Any],
         token_hash: str,
     ) -> Response:
-        after = _share_after(request)
-        frames = self._share_frames(token_hash, record, after=after)
+        # A share stream is the cheapest open connection in the app, but it is
+        # still an open connection: a stranger with one leaked link must not be
+        # able to hold every stream slot in the process. The slot is process-
+        # wide because a share has no owner to key on.
+        if not self._share_stream_slots.acquire():
+            response = self._busy_response(
+                class_name="share_streams",
+                reason="stream_capacity",
+                limit=self._share_stream_slots.limit,
+            )
+            _apply_share_headers(response)
+            return response
+        try:
+            self._record_share_view(token_hash)
+            after = _share_after(request)
+            frames = self._share_frames(token_hash, record, after=after)
+        except BaseException:
+            self._share_stream_slots.release()
+            raise
         return Response(
             status=200,
             headers={
@@ -2359,7 +2426,9 @@ class ChatAPI:
                 "X-Accel-Buffering": "no",
                 "Connection": "keep-alive",
             },
-            stream=frames,
+            stream=self._guarded_stream(
+                frames, lambda: self._share_stream_slots.release()
+            ),
         )
 
     def _share_frames(
@@ -2476,7 +2545,16 @@ class ChatAPI:
         the lease object is also released when the generator is collected.
         """
 
-        lease = _Lease(lambda: self._stream_slots.release(owner))
+        return self._guarded_stream(
+            frames, lambda: self._stream_slots.release(owner)
+        )
+
+    def _guarded_stream(
+        self, frames: Iterator[str], release: Callable[[], None]
+    ) -> Iterator[str]:
+        """Bind one idempotent release to the lifetime of a stream body."""
+
+        lease = _Lease(release)
 
         def guarded() -> Iterator[str]:
             try:
@@ -3031,6 +3109,19 @@ def _json_response(status: int, payload: Mapping[str, Any]) -> Response:
     )
 
 
+def _method_not_allowed_response(allow: str) -> Response:
+    """The one 405 builder: a typed envelope plus the ``Allow`` it proves."""
+
+    error = ChatError(
+        "method_not_allowed",
+        status=405,
+        message="That method is not supported here.",
+    )
+    response = _json_response(405, error.to_body())
+    response.headers["Allow"] = allow
+    return response
+
+
 # -- share helpers (KEL-28) ------------------------------------------------
 
 
@@ -3040,17 +3131,20 @@ def _share_hash(token: str) -> str:
     return hashlib.sha256(token.encode("utf-8", "surrogatepass")).hexdigest()
 
 
-def _share_segments(request: Request) -> list[str]:
+def _is_share_path(path: str) -> bool:
+    """True for ``/api/shared/...``, from a raw path string or a Request path."""
+
     try:
-        path = unquote(urlsplit(request.path).path)
+        segments = [
+            segment for segment in unquote(urlsplit(path).path).split("/") if segment
+        ]
     except ValueError:  # pragma: no cover - urlsplit rarely raises here
-        return []
-    return [segment for segment in path.split("/") if segment]
+        return False
+    return len(segments) >= 2 and segments[0] == "api" and segments[1] == "shared"
 
 
 def _is_share_request(request: Request) -> bool:
-    segments = _share_segments(request)
-    return len(segments) >= 2 and segments[0] == "api" and segments[1] == "shared"
+    return _is_share_path(request.path)
 
 
 def _share_after(request: Request) -> int:
@@ -3130,6 +3224,23 @@ def _share_message(message: Mapping[str, Any]) -> dict[str, Any]:
             _share_source(source) for source in message.get("sources") or []
         ],
     }
+
+
+def _scrub_projection(value: Any) -> Any:
+    """Replace every artifact handle anywhere in the share projection.
+
+    Runs over the finished dict rather than at each field, so a block shape
+    added later cannot forget it. Keys are never rewritten: they are fixed
+    names, not user content.
+    """
+
+    if isinstance(value, str):
+        return scrub_artifact_handles(value)
+    if isinstance(value, Mapping):
+        return {key: _scrub_projection(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_scrub_projection(item) for item in value]
+    return value
 
 
 def _segment(value: str) -> str:
@@ -3252,20 +3363,55 @@ class _Handler(BaseHTTPRequestHandler):
     def do_DELETE(self) -> None:  # noqa: N802
         self._dispatch()
 
+    # Without these, ``BaseHTTPRequestHandler`` answers 501 with an HTML page
+    # it builds from the request line — a page that would echo a share token
+    # and carry none of the share headers. Routing them through the API makes
+    # the answer typed JSON everywhere, and a 405 for the methods the API does
+    # not serve (HEAD included: a stream response has no meaningful body).
+    def do_PUT(self) -> None:  # noqa: N802
+        self._dispatch()
+
+    def do_HEAD(self) -> None:  # noqa: N802
+        self._dispatch()
+
+    def do_OPTIONS(self) -> None:  # noqa: N802
+        self._dispatch()
+
+    def do_TRACE(self) -> None:  # noqa: N802
+        self._dispatch()
+
     def _dispatch(self) -> None:
         parsed = urlsplit(self.path)
+        share_path = _is_share_path(parsed.path)
+        if share_path and self.command.upper() != "GET":
+            # A share is GET-only before any body is read: answer the 405
+            # without buffering a body, and close so unread bytes cannot
+            # poison the next request on this connection.
+            self._respond(
+                self.api.handle(self._request(parsed, b"")),
+                close=True,
+            )
+            return
         try:
             body = self._read_body(parsed.path)
         except _BodyRejected as rejected:
-            self._respond(_body_rejection_response(rejected), close=True)
+            response = _body_rejection_response(rejected)
+            if share_path:
+                # A body rejected on a share path still answers with the share
+                # header set; no path of this surface may skip it.
+                _apply_share_headers(response)
+            self._respond(response, close=True)
             return
         except (ConnectionError, OSError):
             # The peer vanished mid-body; there is nobody to answer and the
             # partially consumed stream cannot be reused.
             self.close_connection = True
             return
+        self._respond(self.api.handle(self._request(parsed, body)))
+
+    def _request(self, parsed: Any, body: bytes) -> Request:
         headers = {key.lower(): value for key, value in self.headers.items()}
-        request = Request(
+        return Request(
             method=self.command,
             path=parsed.path,
             query=parse_qs(parsed.query, keep_blank_values=True),
@@ -3273,7 +3419,6 @@ class _Handler(BaseHTTPRequestHandler):
             body=body,
             client=self.client_address[0] if self.client_address else None,
         )
-        self._respond(self.api.handle(request))
 
     def _read_body(self, path: str) -> bytes:
         """Read a bounded body, refusing an oversized declaration up front.
@@ -3395,16 +3540,64 @@ class _Handler(BaseHTTPRequestHandler):
         if close and "connection" not in names:
             self.send_header("Connection", "close")
         self.end_headers()
+        # HEAD keeps the headers (including the Content-Length of the body it
+        # would have sent) and writes no bytes, as RFC 9110 requires. The API
+        # answers HEAD with 405 before a stream can be opened, so a stream here
+        # is only reachable from an embedded caller and is closed, never read.
+        head = str(getattr(self, "command", "") or "").upper() == "HEAD"
+        body = b"" if head else response.body
+        if head and response.stream is not None:
+            closer = getattr(response.stream, "close", None)
+            if closer is not None:
+                closer()
         try:
-            if response.stream is not None:
+            if response.stream is not None and not head:
                 for frame in response.stream:
                     self.wfile.write(frame.encode("utf-8"))
                     self.wfile.flush()
-            else:
-                self.wfile.write(response.body)
+            elif body:
+                self.wfile.write(body)
                 self.wfile.flush()
         except (BrokenPipeError, ConnectionResetError):
             pass
+
+    def send_error(
+        self,
+        code: int,
+        message: str | None = None,
+        explain: str | None = None,
+    ) -> None:
+        """Answer a stdlib protocol error on a share path with the share set.
+
+        The base implementation builds an HTML page from the request line and
+        the caller's message, and neither is safe here: the path is the token.
+        A share path therefore gets the ordinary typed envelope and the fixed
+        header set, and the standard library's text is never rendered.
+        """
+
+        path = getattr(self, "path", "") or ""
+        if not _is_share_path(path):
+            super().send_error(code, message, explain)
+            return
+        # An unsupported method is the one stdlib error with a real route; the
+        # contract says every non-GET on this prefix is a 405 with Allow: GET.
+        status = 405 if code == 501 else code
+        error = ChatError(
+            "method_not_allowed" if status == 405 else "invalid_request",
+            status=status,
+            message=(
+                "Share links are read-only."
+                if status == 405
+                else "The request could not be read."
+            ),
+        )
+        response = _json_response(status, error.to_body())
+        if status == 405:
+            response.headers["Allow"] = "GET"
+        _apply_share_headers(response)
+        response.headers.setdefault("X-Request-Id", new_request_id())
+        self.log_error("share_path_error")
+        self._respond(response, close=True)
 
     def log_message(self, format: str, *args: Any) -> None:
         """Silence the stdlib access log; the JSON sink already has this request.

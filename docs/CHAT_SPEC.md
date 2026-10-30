@@ -1079,8 +1079,20 @@ Rules that make the surface safe:
   same builder: byte-identical bodies, no distinguishing header. There is no
   shape check before the lookup.
 - **GET only.** Every non-GET under `/api/shared/*` is `405` with
-  `Allow: GET` before any lookup. There is no content, preview, download, or
-  approval route under that prefix, so no artifact bytes are reachable.
+  `Allow: GET` before any lookup. The typing happens at both layers: the
+  adapter routes `PUT`, `HEAD`, `OPTIONS`, and `TRACE` into the API instead of
+  letting the stdlib answer `501` with an HTML page, and no share request body
+  is ever read. There is no content, preview, download, or approval route
+  under that prefix, so no artifact bytes are reachable.
+- **One stream cap for an anonymous surface.** A frozen snapshot is cheap, but
+  an open stream is still a held connection, and a share viewer has no owner
+  budget to charge. Open share streams are capped process-wide at
+  `KELP_MAX_SHARE_STREAMS` (default 16, `0` disables). A refused open is the
+  ordinary `429` shape with `details.class = "share_streams"` and
+  `details.reason = "stream_capacity"`, still carrying the share headers, and
+  it is not counted as a view. The slot is released when the stream ends,
+  closes, or is garbage-collected (`_Lease`, the same rule the owner stream
+  uses), and advertised as `kelp_limiter_*{class="share_streams"}`.
 - **No side effects beyond the view counter.** A share read touches no thread,
   message, turn, approval, or artifact row. It increments one aggregate
   `share_views (day, token_hash, views)` row; the first view of a day also
@@ -1100,13 +1112,30 @@ Rules that make the surface safe:
 - **Snapshot projection.** `storage_path`, `sha256`, artifact handles and
   artifact URLs, approval ids, turn/call ids, and tool-call arguments/results
   are dropped structurally. Pending approval cards are excluded and counted, so
-  a half-finished turn cannot leak an argv payload. The snapshot is capped at
-  4 MiB (`KELP_SHARE_MAX_SNAPSHOT_BYTES`); a larger thread is refused rather
-  than truncated.
+  a half-finished turn cannot leak an argv payload. The projection is also
+  scrubbed with the orphan sweep's handle pattern
+  (`artifact:[A-Za-z0-9_-]{8,128}` → `[attachment]`) because a handle can be
+  typed into message text, a tool summary, or a citation, where no allow-list
+  can drop it. The snapshot is capped at 4 MiB
+  (`KELP_SHARE_MAX_SNAPSHOT_BYTES`); a larger thread is refused rather than
+  truncated.
+- **Revoke id shape.** The listing `id` is the first 16 hex characters of the
+  token hash. `DELETE /threads/{id}/shares/{id}` accepts exactly that shape;
+  a shorter prefix, uppercase, a full token, or a full hash is `404` without a
+  query, so a short id can never be widened into a token oracle.
 - **Retention.** The snapshot is a copy of chat content. It adds no retention
   row: deleting the thread deletes the snapshot and its view counts with it.
-  `shares` has a `owner_id` column fixed to `'owner'` (the one boundary that is
-  real); every other table remains owner-less by design.
+  Rows that are expired, revoked, or parentless (including a soft-deleted
+  parent) are pruned by `ChatStore.share_sweep` on the boot pass and then
+  daily (`RetentionMaintenance.run_once`), and opportunistically on owner
+  create — never on a share read. `shares` has an `owner_id` column fixed to
+  `'owner'` (the one boundary that is real); every other table remains
+  owner-less by design.
+- **Create re-checks the parent.** The insert is conditional
+  (`INSERT … WHERE EXISTS threads … deleted_at IS NULL`) inside its write
+  transaction. A purge that commits between the API's read and the insert
+  inserts nothing and answers the ordinary `404 unknown_thread`, so a share
+  row can never outlive its thread.
 
 ---
 
@@ -1353,8 +1382,16 @@ warm cache.
 | `GET` | `/shared/{token}` | none | `{ share }` | Frozen snapshot; `no-store`, `no-referrer` |
 | `GET` | `/shared/{token}/stream` | none | `text/event-stream` | Replay of the frozen snapshot, then heartbeats |
 
-Any non-GET on `/shared/*` is `405`. Unknown, expired, revoked and malformed
-tokens are one identical `404`.
+Any non-GET on `/shared/*` is `405` with `Allow: GET`, including `HEAD`,
+`OPTIONS`, `PUT`, and `TRACE`: the stdlib adapter routes those verbs into the
+API, so the answer is typed JSON carrying the share headers, never the stdlib's
+`501` HTML page. Unknown, expired, revoked and malformed tokens are one
+identical `404`. A revoke path takes exactly the 16-hex-character public id.
+Open share streams are capped process-wide by `KELP_MAX_SHARE_STREAMS`
+(default `16`); a refused open is a `429` whose `details.class` is
+`share_streams` and whose headers are the same share set. Expired, revoked and
+parentless rows are swept by `RetentionMaintenance.run_once` at boot and daily,
+not on a read.
 
 ---
 

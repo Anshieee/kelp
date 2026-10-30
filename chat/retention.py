@@ -5,7 +5,9 @@ One source of truth for every data class's clock lives here as
 enforced in this milestone are the ones backed by code below:
 
 * chat content is removed when its thread is deleted
-  (:meth:`chat.store.ChatStore.purge_thread`), not by an age timer;
+  (:meth:`chat.store.ChatStore.purge_thread`), not by an age timer; expired,
+  revoked, and parentless share rows are pruned by the same boot/daily pass
+  (:meth:`chat.store.ChatStore.share_sweep`), never on a share read;
 * uploaded files and their derived ``docs.answer`` indexes live for the thread
   and are swept when parentless after :data:`DEFAULT_ARTIFACT_ORPHAN_SECONDS`;
 * ``audit.jsonl`` and ``usage.jsonl`` rotate by size or by interval and their
@@ -70,9 +72,9 @@ INTERVAL_ENV = "KELP_RETENTION_INTERVAL_SECONDS"
 RETENTION_ROWS: tuple[dict[str, str], ...] = (
     {
         "class": "Chat content",
-        "where": "chat.db threads, messages, blocks, events, turns, approvals",
-        "ttl": "Until the owner deletes the thread",
-        "enforced_by": "ChatStore.purge_thread (immediate hard delete)",
+        "where": "chat.db threads, messages, blocks, events, turns, approvals, shares, share_views",
+        "ttl": "Until the owner deletes the thread; expired/revoked share rows are pruned boot + daily",
+        "enforced_by": "ChatStore.purge_thread (immediate hard delete); share_sweep boot + daily",
         "override": "none (explicit delete only)",
     },
     {
@@ -329,7 +331,7 @@ def rotate_jsonl(
 
 
 class RetentionMaintenance:
-    """Boot-time and daily orphan sweep + log rotation.
+    """Boot-time and daily orphan sweep, share sweep, and log rotation.
 
     ``run_once`` is synchronous and returns a content-free report (counts
     only). ``start`` runs the same pass on a daemon thread at the configured
@@ -366,6 +368,11 @@ class RetentionMaintenance:
             now=current,
         )
         report["orphans"] = orphans
+        # Share rows have no retention clock of their own; the sweep is the
+        # only pruner outside `purge_thread`. It runs here, on the boot pass
+        # and then daily, never on the share read path (a share GET mutates
+        # nothing, so a reader cannot lose its row mid-request).
+        report["shares"] = self._sweep_shares()
         report["audit"] = rotate_jsonl(
             self.audit_path,
             max_bytes=self.policy.log_max_bytes,
@@ -383,11 +390,40 @@ class RetentionMaintenance:
                 keep=self.policy.usage_keep,
                 now=current,
             )
-        if orphans.get("artifact_rows"):
+        if orphans.get("artifact_rows") or report["shares"].get("shares"):
             report["vacuumed"] = self.store.vacuum()
         else:
             report["vacuumed"] = False
         return report
+
+    def _sweep_shares(self) -> dict[str, int]:
+        """Prune expired, revoked and orphaned share rows, tolerating absence.
+
+        ``store`` is duck-typed (tests pass a spy), so an object without the
+        share surface reports zero instead of failing the whole pass. A real
+        sweep error is logged and does not abort the remainder of maintenance:
+        rotation and the orphan sweep have already run, and the next pass
+        retries.
+        """
+
+        sweep = getattr(self.store, "share_sweep", None)
+        if sweep is None:
+            return {"shares": 0, "views": 0}
+        try:
+            result = sweep()
+        except Exception as exc:  # noqa: BLE001 - maintenance never fails traffic
+            log(
+                "share_sweep_failed",
+                error_code=type(exc).__name__,
+                status="error",
+            )
+            return {"shares": 0, "views": 0}
+        if not isinstance(result, Mapping):
+            return {"shares": 0, "views": 0}
+        return {
+            "shares": int(result.get("shares", 0) or 0),
+            "views": int(result.get("views", 0) or 0),
+        }
 
     def start(self) -> None:
         if self.policy.maintenance_interval_seconds <= 0:

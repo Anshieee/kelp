@@ -143,8 +143,12 @@ no default: the process refuses to start without them (`missing_api_key` or
 | `KELP_RETENTION_ORPHAN_SECONDS` | no | `3600` | no | Grace before an unclaimed upload or unreferenced file is swept |
 | `KELP_RETENTION_LOG_MAX_BYTES` | no | `10485760` | no | Audit/usage active-file size that forces a rotation |
 | `KELP_RETENTION_LOG_ROTATE_SECONDS` | no | `86400` | no | Maximum segment interval for audit and usage records |
-| `KELP_RETENTION_INTERVAL_SECONDS` | no | `86400` | no | Orphan-sweep and rotation cadence after boot |
+| `KELP_RETENTION_INTERVAL_SECONDS` | no | `86400` | no | Orphan-sweep, share-sweep, and rotation cadence after boot |
 | `KELP_MAX_STREAMS_PER_OWNER` | no | `3` | no | Concurrent SSE streams per owner; `0` disables |
+| `KELP_MAX_SHARE_STREAMS` | no | `16` | no | Concurrent anonymous share streams process-wide; `0` disables |
+| `KELP_SHARE_TTL_SECONDS` | no | `604800` | no | Default share-link lifetime (7 days); minimum `60` |
+| `KELP_SHARE_MAX_TTL_SECONDS` | no | `2592000` | no | Hard ceiling for a requested TTL (30 days); minimum `60` |
+| `KELP_SHARE_MAX_SNAPSHOT_BYTES` | no | `4194304` | no | Share snapshot cap; a larger thread is refused, not truncated; minimum `1024` |
 | `KELP_VERSION` / `KELP_GIT_COMMIT` | no | build args | no | Echoed by `/api/healthz`, `/api/readyz`, `/metrics` |
 
 Rate-limit rejections are `429` JSON with `error.code = "rate_limited"` and a
@@ -152,8 +156,8 @@ Rate-limit rejections are `429` JSON with `error.code = "rate_limited"` and a
 limiter fault fails open. The admin bucket must stay comfortably above the
 readiness probe interval, or probes will see `429` instead of `503`. The
 `/api/metrics` exposition includes `kelp_limiter_in_use`,
-`kelp_limiter_capacity`, and `kelp_limiter_saturation` for the turn and stream
-caps.
+`kelp_limiter_capacity`, and `kelp_limiter_saturation` for the turn, owner
+stream, and share stream (`share_streams`) caps.
 
 ```bash
 cd /opt/kelp
@@ -505,7 +509,7 @@ artifact names.
 
 | Data class | Where | TTL / trigger | Enforced by | Override |
 |---|---|---|---|---|
-| Chat content | `chat.db` threads, messages, blocks, events, turns, approvals | Until the owner deletes the thread (immediate hard delete, no `deleted_at` shadow) | `ChatStore.purge_thread` | none (explicit delete only) |
+| Chat content | `chat.db` threads, messages, blocks, events, turns, approvals, shares, share_views | Until the owner deletes the thread (immediate hard delete, no `deleted_at` shadow); expired, revoked, and parentless share rows are pruned on the same boot + daily pass | `ChatStore.purge_thread`; `ChatStore.share_sweep` via `RetentionMaintenance.run_once` | none (explicit delete only) |
 | Uploaded files | `KELP_ARTIFACT_DIR` (default `workspace/var/artifacts`) | Thread lifetime; unclaimed or parentless uploads after 1 h grace | `ArtifactRegistry.purge` / `sweep_orphans`, boot + daily | `KELP_RETENTION_ORPHAN_SECONDS` |
 | Derived index | `workspace/var/index` (`docs.answer` chunk cache) | Removed eagerly when the artifact or thread is deleted; orphan dirs swept | `ArtifactRegistry.purge` → `remove_index`; `sweep_orphans` | none (follows the artifact) |
 | Audit records | `KELP_AUDIT_DIR/audit.jsonl` and its segments | 30 days, capped at 40 segments | `RetentionMaintenance.rotate`, boot + daily | `KELP_RETENTION_AUDIT_DAYS`, `KELP_RETENTION_AUDIT_KEEP` |
