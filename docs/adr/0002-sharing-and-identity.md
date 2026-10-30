@@ -458,7 +458,8 @@ detail.
 1. KEL-28 says revocation "closes any live share viewer streams". This design has
    no share stream — the page is a static snapshot per request — so there is nothing
    to close, and the guarantee is "the next request is a `404`". A stream, if ever
-   added, inherits KEL-24's one-tick close rule.
+   added, inherits KEL-24's one-tick close rule. **Superseded 2026-10-30 by §14.1:
+   the shipped slice does have a stream.**
 2. The header set is KEL-28's plus one: `Referrer-Policy: no-referrer`. It is
    called out as a deviation rather than as a detail because a token in a path plus
    any outbound link is the single most likely leak in the whole design; a later
@@ -468,6 +469,50 @@ detail.
    token carries its own full allowance, so the aggregate a stranger can drive is
    bounded by how many links exist rather than by the process. The global ceiling is
    the bound that survives a leaked link.
+
+### 14.1 Amendment: what KEL-28 actually shipped (2026-10-30)
+
+This section records the implementation as merged. Where it disagrees with §14
+above, this is the operative text; nothing here widens a guarantee — it replaces
+an unbuilt surface with the one that exists.
+
+- **Route.** The read surface is `GET /api/shared/{token}` returning JSON
+  (`{ok, share}`), not `GET /s/{token}` returning HTML. There is no frontend in
+  this build, and a JSON body is the contract every other route already uses;
+  a server-rendered page is still a later issue with a real consumer. Owner
+  endpoints are also under `/api/threads/{id}/…`, as §14's table says, not `/s`.
+- **Stream.** `GET /api/shared/{token}/stream` is an SSE replay of the frozen
+  snapshot (`snapshot`, then one `message` frame per message, then 15-second
+  heartbeats) and tails nothing new, because the snapshot is immutable. It
+  re-checks the row every `_SHARE_STREAM_TICK` and closes within one tick on
+  revoke, expiry, or purge — so deviation 1 above is superseded: there *is* a
+  stream, and it does inherit KEL-24's one-tick close rule. Open streams are
+  capped process-wide (`KELP_MAX_SHARE_STREAMS`, default 16) with the `_Lease`
+  release pattern; a refused open is a `429` (`details.class =
+  "share_streams"`) that still carries the share headers.
+- **Views.** The counter is `share_views (day, token_hash, views)`, one row per
+  day and link, incremented by every successful snapshot or stream open; the
+  first view of a day also writes one `share_viewed` audit record with
+  `actor="share"`. The owner's listing reports the aggregate `views`. A refused
+  open is not a view.
+- **Methods.** Every non-GET under `/api/shared/*` is a `405` with
+  `Allow: GET`, including `HEAD`, `OPTIONS`, `PUT`, and `TRACE`. The stdlib
+  adapter routes those verbs into the API rather than emitting its own `501`
+  HTML page, and the request body is never read; the stdlib's error path is
+  overridden for this prefix so the share header set and typed envelope survive
+  even there.
+- **Writes re-check the parent.** `share_create` inserts with
+  `INSERT … WHERE EXISTS (threads … deleted_at IS NULL)` inside its write
+  transaction; a purge that commits between the API's read and the insert
+  inserts nothing and answers `404 unknown_thread`. `share_revoke_prefix`
+  accepts exactly the 16-hex public id issued by the listing.
+- **Projection.** The snapshot is scrubbed with the orphan sweep's artifact
+  handle pattern, so a handle typed into text, a tool summary, or a citation is
+  replaced by `[attachment]` as well as being dropped from structured fields.
+- **Sweep.** Expired, revoked, and parentless (including soft-deleted parent)
+  share rows are deleted by `ChatStore.share_sweep`, which
+  `RetentionMaintenance.run_once` calls on the boot pass and then daily; owner
+  create also calls it opportunistically. A share read never sweeps.
 
 ## 15. Consequences and follow-ups
 
@@ -491,7 +536,7 @@ the cost in §12(b). This is named in the UI copy, not hidden.
 
 | Follow-up | Why | Where |
 |---|---|---|
-| Share link implementation | This ADR's slice | **KEL-28** (exists) |
+| Share link implementation | This ADR's slice | **KEL-28** (shipped 2026-10-30; route/stream/views reality in §14.1) |
 | Scheduled-turn actor, `paused_needs_approval`, `origin=schedule` | §4, §5, §6 bind the scheduler | **KEL-23**, **KEL-27** (exist) |
 | Plugin attribution (`actor="plugin"`, digest in `extra`) | §6 vocabulary applies to plugin skills | **KEL-25** (exists) |
 | Attribution keys `on_behalf_of` and `origin_ref` in `extra` | §6 declares them; `AuditLog.record` has no such parameter and nothing writes them today, so these issues own the extension | **KEL-28** (`share`), **KEL-23/KEL-27** (`schedule`), **KEL-25** (`plugin`) — each writes its own key; no separate issue needed |

@@ -19,7 +19,7 @@ import sqlite3
 import threading
 import uuid
 from contextlib import contextmanager
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Callable, Iterator, Mapping, Sequence
 
@@ -27,9 +27,12 @@ __all__ = [
     "APPROVAL_TRANSITIONS",
     "ChatStore",
     "LIVE_TURN_STATES",
+    "SHARE_ID_LENGTH",
     "ThreadBusyError",
+    "ThreadGoneError",
     "iso_now",
     "new_id",
+    "scrub_artifact_handles",
 ]
 
 _SCHEMA = """
@@ -137,9 +140,53 @@ CREATE TABLE IF NOT EXISTS sessions (
 );
 CREATE INDEX IF NOT EXISTS sessions_live ON sessions (expires_at);
 CREATE INDEX IF NOT EXISTS sessions_seen ON sessions (last_seen);
+
+-- KEL-28 M4-F: per-thread read-only share links. The raw token is never
+-- stored; the primary key is its SHA-256. ``snapshot_json`` is the frozen
+-- projection materialised at creation, so a share read never joins
+-- ``threads`` and can never resolve a different thread. ``owner_id`` is the
+-- one column that names the trust boundary (§9 of ADR 0002).
+CREATE TABLE IF NOT EXISTS shares (
+    token_hash TEXT PRIMARY KEY,
+    owner_id TEXT NOT NULL DEFAULT 'owner',
+    thread_id TEXT NOT NULL,
+    snapshot_json TEXT NOT NULL,
+    snapshot_bytes INTEGER NOT NULL,
+    created_at TEXT NOT NULL,
+    expires_at TEXT NOT NULL,
+    revoked_at TEXT
+);
+CREATE INDEX IF NOT EXISTS shares_thread ON shares (thread_id, created_at);
+CREATE INDEX IF NOT EXISTS shares_expiry ON shares (expires_at);
+
+-- Aggregate daily share views, keyed by token hash. There is deliberately no
+-- per-request row and no viewer identity, IP address, or user agent.
+CREATE TABLE IF NOT EXISTS share_views (
+    day TEXT NOT NULL,
+    token_hash TEXT NOT NULL,
+    views INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (day, token_hash)
+);
 """
 
 _ARTIFACT_HANDLE_RE = re.compile(r"artifact:[A-Za-z0-9_-]{8,128}")
+#: Public id of a share in the owner's listing (and in a revoke path): the
+#: first 16 hex characters of ``sha256(token)``. The API and the store must
+#: agree on this width, so the constant lives here.
+SHARE_ID_LENGTH = 16
+_SHARE_ID_RE = re.compile(rf"^[0-9a-f]{{{SHARE_ID_LENGTH}}}$")
+
+
+def scrub_artifact_handles(text: str) -> str:
+    """Replace every artifact handle embedded in free text with a marker.
+
+    Handles are dropped structurally from the share projection, but a user or
+    a tool can also type one into a message, a summary, or a citation. Those
+    fields are legitimate display text, so they are scrubbed with the same
+    pattern the orphan sweep uses rather than passed through.
+    """
+
+    return _ARTIFACT_HANDLE_RE.sub("[attachment]", text)
 
 
 def iso_now(moment: datetime | None = None) -> str:
@@ -196,6 +243,21 @@ class ThreadBusyError(RuntimeError):
         super().__init__(
             f"thread {thread_id} still has live turns: {', '.join(self.turn_ids)}"
         )
+
+
+class ThreadGoneError(RuntimeError):
+    """A write was aimed at a thread that no longer exists.
+
+    :meth:`ChatStore.share_create` re-checks the parent inside its own write
+    transaction: the conditional ``INSERT ... WHERE EXISTS`` inserts nothing
+    when the thread was purged (by another process on the same file) after the
+    caller read it. The API maps this to the ordinary ``404 unknown_thread``;
+    the store never keeps an orphan share row.
+    """
+
+    def __init__(self, thread_id: str):
+        self.thread_id = thread_id
+        super().__init__(f"thread {thread_id} is gone")
 
 
 class ChatStore:
@@ -288,6 +350,11 @@ class ChatStore:
 
     def _now_iso(self) -> str:
         return iso_now(self._now())
+
+    def now_iso(self) -> str:
+        """The store clock as the ISO string every share comparison uses."""
+
+        return self._now_iso()
 
     # -- threads -----------------------------------------------------------
 
@@ -1075,6 +1142,247 @@ class ChatStore:
                 (now, revoked_before),
             ).rowcount
 
+    # -- share links (KEL-28 M4-F) -----------------------------------------
+
+    def share_create(
+        self,
+        *,
+        token_hash: str,
+        thread_id: str,
+        snapshot: Mapping[str, Any],
+        ttl_seconds: float,
+    ) -> dict[str, Any]:
+        """Insert one frozen snapshot. The raw token never reaches this layer.
+
+        The store clock stamps ``created_at``/``expires_at`` into the snapshot
+        as well as the row, so the response and every later read agree on one
+        clock. A new share is always a new row and a new token; there is no
+        update-in-place path (ADR 0002 §16).
+
+        The insert re-checks the parent inside this write transaction with
+        ``WHERE EXISTS``: a purge that committed between the caller's read and
+        this statement (another process on the same file) inserts no row and
+        raises :class:`ThreadGoneError`, so an orphan share can never exist.
+        """
+
+        now = self._now()
+        created_at = iso_now(now)
+        expires_at = iso_now(now + timedelta(seconds=max(0.0, float(ttl_seconds))))
+        frozen = dict(snapshot)
+        frozen["created_at"] = created_at
+        frozen["expires_at"] = expires_at
+        payload = _dump(frozen)
+        with self.transaction():
+            cursor = self._conn.execute(
+                "INSERT INTO shares (token_hash, owner_id, thread_id, "
+                "snapshot_json, snapshot_bytes, created_at, expires_at, "
+                "revoked_at) SELECT ?, 'owner', ?, ?, ?, ?, ?, NULL "
+                "WHERE EXISTS (SELECT 1 FROM threads t WHERE t.id = ? "
+                "AND t.deleted_at IS NULL)",
+                (
+                    token_hash,
+                    thread_id,
+                    payload,
+                    len(payload.encode("utf-8")),
+                    created_at,
+                    expires_at,
+                    thread_id,
+                ),
+            )
+            if cursor.rowcount == 0:
+                raise ThreadGoneError(thread_id)
+        return self.share_get_any(token_hash)  # type: ignore[return-value]
+
+    def _share_record(self, row: sqlite3.Row) -> dict[str, Any]:
+        return {
+            "token_hash": row["token_hash"],
+            "owner_id": row["owner_id"],
+            "thread_id": row["thread_id"],
+            "snapshot": _load(row["snapshot_json"], {}),
+            "snapshot_bytes": int(row["snapshot_bytes"]),
+            "created_at": row["created_at"],
+            "expires_at": row["expires_at"],
+            "revoked_at": row["revoked_at"],
+        }
+
+    def share_get(
+        self, token_hash: str, *, now: str | None = None
+    ) -> dict[str, Any] | None:
+        """Resolve a live link by its hash. Unknown, expired and revoked are ``None``.
+
+        This is the whole read path: one keyed lookup, no join to ``threads``,
+        and no mutation, so every failure is indistinguishable by construction.
+        """
+
+        moment = now or self._now_iso()
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT * FROM shares WHERE token_hash = ? "
+                "AND revoked_at IS NULL AND expires_at > ?",
+                (token_hash, moment),
+            ).fetchone()
+        return self._share_record(row) if row is not None else None
+
+    def share_get_any(self, token_hash: str) -> dict[str, Any] | None:
+        """Return a row whatever its state, for the owner's own listing."""
+
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT * FROM shares WHERE token_hash = ?", (token_hash,)
+            ).fetchone()
+        return self._share_record(row) if row is not None else None
+
+    def share_list(self, thread_id: str) -> list[dict[str, Any]]:
+        """All rows for one thread, newest first. Includes revoked and expired."""
+
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT * FROM shares WHERE thread_id = ? "
+                "ORDER BY created_at DESC, token_hash ASC",
+                (thread_id,),
+            ).fetchall()
+        return [self._share_record(row) for row in rows]
+
+    def share_revoke(self, token_hash: str, *, revoked_at: str | None = None) -> bool:
+        """Set ``revoked_at`` once. The row is kept for the sweep, not deleted."""
+
+        stamp = revoked_at or self._now_iso()
+        with self.transaction():
+            cursor = self._conn.execute(
+                "UPDATE shares SET revoked_at = ? "
+                "WHERE token_hash = ? AND revoked_at IS NULL",
+                (stamp, token_hash),
+            )
+            return cursor.rowcount > 0
+
+    def share_revoke_thread(self, thread_id: str) -> list[str]:
+        """Revoke every live link for one thread in one transaction."""
+
+        stamp = self._now_iso()
+        with self.transaction():
+            rows = self._conn.execute(
+                "SELECT token_hash FROM shares WHERE thread_id = ? "
+                "AND revoked_at IS NULL",
+                (thread_id,),
+            ).fetchall()
+            hashes = [str(row["token_hash"]) for row in rows]
+            if hashes:
+                self._conn.execute(
+                    "UPDATE shares SET revoked_at = ? WHERE thread_id = ? "
+                    "AND revoked_at IS NULL",
+                    (stamp, thread_id),
+                )
+        return hashes
+
+    def share_revoke_prefix(
+        self, thread_id: str, prefix: str, *, revoked_at: str | None = None
+    ) -> dict[str, Any] | None:
+        """Revoke one link by its public id, only when the shape is exact.
+
+        The listing's ``id`` is the first :data:`SHARE_ID_LENGTH` hex characters
+        of the token hash. Anything else — empty, a shorter prefix, uppercase,
+        a full token — is not a public id and is refused without a query, so
+        the short id is the only thing this route ever accepts.
+        """
+
+        if not _SHARE_ID_RE.fullmatch(prefix or ""):
+            return None
+        stamp = revoked_at or self._now_iso()
+        with self.transaction():
+            rows = self._conn.execute(
+                "SELECT * FROM shares WHERE thread_id = ? "
+                "AND revoked_at IS NULL AND substr(token_hash, 1, ?) = ? "
+                "LIMIT 2",
+                (thread_id, SHARE_ID_LENGTH, prefix),
+            ).fetchall()
+            if len(rows) != 1:
+                return None
+            record = self._share_record(rows[0])
+            self._conn.execute(
+                "UPDATE shares SET revoked_at = ? WHERE token_hash = ?",
+                (stamp, record["token_hash"]),
+            )
+            record["revoked_at"] = stamp
+        return record
+
+    def share_record_view(
+        self, token_hash: str, *, day: str | None = None
+    ) -> int:
+        """Increment the aggregate counter and return that day's total.
+
+        One row per ``(day, token_hash)``. No viewer identity, address, or
+        agent is stored; a first view of the day is also the only audit event
+        the API writes for that day.
+        """
+
+        bucket = day or self._now_iso()[:10]
+        with self.transaction():
+            self._conn.execute(
+                "INSERT INTO share_views (day, token_hash, views) VALUES (?, ?, 1) "
+                "ON CONFLICT(day, token_hash) DO UPDATE SET views = views + 1",
+                (bucket, token_hash),
+            )
+            row = self._conn.execute(
+                "SELECT views FROM share_views WHERE day = ? AND token_hash = ?",
+                (bucket, token_hash),
+            ).fetchone()
+        return int(row["views"]) if row is not None else 0
+
+    def share_views_total(self, token_hash: str) -> int:
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT COALESCE(SUM(views), 0) AS n FROM share_views "
+                "WHERE token_hash = ?",
+                (token_hash,),
+            ).fetchone()
+        return int(row["n"])
+
+    def share_sweep(
+        self, *, revoked_grace_seconds: float = 0.0
+    ) -> dict[str, int]:
+        """Delete expired, revoked and orphaned share rows outside a read path.
+
+        Boot/daily maintenance and share creation call this. The share GET
+        never does, so a concurrent reader cannot lose its row mid-request.
+
+        "Orphaned" means the parent thread is gone *or soft-deleted*: the read
+        path already treats a ``deleted_at`` row as absent, so a link that still
+        resolved against it would outlive the thread it copies.
+        """
+
+        moment = self._now()
+        now = iso_now(moment)
+        revoked_before = iso_now(
+            moment - timedelta(seconds=max(0.0, float(revoked_grace_seconds)))
+        )
+        with self.transaction():
+            rows = self._conn.execute(
+                "SELECT token_hash FROM shares WHERE expires_at <= ? "
+                "OR (revoked_at IS NOT NULL AND revoked_at <= ?) "
+                "OR NOT EXISTS (SELECT 1 FROM threads t WHERE t.id = shares.thread_id "
+                "AND t.deleted_at IS NULL)",
+                (now, revoked_before),
+            ).fetchall()
+            hashes = [str(row["token_hash"]) for row in rows]
+            views = 0
+            for start in range(0, len(hashes), 500):
+                chunk = hashes[start : start + 500]
+                placeholders = ", ".join("?" for _ in chunk)
+                views += self._conn.execute(
+                    f"DELETE FROM share_views WHERE token_hash IN ({placeholders})",
+                    chunk,
+                ).rowcount
+            removed = 0
+            if hashes:
+                for start in range(0, len(hashes), 500):
+                    chunk = hashes[start : start + 500]
+                    placeholders = ", ".join("?" for _ in chunk)
+                    removed += self._conn.execute(
+                        f"DELETE FROM shares WHERE token_hash IN ({placeholders})",
+                        chunk,
+                    ).rowcount
+        return {"shares": removed, "views": views}
+
     # -- retention ---------------------------------------------------------
 
     def purge_thread(
@@ -1116,6 +1424,8 @@ class ChatStore:
             "turns": 0,
             "approvals": 0,
             "artifacts": 0,
+            "shares": 0,
+            "share_views": 0,
         }
         deleted_thread = False
         with self.transaction():
@@ -1153,6 +1463,25 @@ class ChatStore:
             counts["artifacts"] = self._conn.execute(
                 "DELETE FROM artifacts WHERE thread_id = ?", (thread_id,)
             ).rowcount
+            # A share never survives its thread: the snapshot, every link and
+            # the aggregate view counters go in the same transaction (§8).
+            share_hashes = [
+                str(row["token_hash"])
+                for row in self._conn.execute(
+                    "SELECT token_hash FROM shares WHERE thread_id = ?",
+                    (thread_id,),
+                ).fetchall()
+            ]
+            counts["shares"] = self._conn.execute(
+                "DELETE FROM shares WHERE thread_id = ?", (thread_id,)
+            ).rowcount
+            for start in range(0, len(share_hashes), 500):
+                chunk = share_hashes[start : start + 500]
+                placeholders = ", ".join("?" for _ in chunk)
+                counts["share_views"] += self._conn.execute(
+                    f"DELETE FROM share_views WHERE token_hash IN ({placeholders})",
+                    chunk,
+                ).rowcount
             deleted_thread = (
                 self._conn.execute(
                     "DELETE FROM threads WHERE id = ?", (thread_id,)
@@ -1188,15 +1517,18 @@ class ChatStore:
         """SQL predicate for "older than the grace window and parentless".
 
         ``parentless`` is evaluated by the database at the moment the
-        statement runs: a row whose ``thread_id`` is unset, or whose parent
-        thread no longer exists. Both the read and the delete go through this
-        one predicate so they cannot drift apart.
+        statement runs: a row whose ``thread_id`` is unset, whose parent thread
+        no longer exists, or whose parent is soft-deleted. A soft-deleted
+        thread is invisible to every read, so its uploads are unreachable the
+        same way an interrupted delete's rows are. Both the read and the delete
+        go through this one predicate so they cannot drift apart.
         """
 
         clauses = [
             f"{alias}.created_at < ?",
             f"({alias}.thread_id IS NULL OR NOT EXISTS "
-            f"(SELECT 1 FROM threads t WHERE t.id = {alias}.thread_id))",
+            f"(SELECT 1 FROM threads t WHERE t.id = {alias}.thread_id "
+            "AND t.deleted_at IS NULL))",
         ]
         params: list[Any] = [cutoff]
         skipped = tuple(dict.fromkeys(str(handle) for handle in skip_handles))
@@ -1264,7 +1596,8 @@ class ChatStore:
                 self._conn.execute(
                     f"DELETE FROM artifacts WHERE handle IN ({placeholders}) "
                     "AND (thread_id IS NULL OR NOT EXISTS "
-                    "(SELECT 1 FROM threads t WHERE t.id = artifacts.thread_id))",
+                    "(SELECT 1 FROM threads t WHERE t.id = artifacts.thread_id "
+                    "AND t.deleted_at IS NULL))",
                     chunk,
                 )
                 survivors = self._conn.execute(
