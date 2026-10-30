@@ -1,0 +1,38 @@
+/* Load alongside styles.css; a-motion.js owns the decorative veil markup. */
+.a-load-veil {
+  position: fixed;
+  inset: 0;
+  z-index: 90;
+  background: var(--canvas, #fbf9f5);
+  pointer-events: none;
+  animation: a-veil-lift 720ms cubic-bezier(0.23, 1, 0.32, 1) 40ms both;
+}
+
+@keyframes a-veil-lift {
+  from {
+    transform: translateY(0);
+    opacity: 1;
+    visibility: visible;
+  }
+  to {
+    transform: translateY(-100%);
+    opacity: 0;
+    visibility: hidden;
+  }
+}
+
+/* Only promote the existing artwork while its small ambient drift is running. */
+.a-field-active {
+  will-change: transform;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .a-load-veil {
+    display: none;
+    animation: none;
+  }
+  .a-field-active {
+    transform: none !important;
+    will-change: auto;
+  }
+}
