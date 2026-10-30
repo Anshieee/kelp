@@ -1,4 +1,4 @@
-import { api, approvals, connectStream, devices, getServerUrl, setServerUrl, shares, signIn, threads, metrics } from "./api.js";
+import { approvals, connectStream, devices, metrics, signIn, threads, wallet, parseSpendGauges } from "./api.js";
 import { keychain } from "./keychain.js";
 import { petStateFromEvent } from "./orb.js";
 
@@ -8,24 +8,76 @@ let currentThread = null;
 let streamHandle = null;
 export const petBus = new EventTarget(); // pet overlay subscribes in Tauri multi-window
 
+// --- local diagnostics: in-memory ring buffer, never leaves the device -----
+const DIAG_MAX = 100;
+const diagLog = [];
+function diag(event, detail) {
+  diagLog.push(`${new Date().toISOString()} ${event}${detail ? " " + detail : ""}`);
+  if (diagLog.length > DIAG_MAX) diagLog.shift();
+  const el = $("diag");
+  if (el) el.textContent = diagLog.join("\n");
+}
+$("copyDiag").onclick = async () => {
+  try {
+    await navigator.clipboard.writeText(diagLog.join("\n"));
+  } catch { /* clipboard unavailable: text stays on screen */ }
+};
+
 function notifyPet(event) {
   const state = petStateFromEvent(event);
-  if (state) petBus.dispatchEvent(new CustomEvent("pet-state", { detail: state }));
+  if (state) {
+    petBus.dispatchEvent(new CustomEvent("pet-state", { detail: state }));
+    const invoke = window.__TAURI__?.core?.invoke ?? window.__TAURI__?.invoke;
+    invoke?.("plugin:event|emit", { event: "pet-state", payload: state }).catch(() => {});
+  }
 }
 
 function toast(msg) {
   $("signinMsg").textContent = msg;
 }
 
-// --- server URL ------------------------------------------------------------
-$("serverUrl").value = getServerUrl();
-$("saveServer").onclick = () => {
-  setServerUrl($("serverUrl").value.trim() || "http://127.0.0.1:8000");
-  $("serverUrl").value = getServerUrl();
-  toast(`Server URL saved: ${getServerUrl()}`);
-};
+// Receipt for a decision made from a pet notification: the server's answer,
+// rendered in-app. Same receipt path as an in-app card tap.
+export function showReceipt({ id, decision, ok, error }) {
+  const el = $("receipt");
+  el.textContent = ok
+    ? `Approval ${id}: recorded as ${decision}d.`
+    : `Approval ${id}: not recorded (${error || "request failed"}).`;
+  diag("approval-receipt", `${id} ${decision} ok=${!!ok}`);
+  void loadApprovals();
+}
 
-// --- sign-in: bearer exchanged once for a session cookie (§12.2) -----------
+// Pet-window decisions arrive via Tauri events, or via localStorage for the
+// plain-browser dev path (two windows, same origin).
+if (window.__TAURI__?.event?.listen) {
+  window.__TAURI__.event.listen("pet-decision-receipt", (e) => showReceipt(e.payload));
+  window.__TAURI__.event.listen("pet-focus-approval", (e) => highlightApproval(e.payload));
+}
+window.addEventListener("storage", (e) => {
+  if (e.key === "kelp.pet-receipt" && e.newValue) {
+    try {
+      showReceipt(JSON.parse(e.newValue));
+    } catch { /* ignore malformed receipt */ }
+  }
+});
+
+// Notification tap deep-link: ?approval= highlights the card (one more tap
+// to decide). Applied on load and on focus.
+function highlightApproval(id) {
+  if (!id) return;
+  const card = document.querySelector(`[data-approval="${CSS.escape(id)}"]`);
+  if (card) {
+    card.scrollIntoView({ block: "center" });
+    card.classList.add("flash");
+    setTimeout(() => card.classList.remove("flash"), 3000);
+  }
+}
+window.addEventListener("focus", () => {
+  highlightApproval(new URLSearchParams(location.search).get("approval"));
+});
+highlightApproval(new URLSearchParams(location.search).get("approval"));
+
+// --- sign-in: one bearer exchange, then OS-keychain session only (§12.2) ----
 $("signinBtn").onclick = async () => {
   const bearer = $("bearer").value.trim();
   if (!bearer) return toast("Paste the root bearer first.");
@@ -36,9 +88,11 @@ $("signinBtn").onclick = async () => {
     $("main").hidden = false;
     $("connState").textContent = "online";
     $("connState").classList.add("on");
+    diag("sign-in", res.session.device.label);
     toast(`Signed in as ${res.session.device.label}.`);
     await Promise.all([loadThreads(), loadApprovals(), loadDevices(), loadSpend()]);
   } catch (e) {
+    diag("sign-in-failed", String(e.status ?? "?"));
     toast(`Sign in failed (${e.status ?? "?"}): ${e.message}`);
   }
 };
@@ -52,6 +106,7 @@ $("signoutBtn").onclick = async () => {
   $("main").hidden = true;
   $("connState").textContent = "offline";
   $("connState").classList.remove("on");
+  diag("sign-out");
   toast("Signed out.");
 };
 
@@ -81,11 +136,10 @@ async function openThread(id) {
   for (const m of snap.messages ?? []) {
     if (m.role && m.content) $("stream").textContent += `${m.role}: ${m.content}\n`;
   }
-  const after = snap.messages?.length ? undefined : undefined;
   streamHandle = connectStream(id, {
-    after,
     onState: (s) => {
       $("connState").textContent = s === "open" ? "online" : s;
+      diag("stream", s);
       notifyPet({ type: s === "open" ? "stream_closed" : "turn_started" });
     },
     onEvent: (data) => {
@@ -113,6 +167,16 @@ $("sendBtn").onclick = async () => {
 };
 
 // --- approvals ---------------------------------------------------------------
+async function decide(id, decision) {
+  try {
+    await approvals.decide(id, decision);
+    notifyPet({ type: "approval_decided" });
+    showReceipt({ id, decision, ok: true });
+  } catch (e) {
+    showReceipt({ id, decision, ok: false, error: e.message });
+  }
+}
+
 async function loadApprovals() {
   const { approvals: list } = await approvals.list("?status=pending");
   const box = $("approvals");
@@ -125,6 +189,7 @@ async function loadApprovals() {
   for (const a of list) {
     const div = document.createElement("div");
     div.className = "approval";
+    div.dataset.approval = a.id;
     div.innerHTML = `<strong></strong><p></p>`;
     div.querySelector("strong").textContent = a.title || a.id;
     div.querySelector("p").textContent = a.detail || a.tool || "";
@@ -132,11 +197,7 @@ async function loadApprovals() {
       const b = document.createElement("button");
       b.textContent = d === "approve" ? "Approve" : "Deny";
       if (d === "deny") b.className = "ghost";
-      b.onclick = async () => {
-        await approvals.decide(a.id, d === "approve" ? "approve" : "deny");
-        notifyPet({ type: "approval_decided" });
-        await loadApprovals();
-      };
+      b.onclick = () => decide(a.id, d);
       div.append(b, " ");
     }
     box.append(div);
@@ -157,6 +218,7 @@ async function loadDevices() {
     b.className = "ghost";
     b.onclick = async () => {
       await devices.revoke(d.id);
+      diag("device-revoke", d.id);
       await loadDevices();
     };
     li.append(b);
@@ -165,41 +227,51 @@ async function loadDevices() {
 }
 $("refreshDevices").onclick = loadDevices;
 
-// --- shares ------------------------------------------------------------------
-$("shareBtn").onclick = async () => {
-  if (!currentThread) return toast("Open a thread first.");
-  const { share } = await api(`/api/threads/${currentThread}/share`, { method: "POST", body: {} });
-  toast(`Share created: ${share.url ?? share.token ?? share.id}`);
-  await loadShares();
-};
-async function loadShares() {
-  if (!currentThread) return;
-  const { shares: list } = await shares.list(currentThread);
-  const ul = $("shareList");
-  ul.innerHTML = "";
-  for (const s of list) {
-    const li = document.createElement("li");
-    li.innerHTML = `<span></span>`;
-    li.firstChild.textContent = `${s.id} — ${s.status}`;
-    const b = document.createElement("button");
-    b.textContent = "Revoke";
-    b.className = "ghost";
-    b.onclick = async () => {
-      await shares.revoke(currentThread, s.id);
-      await loadShares();
-    };
-    li.append(b);
-    ul.append(li);
-  }
+// --- spend: mirrors the server -----------------------------------------------
+// Warn at 80% of cap; at 100% a plain sentence, no numbers-as-alarm.
+// Saved cards show amounts context only as brand + last4 + expiry —
+// never card details.
+function money(n) {
+  return `$${Number(n).toFixed(2)}`;
 }
 
-// --- spend -------------------------------------------------------------------
 async function loadSpend() {
+  const warn = $("spendWarn");
+  warn.hidden = true;
+  warn.textContent = "";
   try {
-    const data = await metrics.spend();
-    $("spend").textContent = JSON.stringify(data, null, 2);
+    const text = await metrics.spendText();
+    const s = parseSpendGauges(text);
+    if (!s) {
+      $("spend").textContent = "(no spend data reported)";
+      return;
+    }
+    const cap = s.capUsd == null ? "no cap" : money(s.capUsd);
+    $("spend").textContent = `${s.window}: ${money(s.usedUsd)} of ${cap}`;
+    if (s.capped) {
+      warn.hidden = false;
+      warn.textContent = "Monthly spend cap reached. New turns are paused until the cap resets.";
+      diag("spend-capped", money(s.usedUsd));
+    } else if (s.warned) {
+      warn.hidden = false;
+      warn.textContent = `Spend is at ${Math.round(s.ratio * 100)}% of the ${s.window} cap.`;
+      diag("spend-warn", String(Math.round(s.ratio * 100)));
+    }
   } catch (e) {
     $("spend").textContent = `(unavailable: ${e.message})`;
+  }
+  try {
+    const cards = await wallet.cards();
+    const ul = $("cardList");
+    ul.innerHTML = "";
+    if (cards === null) return; // endpoint not mounted: section stays empty
+    for (const c of cards) {
+      const li = document.createElement("li");
+      li.textContent = `${c.brand ?? "card"} •••• ${c.last4 ?? "????"}${c.exp ? ` exp ${c.exp}` : ""}`;
+      ul.append(li);
+    }
+  } catch {
+    /* cards are informational; spend gauges are the source of truth */
   }
 }
 $("refreshSpend").onclick = loadSpend;

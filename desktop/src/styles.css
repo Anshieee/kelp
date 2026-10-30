@@ -13,6 +13,9 @@ button.ghost { background: transparent; color: inherit; }
 .msg { min-height: 1.2em; font-size: 13px; }
 .pill { font-size: 12px; padding: 3px 10px; border-radius: 999px; background: #eee; }
 .pill.on { background: #cfe8d4; }
+.receipt { font-weight: 600; }
+.spend-warn { background: #fdf0d5; border: 1px solid #e0a100; border-radius: 8px; padding: 8px; }
+.approval.flash { outline: 3px solid #e0a100; }
 #stream { white-space: pre-wrap; border-top: 1px dashed #ddd; margin-top: 8px; padding-top: 8px; min-height: 60px; }
 .approval { border: 1px solid #e0a; border-radius: 8px; padding: 8px; margin: 8px 0; }
 ul { list-style: none; padding: 0; }

@@ -2,17 +2,12 @@
 // Auth: bearer is exchanged ONCE via POST /api/auth/session (§12.2); after
 // that the HttpOnly session cookie + CSRF double-submit pair authorize
 // every call. The bearer is never attached to routine requests.
+// Telemetry: none. The client only ever talks to SERVER_URL (see
+// config.js); diagnostics stay in a local in-memory log (app.js).
 
-const LS_KEY = "kelp.serverUrl";
-export const DEFAULT_SERVER_URL = "http://127.0.0.1:8000";
+import { SERVER_URL } from "./config.js";
 
-export function getServerUrl() {
-  return (localStorage.getItem(LS_KEY) || DEFAULT_SERVER_URL).replace(/\/+$/, "");
-}
-
-export function setServerUrl(url) {
-  localStorage.setItem(LS_KEY, url.replace(/\/+$/, ""));
-}
+const BASE = SERVER_URL.replace(/\/+$/, "");
 
 function csrfToken() {
   const m = document.cookie.match(/(?:^|;\s*)csrf=([^;]+)/);
@@ -27,7 +22,7 @@ export async function api(path, { method = "GET", body, bearer, csrf = true } = 
   if (csrf && !bearer && method !== "GET") {
     headers["X-CSRF-Token"] = csrfToken();
   }
-  const res = await fetch(`${getServerUrl()}${path}`, {
+  const res = await fetch(`${BASE}${path}`, {
     method,
     headers,
     credentials: "include",
@@ -61,6 +56,9 @@ export const threads = {
 
 export const approvals = {
   list: (params = "") => api(`/api/approvals${params}`),
+  // One-tap decision from a notification or a card. Server caps (single
+  // use, TTL, idempotent replay) are enforced server-side; the client only
+  // renders the receipt the server returns.
   decide: (id, decision, note) =>
     api(`/api/approvals/${id}/decision`, { method: "POST", body: { decision, note } }),
 };
@@ -68,18 +66,62 @@ export const approvals = {
 export const devices = {
   list: () => api("/api/auth/devices"),
   revoke: (id) => api(`/api/auth/devices/${id}`, { method: "DELETE" }),
-  signOut: () => api("/api/auth/session", { method: "DELETE" }),
+  signOut: () => api(`/api/auth/session`, { method: "DELETE" }),
 };
 
-export const shares = {
-  list: (threadId) => api(`/api/threads/${threadId}/shares`),
-  create: (threadId, ttlSeconds) =>
-    api(`/api/threads/${threadId}/share`, { method: "POST", body: { ttl_seconds: ttlSeconds } }),
-  revoke: (threadId, id) => api(`/api/threads/${threadId}/shares/${id}`, { method: "DELETE" }),
+/** Saved cards: brand + last4 + expiry only. Never card details. */
+export const wallet = {
+  cards: async () => {
+    try {
+      const data = await api("/api/wallet/cards");
+      return Array.isArray(data.cards) ? data.cards : [];
+    } catch (e) {
+      if (e.status === 404) return null; // endpoint not mounted: hide section
+      throw e;
+    }
+  },
 };
+
+// ---------------------------------------------------------------------------
+// Spend. /api/metrics is Prometheus text; the spend gauges are
+// `spend_used_usd{window=}`, `spend_cap_usd{window=}`, `spend_cap_ratio{}`.
+// Month window preferred, day as fallback. Pure parser, unit-tested.
+// ---------------------------------------------------------------------------
+
+export function parseSpendGauges(text) {
+  const out = {};
+  for (const line of String(text).split("\n")) {
+    if (line.startsWith("#") || !line.trim()) continue;
+    const m = line.match(/^(spend_used_usd|spend_cap_usd|spend_cap_ratio)\{([^}]*)\}\s+([0-9.eE+-]+)/);
+    if (!m) continue;
+    const labels = Object.fromEntries(
+      [...m[2].matchAll(/(\w+)="([^"]*)"/g)].map((g) => [g[1], g[2]]),
+    );
+    const window = labels.window || "month";
+    out[window] ??= {};
+    out[window][m[1]] = Number(m[3]);
+  }
+  const pick = out.month ?? out.day ?? null;
+  if (!pick || !Number.isFinite(pick.spend_used_usd)) return null;
+  const used = pick.spend_used_usd;
+  const cap = Number.isFinite(pick.spend_cap_usd) ? pick.spend_cap_usd : null;
+  const ratio = cap ? used / cap : (Number.isFinite(pick.spend_cap_ratio) ? pick.spend_cap_ratio : 0);
+  return {
+    window: out.month ? "month" : "day",
+    usedUsd: used,
+    capUsd: cap,
+    ratio,
+    warned: ratio >= 0.8 && ratio < 1,
+    capped: ratio >= 1,
+  };
+}
 
 export const metrics = {
-  spend: () => api("/api/metrics"),
+  spendText: async () => {
+    const res = await fetch(`${BASE}/api/metrics`, { credentials: "include" });
+    if (!res.ok) throw new Error(`metrics unavailable: ${res.status}`);
+    return res.text();
+  },
 };
 
 // ---------------------------------------------------------------------------
@@ -98,7 +140,7 @@ export function connectStream(threadId, { onEvent, onState, after } = {}) {
   function open() {
     if (closed) return;
     const q = lastId != null ? `?after=${encodeURIComponent(lastId)}` : "";
-    es = new EventSource(`${getServerUrl()}/api/threads/${threadId}/stream${q}`, {
+    es = new EventSource(`${BASE}/api/threads/${threadId}/stream${q}`, {
       withCredentials: true,
     });
     onState?.("connecting");

@@ -1,9 +1,16 @@
 # Desktop app + desk pet — scope (v1)
 
 > **Owner decisions (locked, 2026-10-30):**
-> 1. **Tauri thin client** — small binary, OS webview, keychain API, transparent frameless window for the pet.
-> 2. **Talks to the Nebius-hosted server** — configurable server URL, no bundled sidecar (packaging + signing cost, restart/lock semantics duplicated).
-> 3. **Interactive pet** — notifications plus quick actions, click-to-open, mute. (Scope table below describes the v1 passive mirror; interactivity is the locked extension: approve/deny quick actions on `waiting`, click opens/focuses the app, right-click mutes motion / quits.)
+> 1. **Tauri thin client** — small binary, OS webview, keychain API, token in OS keychain only.
+> 2. **One Nebius-hosted server** — exactly one configured server URL (`desktop/src/config.js`), no bundled sidecar, no runtime URL switcher.
+> 3. **Interactive pet** — notifications plus one-tap Approve/Deny (server caps enforced server-side, receipt in-app), click-to-open, mute; on all workspaces, quiet under OS do-not-disturb, reduced-motion respected.
+>
+> **Settled v1 surface (two grill rounds, locked):**
+> - IN: chat + streaming, approval cards, devices list + revoke, spend readout.
+> - HIDDEN ENTIRELY (no dead buttons): shares UI, dedicated schedules screen.
+> - Auth: one bearer exchange, then OS-keychain session only.
+> - Spend mirrors the server: warn at 80% of cap, plain sentence at 100%; amounts + card last4 only, never card details.
+> - Unsigned dev builds only. Diagnostics are local logs only, no telemetry.
 
 ## What they are
 
