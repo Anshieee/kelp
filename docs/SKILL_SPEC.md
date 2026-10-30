@@ -535,6 +535,45 @@ The only write skill in the prototype. Input
 so the manifest forces approval. Writes only under the scheduler scope; the created task feeds
 the scheduler surface in P0-2/P0-5.
 
+**Store.** One task per file under `${WORKSPACE}/var/scheduler/<task_id>.json`; the directory
+is forced to `0700` (the final directory is chmodded even when it already existed, matching
+`var/artifacts`; parent directories are only tightened when created), each file `0600`, and a
+write is a temporary file in the same directory followed by `fsync`, `rename`, and a directory
+`fsync`. A reader therefore sees the previous document or the complete new one, never a partial
+line. A file that fails JSON, schema, cron, or timezone validation is renamed `<name>.bad` at
+the next scan; the other tasks still load and boot continues. A file whose `task_id` differs
+from its own name is quarantined the same way — only the canonical `task_<id>.json` may define
+`<id>`, so a stray copy can never fire or displace the canonical task. Creation is capped by
+`KELP_SCHEDULER_MAX_TASKS` (default 200), and `title` / `prompt` are capped at 120 / 2000
+characters.
+
+**Cron.** Exactly five fields — minute, hour, day-of-month, month, day-of-week — with `*`,
+integers, ranges, lists, steps, and three-letter month/weekday names. Six-field (seconds)
+expressions, `@daily`-style shortcuts, and Quartz modifiers (`L`, `W`, `#`, `?`) fail with a
+named `CronError`; they are never silently reinterpreted. `next_run_at` is computed in the
+task's `zoneinfo` timezone and stored as a UTC instant (`…Z`). A spring-forward wall time fires
+once at the first valid instant after the gap; a fall-back wall time that occurs twice fires
+only on the first occurrence. `next_run_at` is pure (`expr`, `timezone`, `after`) and is used
+by both create and the ticker.
+
+**Runtime.** `chat.scheduler.SchedulerRuntime` owns one daemon tick, started after boot
+recovery and stopped before the chat store is closed. A due run more than
+`KELP_SCHEDULER_GRACE_SECONDS` (default 3600) late is recorded `missed` and skipped; a fresher
+one fires once and its next run is placed after `now`, so a long outage never produces a burst.
+A due run whose `end_at` window has already closed is also recorded `missed` and the task is
+marked `completed`, so the audit trail explains the absent callback.
+State is persisted before the callback runs, which is what makes a restart mid-run idempotent.
+`KELP_SCHEDULER_ENABLED=0` disables both the loop and `tick`.
+
+**Audit.** One content-free `schedule_created` row per created task and one `schedule_run` row
+per fire, missed window, or expired window (schedule id, run id, actor, cron, timezone,
+`scheduled_for`, outcome, duration, cost class). The title and prompt never enter the audit
+trail. The server passes its retained `KELP_AUDIT_DIR/audit.jsonl`; a direct store or handler
+call with no server trail writes `${WORKSPACE}/var/scheduler/audit.jsonl` instead. That local
+file is an intentional fallback sink for callers that bypass the server (tests, embedders,
+direct skill calls), stays inside the scheduler write scope, and lives and dies with the
+workspace; it is not a second retention row, and production rows are the rotated server log.
+
 ---
 
 ## 13. Adding a skill
