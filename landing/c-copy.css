@@ -1,0 +1,345 @@
+/* Copy-led sections share the landing page’s type, colours and pill language. */
+.hero h1 {
+  font-size: clamp(90px, 10.4vw, 160px);
+  max-width: 1160px;
+}
+
+.c-computer,
+.c-comparison,
+.c-companion {
+  padding-top: 100px;
+  padding-bottom: 100px;
+}
+
+.c-section-heading {
+  display: grid;
+  grid-template-columns: 1.3fr 0.7fr;
+  align-items: end;
+  gap: 60px;
+  margin-bottom: 48px;
+}
+
+.c-section-heading h2,
+.c-examples h2,
+.c-companion h2 {
+  font-size: clamp(52px, 5.4vw, 82px);
+  letter-spacing: -0.045em;
+}
+
+.c-section-heading > p,
+.c-companion-copy > p {
+  color: var(--body);
+  font-size: 18px;
+  max-width: 480px;
+}
+
+.c-handoff {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 40px;
+  list-style: none;
+  padding: 32px 0;
+  margin: 0;
+  border-block: 1px solid var(--line);
+}
+
+.c-step {
+  display: inline-flex;
+  width: 44px;
+  height: 44px;
+  align-items: center;
+  justify-content: center;
+  border-radius: 9999px;
+  background: var(--sage);
+  margin-bottom: 25px;
+  font-size: 16px;
+}
+
+.c-handoff li:nth-child(2) .c-step {
+  background: var(--butter);
+}
+.c-handoff li:nth-child(3) .c-step {
+  background: var(--sky);
+}
+
+.c-handoff h3,
+.c-comparison h3 {
+  font-size: 34px;
+  letter-spacing: -0.025em;
+}
+
+.c-handoff p {
+  margin-top: 14px;
+  max-width: 320px;
+  font-size: 17px;
+  color: var(--body);
+}
+
+.c-scope-note,
+.c-companion-copy > .c-scope-note {
+  margin-top: 22px;
+  color: var(--body);
+  font-size: 14px;
+  line-height: 1.7;
+}
+
+.c-examples {
+  padding-top: 60px;
+  padding-bottom: 70px;
+  text-align: center;
+}
+
+.c-example-stage {
+  max-width: 1080px;
+  margin: 36px auto 0;
+}
+
+.c-example-copy {
+  display: grid;
+  align-items: center;
+  min-height: 150px;
+  padding: 28px 60px;
+  border-radius: 9999px;
+  background: var(--butter);
+}
+
+.c-example-copy p {
+  font: 400 clamp(25px, 2.2vw, 32px)/1.3 var(--serif);
+  text-wrap: balance;
+}
+
+.c-example-copy [hidden],
+.c-example-controls[hidden] {
+  display: none;
+}
+
+.c-example-controls {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-wrap: wrap;
+  gap: 8px 22px;
+  margin-top: 18px;
+}
+
+.c-example-dots {
+  display: flex;
+}
+.c-example-dots button {
+  display: grid;
+  place-items: center;
+  width: 44px;
+  height: 44px;
+  padding: 0;
+  background: transparent;
+}
+
+.c-example-dots span {
+  width: 9px;
+  height: 9px;
+  border-radius: 9999px;
+  border: 1px solid var(--body);
+}
+
+.c-example-dots [aria-pressed="true"] span {
+  background: var(--strong);
+}
+.c-example-dots button:hover {
+  background: var(--muted);
+}
+.c-example-pause {
+  min-height: 44px;
+  padding: 8px 16px;
+  border: 1px solid var(--line);
+  background: transparent;
+  font-size: 13px;
+}
+.c-example-pause:disabled {
+  cursor: default;
+}
+
+.c-comparison-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 22px;
+}
+
+.c-comparison-grid article {
+  padding: 50px 38px;
+  border-radius: 9999px;
+  background: var(--sky);
+  text-align: center;
+}
+
+.c-comparison-grid article:nth-child(2) {
+  background: var(--lilac);
+}
+.c-comparison-grid .c-comparison-kelp {
+  background: var(--sage);
+}
+.c-comparison-summary {
+  font-size: 20px;
+  line-height: 1.5;
+  margin-top: 24px;
+}
+
+.c-comparison-summary + p {
+  color: var(--body);
+  margin: 20px auto 0;
+  font-size: 17px;
+  max-width: 290px;
+}
+
+.c-companion {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  align-items: center;
+  gap: 70px;
+}
+
+.c-companion-art {
+  display: grid;
+  place-items: center;
+  min-height: 330px;
+  border-bottom: 1px solid var(--line);
+}
+
+.c-companion-perch {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 20px;
+  width: 240px;
+  height: 280px;
+  border-radius: 9999px;
+  background: var(--peach);
+}
+
+.c-companion-perch svg {
+  width: 65px;
+  height: 90px;
+  stroke-width: 1.2;
+}
+.c-companion-perch span {
+  font: italic 28px/1.2 var(--serif);
+}
+.c-roadmap {
+  margin-block: 24px;
+  padding: 8px 17px;
+  min-height: 38px;
+  background: var(--lilac);
+  font-size: 13px;
+}
+.c-roadmap:hover {
+  transform: none;
+  box-shadow: none;
+}
+
+@media (max-width: 991px) {
+  .c-section-heading {
+    grid-template-columns: 1fr;
+    gap: 26px;
+  }
+  .c-handoff {
+    gap: 24px;
+  }
+  .c-comparison-grid {
+    gap: 14px;
+  }
+  .c-comparison-grid article {
+    padding: 42px 22px;
+  }
+  .c-comparison h3 {
+    font-size: 28px;
+  }
+  .c-comparison-summary {
+    font-size: 18px;
+  }
+  .c-companion {
+    gap: 35px;
+  }
+}
+
+@media (max-width: 600px) {
+  .hero h1 {
+    font-size: clamp(49px, 13.5vw, 76px);
+    line-height: 1.03;
+  }
+  .c-computer,
+  .c-comparison,
+  .c-companion {
+    padding-block: 65px;
+  }
+  .c-section-heading {
+    margin-bottom: 32px;
+    gap: 22px;
+  }
+  .c-section-heading h2,
+  .c-examples h2,
+  .c-companion h2 {
+    font-size: clamp(44px, 12.8vw, 62px);
+  }
+  .c-handoff {
+    grid-template-columns: 1fr;
+    gap: 30px;
+  }
+  .c-handoff li {
+    display: grid;
+    grid-template-columns: 44px minmax(0, 1fr);
+    gap: 9px 18px;
+  }
+  .c-step {
+    grid-row: span 2;
+    margin: 0;
+  }
+  .c-handoff h3 {
+    font-size: 30px;
+    align-self: center;
+  }
+  .c-handoff p {
+    grid-column: 2;
+    margin: 0;
+  }
+  .c-examples {
+    padding-block: 35px;
+  }
+  .c-example-copy {
+    min-height: 190px;
+    padding: 32px;
+  }
+  .c-example-copy p {
+    font-size: 27px;
+  }
+  .c-comparison-grid {
+    grid-template-columns: 1fr;
+    gap: 18px;
+  }
+  .c-comparison-grid article {
+    padding: 38px 34px;
+  }
+  .c-comparison h3 {
+    font-size: 34px;
+  }
+  .c-comparison-summary {
+    margin-top: 18px;
+    font-size: 20px;
+  }
+  .c-comparison-summary + p {
+    margin-top: 16px;
+  }
+  .c-companion {
+    grid-template-columns: 1fr;
+    gap: 34px;
+  }
+  .c-companion-art {
+    min-height: 250px;
+  }
+  .c-companion-perch {
+    width: 190px;
+    height: 230px;
+  }
+  .c-companion-perch span {
+    font-size: 24px;
+  }
+}
