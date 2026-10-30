@@ -1,0 +1,88 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#0B0B0A">
+  <meta name="description" content="Kelp is your always-on private assistant. Talk through the work, approve the important moves, and put the repeatable things on a schedule.">
+  <title>Kelp / Less busy. More done.</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='12' fill='%230B0B0A'/%3E%3Cpath d='M32 53V12M32 40Q8 37 15 20Q34 21 32 40M32 30Q52 29 49 11Q30 14 32 30' fill='none' stroke='%236FBFA0' stroke-width='5'/%3E%3C/svg%3E">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@600;700&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="styles.css">
+  <script defer src="https://cdn.jsdelivr.net/npm/gsap@3.12.5/dist/gsap.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/gsap@3.12.5/dist/ScrollTrigger.min.js"></script>
+  <script defer src="app.js"></script>
+</head>
+<body>
+  <a class="skip-link" href="#main">Skip to content</a>
+
+  <div class="intro" aria-hidden="true" hidden>
+    <div class="intro-mark">KELP<span class="intro-grain"></span></div>
+    <span class="micro">A LITTLE LESS ON YOUR MIND.</span>
+  </div>
+
+  <header class="hud">
+    <a class="hud-descriptor micro" href="#main"><span class="status-dot"></span> ALWAYS-ON PRIVATE ASSISTANT</a>
+    <a class="wordmark" href="#main" aria-label="Kelp home"><span aria-hidden="true">K</span><span aria-hidden="true">E</span><span aria-hidden="true">L</span><span aria-hidden="true">P</span></a>
+    <nav class="hud-right micro" aria-label="Main navigation"><a href="https://app.kelp.local" aria-describedby="dashboard-note">DASHBOARD <span aria-hidden="true">↗</span></a><span class="hud-year">© 2026</span></nav>
+  </header>
+
+  <main id="main">
+    <section class="hero" aria-labelledby="hero-title">
+      <div class="hero-field" aria-hidden="true"><canvas id="kelp-field"></canvas><div class="field-cross cross-one">+</div><div class="field-cross cross-two">+</div><span class="field-label micro">FIG. 01 / ROOM TO THINK</span><span class="field-coordinate micro">35° 40′ N<br>DRIFT: SLOW</span></div>
+      <div class="hero-content">
+        <div class="eyebrow micro reveal"><span class="small-rule"></span> YOUR TIME, BACK IN YOUR HANDS.</div>
+        <h1 id="hero-title" class="reveal">LESS BUSY.<br><span>MORE DONE.</span></h1>
+        <p class="hero-description reveal">An always-on private assistant for the things<br class="desktop-break"> on your mind. You set the direction.<br class="desktop-break"> Kelp takes care of the follow-through.</p>
+        <div class="hero-action reveal"><a class="cta" href="https://app.kelp.local" aria-describedby="dashboard-note">MEET YOUR ASSISTANT <span aria-hidden="true">↗</span></a><p id="dashboard-note" class="destination-note micro">DASHBOARD PREVIEW · PLACEHOLDER URL</p></div>
+      </div>
+      <div class="hero-bottom micro"><span>THINK CLEARLY. ACT INTENTIONALLY.</span><a href="#capabilities">EXPLORE THE SYSTEM <span aria-hidden="true">↓</span></a><span class="hero-edition">PRIVATE BY DESIGN / V.01</span></div>
+    </section>
+
+    <section class="capabilities" id="capabilities" aria-labelledby="capabilities-title">
+      <div class="section-heading"><h2 class="micro" id="capabilities-title">A SMALL SYSTEM. A LOT OFF YOUR PLATE.</h2><span class="micro">03 WAYS TO MAKE ROOM</span></div>
+      <ol class="roster">
+        <li class="roster-item"><button class="roster-trigger" type="button" data-dossier="chat" aria-haspopup="dialog" aria-controls="dossier-chat"><span class="roster-number micro">01 /</span><span class="roster-title">CHAT</span><span class="roster-description">A thought becomes a thread.<br>A thread becomes a thing, done.</span><span class="roster-plus" aria-hidden="true">+</span></button></li>
+        <li class="roster-item"><button class="roster-trigger" type="button" data-dossier="approvals" aria-haspopup="dialog" aria-controls="dossier-approvals"><span class="roster-number micro">02 /</span><span class="roster-title">APPROVALS</span><span class="roster-description">The important moves<br>still have your name on them.</span><span class="roster-plus" aria-hidden="true">+</span></button></li>
+        <li class="roster-item"><button class="roster-trigger" type="button" data-dossier="scheduled" aria-haspopup="dialog" aria-controls="dossier-scheduled"><span class="roster-number micro">03 /</span><span class="roster-title">SCHEDULED WORK</span><span class="roster-description">Set the rhythm once.<br>Let the routine look after itself.</span><span class="roster-plus" aria-hidden="true">+</span></button></li>
+      </ol>
+      <div class="roster-foot micro"><span>OPEN A DOSSIER TO LOOK INSIDE</span><span>YOUR ASSISTANT. YOUR CALL.</span></div>
+      <noscript><p class="noscript-note">Enable JavaScript to explore the interactive dossiers. Kelp brings together threaded chat, single-use approvals, and scheduled work with spend caps.</p></noscript>
+    </section>
+
+    <section class="trust" aria-labelledby="trust-title">
+      <div class="trust-intro"><span class="micro">BUILT-IN BOUNDARIES</span><h2 id="trust-title">A little autonomy.<br><span>A lot of accountability.</span></h2></div>
+      <div class="trust-details"><p><span class="micro">01 / CARD SECURITY</span><span>Cards stay in the Stripe vault.</span></p><p><span class="micro">02 / SPENDING LIMITS</span><span>Per-day and monthly caps. Set by you.</span></p><p><span class="micro">03 / THE PAPER TRAIL</span><span>Every action, in an append-only audit.</span></p></div>
+    </section>
+  </main>
+
+  <footer class="footer">
+    <div class="footer-top"><a class="footer-brand" href="#main" aria-label="Kelp home">kelp</a><p>A little less on your mind.</p><nav aria-label="Footer navigation" class="micro"><a href="https://app.kelp.local" aria-describedby="dashboard-note">DASHBOARD (PREVIEW) <span aria-hidden="true">↗</span></a><a href="https://kelp-sdlc.netlify.app">FOLLOW THE BUILD <span aria-hidden="true">↗</span></a></nav></div>
+    <div class="footer-bottom micro"><span>© 2026 KELP / INDEPENDENT BY NATURE.</span><a href="#privacy" data-privacy>PRIVACY (DRAFT)</a><span>ALWAYS ON. ALWAYS YOURS.</span></div>
+  </footer>
+
+  <aside class="cookie-bar micro" aria-label="Site storage notice" hidden><p>NO ANALYTICS HERE. <a href="#privacy" data-privacy>PRIVACY (DRAFT)</a></p><button type="button" id="dismiss-cookie" aria-label="Dismiss storage notice">DISMISS <span aria-hidden="true">×</span></button></aside>
+
+  <dialog class="dossier" id="dossier-chat" aria-labelledby="chat-title" aria-describedby="chat-claim">
+    <div class="dossier-bar micro"><span>CAPABILITY DOSSIER / 01</span><button class="close-dialog" type="button" aria-label="Close chat dossier" autofocus>CLOSE <span aria-hidden="true">×</span></button></div>
+    <div class="dossier-grid"><div class="dossier-copy"><span class="micro dossier-kicker">A PLACE TO THINK OUT LOUD</span><h2 id="chat-title">CHAT</h2><p class="dossier-claim" id="chat-claim">Start with a thought. Leave with something useful.</p><ul class="capability-list"><li><span class="micro">01</span>Separate threads keep each piece of work in context.</li><li><span class="micro">02</span>Streaming responses let you follow the thinking as it arrives.</li><li><span class="micro">03</span>Artifacts turn the conversation into files you can use.</li></ul></div><div class="dossier-visual chat-visual" aria-label="Illustrative chat preview"><div class="visual-label micro">INTERFACE STUDY / NOT A LIVE SESSION</div><div class="mock-thread"><div class="mock-top micro"><span class="status-dot"></span> MONDAY, WITHOUT THE NOISE <span>01</span></div><div class="mock-message user-message">Turn these notes into a plan for the week.</div><div class="mock-message assistant-message"><span class="micro">KELP</span><p>Here’s a little more structure.</p><div class="mock-line"></div><div class="mock-line short"></div><div class="mock-line"></div><div class="artifact"><span class="artifact-icon" aria-hidden="true">↳</span><span>week-ahead.md<small class="micro">ARTIFACT / READY</small></span><span aria-hidden="true">↗</span></div><span class="stream-cursor" aria-hidden="true"></span></div></div><span class="visual-bottom micro">FROM OPEN QUESTION TO NEXT STEP.</span></div></div>
+    <div class="dossier-bottom"><span class="micro">ILLUSTRATIVE PRODUCT PREVIEW</span><a class="cta" href="https://app.kelp.local/?demo=chat" aria-describedby="chat-preview-note">EXPLORE CHAT <span aria-hidden="true">↗</span></a><span id="chat-preview-note" class="micro dossier-link-note">DASHBOARD URL IS A PLACEHOLDER</span></div>
+  </dialog>
+
+  <dialog class="dossier" id="dossier-approvals" aria-labelledby="approvals-title" aria-describedby="approvals-claim">
+    <div class="dossier-bar micro"><span>CAPABILITY DOSSIER / 02</span><button class="close-dialog" type="button" aria-label="Close approvals dossier" autofocus>CLOSE <span aria-hidden="true">×</span></button></div>
+    <div class="dossier-grid"><div class="dossier-copy"><span class="micro dossier-kicker">AUTONOMY WITH A CHECKPOINT</span><h2 id="approvals-title">APPROVALS</h2><p class="dossier-claim" id="approvals-claim">Your assistant can propose. Only you can say yes.</p><ul class="capability-list"><li><span class="micro">01</span>Single-use approval cards expire after 10 minutes.</li><li><span class="micro">02</span>Review the action and its cost before you approve or reject.</li><li><span class="micro">03</span>An audit trail records the decision and the outcome.</li></ul></div><div class="dossier-visual approval-visual" aria-label="Illustrative approval card"><div class="visual-label micro">INTERFACE STUDY / NOT A REAL PURCHASE</div><div class="mock-approval"><div class="mock-top micro"><span class="status-dot"></span> WAITING ON YOU <span>09:59</span></div><div class="approval-body"><span class="micro">PROPOSED ACTION</span><h3>Make the next move?</h3><p>A clear action. An exact amount.<br>One decision, yours to make.</p><div class="approval-amount"><span class="micro">TOTAL</span><span>$12.00</span></div><div class="mock-buttons" aria-hidden="true"><span>APPROVE ↗</span><span>REJECT</span></div></div><div class="approval-stamp micro">SINGLE USE / EXPIRES IN 10 MIN</div></div><span class="visual-bottom micro">NO YES, NO ACTION.</span></div></div>
+    <div class="dossier-bottom"><span class="micro">ILLUSTRATIVE PRODUCT PREVIEW</span><a class="cta" href="https://app.kelp.local/?demo=approvals" aria-describedby="approvals-preview-note">EXPLORE APPROVALS <span aria-hidden="true">↗</span></a><span id="approvals-preview-note" class="micro dossier-link-note">DASHBOARD URL IS A PLACEHOLDER</span></div>
+  </dialog>
+
+  <dialog class="dossier" id="dossier-scheduled" aria-labelledby="scheduled-title" aria-describedby="scheduled-claim">
+    <div class="dossier-bar micro"><span>CAPABILITY DOSSIER / 03</span><button class="close-dialog" type="button" aria-label="Close scheduled work dossier" autofocus>CLOSE <span aria-hidden="true">×</span></button></div>
+    <div class="dossier-grid"><div class="dossier-copy"><span class="micro dossier-kicker">THE ROUTINE, TAKEN CARE OF</span><h2 id="scheduled-title">SCHEDULED<br>WORK</h2><p class="dossier-claim" id="scheduled-claim">Give the repeatable things a rhythm of their own.</p><ul class="capability-list"><li><span class="micro">01</span>Cron schedules put recurring work on your clock.</li><li><span class="micro">02</span>Proactive turns bring the next update to you.</li><li><span class="micro">03</span>Spend caps keep background work within your boundaries.</li></ul></div><div class="dossier-visual schedule-visual" aria-label="Illustrative scheduled work preview"><div class="visual-label micro">INTERFACE STUDY / EXAMPLE SCHEDULE</div><div class="mock-schedule"><div class="mock-top micro"><span class="status-dot"></span> YOUR WEEK, IN RHYTHM <span>ON</span></div><div class="schedule-clock" aria-hidden="true"><span class="clock-orbit orbit-one"></span><span class="clock-orbit orbit-two"></span><span class="clock-hand"></span><span class="clock-center"></span><span class="clock-label micro">09:00</span></div><div class="schedule-task"><span>Morning brief</span><span class="micro">MON / WED / FRI</span></div><div class="schedule-code micro">0 9 * * 1,3,5 <span>WITHIN SPEND CAP</span></div></div><span class="visual-bottom micro">LESS REMEMBERING. MORE LIVING.</span></div></div>
+    <div class="dossier-bottom"><span class="micro">ILLUSTRATIVE PRODUCT PREVIEW</span><a class="cta" href="https://app.kelp.local/?demo=scheduled" aria-describedby="scheduled-preview-note">EXPLORE SCHEDULED WORK <span aria-hidden="true">↗</span></a><span id="scheduled-preview-note" class="micro dossier-link-note">DASHBOARD URL IS A PLACEHOLDER</span></div>
+  </dialog>
+
+  <dialog class="privacy-dialog" id="privacy" aria-labelledby="privacy-title"><div class="dossier-bar micro"><span>SITE NOTICE / DRAFT</span><button class="close-dialog" type="button" autofocus aria-label="Close privacy notice">CLOSE ×</button></div><div class="privacy-copy"><h2 id="privacy-title">Privacy placeholder</h2><p>This is a standalone product preview, not the final privacy policy. Dashboard links use a placeholder domain and do not connect to a live Kelp service.</p><p>This page has no analytics and sets no cookies. Dismissing the notice saves one preference in your browser’s local storage. Fonts load from Google Fonts and motion scripts load from jsDelivr; those providers receive standard network request information.</p><p>The final service policy, operator details, and contact information must be supplied before launch.</p></div></dialog>
+</body>
+</html>
