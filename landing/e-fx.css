@@ -5,17 +5,69 @@
 
 /* ---------- 1. Examples player ------------------------------------------- */
 
-/* The active dot reads as a small pill so the current example is obvious
-   without relying on contrast alone. */
-.e-player .c-example-dots span {
-  transition:
-    width 0.25s var(--ease-out, ease),
-    background-color 0.25s var(--ease-out, ease);
+/* The four dots share one indicator. It slides between their centres on a
+   transform, stretching mid-flight, so consecutive examples read as the dots
+   morphing into one another rather than as separate lights switching on. The
+   dot it lands on fades out underneath it. */
+.e-player .c-example-dots {
+  position: relative;
 }
 
-.e-player .c-example-dots [aria-pressed="true"] span {
-  width: 24px;
+.e-player .c-example-dots button {
+  position: relative;
+  z-index: 1;
+  border-radius: 9999px;
+}
+
+.e-player .c-example-dots button > span {
+  transform: translateX(var(--pull, 0px));
+  transition:
+    opacity 0.28s var(--ease-out, ease),
+    transform 0.44s var(--ease-out, ease);
+}
+
+.e-player .c-example-dots [aria-pressed="true"] > span {
+  opacity: 0;
+}
+
+.e-player .c-example-pill {
+  position: absolute;
+  top: 50%;
+  left: 0;
+  z-index: 2;
+  width: 9px;
+  height: 9px;
+  margin: -4.5px 0 0 -4.5px;
+  border: 0;
+  pointer-events: none;
+  transform: translate3d(var(--pill-x, 22px), 0, 0);
+  transition: transform var(--pill-dur, 460ms) var(--ease-out, ease);
+}
+
+.e-player .c-example-pill::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: 9999px;
   background: var(--strong);
+  transform: scaleX(2.6667); /* 24px capsule from a 9px base */
+  transform-origin: 50% 50%;
+}
+
+.e-player .c-example-pill.is-travelling::after {
+  animation: e-pill-morph var(--pill-dur, 460ms) var(--ease-out, ease);
+}
+
+@keyframes e-pill-morph {
+  0% {
+    transform: scaleX(2.6667); /* 24px capsule from a 9px base */
+  }
+  38% {
+    transform: scaleX(4.45); /* stretch at the midpoint of the flight */
+  }
+  100% {
+    transform: scaleX(2.6667); /* 24px capsule from a 9px base */
+  }
 }
 
 .e-player .c-example-pause {
@@ -704,8 +756,12 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .e-player .c-example-dots span {
+  .e-player .c-example-dots button > span,
+  .e-player .c-example-pill,
+  .e-player .c-example-pill::after,
+  .e-player .c-example-copy p {
     transition: none;
+    animation: none;
   }
 
   /* One still frame: the CSS face, no shader, no spin. */

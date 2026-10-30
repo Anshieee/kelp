@@ -96,54 +96,153 @@
 
   /* ---------------------------------------------------------------------
      Examples player.
-     c-copy.js binds the first copy of this carousel and starts its own timer.
-     Clone the stage so those listeners drop with the detached original, then
-     run a single, complete cycle from here: scroll-triggered, dot-driven and
-     genuinely pausable.
+     One owner: this block. c-copy.js used to bind the same carousel and start
+     a second timer; it is now inert, so the stage is driven from here only.
+
+     Motion: slides crossfade with a slight rise, and the four dots share a
+     single indicator that slides between their centres, stretching mid-flight
+     so each dot reads as morphing into the next. Everything animated is
+     transform/opacity. Reduced motion keeps the selected state and drops the
+     travel.
      --------------------------------------------------------------------- */
   function initExamples() {
-    const stage = document.querySelector(".c-example-stage");
-    if (!stage) return;
-
-    const player = stage.cloneNode(true);
-    player.classList.add("e-player");
-    stage.replaceWith(player);
+    const player = document.querySelector(".c-example-stage");
+    if (!player) return;
 
     const slides = [
       ...player.querySelectorAll('[aria-roledescription="slide"]'),
     ];
-    const dots = [...player.querySelectorAll(".c-example-dots button")];
+    const dotsBox = player.querySelector(".c-example-dots");
+    const dots = dotsBox ? [...dotsBox.querySelectorAll("button")] : [];
     const pause = player.querySelector(".c-example-pause");
     const copy = player.querySelector(".c-example-copy");
     const controls = player.querySelector(".c-example-controls");
     if (!slides.length || !dots.length || !pause || !copy || !controls) return;
+    if (!dotsBox) return;
 
-    const EVERY = 6500;
+    player.classList.add("e-player");
+
+    /* The travelling indicator. Purely decorative: the pressed dot carries
+       the state for assistive tech. */
+    const pill = document.createElement("span");
+    pill.className = "c-example-pill";
+    pill.setAttribute("aria-hidden", "true");
+    dotsBox.prepend(pill);
+
+    const EVERY = 4000;
+    const TRAVEL_MIN = 360;
+    const TRAVEL_MAX = 640;
     let index = 0;
     let timer = 0;
+    let release = 0;
     let playing = !reduce.matches;
     let inView = false;
+    let hovering = false;
+    let pointerFocus = false;
 
     const pagePaused = () => document.body.classList.contains("motion-paused");
+    const held = () => reduce.matches || pagePaused();
 
-    function show(next) {
-      index = (next + slides.length) % slides.length;
-      slides.forEach((slide, i) => {
-        slide.hidden = i !== index;
+    function centreOf(button) {
+      return button.offsetLeft + button.offsetWidth / 2;
+    }
+
+    function placePill(animate, distance) {
+      const button = dots[index];
+      if (!button) return;
+      const travel = animate && !reduce.matches;
+      if (travel) {
+        pill.style.setProperty(
+          "--pill-dur",
+          Math.min(TRAVEL_MAX, TRAVEL_MIN + Math.abs(distance) * 1.7) + "ms",
+        );
+      } else {
+        pill.style.transition = "none";
+      }
+      dotsBox.style.setProperty("--pill-x", centreOf(button) + "px");
+      if (!travel) {
+        void pill.offsetWidth;
+        pill.style.transition = "";
+      }
+    }
+
+    /* Dots lean towards the indicator as it lands, then ease back. */
+    function pullDots(pillX) {
+      dots.forEach((dot, i) => {
+        if (i === index) {
+          dot.style.setProperty("--pull", "0px");
+          return;
+        }
+        const pull = (pillX - centreOf(dot)) * 0.16;
+        dot.style.setProperty(
+          "--pull",
+          Math.max(-4, Math.min(4, pull)).toFixed(2) + "px",
+        );
       });
+      window.clearTimeout(release);
+      release = window.setTimeout(() => {
+        dots.forEach((dot) => dot.style.setProperty("--pull", "0px"));
+      }, 420);
+    }
+
+    function show(next, options) {
+      const count = slides.length;
+      const previous = index;
+      const target = ((next % count) + count) % count;
+      const forward =
+        options && options.forward !== undefined
+          ? options.forward
+          : target > previous;
+      const animate = !(options && options.animate === false);
+
+      index = target;
+
+      const enter = forward ? 14 : -14;
+      const exit = forward ? -12 : 12;
+      slides.forEach((slide, i) => {
+        const active = i === index;
+        slide.hidden = false;
+        slide.style.setProperty("--slide-in", (active ? enter : exit) + "px");
+        slide.classList.toggle("is-active", active);
+      });
+
       dots.forEach((dot, i) =>
         dot.setAttribute("aria-pressed", String(i === index)),
       );
+
+      const from = previous === index ? null : centreOf(dots[previous]);
+      const to = centreOf(dots[index]);
+      placePill(animate, from === null ? 0 : to - from);
+
+      if (animate && !reduce.matches) {
+        pill.classList.remove("is-travelling");
+        void pill.offsetWidth;
+        pill.classList.add("is-travelling");
+      }
+
+      if (animate) pullDots(to);
+      else dots.forEach((dot) => dot.style.setProperty("--pull", "0px"));
     }
 
     function update() {
       window.clearInterval(timer);
       timer = 0;
 
-      const held = reduce.matches || pagePaused();
-      const running = playing && !held && inView && !document.hidden;
+      const motionHeld = held();
+      /* Keyboard focus holds the rotation, as WCAG 2.2.2 expects. A pointer
+         tap on a dot also focuses it, but should not leave the player stuck
+         on touch, so pointer-driven focus does not count. */
+      const focusHolds =
+        player.contains(document.activeElement) && !pointerFocus;
+      const running =
+        playing &&
+        !motionHeld &&
+        inView &&
+        !hovering &&
+        !focusHolds &&
+        !document.hidden;
 
-      pause.disabled = held;
+      pause.disabled = motionHeld;
       pause.textContent = reduce.matches
         ? "Paused for reduced motion"
         : pagePaused()
@@ -151,25 +250,76 @@
           : playing
             ? "Pause examples"
             : "Play examples";
-      pause.setAttribute("aria-pressed", String(!playing || held));
+      pause.setAttribute("aria-pressed", String(!playing || motionHeld));
       copy.setAttribute("aria-live", running ? "off" : "polite");
 
       if (running) {
-        timer = window.setInterval(() => show(index + 1), EVERY);
+        timer = window.setInterval(
+          () => show(index + 1, { forward: true }),
+          EVERY,
+        );
       }
+    }
+
+    function choose(next) {
+      const target = ((next % dots.length) + dots.length) % dots.length;
+      if (target !== index) show(target, { forward: target > index });
+      update();
     }
 
     dots.forEach((dot, i) =>
       dot.addEventListener("click", () => {
-        show(i);
-        update();
+        choose(i);
       }),
     );
+
+    /* Arrow keys walk the dots; Tab already reaches them. */
+    dotsBox.addEventListener("keydown", (event) => {
+      const key = event.key;
+      const current = dots.indexOf(event.target.closest("button"));
+      if (current === -1) return;
+      let next = null;
+      if (key === "ArrowRight" || key === "ArrowDown")
+        next = (current + 1) % dots.length;
+      else if (key === "ArrowLeft" || key === "ArrowUp")
+        next = (current - 1 + dots.length) % dots.length;
+      else if (key === "Home") next = 0;
+      else if (key === "End") next = dots.length - 1;
+      if (next === null) return;
+      event.preventDefault();
+      choose(next);
+      dots[next].focus();
+    });
 
     pause.addEventListener("click", () => {
       playing = !playing;
       update();
     });
+
+    player.addEventListener("pointerenter", (event) => {
+      if (event.pointerType !== "mouse") return;
+      hovering = true;
+      update();
+    });
+    player.addEventListener("pointerleave", (event) => {
+      if (event.pointerType !== "mouse") return;
+      hovering = false;
+      update();
+    });
+    player.addEventListener("focusin", update);
+    player.addEventListener("focusout", () => {
+      queueMicrotask(update);
+    });
+    player.addEventListener("pointerdown", () => {
+      pointerFocus = true;
+    });
+    document.addEventListener(
+      "keydown",
+      () => {
+        pointerFocus = false;
+      },
+      true,
+    );
 
     document.addEventListener("visibilitychange", update);
     new MutationObserver(update).observe(document.body, {
@@ -189,15 +339,26 @@
       inView = true;
     }
 
+    /* Re-measure when the layout settles, never animated. */
+    const settle = () => placePill(false, 0);
+    window.addEventListener("resize", settle);
+    if ("ResizeObserver" in window) {
+      new ResizeObserver(settle).observe(dotsBox);
+    }
+    if (document.fonts && document.fonts.ready) {
+      document.fonts.ready.then(settle);
+    }
+
     reduce.addEventListener("change", () => {
       playing = !reduce.matches;
-      if (reduce.matches) show(0);
+      placePill(false, 0);
       update();
     });
 
     controls.hidden = false;
-    show(0);
+    show(0, { animate: false });
     update();
+    settle();
   }
 
   /* ---------------------------------------------------------------------
