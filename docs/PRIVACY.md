@@ -5,7 +5,8 @@
 - **Scope:** the server process in `chat/`, `kernel/`, `skills/`, `openshell/`, and `payments/`
 - **Companions:** the retention rule ([`docs/DEPLOY.md`](DEPLOY.md) §8.1, `chat/retention.py`),
   the policy gate ([`docs/OPENSHELL.md`](OPENSHELL.md)), the chat spec
-  ([`docs/CHAT_SPEC.md`](CHAT_SPEC.md) §12)
+  ([`docs/CHAT_SPEC.md`](CHAT_SPEC.md) §12), and the sharing decision
+  ([ADR 0002](adr/0002-sharing-and-identity.md))
 - **Enforced by:** `openshell/egress_ledger.py` (the ledger) and
   `tests/test_privacy.py` (recipient, ledger, and exec-boundary checks)
 
@@ -82,6 +83,28 @@ with the status on a rejection — a failing probe is never filed as a success.
 - Local embeddings for document search run in-process. They are not an egress
   path.
 
+### 2.3 A share link is a reader, not a recipient
+
+The recipient table above is about outbound calls the server process makes. A share
+link is the other direction: an inbound read of a local snapshot, served to whoever
+holds the URL.
+
+- **It adds no recipient.** A share read writes no egress row, opens no socket,
+  starts no turn, calls no tool, and reads no artifact bytes. The list in §2 is
+  unchanged by sharing.
+- **It does add a reader.** When the share surface lands (ADR 0002, KEL-28), the
+  owner can hand out a URL that shows one thread's snapshot to anyone who holds it,
+  with no account, until it is revoked or expires. That person receives the owner's
+  content. They are not tracked: the audit records the link, not the viewer, and
+  aggregate daily view counts are the only usage record. No IP, no user agent, no
+  cookie.
+- **It is a copy.** Revocation stops the next request; it cannot recall a page
+  already delivered to a browser. Sharing is a decision to hand someone a copy, and
+  the UI says so.
+- **It is not in this build.** Nothing in §1, §3, or §4 depends on the share
+  surface existing. This subsection exists so that when it does land, no reader has
+  to guess whether the recipient list grew. It does not.
+
 ---
 
 ## 3. Where the data lives on this machine
@@ -102,6 +125,15 @@ The row names in the last column are the `class` values of
 `chat.retention.RETENTION_ROWS`, mirrored in [`docs/DEPLOY.md`](DEPLOY.md) §8.1.
 That table is the contract; this one says which of its rows hold what this review
 talks about, so a reader can move between the two without guessing.
+
+**Where a share snapshot will sit.** A share link (§2.3) is a second copy of one
+thread's content, so it belongs to the **Chat content** row and inherits that row's
+rule: it is removed in the same transaction that purges the thread, and it is never
+retained after the thread is gone. It is also bounded on its own clock — revoked and
+expired links die on the next request. If KEL-28 chooses to keep share rows for
+their own retention window, that window must be added to `RETENTION_ROWS`,
+`docs/DEPLOY.md` §8.1, and this table in the same change, because
+`tests/test_privacy.py` binds the three together.
 
 Two properties matter for the privacy claim:
 
@@ -246,6 +278,11 @@ does.
 - **The static tracker page** in `netlify/` links out to Linear and GitHub when a
   reader clicks. That is a browser navigation, not a server egress, and it loads
   no third-party asset.
+- **A shared thread is deliberately readable by a stranger.** Once the share
+  surface ships, the owner can hand a URL to one thread and the holder can read it
+  with no account. That is the feature, not a leak: the content is still the owner's,
+  the model provider already has it, and the only promise is that the link dies on
+  revocation or expiry. The page cannot be un-rendered once it has been seen.
 
 ---
 
@@ -286,6 +323,8 @@ review references that table rather than restating it.
 - Retention policy source: [`chat/retention.py`](../chat/retention.py)
 - Policy gate and audit log: [`docs/OPENSHELL.md`](OPENSHELL.md)
 - Chat surface, approvals, and the security section: [`docs/CHAT_SPEC.md`](CHAT_SPEC.md) §12
+- Sharing and identity, including what a share link does and does not do:
+  [`docs/adr/0002-sharing-and-identity.md`](adr/0002-sharing-and-identity.md)
 - Skill contract and the `execute` prohibition: [`docs/SKILL_SPEC.md`](SKILL_SPEC.md)
 - Egress ledger: [`openshell/egress_ledger.py`](../openshell/egress_ledger.py)
 - Exec gate: [`openshell/exec_gate.py`](../openshell/exec_gate.py)
