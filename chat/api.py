@@ -47,7 +47,7 @@ from .logging import (
 from .metrics import Metrics, PROMETHEUS_CONTENT_TYPE, get_metrics
 from .service import ChatService
 from .store import ChatStore
-from .stream import IDLE_SECONDS, sse_frames
+from .stream import IDLE_SECONDS, format_comment, format_event, sse_frames
 
 __all__ = [
     "AuthFailureTracker",
@@ -75,7 +75,7 @@ _UPLOAD_OVERHEAD = 64 * 1024
 # Every route belongs to one class. ``auth`` is charged only when a request
 # cannot authenticate, so a burst of bad credentials cannot spend the owner's
 # chat/read budget; the other four classes are charged per client identity.
-_RATE_LIMIT_CLASSES = ("auth", "chat", "upload", "read", "admin")
+_RATE_LIMIT_CLASSES = ("auth", "chat", "upload", "read", "admin", "share", "share_global")
 _RATE_LIMIT_ENV_PREFIX = "KELP_RATE_LIMIT_"
 _RATE_LIMIT_ENABLED_ENV = "KELP_RATE_LIMIT_ENABLED"
 _RATE_LIMIT_IDLE_ENV = "KELP_RATE_LIMIT_IDLE_SECONDS"
@@ -91,6 +91,11 @@ _DEFAULT_RATE_LIMITS: dict[str, tuple[float, float]] = {
     # Readiness probes and scrapes are deliberately far more generous: a
     # supervisor loop must not be the thing that makes the service look down.
     "admin": (1200.0, 300.0),
+    # KEL-28: share reads are keyed on sha256(token), so one leaked link can
+    # only spend its own bucket. ``share_global`` is the process-wide ceiling
+    # that many distinct links cannot collectively exhaust.
+    "share": (30.0, 10.0),
+    "share_global": (600.0, 200.0),
 }
 _DEFAULT_RATE_LIMIT_IDLE_SECONDS = 300.0
 _DEFAULT_RATE_LIMIT_MAX_KEYS = 4096
@@ -155,6 +160,49 @@ _PROVIDER_PROBE_TIMEOUT = 3.0
 _PROVIDER_HTTP_TIMEOUT = 2.0
 _COMMIT_ENV = ("KELP_GIT_COMMIT", "GIT_COMMIT", "SOURCE_COMMIT")
 _VERSION_ENV = "KELP_VERSION"
+
+# -- read-only share links (KEL-28 M4-F) ----------------------------------
+#
+# A share is a 256-bit capability in a URL, bound to one frozen snapshot of one
+# thread. The raw token exists in the creation response only; the store keeps
+# its SHA-256. Every share read is GET-only, charges the ``share`` class before
+# the lookup, and returns one indistinguishable 404 for unknown, expired,
+# revoked, and malformed input.
+SHARE_TTL_ENV = "KELP_SHARE_TTL_SECONDS"
+SHARE_MAX_TTL_ENV = "KELP_SHARE_MAX_TTL_SECONDS"
+SHARE_MAX_SNAPSHOT_BYTES_ENV = "KELP_SHARE_MAX_SNAPSHOT_BYTES"
+_DEFAULT_SHARE_TTL_SECONDS = 7 * 24 * 60 * 60
+_DEFAULT_SHARE_MAX_TTL_SECONDS = 30 * 24 * 60 * 60
+_DEFAULT_SHARE_MAX_SNAPSHOT_BYTES = 4 * 1024 * 1024
+#: Public id of a link in the owner's listing is the hash prefix; the full
+#: hash is never needed to revoke one.
+_SHARE_ID_LENGTH = 16
+#: How often an open share stream re-checks its link. Revocation and purge
+#: close it within one tick (the KEL-24 rule, applied to a share stream).
+_SHARE_STREAM_TICK = 0.5
+_SHARE_HEADERS = {
+    "Cache-Control": "no-store",
+    "Referrer-Policy": "no-referrer",
+    "X-Robots-Tag": "noindex, nofollow",
+    "X-Content-Type-Options": "nosniff",
+    "Content-Security-Policy": (
+        "default-src 'none'; style-src 'unsafe-inline'; img-src 'self' data:; "
+        "frame-ancestors 'none'; base-uri 'none'; form-action 'none'"
+    ),
+}
+#: A snapshot block keeps only these display fields. Anything else — an
+#: artifact handle, a storage path, a content hash, an approval argv — is
+#: dropped structurally rather than filtered by a query someone must remember.
+_SHARE_SOURCE_KEYS = (
+    "kind",
+    "title",
+    "url",
+    "snippet",
+    "locator",
+    "published_at",
+    "status",
+    "tool",
+)
 
 
 @dataclass
@@ -562,7 +610,9 @@ def _request_id_for(request: Request) -> str:
     return new_request_id()
 
 
-_DYNAMIC_ROUTE_HEADS = frozenset({"threads", "turns", "approvals", "artifacts"})
+_DYNAMIC_ROUTE_HEADS = frozenset(
+    {"threads", "turns", "approvals", "artifacts", "shared"}
+)
 _STATIC_ROUTE_HEADS = frozenset(
     {"health", "healthz", "readyz", "metrics", "attachments"}
 )
@@ -1594,6 +1644,9 @@ class ChatAPI:
         sessions: SessionStore | None = None,
         auth_failures: AuthFailureTracker | None = None,
         cookie_secure: bool | None = None,
+        share_ttl: float | None = None,
+        share_max_ttl: float | None = None,
+        share_max_snapshot_bytes: int | None = None,
     ):
         self.service = service
         self.auth_token = auth_token
@@ -1617,6 +1670,35 @@ class ChatAPI:
             if cookie_secure is None
             else bool(cookie_secure)
         )
+        # A requested TTL is clamped, never rejected: the hard ceiling is the
+        # only bound that matters, and a caller asking for 90 days gets 30.
+        self.share_max_ttl = (
+            _env_number(
+                source, SHARE_MAX_TTL_ENV, _DEFAULT_SHARE_MAX_TTL_SECONDS, minimum=60.0
+            )
+            if share_max_ttl is None
+            else max(60.0, float(share_max_ttl))
+        )
+        self.share_ttl = min(
+            _env_number(
+                source, SHARE_TTL_ENV, _DEFAULT_SHARE_TTL_SECONDS, minimum=60.0
+            )
+            if share_ttl is None
+            else max(60.0, float(share_ttl)),
+            self.share_max_ttl,
+        )
+        self.share_max_snapshot_bytes = (
+            _env_int(
+                source,
+                SHARE_MAX_SNAPSHOT_BYTES_ENV,
+                _DEFAULT_SHARE_MAX_SNAPSHOT_BYTES,
+                minimum=1024,
+            )
+            if share_max_snapshot_bytes is None
+            else max(1024, int(share_max_snapshot_bytes))
+        )
+        # Tick for an open share stream's liveness check; tests shorten it.
+        self.share_tick = _SHARE_STREAM_TICK
         self._turn_slots = _Capacity(
             _env_int(
                 source,
@@ -1688,16 +1770,25 @@ class ChatAPI:
         response = self._dispatch_inner(request)
         # A successful cookie-authenticated response carries the rolled pair.
         # A failed response must not extend the session that just failed CSRF.
-        try:
-            self._roll_session_cookie(request, response)
-        except Exception:  # noqa: BLE001 - a cookie refresh never breaks a response
-            log("session_roll_failed", level="warning", status="error")
+        # A share response never sets a cookie, even when the caller happens to
+        # hold a live owner session: sharing is a capability, not an identity.
+        if not _is_share_request(request):
+            try:
+                self._roll_session_cookie(request, response)
+            except Exception:  # noqa: BLE001 - a cookie refresh never breaks a response
+                log("session_roll_failed", level="warning", status="error")
         return response
 
     def _dispatch_inner(self, request: Request) -> Response:
         try:
             path = unquote(urlsplit(request.path).path)
             segments = [segment for segment in path.split("/") if segment]
+            # A share is the only unauthenticated read surface besides
+            # liveness. It is dispatched here, before auth and before the
+            # owner's route classes, so every method (including a body-carrying
+            # POST) is answered 405 without ever reaching ``_authorize``.
+            if len(segments) >= 2 and segments[0] == "api" and segments[1] == "shared":
+                return self._shared(request, segments[2:])
             # Liveness is the one unauthenticated route: a supervisor must be
             # able to tell "process alive" from "owner token missing".
             if not self._is_public(request, segments):
@@ -1948,11 +2039,392 @@ class ChatAPI:
                 return _json_response(200, result)
             raise ChatError("not_found", status=404, message="Unknown endpoint.")
 
+        if rest[1] == "share" and len(rest) == 2 and method == "POST":
+            return self._create_share(request, thread_id)
+        if rest[1] == "shares":
+            return self._thread_shares(request, method, thread_id, rest[2:])
         if rest[1] == "stream" and len(rest) == 2 and method == "GET":
             return self._stream(request, thread_id)
         if rest[1] == "turns" and len(rest) == 2 and method == "POST":
             return self._send(request, thread_id)
         raise ChatError("not_found", status=404, message="Unknown endpoint.")
+
+    # -- share links (KEL-28 M4-F) -----------------------------------------
+
+    def _create_share(self, request: Request, thread_id: str) -> Response:
+        """Materialise one read-only snapshot and return its token exactly once.
+
+        This is an ordinary owner mutation: ``_authorize`` already enforced the
+        bearer/session credential and the CSRF pair, and the ``chat`` class
+        charged the request before dispatch. A thread with a live turn is
+        refused because the snapshot would otherwise freeze a half-written
+        turn (the same rule the purge uses).
+        """
+
+        body = self._json_body(request, optional=True, limit=_DECISION_LIMIT)
+        raw_ttl = body.get("ttl_seconds")
+        ttl = self.share_ttl
+        if raw_ttl is not None:
+            if isinstance(raw_ttl, bool) or not isinstance(raw_ttl, (int, float)):
+                raise ChatError(
+                    "invalid_request",
+                    status=400,
+                    message="ttl_seconds must be a number.",
+                    user_fixable=True,
+                    field="/ttl_seconds",
+                )
+            ttl = min(max(60.0, float(raw_ttl)), self.share_max_ttl)
+        thread = self.service.store.get_thread(thread_id)
+        if thread is None:
+            raise ChatError("unknown_thread", status=404)
+        if thread.get("active_turn_id"):
+            raise ChatError(
+                "turn_in_progress",
+                status=409,
+                message="Wait for the turn to finish before sharing.",
+                details={"active_turn_id": thread["active_turn_id"]},
+            )
+        snapshot = self._build_share_snapshot(thread_id, thread)
+        token = secrets.token_urlsafe(32)
+        token_hash = _share_hash(token)
+        # Sweep on an owner write, never on the read path: an expired or
+        # orphaned row cannot grow the table without bound.
+        try:
+            self.service.store.share_sweep()
+        except Exception:  # noqa: BLE001 - maintenance never blocks a create
+            pass
+        record = self.service.store.share_create(
+            token_hash=token_hash,
+            thread_id=thread_id,
+            snapshot=snapshot,
+            ttl_seconds=ttl,
+        )
+        self._audit_share(
+            "share_created", actor="owner", token_hash=token_hash,
+            extra={"thread_id": thread_id},
+        )
+        return _json_response(
+            201,
+            {
+                "ok": True,
+                "share": {
+                    "id": token_hash[:_SHARE_ID_LENGTH],
+                    "token": token,
+                    "url": f"/api/shared/{token}",
+                    "stream_url": f"/api/shared/{token}/stream",
+                    "thread_id": thread_id,
+                    "created_at": record["created_at"],
+                    "expires_at": record["expires_at"],
+                    "message_count": snapshot["message_count"],
+                },
+            },
+        )
+
+    def _thread_shares(
+        self, request: Request, method: str, thread_id: str, rest: list[str]
+    ) -> Response:
+        """List or revoke this thread's links. The raw token is never returned."""
+
+        if self.service.store.get_thread(thread_id) is None:
+            raise ChatError("unknown_thread", status=404)
+        if not rest:
+            if method == "GET":
+                now = self.service.store.now_iso()
+                shares = [
+                    self._share_listing(record, now=now)
+                    for record in self.service.store.share_list(thread_id)
+                ]
+                return _json_response(200, {"ok": True, "shares": shares})
+            if method == "DELETE":
+                hashes = self.service.store.share_revoke_thread(thread_id)
+                for token_hash in hashes:
+                    self._audit_share(
+                        "share_revoked", actor="owner", token_hash=token_hash,
+                        extra={"thread_id": thread_id, "all": True},
+                    )
+                return _json_response(
+                    200, {"ok": True, "revoked": len(hashes)}
+                )
+            raise ChatError("not_found", status=404, message="Unknown endpoint.")
+        if len(rest) == 1 and method == "DELETE":
+            share_id = _segment(rest[0])
+            record = self.service.store.share_revoke_prefix(thread_id, share_id)
+            if record is None:
+                raise ChatError("unknown_share", status=404, message="Unknown share.")
+            self._audit_share(
+                "share_revoked", actor="owner", token_hash=record["token_hash"],
+                extra={"thread_id": thread_id},
+            )
+            return _json_response(
+                200,
+                {
+                    "ok": True,
+                    "revoked": 1,
+                    "share": {"id": record["token_hash"][:_SHARE_ID_LENGTH]},
+                },
+            )
+        raise ChatError("not_found", status=404, message="Unknown endpoint.")
+
+    def _share_listing(self, record: Mapping[str, Any], *, now: str) -> dict[str, Any]:
+        if record["revoked_at"]:
+            status = "revoked"
+        elif str(record["expires_at"]) <= now:
+            status = "expired"
+        else:
+            status = "active"
+        views = 0
+        try:
+            views = self.service.store.share_views_total(record["token_hash"])
+        except Exception:  # noqa: BLE001 - a listing never fails on a counter
+            views = 0
+        return {
+            "id": str(record["token_hash"])[:_SHARE_ID_LENGTH],
+            "status": status,
+            "created_at": record["created_at"],
+            "expires_at": record["expires_at"],
+            "revoked_at": record["revoked_at"],
+            "snapshot_bytes": record["snapshot_bytes"],
+            "views": views,
+        }
+
+    def _build_share_snapshot(
+        self, thread_id: str, thread: Mapping[str, Any]
+    ) -> dict[str, Any]:
+        """Project the settled thread once, dropping every owner-only field."""
+
+        messages = self._all_messages(thread_id)
+        pending = self.service.store.list_approvals(
+            thread_id=thread_id, status="pending", limit=200
+        )
+        snapshot = {
+            "version": 1,
+            "title": str(thread.get("title") or "Shared chat"),
+            "message_count": len(messages),
+            "messages": [_share_message(message) for message in messages],
+            "omitted": {"approvals": len(pending)},
+            "viewer": "anonymous-share",
+            "read_only": True,
+        }
+        # The store stamps two timestamps into the frozen copy, so leave a
+        # small margin rather than accepting a snapshot that grows past the cap
+        # on insert.
+        size = len(
+            json.dumps(snapshot, default=str, separators=(",", ":")).encode("utf-8")
+        )
+        if size + 512 > self.share_max_snapshot_bytes:
+            raise ChatError(
+                "share_too_large",
+                status=413,
+                message="This thread is too large to share.",
+                details={"limit_bytes": self.share_max_snapshot_bytes},
+            )
+        return snapshot
+
+    def _all_messages(self, thread_id: str) -> list[dict[str, Any]]:
+        collected: list[dict[str, Any]] = []
+        before: str | None = None
+        while True:
+            batch, has_more = self.service.store.list_messages(
+                thread_id, limit=100, before=before
+            )
+            collected = list(batch) + collected
+            if not has_more or not batch:
+                break
+            before = str(batch[0]["id"])
+        return collected
+
+    def _audit_share(
+        self,
+        event: str,
+        *,
+        actor: str,
+        token_hash: str,
+        extra: Mapping[str, Any] | None = None,
+    ) -> None:
+        """One audit record, carrying the hash and never the token."""
+
+        record = getattr(self.service, "_record_audit", None)
+        if record is None:
+            return
+        fields = {"token_hash": token_hash, **dict(extra or {})}
+        try:
+            record(event, actor=actor, extra=fields)
+        except Exception:  # noqa: BLE001 - accounting is not traffic
+            return
+
+    # -- public share reads ------------------------------------------------
+
+    def _shared(self, request: Request, rest: list[str]) -> Response:
+        """The unauthenticated GET-only share surface."""
+
+        if request.method.upper() != "GET":
+            response = self._share_error(
+                405,
+                "method_not_allowed",
+                "Share links are read-only.",
+            )
+            response.headers["Allow"] = "GET"
+            return response
+        if not rest:
+            return self._share_not_found()
+        token = rest[0]
+        if len(rest) > 1 and (len(rest) != 2 or rest[1] != "stream"):
+            return self._share_not_found()
+        limited = self._limit_share(token)
+        if limited is not None:
+            return limited
+        token_hash = _share_hash(token)
+        record = self.service.store.share_get(token_hash)
+        if record is None:
+            # Unknown, malformed, expired, revoked and purged all land here.
+            return self._share_not_found()
+        self._record_share_view(token_hash)
+        if len(rest) == 2:
+            return self._share_stream(request, record, token_hash)
+        return self._share_snapshot(record, token_hash)
+
+    def _limit_share(self, token: str) -> Response | None:
+        """Charge the per-token bucket and the global ceiling before lookup.
+
+        Unlike the owner classes this fails closed: a limiter fault refuses the
+        read instead of proceeding, because the share surface is the one place
+        where "try again unfettered" is the attack.
+        """
+
+        try:
+            if not self.limiter.enabled:
+                return None
+            allowed, retry_after = self.limiter.consume(
+                "share", f"sha256:{_share_hash(token)[:24]}"
+            )
+            if not allowed:
+                response = _rate_limited_response(
+                    retry_after, class_name="share", reason="rate"
+                )
+                _apply_share_headers(response)
+                return response
+            allowed, retry_after = self.limiter.consume("share_global", "global")
+            if not allowed:
+                response = _rate_limited_response(
+                    retry_after, class_name="share_global", reason="global"
+                )
+                _apply_share_headers(response)
+                return response
+            return None
+        except Exception:  # noqa: BLE001 - this class fails closed
+            response = _rate_limited_response(
+                _RATE_LIMITED_FALLBACK_RETRY,
+                class_name="share",
+                reason="limiter_error",
+            )
+            _apply_share_headers(response)
+            return response
+
+    def _record_share_view(self, token_hash: str) -> int:
+        """Aggregate one view for today and audit the first one of the day."""
+
+        try:
+            day = self.service.store.now_iso()[:10]
+            views = self.service.store.share_record_view(token_hash, day=day)
+        except Exception:  # noqa: BLE001 - a counter never breaks a read
+            log("share_view_error", level="warning", status="error")
+            return 0
+        if views == 1:
+            self._audit_share(
+                "share_viewed", actor="share", token_hash=token_hash,
+                extra={"day": day},
+            )
+        return views
+
+    def _share_snapshot(
+        self, record: Mapping[str, Any], token_hash: str
+    ) -> Response:
+        payload = dict(record["snapshot"])
+        payload["id"] = token_hash[:_SHARE_ID_LENGTH]
+        return _share_json_response(200, {"ok": True, "share": payload})
+
+    def _share_stream(
+        self,
+        request: Request,
+        record: Mapping[str, Any],
+        token_hash: str,
+    ) -> Response:
+        after = _share_after(request)
+        frames = self._share_frames(token_hash, record, after=after)
+        return Response(
+            status=200,
+            headers={
+                **dict(_SHARE_HEADERS),
+                "Content-Type": "text/event-stream; charset=utf-8",
+                "X-Accel-Buffering": "no",
+                "Connection": "keep-alive",
+            },
+            stream=frames,
+        )
+
+    def _share_frames(
+        self,
+        token_hash: str,
+        record: Mapping[str, Any],
+        *,
+        after: int = 0,
+    ) -> Iterator[str]:
+        """Replay the frozen snapshot, then tail its link until it dies.
+
+        The snapshot is immutable by design, so "tail" means keeping the
+        connection open with heartbeats while the link is live; no thread
+        event written after creation can reach a viewer. Every tick re-checks
+        the row, so revocation, expiry and purge close the stream within one
+        tick.
+        """
+
+        snapshot = record["snapshot"]
+        if after <= 0:
+            yield format_event(
+                {
+                    "seq": 0,
+                    "type": "snapshot",
+                    "ts": record["created_at"],
+                    "title": snapshot.get("title"),
+                    "created_at": record["created_at"],
+                    "expires_at": record["expires_at"],
+                    "message_count": int(snapshot.get("message_count") or 0),
+                }
+            )
+        for index, message in enumerate(snapshot.get("messages") or [], start=1):
+            if index <= after:
+                continue
+            yield format_event(
+                {
+                    "seq": index,
+                    "type": "message",
+                    "ts": message.get("created_at") or record["created_at"],
+                    "message": message,
+                }
+            )
+        started = time.monotonic()
+        last_beat = started
+        while True:
+            if not _share_alive(self.service.store, token_hash):
+                return
+            remaining = self.stream_idle - (time.monotonic() - started)
+            if remaining <= 0:
+                return
+            time.sleep(min(max(0.01, self.share_tick), remaining))
+            if not _share_alive(self.service.store, token_hash):
+                return
+            if time.monotonic() - last_beat >= 15.0:
+                yield format_comment()
+                last_beat = time.monotonic()
+
+    def _share_error(self, status: int, code: str, message: str) -> Response:
+        error = ChatError(code, status=status, message=message)
+        return _share_json_response(status, error.to_body())
+
+    def _share_not_found(self) -> Response:
+        """The one 404 builder; every failure mode goes through it unchanged."""
+
+        return self._share_error(404, "not_found", "Unknown share.")
 
     def _stream(self, request: Request, thread_id: str) -> Response:
         if self.service.store.get_thread(thread_id) is None:
@@ -2557,6 +3029,107 @@ def _json_response(status: int, payload: Mapping[str, Any]) -> Response:
         },
         body=body,
     )
+
+
+# -- share helpers (KEL-28) ------------------------------------------------
+
+
+def _share_hash(token: str) -> str:
+    """The only key a share is stored or looked up by."""
+
+    return hashlib.sha256(token.encode("utf-8", "surrogatepass")).hexdigest()
+
+
+def _share_segments(request: Request) -> list[str]:
+    try:
+        path = unquote(urlsplit(request.path).path)
+    except ValueError:  # pragma: no cover - urlsplit rarely raises here
+        return []
+    return [segment for segment in path.split("/") if segment]
+
+
+def _is_share_request(request: Request) -> bool:
+    segments = _share_segments(request)
+    return len(segments) >= 2 and segments[0] == "api" and segments[1] == "shared"
+
+
+def _share_after(request: Request) -> int:
+    raw = request.header("last-event-id") or request.query_one("after") or "0"
+    try:
+        return max(0, int(raw))
+    except (TypeError, ValueError):
+        return 0
+
+
+def _share_alive(store: ChatStore, token_hash: str) -> bool:
+    try:
+        return store.share_get(token_hash) is not None
+    except Exception:  # noqa: BLE001 - a liveness check fails closed
+        return False
+
+
+def _apply_share_headers(response: Response) -> None:
+    response.headers.update(_SHARE_HEADERS)
+
+
+def _share_json_response(status: int, payload: Mapping[str, Any]) -> Response:
+    response = _json_response(status, payload)
+    _apply_share_headers(response)
+    return response
+
+
+def _share_source(source: Any) -> dict[str, Any]:
+    if not isinstance(source, Mapping):
+        return {}
+    return {
+        key: source[key]
+        for key in _SHARE_SOURCE_KEYS
+        if source.get(key) is not None
+    }
+
+
+def _share_block(block: Any) -> dict[str, Any]:
+    """Allow-list one block; every unlisted shape becomes ``unknown``."""
+
+    if not isinstance(block, Mapping):
+        return {"type": "unknown"}
+    kind = block.get("type")
+    if kind == "text":
+        return {"type": "text", "text": str(block.get("text") or "")}
+    if kind == "attachment":
+        attachment = block.get("attachment")
+        attachment = attachment if isinstance(attachment, Mapping) else {}
+        return {
+            "type": "attachment",
+            "attachment": {
+                key: attachment[key]
+                for key in ("name", "kind", "mime", "size_bytes", "status")
+                if attachment.get(key) is not None
+            },
+        }
+    if kind == "tool_call":
+        return {
+            "type": "tool_call",
+            "tool": block.get("tool"),
+            "label": block.get("label"),
+            "summary": block.get("summary"),
+            "status": block.get("status"),
+            "duration_ms": block.get("duration_ms"),
+            "effects": list(block.get("effects") or []),
+        }
+    return {"type": "unknown"}
+
+
+def _share_message(message: Mapping[str, Any]) -> dict[str, Any]:
+    return {
+        "role": message.get("role"),
+        "status": message.get("status"),
+        "created_at": message.get("created_at"),
+        "blocks": [_share_block(block) for block in message.get("blocks") or []],
+        "sources": [
+            _share_source(source) for source in message.get("sources") or []
+        ],
+    }
 
 
 def _segment(value: str) -> str:

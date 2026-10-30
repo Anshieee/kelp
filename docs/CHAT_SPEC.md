@@ -943,6 +943,8 @@ key, and a presented token is hashed and never retained as a key.
 | `upload` | `POST /attachments` | 60 / 20 |
 | `read` | `GET` threads, approvals, artifacts | 600 / 200 |
 | `admin` | `GET /metrics`, `GET /readyz` | 1200 / 300 |
+| `share` | `GET /api/shared/{token}` and its stream, keyed by `sha256(token)` | 30 / 10 |
+| `share_global` | Process-wide ceiling over every share read | 600 / 200 |
 
 - A rejected call is `429` with the ordinary error envelope
   (`error.code = "rate_limited"`, `retryable: true`) and a `Retry-After`
@@ -955,6 +957,11 @@ key, and a presented token is hashed and never retained as a key.
   the map is bounded and a quiet client starts from a full bucket. A rejected
   `POST /api/auth/session` counts against the presented bearer even when a
   session cookie authorized the route (§12.2).
+- The two `share` classes are the exception to fail-open: a limiter fault on
+  the share surface refuses the read. A share read is charged per token hash
+  **and** against the global ceiling before the token is looked up, so an
+  unknown token is still slowed down and many distinct links cannot
+  collectively exhaust the process.
 - A global turn cap and a per-owner stream cap sit alongside the token
   buckets. Exceeding either returns `429 rate_limited` with
   `details.reason = "turn_capacity"` or `"stream_capacity"` and a short
@@ -1045,6 +1052,61 @@ Cookie rules:
   session cookie authorized the request: it is logged, counted, and can lock
   that bearer out. The cookie that admitted the route does not reset the
   presented credential's failure debt.
+
+### 12.3 Read-only share links (KEL-28, ADR 0002)
+
+A share is a per-thread capability, not a principal. It authenticates nobody,
+grants no write and no model or tool call, and reveals one frozen snapshot of
+one thread. There is still exactly one owner; a share link is the only way a
+non-owner reads anything.
+
+| Route | Auth | What it does |
+|---|---|---|
+| `POST /api/threads/{id}/share` | Bearer or session cookie + CSRF | Freeze the thread into a snapshot and return a 256-bit URL-safe token **once**. Optional `{ "ttl_seconds": n }`; the default is 7 days and a longer request is clamped to 30 days (`KELP_SHARE_MAX_TTL_SECONDS`). A thread with a live turn is `409 turn_in_progress`. Creates are audited as `share_created` with `token_hash`, never the token. |
+| `GET /api/threads/{id}/shares` | Bearer or session cookie | List this thread's links: `id` (first 16 hex characters of the hash), `status` (`active`/`expired`/`revoked`), timestamps, `snapshot_bytes`, and aggregate `views`. The token is not recoverable and is never returned. |
+| `DELETE /api/threads/{id}/shares/{id}` | Bearer or session cookie + CSRF | Revoke one link by its short hash id. A row is flagged, not deleted, so a concurrent read cannot lose it mid-request; the next request is the ordinary share `404`. |
+| `DELETE /api/threads/{id}/shares` | Bearer or session cookie + CSRF | Revoke every live link for the thread in one transaction. |
+| `GET /api/shared/{token}` | None | The frozen snapshot: title, messages (text, attachment metadata without any handle, sanitized tool-call display fields), citation metadata, `omitted.approvals` count, `created_at`, `expires_at`. |
+| `GET /api/shared/{token}/stream` | None | SSE replay of the same frozen snapshot (`snapshot` then one `message` frame per message) followed by heartbeats. It tails nothing new, because the snapshot is immutable; the connection closes on revoke, expiry, purge, or idle. `Last-Event-ID`/`?after=` resume at a message index. |
+
+Rules that make the surface safe:
+
+- **Stored as a hash.** The table key is `sha256(token)`; the raw token appears
+  only in the creation response. It is never written to a log, metric label, or
+  audit record. Metric routes collapse the token to `/api/shared/{id}`.
+- **One lookup, one 404.** Unknown, empty, malformed, expired, revoked and
+  purged tokens are hashed and looked up by the same key, then rendered by the
+  same builder: byte-identical bodies, no distinguishing header. There is no
+  shape check before the lookup.
+- **GET only.** Every non-GET under `/api/shared/*` is `405` with
+  `Allow: GET` before any lookup. There is no content, preview, download, or
+  approval route under that prefix, so no artifact bytes are reachable.
+- **No side effects beyond the view counter.** A share read touches no thread,
+  message, turn, approval, or artifact row. It increments one aggregate
+  `share_views (day, token_hash, views)` row; the first view of a day also
+  writes one `share_viewed` audit record with `actor="share"` and the hash.
+  There is no per-request identity row, IP, user agent, or cookie.
+- **Headers.** Every share response, including `404`/`405`/`429`, carries
+  `Cache-Control: no-store`, `Referrer-Policy: no-referrer`,
+  `X-Robots-Tag: noindex, nofollow`, `X-Content-Type-Options: nosniff`, and a
+  CSP of `default-src 'none'; style-src 'unsafe-inline'; img-src 'self' data:;
+  frame-ancestors 'none'; base-uri 'none'; form-action 'none'`. A share
+  response never sets a cookie, even when the caller holds an owner session.
+- **Kill switches.** Revoking a link makes the next request `404` and closes an
+  open stream within one tick. Deleting the thread (`purge_thread`) deletes its
+  `shares` and `share_views` rows in the same transaction as its messages, so
+  the link is `404` immediately. Rotating the root token or session secret does
+  **not** revoke links; the explicit revoke routes are the only kill switch.
+- **Snapshot projection.** `storage_path`, `sha256`, artifact handles and
+  artifact URLs, approval ids, turn/call ids, and tool-call arguments/results
+  are dropped structurally. Pending approval cards are excluded and counted, so
+  a half-finished turn cannot leak an argv payload. The snapshot is capped at
+  4 MiB (`KELP_SHARE_MAX_SNAPSHOT_BYTES`); a larger thread is refused rather
+  than truncated.
+- **Retention.** The snapshot is a copy of chat content. It adds no retention
+  row: deleting the thread deletes the snapshot and its view counts with it.
+  `shares` has a `owner_id` column fixed to `'owner'` (the one boundary that is
+  real); every other table remains owner-less by design.
 
 ---
 
@@ -1280,6 +1342,20 @@ the current answer is reused), so a one-second scrape loop cannot hammer the ups
 Steady-state budget: p95 `/api/healthz` < 50 ms, p95 `/api/readyz` < 250 ms with a
 warm cache.
 
+### 15.7 Share links (KEL-28)
+
+| Method | Path | Auth | Success | Notes |
+|---|---|---|---|---|
+| `POST` | `/threads/{id}/share` | owner + CSRF | `201 { share }` | `share.token` is returned once; stored as a hash |
+| `GET` | `/threads/{id}/shares` | owner | `{ shares }` | Short hash ids, state, timestamps, aggregate views |
+| `DELETE` | `/threads/{id}/shares/{id}` | owner + CSRF | `{ ok, revoked, share }` | Revoke one link |
+| `DELETE` | `/threads/{id}/shares` | owner + CSRF | `{ ok, revoked }` | Revoke all links for the thread |
+| `GET` | `/shared/{token}` | none | `{ share }` | Frozen snapshot; `no-store`, `no-referrer` |
+| `GET` | `/shared/{token}/stream` | none | `text/event-stream` | Replay of the frozen snapshot, then heartbeats |
+
+Any non-GET on `/shared/*` is `405`. Unknown, expired, revoked and malformed
+tokens are one identical `404`.
+
 ---
 
 ## 16. What Figma must deliver
@@ -1381,4 +1457,5 @@ approval blocking the stream → §7.3-7.4 + approval tests; reconnect without d
 | `docs/SKILL_SPEC.md` | envelopes, approval request fields, effects/scopes, error codes |
 | `docs/frontend-scope-simple.md` | screens 1-5 and 13, the four states, copy tone |
 | `docs/adr/0001-docs-answer-single-skill.md` | why PDF and CSV share `docs.answer` |
+| `docs/adr/0002-sharing-and-identity.md` | why a share is a read-only per-thread capability, not a second principal |
 | `kernel/events.py`, `openshell/approvals.py`, `skills/context.py` | the objects this spec normalises |
