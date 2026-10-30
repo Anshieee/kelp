@@ -6,7 +6,7 @@
     <meta name="theme-color" content="#FBF9F5" />
     <meta
       name="description"
-      content="A little less on your mind. Kelp brings conversation, human approvals, and scheduled work together in a private assistant."
+      content="If you can text, you can run it. Meet Kelp: an agent with no setup and no technical skills needed. A product preview."
     />
     <title>Kelp — A little less on your mind.</title>
     <link
@@ -20,6 +20,9 @@
       rel="stylesheet"
     />
     <link rel="stylesheet" href="styles.css" />
+    <link rel="stylesheet" href="a-motion.css" />
+    <link rel="stylesheet" href="b-scroll.css" />
+    <link rel="stylesheet" href="c-copy.css" />
     <script
       defer
       src="https://cdn.jsdelivr.net/npm/gsap@3.12.5/dist/gsap.min.js"
@@ -29,6 +32,9 @@
       src="https://cdn.jsdelivr.net/npm/gsap@3.12.5/dist/ScrollTrigger.min.js"
     ></script>
     <script defer src="app.js"></script>
+    <script defer src="a-motion.js"></script>
+    <script defer src="b-scroll.js"></script>
+    <script defer src="c-copy.js"></script>
   </head>
   <body>
     <a class="skip-link pill" href="#main">Skip to content</a>
@@ -88,15 +94,15 @@
           <div class="art-orbit"></div>
         </div>
         <h1 id="hero-title" class="reveal">
-          A little less<br />on your <em>mind.</em>
+          If you can text,<br />you can <em>run it.</em>
         </h1>
         <div class="hero-note" aria-hidden="true">
           Your call.<br /><em>Always.</em><span>↙</span>
         </div>
         <div class="hero-copy reveal">
           <p>
-            Meet Kelp. A private assistant to talk things through, take the next
-            step, and keep the everyday moving.
+            Meet Kelp. An agent that needs no setup and no technical skills.
+            Just say what you need, in your own words. Kelp takes it from there.
           </p>
           <div class="hero-actions">
             <a
@@ -114,11 +120,158 @@
           </p>
         </div>
         <div class="hero-bottom">
-          <span>Less remembering. More living.</span
+          <span>No setup. No technical know-how.</span
           ><a href="#a-conversation"
             >A little room to breathe <span aria-hidden="true">↓</span></a
           >
         </div>
+      </section>
+
+      <section
+        class="c-computer section-shell"
+        id="own-computer"
+        aria-labelledby="computer-title"
+      >
+        <div class="c-section-heading reveal">
+          <h2 id="computer-title">
+            Your agent.<br />Its own <em>computer.</em>
+          </h2>
+          <p>
+            You shouldn’t have to watch over every step. Kelp gets a computer of
+            its own to do the work you ask for, not just tell you how.
+          </p>
+        </div>
+        <ol class="c-handoff" aria-label="How a task gets done">
+          <li>
+            <span class="c-step">1</span>
+            <h3>Ask once.</h3>
+            <p>One message, in plain language. Say what done looks like.</p>
+          </li>
+          <li>
+            <span class="c-step">2</span>
+            <h3>Go about your day.</h3>
+            <p>
+              Your agent works on its own computer. No need to keep a tab open.
+            </p>
+          </li>
+          <li>
+            <span class="c-step">3</span>
+            <h3>Come back to done.</h3>
+            <p>
+              Find the result waiting. If a decision needs your approval, Kelp
+              asks.
+            </p>
+          </li>
+        </ol>
+        <p class="c-scope-note">
+          The experience we’re building. This page is a preview, not a connected
+          agent.
+        </p>
+      </section>
+
+      <section
+        class="c-examples section-shell"
+        id="everyday-examples"
+        aria-labelledby="examples-title"
+      >
+        <h2 id="examples-title">
+          What would you like<br />off your <em>plate?</em>
+        </h2>
+        <div
+          class="c-example-stage"
+          role="region"
+          aria-roledescription="carousel"
+          aria-label="Example requests"
+        >
+          <div class="c-example-copy" id="example-slides" aria-live="off">
+            <p
+              id="example-1"
+              role="group"
+              aria-roledescription="slide"
+              aria-label="1 of 4"
+            >
+              Sort my inbox and show me only what needs a reply.
+            </p>
+            <p
+              id="example-2"
+              role="group"
+              aria-roledescription="slide"
+              aria-label="2 of 4"
+              hidden
+            >
+              Watch this laptop’s price and ask before buying when it drops.
+            </p>
+            <p
+              id="example-3"
+              role="group"
+              aria-roledescription="slide"
+              aria-label="3 of 4"
+              hidden
+            >
+              Turn this 60-page report into a one-page decision brief.
+            </p>
+            <p
+              id="example-4"
+              role="group"
+              aria-roledescription="slide"
+              aria-label="4 of 4"
+              hidden
+            >
+              Follow up on this unpaid invoice, politely, until I hear back.
+            </p>
+          </div>
+          <div class="c-example-controls" hidden>
+            <div
+              class="c-example-dots"
+              role="group"
+              aria-label="Choose an example"
+            >
+              <button
+                type="button"
+                aria-label="Show example 1: inbox"
+                aria-controls="example-1"
+                aria-pressed="true"
+              >
+                <span></span>
+              </button>
+              <button
+                type="button"
+                aria-label="Show example 2: price watch"
+                aria-controls="example-2"
+                aria-pressed="false"
+              >
+                <span></span>
+              </button>
+              <button
+                type="button"
+                aria-label="Show example 3: document brief"
+                aria-controls="example-3"
+                aria-pressed="false"
+              >
+                <span></span>
+              </button>
+              <button
+                type="button"
+                aria-label="Show example 4: invoice follow-up"
+                aria-controls="example-4"
+                aria-pressed="false"
+              >
+                <span></span>
+              </button>
+            </div>
+            <button
+              class="pill c-example-pause"
+              type="button"
+              aria-pressed="false"
+            >
+              Pause examples
+            </button>
+          </div>
+        </div>
+        <p class="c-scope-note">
+          Illustrative requests, not live tasks. Access and approvals stay in
+          your hands.
+        </p>
       </section>
 
       <section
@@ -213,6 +366,57 @@
         </div>
       </section>
 
+      <section
+        class="c-comparison section-shell"
+        id="compare"
+        aria-labelledby="comparison-title"
+      >
+        <div class="c-section-heading reveal">
+          <h2 id="comparison-title">
+            Useful shouldn’t<br />mean <em>complicated.</em>
+          </h2>
+          <p>
+            Some agents give you freedom. Others make it easy to start. We’re
+            building Kelp so you don’t have to choose.
+          </p>
+        </div>
+        <div class="c-comparison-grid">
+          <article>
+            <h3>Hermes agent</h3>
+            <p class="c-comparison-summary">
+              Broad freedom.<br />Hands-on setup.
+            </p>
+            <p>
+              A flexible, general-purpose approach for people comfortable
+              installing and configuring their own agent.
+            </p>
+          </article>
+          <article>
+            <h3>Instinct</h3>
+            <p class="c-comparison-summary">
+              A simple start.<br />A narrower scope.
+            </p>
+            <p>
+              A lighter approach when you want an easy way into a smaller set of
+              everyday tasks.
+            </p>
+          </article>
+          <article class="c-comparison-kelp">
+            <h3>Kelp</h3>
+            <p class="c-comparison-summary">Full power.<br />Zero setup.</p>
+            <p>
+              Our aim: a general-purpose agent you can run by sending a message.
+              No installing tools. No technical steps to learn.
+            </p>
+          </article>
+        </div>
+        <p class="c-scope-note">
+          A positioning sketch, not a feature-by-feature test. Tools change;
+          check each product’s current capabilities before choosing. Kelp is a
+          product preview.
+        </p>
+      </section>
+
       <div class="marquee-wrap">
         <div class="marquee" aria-hidden="true">
           <div class="marquee-track">
@@ -303,6 +507,33 @@
             placeholders.
           </p></noscript
         >
+      </section>
+
+      <section
+        class="c-companion section-shell"
+        id="desktop-companion"
+        aria-labelledby="companion-title"
+      >
+        <div class="c-companion-art" aria-hidden="true">
+          <div class="c-companion-perch">
+            <svg><use href="#sprout" /></svg><span>A little company.</span>
+          </div>
+        </div>
+        <div class="c-companion-copy">
+          <h2 id="companion-title">
+            A familiar face<br />on your <em>desktop.</em>
+          </h2>
+          <span class="pill c-roadmap">On the roadmap</span>
+          <p>
+            We’d like your agent to live on your computer as a little companion
+            you can talk to any time. There when you need a hand, out of the way
+            when you don’t.
+          </p>
+          <p class="c-scope-note">
+            Not built yet. The desktop companion is a planned part of Kelp, not
+            a feature you can use today.
+          </p>
+        </div>
       </section>
 
       <section class="trust section-shell" aria-labelledby="trust-title">
