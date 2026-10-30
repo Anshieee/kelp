@@ -1,11 +1,15 @@
 /* e-fx.js — content pass.
-   Owns: the examples player, the dithered video poster, the desktop pet’s
-   identity, and nothing else. Everything here is additive; existing scripts
-   keep their own hooks. */
+   Owns: the examples player, the dithered video poster, the phone’s scroll
+   spin, and the desktop companion’s WebGL orb. Everything here is additive;
+   existing scripts keep their own hooks. */
 (() => {
   "use strict";
 
   const reduce = window.matchMedia("(prefers-reduced-motion: reduce)");
+  const clamp = (value, min = 0, max = 1) =>
+    value < min ? min : value > max ? max : value;
+  const idle =
+    window.requestIdleCallback || ((work) => window.setTimeout(work, 60));
 
   /* ---------------------------------------------------------------------
      Dither artwork — the same ordered dither as the hero field in app.js,
@@ -196,11 +200,519 @@
     update();
   }
 
+  /* ---------------------------------------------------------------------
+     Phone: turn into place on entry, away on exit.
+     The angle is driven by the frame’s own travel through the viewport, so
+     the window is the same at every screen size and does not depend on how
+     tall the section happens to be:
+       p = 0    frame's top edge at the bottom of the viewport
+       p = 0.5  frame centred
+       p = 1    frame's bottom edge at the top of the viewport
+     Entry finishes by p = 0.34 (top edge around the middle), and the exit
+     turn starts at p = 0.58, while the frame is still half on screen, so both
+     halves are actually reachable. ease-out cubic, one axis plus a small
+     vertical tilt; the section clips the overhang.
+     --------------------------------------------------------------------- */
+  function initPhoneSpin() {
+    const frames = [...document.querySelectorAll("[data-phone-spin]")];
+    if (!frames.length) return;
+
+    let queued = 0;
+    const easeOut = (t) => 1 - Math.pow(1 - t, 3);
+    const held = () =>
+      reduce.matches || document.body.classList.contains("motion-paused");
+
+    function reset() {
+      frames.forEach((node) => {
+        node.style.transform = "";
+        node.style.willChange = "";
+      });
+    }
+
+    function paint() {
+      queued = 0;
+      if (held()) return;
+      const view = window.innerHeight || 1;
+      frames.forEach((node) => {
+        const rect = node.getBoundingClientRect();
+        if (rect.bottom < -40 || rect.top > view + 40) return;
+
+        const p = (view - rect.top) / Math.max(1, view + rect.height);
+        const enter = easeOut(clamp(p / 0.34));
+        const exit = easeOut(clamp((p - 0.58) / 0.32));
+        const turn = -26 * (1 - enter) + 18 * exit;
+        const tilt = -7 * (1 - enter) + 6 * exit;
+        const scale = 0.955 + 0.045 * enter - 0.018 * exit;
+        const settled = enter === 1 && exit === 0;
+
+        node.style.transform = settled
+          ? ""
+          : `perspective(1300px) rotateY(${turn.toFixed(2)}deg) rotateX(${tilt.toFixed(
+              2,
+            )}deg) scale(${scale.toFixed(3)})`;
+        node.style.willChange = settled ? "" : "transform";
+      });
+    }
+
+    function request() {
+      if (queued || document.hidden) return;
+      queued = window.requestAnimationFrame(paint);
+    }
+
+    window.addEventListener("scroll", request, { passive: true });
+    window.addEventListener("resize", request, { passive: true });
+    document.addEventListener("visibilitychange", request);
+    new MutationObserver(() => {
+      if (held()) reset();
+      else request();
+    }).observe(document.body, { attributes: true, attributeFilter: ["class"] });
+    reduce.addEventListener("change", () => {
+      if (reduce.matches) reset();
+      else request();
+    });
+
+    if (reduce.matches) reset();
+    else request();
+  }
+
+  /* ---------------------------------------------------------------------
+     Desktop companion: a WebGL orb.
+     One sphere, two capsule eyes. The eyes follow the pointer, blink on their
+     own cadence, and glance about when the pointer rests; the orb itself never
+     moves. The body crossfades between three palettes on a two-second cadence
+     (the old working / waiting / done flavours) so the surface keeps drifting
+     without ever cutting. Ivory rim light keeps it seated on the page.
+     When GL is unavailable, reduced motion is on, or the context is lost, the
+     CSS face in the markup is what shows: eyes on a jade disc, a still frame.
+     --------------------------------------------------------------------- */
+  /* Each flavour keeps the cadence of the state it stands in for: working is
+     busy, waiting settles and watches, done is unhurried. The colours and the
+     timing crossfade together, so the mood changes without a cut. */
+  const ORB_FLAVOURS = [
+    {
+      body: [0.286, 0.588, 0.439],
+      deep: [0.075, 0.207, 0.157],
+      glance: 2200,
+      blink: 2800,
+    },
+    {
+      body: [0.878, 0.553, 0.412],
+      deep: [0.408, 0.212, 0.145],
+      glance: 5600,
+      blink: 5200,
+    },
+    {
+      body: [0.463, 0.678, 0.776],
+      deep: [0.129, 0.286, 0.376],
+      glance: 3800,
+      blink: 4200,
+    },
+  ];
+
+  const ORB_VERTEX = `
+    attribute vec2 aPos;
+    void main() { gl_Position = vec4(aPos, 0.0, 1.0); }
+  `;
+
+  const ORB_FRAGMENT = `
+    #ifdef GL_FRAGMENT_PRECISION_HIGH
+    precision highp float;
+    #else
+    precision mediump float;
+    #endif
+    uniform vec2 uRes;
+    uniform float uTime;
+    uniform vec2 uGaze;
+    uniform float uBlink;
+    uniform vec3 uBody;
+    uniform vec3 uDeep;
+
+    float sdCapsule(vec2 p, vec2 a, vec2 b, float r) {
+      vec2 pa = p - a;
+      vec2 ba = b - a;
+      float h = clamp(dot(pa, ba) / dot(ba, ba), 0.0, 1.0);
+      return length(pa - ba * h) - r;
+    }
+
+    float bayer2(vec2 a) {
+      a = floor(a);
+      return fract(a.x / 2.0 + a.y * a.y * 0.75);
+    }
+    float bayer4(vec2 a) {
+      return bayer2(0.5 * a) * 0.25 + bayer2(a);
+    }
+
+    void main() {
+      vec2 p = (gl_FragCoord.xy - 0.5 * uRes) / min(uRes.x, uRes.y) * 2.0;
+      p.y = -p.y;
+
+      float aa = 2.0 / min(uRes.x, uRes.y);
+      float R = 0.82;
+      float d = length(p);
+      float alpha = smoothstep(R + aa, R - aa, d);
+      if (alpha <= 0.002) {
+        gl_FragColor = vec4(0.0);
+        return;
+      }
+
+      float z = sqrt(max(0.0, R * R - d * d)) / R;
+      vec3 n = normalize(vec3(p / R, z));
+
+      float key = clamp(dot(n, normalize(vec3(-0.55, 0.62, 0.7))), 0.0, 1.0);
+      float fill = clamp(dot(n, normalize(vec3(0.5, -0.55, 0.4))), 0.0, 1.0);
+
+      vec3 col = mix(uDeep, uBody, pow(key, 1.05));
+      col += uBody * 0.14 * fill * z;
+
+      // The underside settles into ink, so the orb carries weight on ivory.
+      col *= 0.86 + 0.14 * smoothstep(-0.9, 0.55, n.y);
+
+      float rim = pow(1.0 - z, 2.4);
+      col = mix(col, vec3(0.984, 0.976, 0.961), rim * 0.42);
+
+      float breath = 0.5 + 0.5 * sin(uTime * 0.9);
+      col += pow(clamp(n.y, 0.0, 1.0), 3.0) * (0.03 + 0.04 * breath);
+
+      vec2 g = clamp(uGaze, -1.0, 1.0) * 0.115;
+      float open = mix(0.12, 1.0, uBlink);
+      float eye = 10000.0;
+      float glint = 0.0;
+      for (int i = 0; i < 2; i++) {
+        float s = i == 0 ? -1.0 : 1.0;
+        vec2 c = vec2(s * 0.255, -0.045) + g;
+        vec2 q = p - c;
+        q.y /= open;
+        eye = min(eye, sdCapsule(q, vec2(-0.058, 0.0), vec2(0.058, 0.0), 0.100));
+        glint = max(glint, smoothstep(0.030, 0.0, length(p - (c + vec2(-0.036, 0.048)))));
+      }
+
+      float mask = smoothstep(0.011, -0.011, eye);
+      col = mix(col, vec3(0.043, 0.055, 0.051), mask);
+      col += glint * mask * uBlink * vec3(0.5, 0.48, 0.43);
+
+      col += (bayer4(gl_FragCoord.xy) - 0.5) * 0.028;
+
+      gl_FragColor = vec4(col, alpha);
+    }
+  `;
+
+  function initOrb() {
+    const host = document.querySelector("[data-orb]");
+    const canvas = host && host.querySelector(".e-orb-canvas");
+    if (!host || !canvas) return;
+
+    let gl = null;
+    let program = null;
+    let uniforms = null;
+    let buffer = null;
+    let started = false;
+    let lost = false;
+    let last = 0;
+    let raf = 0;
+    let visible = false;
+
+    const gaze = { x: 0, y: 0, tx: 0, ty: 0 };
+    const blink = { value: 1, phase: 1, next: 0 };
+    const flavour = { from: 0, to: 0, mix: 1, at: 0, index: 0 };
+    const palette = {
+      body: ORB_FLAVOURS[0].body.slice(),
+      deep: ORB_FLAVOURS[0].deep.slice(),
+    };
+    const cadence = { glance: ORB_FLAVOURS[0].glance, blink: ORB_FLAVOURS[0].blink };
+
+    let pointerAt = -1e9;
+    let glanceAt = 0;
+    const GLANCES = [
+      [0.55, -0.35],
+      [-0.5, 0.32],
+      [0.16, 0.5],
+      [-0.18, -0.12],
+      [0, 0],
+    ];
+    let glance = 0;
+
+    const pageHeld = () =>
+      reduce.matches || document.body.classList.contains("motion-paused");
+
+    function compile(type, source) {
+      const shader = gl.createShader(type);
+      gl.shaderSource(shader, source);
+      gl.compileShader(shader);
+      if (!gl.getShaderParameter(shader, gl.COMPILE_STATUS)) {
+        gl.deleteShader(shader);
+        return null;
+      }
+      return shader;
+    }
+
+    function build() {
+      const vertex = compile(gl.VERTEX_SHADER, ORB_VERTEX);
+      const fragment = compile(gl.FRAGMENT_SHADER, ORB_FRAGMENT);
+      if (!vertex || !fragment) return false;
+
+      const next = gl.createProgram();
+      gl.attachShader(next, vertex);
+      gl.attachShader(next, fragment);
+      gl.linkProgram(next);
+      gl.deleteShader(vertex);
+      gl.deleteShader(fragment);
+      if (!gl.getProgramParameter(next, gl.LINK_STATUS)) {
+        gl.deleteProgram(next);
+        return false;
+      }
+
+      program = next;
+      gl.useProgram(program);
+
+      buffer = gl.createBuffer();
+      gl.bindBuffer(gl.ARRAY_BUFFER, buffer);
+      gl.bufferData(
+        gl.ARRAY_BUFFER,
+        new Float32Array([-1, -1, 3, -1, -1, 3]),
+        gl.STATIC_DRAW,
+      );
+      const slot = gl.getAttribLocation(program, "aPos");
+      gl.enableVertexAttribArray(slot);
+      gl.vertexAttribPointer(slot, 2, gl.FLOAT, false, 0, 0);
+
+      uniforms = {
+        res: gl.getUniformLocation(program, "uRes"),
+        time: gl.getUniformLocation(program, "uTime"),
+        gaze: gl.getUniformLocation(program, "uGaze"),
+        blink: gl.getUniformLocation(program, "uBlink"),
+        body: gl.getUniformLocation(program, "uBody"),
+        deep: gl.getUniformLocation(program, "uDeep"),
+      };
+
+      gl.enable(gl.BLEND);
+      gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
+      gl.clearColor(0, 0, 0, 0);
+      return true;
+    }
+
+    function resize() {
+      const ratio = Math.min(window.devicePixelRatio || 1, 2);
+      const rect = canvas.getBoundingClientRect();
+      const width = Math.max(1, Math.round(rect.width * ratio));
+      const height = Math.max(1, Math.round(rect.height * ratio));
+      if (canvas.width !== width || canvas.height !== height) {
+        canvas.width = width;
+        canvas.height = height;
+      }
+      gl.viewport(0, 0, canvas.width, canvas.height);
+    }
+
+    function mixPalette(now) {
+      const STEP = 2000;
+      if (!flavour.at) {
+        // Open on the ink-jade body and hold it for a beat before the drift.
+        flavour.at = now + 1000;
+        flavour.from = 0;
+        flavour.to = 1;
+        flavour.mix = 0;
+        flavour.index = 1;
+      }
+      if (now < flavour.at) return;
+      const elapsed = now - flavour.at;
+      if (elapsed >= STEP) {
+        flavour.at = now;
+        flavour.from = flavour.to;
+        flavour.index = (flavour.index + 1) % ORB_FLAVOURS.length;
+        flavour.to = flavour.index;
+        flavour.mix = 0;
+      }
+      // Crossfade the first 60% of each step, then hold: no hard cut, and a
+      // moment of rest before the next drift.
+      flavour.mix = clamp((now - flavour.at) / (STEP * 0.6));
+      const t = flavour.mix * flavour.mix * (3 - 2 * flavour.mix);
+      const a = ORB_FLAVOURS[flavour.from];
+      const b = ORB_FLAVOURS[flavour.to];
+      for (let i = 0; i < 3; i++) {
+        palette.body[i] = a.body[i] + (b.body[i] - a.body[i]) * t;
+        palette.deep[i] = a.deep[i] + (b.deep[i] - a.deep[i]) * t;
+      }
+      cadence.glance = a.glance + (b.glance - a.glance) * t;
+      cadence.blink = a.blink + (b.blink - a.blink) * t;
+    }
+
+    function stepEyes(now, delta) {
+      const still = now - pointerAt > 2200;
+      if (still && now > glanceAt) {
+        glanceAt = now + cadence.glance * (0.8 + Math.random() * 0.6);
+        glance = (glance + 1) % GLANCES.length;
+        gaze.tx = GLANCES[glance][0];
+        gaze.ty = GLANCES[glance][1];
+      }
+      const ease = Math.min(1, (delta / 16) * 0.16);
+      gaze.x += (gaze.tx - gaze.x) * ease;
+      gaze.y += (gaze.ty - gaze.y) * ease;
+
+      if (blink.next === 0) blink.next = now + cadence.blink;
+      if (blink.phase === 1 && now >= blink.next) {
+        blink.phase = 0;
+        blink.next = now + cadence.blink * (0.8 + Math.random() * 0.7);
+      }
+      if (blink.phase < 1) {
+        blink.phase = Math.min(1, blink.phase + delta / 220);
+        const half = blink.phase < 0.5 ? blink.phase * 2 : (1 - blink.phase) * 2;
+        blink.value = 1 - 0.92 * (half * half * (3 - 2 * half));
+      } else {
+        blink.value = 1;
+      }
+    }
+
+    function draw(now) {
+      raf = 0;
+      if (!gl || !program || lost || pageHeld() || !visible || document.hidden)
+        return;
+      // A 30fps budget: the body drifts slowly, so more frames buy nothing.
+      if (last && now - last < 28) {
+        raf = window.requestAnimationFrame(draw);
+        return;
+      }
+      const delta = last ? Math.min(80, now - last) : 16;
+      last = now;
+
+      resize();
+      mixPalette(now);
+      stepEyes(now, delta);
+
+      gl.clear(gl.COLOR_BUFFER_BIT);
+      gl.uniform2f(uniforms.res, canvas.width, canvas.height);
+      gl.uniform1f(uniforms.time, now / 1000);
+      gl.uniform2f(uniforms.gaze, gaze.x, gaze.y);
+      gl.uniform1f(uniforms.blink, blink.value);
+      gl.uniform3f(uniforms.body, palette.body[0], palette.body[1], palette.body[2]);
+      gl.uniform3f(uniforms.deep, palette.deep[0], palette.deep[1], palette.deep[2]);
+      gl.drawArrays(gl.TRIANGLES, 0, 3);
+
+      if (!host.classList.contains("e-orb--webgl")) {
+        host.classList.add("e-orb--webgl");
+      }
+      raf = window.requestAnimationFrame(draw);
+    }
+
+    function wake() {
+      if (!raf && started && !lost) raf = window.requestAnimationFrame(draw);
+    }
+
+    function start() {
+      if (started || reduce.matches) return;
+      try {
+        gl =
+          canvas.getContext("webgl", {
+            alpha: true,
+            antialias: false,
+            depth: false,
+            stencil: false,
+            premultipliedAlpha: false,
+            powerPreference: "low-power",
+          }) ||
+          canvas.getContext("experimental-webgl", {
+            alpha: true,
+            antialias: false,
+            depth: false,
+            stencil: false,
+          });
+      } catch {
+        gl = null;
+      }
+      if (!gl) return;
+      if (!build()) {
+        gl = null;
+        return;
+      }
+      started = true;
+      lost = false;
+      canvas.addEventListener("webglcontextlost", onLost, false);
+      canvas.addEventListener("webglcontextrestored", onRestored, false);
+      // Give the canvas its layout box before the first draw, so frame one is
+      // the real size rather than a one-pixel stretch.
+      host.classList.add("e-orb--webgl");
+      resize();
+      wake();
+    }
+
+    function onLost(event) {
+      // Let the browser try to hand the context back.
+      event.preventDefault();
+      lost = true;
+      window.cancelAnimationFrame(raf);
+      raf = 0;
+      host.classList.remove("e-orb--webgl");
+    }
+
+    function onRestored() {
+      if (!gl || build() === false) return;
+      lost = false;
+      wake();
+    }
+
+    // The eyes follow the pointer anywhere on the page, not only over the
+    // orb: the companion is meant to notice you. Work is skipped while the
+    // orb is off screen.
+    window.addEventListener(
+      "pointermove",
+      (event) => {
+        if (!visible) return;
+        const rect = canvas.getBoundingClientRect();
+        if (!rect.width || !rect.height) return;
+        gaze.tx = clamp(((event.clientX - rect.left) / rect.width) * 2 - 1, -1, 1);
+        gaze.ty = clamp(((event.clientY - rect.top) / rect.height) * 2 - 1, -1, 1);
+        pointerAt = performance.now();
+      },
+      { passive: true },
+    );
+
+    // Touch and keyboard users never hover: a slow idle drift is the whole
+    // performance, and the glance list keeps it alive.
+    if ("IntersectionObserver" in window) {
+      new IntersectionObserver(
+        ([entry]) => {
+          visible = entry.isIntersecting;
+          if (visible) wake();
+        },
+        { rootMargin: "120px 0px" },
+      ).observe(host);
+    } else {
+      visible = true;
+    }
+
+    document.addEventListener("visibilitychange", () => {
+      if (!document.hidden) wake();
+    });
+
+    window.addEventListener("resize", () => {
+      if (!started || lost) return;
+      wake();
+    });
+
+    new MutationObserver(() => {
+      if (pageHeld()) {
+        window.cancelAnimationFrame(raf);
+        raf = 0;
+      } else wake();
+    }).observe(document.body, { attributes: true, attributeFilter: ["class"] });
+
+    reduce.addEventListener("change", () => {
+      if (reduce.matches) {
+        window.cancelAnimationFrame(raf);
+        raf = 0;
+        host.classList.remove("e-orb--webgl");
+        return;
+      }
+      start();
+      wake();
+    });
+
+    start();
+  }
+
   /* ------------------------------------------------------------------- */
 
   initExamples();
+  initPhoneSpin();
+  initOrb();
 
-  const idle =
-    window.requestIdleCallback || ((work) => window.setTimeout(work, 60));
   idle(paintAllDithers);
 })();
