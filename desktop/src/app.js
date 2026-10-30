@@ -1,6 +1,17 @@
 import { approvals, connectStream, devices, metrics, signIn, threads, wallet, parseSpendGauges } from "./api.js";
 import { keychain } from "./keychain.js";
 import { petStateFromEvent } from "./orb.js";
+import {
+  isDemo,
+  demoThreads,
+  demoMessages,
+  demoApprovals,
+  demoDevices,
+  demoSpendText,
+  demoCannedReply,
+} from "./demo.js";
+
+const DEMO = isDemo();
 
 const $ = (id) => document.getElementById(id);
 
@@ -78,6 +89,29 @@ window.addEventListener("focus", () => {
 highlightApproval(new URLSearchParams(location.search).get("approval"));
 
 // --- sign-in: one bearer exchange, then OS-keychain session only (§12.2) ----
+if (DEMO) {
+  // Demo mode: skip sign-in entirely, render fixtures, label everything.
+  $("signin").hidden = true;
+  $("demoBanner").hidden = false;
+  $("main").hidden = false;
+  $("connState").textContent = "demo";
+  diag("demo", "fixtures only, no server");
+  const liveBtn = document.createElement("button");
+  liveBtn.textContent = "Use live server instead";
+  liveBtn.className = "ghost";
+  liveBtn.type = "button";
+  liveBtn.onclick = () => {
+    try {
+      localStorage.setItem("kelp.live", "1");
+    } catch { /* private mode: query param still applies */ }
+    location.search = "?live=1";
+  };
+  $("demoBanner").append(" ", liveBtn);
+  loadThreads();
+  loadApprovals();
+  loadDevices();
+  loadSpend();
+}
 $("signinBtn").onclick = async () => {
   const bearer = $("bearer").value.trim();
   if (!bearer) return toast("Paste the root bearer first.");
@@ -112,9 +146,9 @@ $("signoutBtn").onclick = async () => {
 
 // --- threads + streaming chat ----------------------------------------------
 async function loadThreads() {
-  const { threads: list } = await threads.list();
   const ul = $("threadList");
   ul.innerHTML = "";
+  const list = DEMO ? demoThreads : (await threads.list()).threads;
   for (const t of list) {
     const li = document.createElement("li");
     li.innerHTML = `<span></span>`;
@@ -132,6 +166,12 @@ async function openThread(id) {
   currentThread = id;
   streamHandle?.close();
   $("stream").textContent = "";
+  if (DEMO) {
+    for (const m of demoMessages[id] ?? []) {
+      $("stream").textContent += `${m.role}: ${m.content}\n`;
+    }
+    return;
+  }
   const snap = await threads.get(id);
   for (const m of snap.messages ?? []) {
     if (m.role && m.content) $("stream").textContent += `${m.role}: ${m.content}\n`;
@@ -162,12 +202,24 @@ $("sendBtn").onclick = async () => {
   const text = $("chatInput").value.trim();
   if (!text || !currentThread) return toast(currentThread ? "Type a message." : "Open a thread first.");
   $("chatInput").value = "";
+  if (DEMO) {
+    notifyPet({ type: "turn_started" });
+    $("stream").textContent += `user: ${text}\nassistant: ${demoCannedReply(text)}\n`;
+    notifyPet({ type: "turn_finished" });
+    return;
+  }
   notifyPet({ type: "turn_started" });
   await threads.send(currentThread, text);
 };
 
 // --- approvals ---------------------------------------------------------------
 async function decide(id, decision) {
+  if (DEMO) {
+    notifyPet({ type: "approval_decided" });
+    showReceipt({ id, decision, ok: true });
+    diag("demo-decide", `${id} ${decision} (not recorded)`);
+    return;
+  }
   try {
     await approvals.decide(id, decision);
     notifyPet({ type: "approval_decided" });
@@ -178,7 +230,7 @@ async function decide(id, decision) {
 }
 
 async function loadApprovals() {
-  const { approvals: list } = await approvals.list("?status=pending");
+  const list = DEMO ? demoApprovals : (await approvals.list("?status=pending")).approvals;
   const box = $("approvals");
   box.innerHTML = "";
   if (!list.length) {
@@ -206,7 +258,7 @@ async function loadApprovals() {
 
 // --- devices -----------------------------------------------------------------
 async function loadDevices() {
-  const { devices: list } = await devices.list();
+  const list = DEMO ? demoDevices : (await devices.list()).devices;
   const ul = $("deviceList");
   ul.innerHTML = "";
   for (const d of list) {
@@ -240,8 +292,8 @@ async function loadSpend() {
   warn.hidden = true;
   warn.textContent = "";
   try {
-    const text = await metrics.spendText();
-    const s = parseSpendGauges(text);
+    const text = DEMO ? demoSpendText : await metrics.spendText();
+    const s = DEMO ? { window: "demo", usedUsd: 1.2, capUsd: 40, capped: false, warned: false } : parseSpendGauges(text);
     if (!s) {
       $("spend").textContent = "(no spend data reported)";
       return;

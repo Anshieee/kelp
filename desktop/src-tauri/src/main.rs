@@ -3,7 +3,7 @@
 //! Kelp server URL. Unsigned dev builds only: no updater keys, no signing
 //! step. No telemetry: the shell collects nothing and phones nowhere.
 
-#![cfg_attr(not(debug_assertions), windows_subsystem_windows)]
+#![cfg_attr(all(not(debug_assertions), target_os = "windows"), windows_subsystem = "windows")]
 
 fn main() {
     tauri::Builder::default()
