@@ -41,6 +41,7 @@ from skills.errors import SkillManifestError
 from skills.loader import SkillRegistry
 
 from .api import (
+    SESSION_SECRET_ENV,
     SESSION_SECURE_ENV,
     AuthFailureTracker,
     ChatAPI,
@@ -456,6 +457,12 @@ def _service_secrets(
     if config.kernel.api_key:
         values["NEBIUS_API_KEY"] = config.kernel.api_key
     values["KELP_AUTH_TOKEN"] = config.auth_token
+    # The per-device CSRF half is an HMAC under a key derived from this value,
+    # so an operator echoing the environment must not leak it into a log or
+    # audit line either.
+    session_secret = environ.get(SESSION_SECRET_ENV)
+    if isinstance(session_secret, str) and session_secret.strip():
+        values[SESSION_SECRET_ENV] = session_secret.strip()
     if config.csrf_token:
         values["KELP_CSRF_TOKEN"] = config.csrf_token
     return values

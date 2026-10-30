@@ -663,9 +663,10 @@ Browsers exchange it for an opaque server-side session; the session cookie is
 response, and never contains the root token. Sessions are stored in the
 `sessions` table of the chat database, so several devices survive a restart;
 each row carries a short label, timestamps, and the SHA-256 of the session id.
-The CSRF half is derived with HMAC from that hash and `KELP_SESSION_SECRET`
-(falling back to `KELP_AUTH_TOKEN`), so **no session id or CSRF token is written
-to the database**. A restart alone no longer logs browsers out; the bearer
+The CSRF half is derived with HMAC-SHA256 keyed by the SHA-256 of
+`KELP_SESSION_SECRET` (falling back to `KELP_AUTH_TOKEN`), over the `kelp-csrf:`
+prefix plus the stored id hash, so **no session id or CSRF token is written to
+the database**. A restart alone no longer logs browsers out; the bearer
 token still works and `DELETE /api/auth/sessions` remains the global reset.
 
 **Sign in (the bearer is used only for this exchange and is never the cookie):**
@@ -719,10 +720,13 @@ curl -sS -X DELETE "https://kelp.example.com/api/auth/sessions" \
   -H "Authorization: Bearer ${KELP_AUTH_TOKEN}"
 ```
 
-Both responses clear the cookies (`Max-Age=0`) and take effect immediately,
-including for an open SSE stream on the next auth check. Revoking a device
-marks its row `revoked_at`, so its next request (and its next stream heartbeat)
-answers `401`.
+`DELETE /api/auth/session` and `DELETE /api/auth/sessions` always answer with
+both cookies cleared (`Max-Age=0`). `DELETE /api/auth/devices/${DEVICE_ID_SHORT}`
+clears them only when the id is the caller's own device; revoking another device
+leaves the caller's cookies alone, and the bearer call above sends none at all.
+Every revoke takes effect immediately, including for an open SSE stream on the
+next auth check. Revoking a device marks its row `revoked_at`, so its next
+request (and its next stream heartbeat) answers `401`.
 
 **Rotate `KELP_AUTH_TOKEN`, `KELP_SESSION_SECRET`, or `KELP_CSRF_TOKEN`:**
 

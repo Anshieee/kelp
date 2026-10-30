@@ -993,17 +993,20 @@ opaque server-side session; the raw session id exists only in the client's
 in the `sessions` table of `chat.db` (`id_hash` primary key, `label`,
 `created_at`, `last_seen`, `expires_at`, `revoked_at`), so several devices
 survive a restart. A restart still cannot outlive the server secret: the CSRF
-half is `HMAC-SHA256(KELP_SESSION_SECRET, id_hash)`, derived on demand and
-never stored, so the database holds no value that can be replayed as a cookie
-or a mutation token. If `KELP_SESSION_SECRET` is unset the root
-`KELP_AUTH_TOKEN` is used as the derivation key, which keeps existing devices
-valid across a restart without a second secret. The session cap
+half is the unpadded base64url encoding of
+`HMAC-SHA256(SHA-256(KELP_SESSION_SECRET), "kelp-csrf:" + id_hash)`, derived on
+demand and never stored. The HMAC key is a 32-byte SHA-256 digest of the
+secret, not the secret itself, and the message is the `kelp-csrf:` prefix
+followed by the stored id hash, so the database holds no value that can be
+replayed as a cookie or a mutation token. If `KELP_SESSION_SECRET` is unset the
+root `KELP_AUTH_TOKEN` is used as the derivation key, which keeps existing
+devices valid across a restart without a second secret. The session cap
 (`KELP_SESSION_MAX`) evicts the oldest idle device, and expired or revoked rows
 are pruned, so the table stays bounded.
 
 | Route | Auth | What it does |
 |---|---|---|
-| `POST /api/auth/session` | Bearer | Mint a session. Accepts an optional `device_label` (1-40 characters after scrubbing control/zero-width/bidi characters; empty or absent becomes `Unknown device`). `201` with `session.expires_at`, `session.csrf_token`, `session.device`, and both cookies. |
+| `POST /api/auth/session` | Bearer | Mint a session. Accepts an optional `device_label` (1-40 characters after scrubbing control/zero-width/bidi characters; empty or absent becomes `Unknown device`). `201` with `session.expires_at`, `session.csrf_token`, `session.device` (`{ id, label }`), and both cookies. |
 | `GET /api/auth/devices` | Bearer or session cookie | List live devices: `id` (the first 12 hex characters of `id_hash`), `label`, `created_at`, `last_seen`, `expires_at`, `online` (last seen within 60 s), and `current` (true only for the cookie that made the call; a bearer caller has none). |
 | `DELETE /api/auth/devices/{id_short}` | Bearer or session cookie | Revoke one device by its short id. `200 { ok, revoked: 1, device: { id } }`; an unknown or ambiguous id is `404`. Revoking the caller clears its cookies; revoking another device closes its open SSE stream on the next fresh auth check. |
 | `DELETE /api/auth/session` | Session cookie | Revoke the presented session and clear both cookies. A bearer-only caller gets `400 invalid_request`. |
@@ -1027,9 +1030,10 @@ Cookie rules:
   `KELP_CSRF_TOKEN` must match `X-CSRF-Token`, otherwise an `Origin`, when
   present, must be same-origin. A bearer sign-in is exempt because it already
   proves possession of the root token.
-- Device labels are owner data, not telemetry: they appear only in the device
-  list response and the `sessions` row. No log or audit record carries a
-  label; a device is identified there by its hashed short id at most.
+- Device labels are owner data, not telemetry: they appear only in the sign-in
+  response (`session.device.label`), the device list response, and the
+  `sessions` row. No log or audit record carries a label; a device is
+  identified there by its hashed short id at most.
 - Every rejected credential emits exactly one structured `auth_failed` record
   with `outcome` (`rejected`/`locked`), `reason`, `count`, `status`, and a
   truncated SHA-256 `identity_hash`. The presented token, cookie, and peer
