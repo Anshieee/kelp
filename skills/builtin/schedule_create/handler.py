@@ -60,7 +60,10 @@ def _audit_target(context: Any, workspace_root: Path) -> AuditLog | None:
     ``GuardedSkillContext`` carries the server's :class:`AuditLog` for the
     invocation. A direct handler call (tests, embedders) has no server trail,
     so the row goes to ``var/scheduler/audit.jsonl`` inside the declared write
-    scope rather than creating a file outside it.
+    scope rather than creating a file outside it. That local file is a
+    deliberate fallback sink, not a second entry in the retention inventory:
+    production calls pass the retained ``KELP_AUDIT_DIR`` log, which
+    :class:`chat.retention.RetentionMaintenance` rotates.
     """
 
     audit = getattr(context, "audit", None)

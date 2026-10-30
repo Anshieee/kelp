@@ -20,8 +20,10 @@ directory:
 * **Catch-up** is bounded. A run whose scheduled time is no more than
   :data:`DEFAULT_GRACE_SECONDS` late fires once; the next run is then placed in
   the future, so a long downtime never produces a burst. A run older than the
-  grace window is recorded as ``missed`` and skipped. Either way at most one
-  catch-up happens per task per tick.
+  grace window is recorded as ``missed`` and skipped. A window that closes
+  (``end_at``) before its scheduled run is likewise recorded ``missed`` and the
+  task becomes ``completed``. Either way at most one catch-up happens per task
+  per tick.
 * **Ownership** mirrors :class:`chat.retention.RetentionMaintenance`:
   :meth:`SchedulerRuntime.start` runs a daemon thread and
   :meth:`SchedulerRuntime.stop` joins it. The server calls ``start`` after boot
@@ -34,9 +36,20 @@ or a provider, so the skill handler can share the cron parser without a cycle.
 
 Audit rows are content-free. :class:`SchedulerStore` writes one
 ``schedule_created`` row per created task and :class:`SchedulerRuntime` writes
-one ``schedule_run`` row per fire or missed window. Neither row contains the
-task title or prompt; only ids, the cron expression, the timezone, timestamps,
-outcome, duration, and cost class.
+one ``schedule_run`` row per fire, missed window, or expired window. Neither row
+contains the task title or prompt; only ids, the cron expression, the timezone,
+timestamps, outcome, duration, and cost class.
+
+**Audit sink.** The server passes its retained :class:`openshell.audit.AuditLog`
+(``KELP_AUDIT_DIR/audit.jsonl``) into both the store and the runtime, and that
+file is rotated by :class:`chat.retention.RetentionMaintenance`. A direct store
+or handler call with no server trail falls back to
+``${WORKSPACE}/var/scheduler/audit.jsonl``. That fallback is intentionally a
+local sink, not a second row in :data:`chat.retention.RETENTION_ROWS`: it exists
+only for callers that bypass the server (tests, embedders, direct skill calls),
+it stays inside the declared ``var/scheduler`` write scope, and it is discarded
+with the workspace. Production rows therefore live in the retained audit log,
+and the local file never becomes a second, unrotated copy of them.
 """
 
 from __future__ import annotations
@@ -705,7 +718,18 @@ def _coerce_task(data: Any, *, now: datetime | None = None) -> ScheduledTask:
 
 
 def _ensure_private_directory(path: Path) -> None:
-    """Create a directory tree, granting ``0700`` only to directories we create."""
+    """Create a directory tree and force ``0700`` on the final directory.
+
+    Choice: the final directory is chmodded ``0700`` *unconditionally*, even
+    when it already existed. This matches :class:`chat.artifacts.ArtifactRegistry`,
+    which does the same for ``var/artifacts``. A task file is ``0600``, but the
+    file *names* still disclose schedule ids and update times, so an operator
+    (or a careless ``mkdir``) leaving ``var/scheduler`` group- or
+    world-readable must not turn the store into a listing. Parent directories
+    are touched only when this function created them: ``var/`` may live on a
+    shared volume with a deliberate group mode, and the store has no business
+    changing it.
+    """
 
     missing: list[Path] = []
     current = path
@@ -721,6 +745,10 @@ def _ensure_private_directory(path: Path) -> None:
             os.chmod(created, 0o700)
         except OSError:  # pragma: no cover - platform dependent
             pass
+    try:
+        os.chmod(path, 0o700)
+    except OSError:  # pragma: no cover - platform dependent
+        pass
 
 
 def _fsync_directory(path: Path) -> None:
@@ -780,9 +808,11 @@ class ScheduleStore:
     """Read, validate, quarantine, and create task documents.
 
     A corrupt file is renamed ``<name>.bad`` and the scan continues, so one bad
-    byte cannot stop boot or hide the other tasks. The store never rewrites a
-    file it did not just write, and it never follows a ``task_id`` containing a
-    path separator.
+    byte cannot stop boot or hide the other tasks. A file whose ``task_id`` does
+    not match its own name is treated as corrupt and quarantined: the canonical
+    ``task_<id>.json`` is the only document that may define ``<id>``. The store
+    never rewrites a file it did not just write, and it never follows a
+    ``task_id`` containing a path separator.
     """
 
     def __init__(
@@ -828,7 +858,20 @@ class ScheduleStore:
                 raw = path.read_text(encoding="utf-8")
                 data = json.loads(raw)
                 task = _coerce_task(data, now=moment)
+                if task.task_id != path.stem:
+                    # The file name is the authoritative id: it is what
+                    # ``read_task`` and the ticker address, so a document that
+                    # disagrees is stray data, not a task with an alias.
+                    raise SchedulerError(
+                        "task_id_mismatch",
+                        f"task file {path.name!r} declares task_id {task.task_id!r}.",
+                        field="/task_id",
+                    )
                 if task.task_id in seen:
+                    # Unreachable while every accepted document is named after
+                    # its id, but kept as a guard: the first canonical file
+                    # wins and any later document with the same id is
+                    # quarantined rather than replacing it.
                     raise SchedulerError(
                         "invalid_task", f"duplicate task_id {task.task_id!r}.", field="/task_id"
                     )
@@ -960,7 +1003,9 @@ class ScheduleStore:
 
         # One content-free row per created task. A caller with the server's
         # audit trail passes it in; a direct store call still gets a row in
-        # the scheduler directory rather than silently skipping the audit.
+        # the scheduler directory rather than silently skipping the audit. The
+        # local file is the deliberate fallback sink described in the module
+        # docstring, not a second retained audit log.
         _audit_created(audit or AuditLog(self.root / "audit.jsonl"), task)
         return task
 
@@ -1082,6 +1127,10 @@ class SchedulerRuntime:
             else max(0, int(grace_seconds))
         )
         self.audit = audit if audit is not None else AuditLog(store.root / "audit.jsonl")
+        # No server audit trail passed: keep the row beside the tasks (inside
+        # the scheduler write scope) instead of dropping it. This is the
+        # intentional local fallback sink; production passes the retained
+        # ``KELP_AUDIT_DIR`` log, which retention rotates.
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
         self._thread_lock = threading.Lock()
@@ -1145,10 +1194,25 @@ class SchedulerRuntime:
         report["due"] += 1
         end_at = _parse_iso(task.get("end_at"), field="/end_at")
         if end_at is not None and now > end_at:
+            # The window closed before this run. That is a missed run, not a
+            # silent completion: record it like the grace-expired case so the
+            # audit trail explains why the callback never fired.
             task["state"] = "completed"
             task["updated_at"] = _iso(now)
             self.store.write_task(task, now=now)
+            missed_run_id = _run_id()
             report["completed"] += 1
+            report["missed"] += 1
+            self._audit_run(task, missed_run_id, next_run, "missed", 0, now)
+            report["runs"].append(
+                {
+                    "task_id": task["task_id"],
+                    "run_id": missed_run_id,
+                    "scheduled_for": _iso(next_run),
+                    "outcome": "missed",
+                    "duration_ms": 0,
+                }
+            )
             return
 
         if (now - next_run).total_seconds() > self.grace_seconds:

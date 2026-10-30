@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -331,6 +332,66 @@ def test_load_task_accepts_minimal_document_with_defaults(tmp_path: Path) -> Non
     assert loaded[0]["enabled"] is True
     assert loaded[0]["state"] == "active"
     assert loaded[0]["failure_count"] == 0
+
+
+def test_task_id_must_match_filename_or_the_file_is_quarantined(tmp_path: Path) -> None:
+    store = _store(tmp_path)
+    store.ensure_root()
+    canonical = _task_body(task_id="task_canon")
+    (store.root / "task_canon.json").write_text(json.dumps(canonical), encoding="utf-8")
+    # Sorts before the canonical name: the stray must lose regardless of order.
+    (store.root / "aaa_stray.json").write_text(json.dumps(canonical), encoding="utf-8")
+
+    loaded = store.load_tasks(now=BASE)
+    assert [task["task_id"] for task in loaded] == ["task_canon"]
+    assert (store.root / "task_canon.json").exists()
+    assert (store.root / "aaa_stray.json.bad").exists()
+    assert (store.root / "aaa_stray.json").exists() is False
+    assert store.last_quarantined == ["aaa_stray.json.bad"]
+
+
+def test_stray_duplicate_never_fires_and_quarantine_does_not_grow(tmp_path: Path) -> None:
+    clock = Clock()
+    store = _store(tmp_path, clock)
+    task = store.create_task(
+        title="canonical", prompt="p", expr="* * * * *", timezone="UTC", now=BASE
+    )
+    canonical = store.task_path(task["task_id"])
+    (store.root / "aaa_stray.json").write_text(
+        canonical.read_text(encoding="utf-8"), encoding="utf-8"
+    )
+    clock.advance(minutes=2)
+
+    fired: list[str] = []
+    runtime = SchedulerRuntime(
+        store, on_fire=lambda task, when: fired.append(task["task_id"]), now=clock
+    )
+
+    first = runtime.tick()
+    bad_after_first = sorted(path.name for path in store.root.glob("*.bad"))
+    second = runtime.tick()
+    third = runtime.tick()
+
+    assert first["quarantined"] == 1
+    assert len(fired) == 1  # only the canonical file fired, exactly once
+    assert second["fired"] == 0 and third["fired"] == 0
+    assert second["quarantined"] == 0 and third["quarantined"] == 0
+    assert bad_after_first == ["aaa_stray.json.bad"]
+    assert sorted(path.name for path in store.root.glob("*.bad")) == bad_after_first
+    assert store.load_tasks(now=clock())[0]["task_id"] == task["task_id"]
+
+
+def test_store_forces_scheduler_root_0700_without_touching_parent(tmp_path: Path) -> None:
+    store = _store(tmp_path)
+    store.root.parent.mkdir(parents=True)
+    os.chmod(store.root.parent, 0o755)
+    store.root.mkdir()
+    os.chmod(store.root, 0o755)
+
+    store.create_task(title="mode", prompt="p", expr="0 9 * * *", timezone="UTC", now=BASE)
+
+    assert store.root.stat().st_mode & 0o777 == 0o700
+    assert store.root.parent.stat().st_mode & 0o777 == 0o755
 
 
 def test_task_file_with_bad_cron_or_timezone_is_quarantined(tmp_path: Path) -> None:
@@ -689,6 +750,7 @@ def test_start_stop_uses_no_sleeps(tmp_path: Path, monkeypatch: pytest.MonkeyPat
 def test_start_at_and_end_at_bound_the_window(tmp_path: Path) -> None:
     clock = Clock()
     store = _store(tmp_path, clock)
+    audit = AuditLog(tmp_path / "audit.jsonl")
     start = BASE + timedelta(hours=1)
     end = BASE + timedelta(hours=3)
     task = store.create_task(
@@ -699,15 +761,32 @@ def test_start_at_and_end_at_bound_the_window(tmp_path: Path) -> None:
         start_at=start,
         end_at=end,
         now=BASE,
+        audit=audit,
     )
     assert task["next_run_at"] == "2026-10-30T13:00:00Z"
 
     clock.moment = end + timedelta(minutes=1)
-    runtime = SchedulerRuntime(store, on_fire=lambda task, when: None, now=clock)
+    fired: list[datetime] = []
+    runtime = SchedulerRuntime(
+        store, on_fire=lambda task, when: fired.append(when), now=clock, audit=audit
+    )
     report = runtime.tick()
     assert report["fired"] == 0
+    assert fired == []
     assert report["completed"] == 1
+    assert report["missed"] == 1
     assert store.load_tasks(now=clock())[0]["state"] == "completed"
+
+    # An expired window is a missed run, not a silent completion.
+    runs = audit.entries(event="schedule_run")
+    assert len(runs) == 1
+    assert runs[0]["outcome"] == "missed"
+    assert runs[0]["extra"]["scheduled_for"] == "2026-10-30T13:00:00Z"
+    assert report["runs"][0]["outcome"] == "missed"
+
+    # The completed state means the expired window is recorded once, not per tick.
+    assert runtime.tick()["missed"] == 0
+    assert len(audit.entries(event="schedule_run")) == 1
 
 
 def test_end_before_first_run_is_rejected(tmp_path: Path) -> None:
