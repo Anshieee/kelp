@@ -1,0 +1,903 @@
+<template>
+  <style>
+    @font-face {
+      font-family: "Newsreader";
+      src: url("assets/fonts/newsreader-latin.woff2") format("woff2");
+      font-weight: 300 600;
+      font-style: normal;
+      font-display: block;
+    }
+    @font-face {
+      font-family: "Newsreader";
+      src: url("assets/fonts/newsreader-latin-italic.woff2") format("woff2");
+      font-weight: 300 600;
+      font-style: italic;
+      font-display: block;
+    }
+    @font-face {
+      font-family: "Inter";
+      src: url("assets/fonts/inter-latin-var.woff2") format("woff2");
+      font-weight: 400 700;
+      font-style: normal;
+      font-display: block;
+    }
+    #root {
+      --ivory: #fbf9f5;
+      --paper: #ffffff;
+      --ink: #1b211c;
+      --ink-soft: #4a544e;
+      --jade: #59b26f;
+      --jade-deep: #276b3c;
+      --jade-light: #e4f0e2;
+      --sage: #c9dfbc;
+      --sage-pale: #e8eddf;
+      --verm: #e52d2d;
+      --butter: #f0e7c5;
+      --sand: #e7d8be;
+      --umber: #73553b;
+      --line: #cdd5c9;
+      position: absolute;
+      inset: 0;
+      overflow: hidden;
+      background: var(--ivory);
+      font-family: "Inter", system-ui, sans-serif;
+      color: var(--ink);
+      -webkit-font-smoothing: antialiased;
+    }
+    #root * {
+      box-sizing: border-box;
+    }
+    .s1-wall {
+      position: absolute;
+      inset: 0;
+      background: var(--ivory);
+    }
+    .s1-floor {
+      position: absolute;
+      left: 0;
+      right: 0;
+      top: 892px;
+      height: 188px;
+      background: #f4efe5;
+    }
+    .s1-floor-line {
+      position: absolute;
+      left: 0;
+      right: 0;
+      top: 890px;
+      height: 2px;
+      background: #e2dccf;
+    }
+    .s1-window {
+      position: absolute;
+      left: 1150px;
+      top: 96px;
+      width: 620px;
+      height: 620px;
+      border-radius: 310px 310px 26px 26px;
+      background: var(--sage-pale);
+      overflow: hidden;
+    }
+    .s1-window-sun {
+      position: absolute;
+      right: 96px;
+      top: 92px;
+      width: 156px;
+      height: 156px;
+      border-radius: 50%;
+      background: var(--butter);
+    }
+    .s1-window-hill {
+      position: absolute;
+      left: -40px;
+      bottom: -120px;
+      width: 720px;
+      height: 320px;
+      border-radius: 50%;
+      background: #d8e6cd;
+    }
+    .s1-window-hill2 {
+      position: absolute;
+      right: -140px;
+      bottom: -170px;
+      width: 520px;
+      height: 300px;
+      border-radius: 50%;
+      background: #cfe2c4;
+    }
+    .s1-window-mullion {
+      position: absolute;
+      left: 50%;
+      top: 0;
+      bottom: 0;
+      width: 10px;
+      margin-left: -5px;
+      background: var(--ivory);
+      opacity: 0.9;
+    }
+    .s1-window-rail {
+      position: absolute;
+      left: 0;
+      right: 0;
+      top: 300px;
+      height: 10px;
+      background: var(--ivory);
+      opacity: 0.9;
+    }
+    .s1-sofa {
+      position: absolute;
+      left: 1462px;
+      top: 470px;
+      width: 424px;
+      height: 392px;
+    }
+    .s1-sofa-back {
+      position: absolute;
+      left: 0;
+      top: 0;
+      width: 424px;
+      height: 236px;
+      border-radius: 34px 34px 18px 18px;
+      background: var(--sage);
+    }
+    .s1-sofa-seat {
+      position: absolute;
+      left: -12px;
+      top: 196px;
+      width: 448px;
+      height: 150px;
+      border-radius: 26px;
+      background: #bcd6ad;
+    }
+    .s1-cushion {
+      position: absolute;
+      top: 58px;
+      width: 172px;
+      height: 150px;
+      border-radius: 22px;
+      background: var(--sage-pale);
+    }
+    .s1-cushion.a {
+      left: 34px;
+    }
+    .s1-cushion.b {
+      left: 218px;
+    }
+    .s1-sofa-leg {
+      position: absolute;
+      bottom: 0;
+      width: 14px;
+      height: 48px;
+      border-radius: 6px;
+      background: var(--umber);
+    }
+    .s1-sofa-leg.l {
+      left: 56px;
+    }
+    .s1-sofa-leg.r {
+      right: 56px;
+    }
+    .s1-table {
+      position: absolute;
+      left: 560px;
+      top: 782px;
+      width: 800px;
+      height: 190px;
+    }
+    .s1-table-top {
+      position: absolute;
+      left: 0;
+      top: 0;
+      width: 800px;
+      height: 44px;
+      border-radius: 16px;
+      background: var(--sand);
+    }
+    .s1-table-edge {
+      position: absolute;
+      left: 0;
+      top: 38px;
+      width: 800px;
+      height: 10px;
+      border-radius: 6px;
+      background: #d3c1a2;
+    }
+    .s1-table-leg {
+      position: absolute;
+      top: 44px;
+      width: 26px;
+      height: 146px;
+      border-radius: 0 0 8px 8px;
+      background: var(--umber);
+      opacity: 0.85;
+    }
+    .s1-table-leg.l {
+      left: 64px;
+    }
+    .s1-table-leg.r {
+      right: 64px;
+    }
+    .s1-mug {
+      position: absolute;
+      left: 500px;
+      top: 726px;
+      width: 78px;
+      height: 74px;
+    }
+    .s1-mug-body {
+      position: absolute;
+      left: 0;
+      top: 8px;
+      width: 62px;
+      height: 60px;
+      border-radius: 8px 8px 14px 14px;
+      background: var(--paper);
+      border: 3px solid var(--ink);
+    }
+    .s1-mug-handle {
+      position: absolute;
+      right: 0;
+      top: 20px;
+      width: 28px;
+      height: 34px;
+      border: 3px solid var(--ink);
+      border-left: 0;
+      border-radius: 0 20px 20px 0;
+    }
+    .s1-laptop {
+      position: absolute;
+      left: 636px;
+      top: 468px;
+      width: 404px;
+      height: 336px;
+      transform-origin: 50% 100%;
+    }
+    .s1-laptop-lid {
+      position: absolute;
+      left: 0;
+      top: 0;
+      width: 404px;
+      height: 274px;
+      border-radius: 18px 18px 4px 4px;
+      background: #d9d4c8;
+      border: 6px solid #c3bdb0;
+      overflow: hidden;
+      transform-origin: 50% 100%;
+    }
+    .s1-laptop-screen {
+      position: absolute;
+      inset: 12px;
+      border-radius: 8px;
+      background: #fdfbf6;
+      overflow: hidden;
+      padding: 22px 26px;
+    }
+    .s1-screen-brand {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 17px;
+      font-weight: 700;
+      letter-spacing: -0.02em;
+    }
+    .s1-screen-brand svg {
+      width: 18px;
+      height: 22px;
+    }
+    .s1-screen-title {
+      margin-top: 22px;
+      font-family: "Newsreader", Georgia, serif;
+      font-size: 34px;
+      line-height: 1.04;
+      letter-spacing: -0.03em;
+      color: var(--ink);
+    }
+    .s1-screen-line {
+      margin-top: 12px;
+      height: 9px;
+      border-radius: 5px;
+      background: var(--sage-pale);
+    }
+    .s1-screen-line.short {
+      width: 62%;
+    }
+    .s1-laptop-base {
+      position: absolute;
+      left: -22px;
+      top: 268px;
+      width: 448px;
+      height: 26px;
+      border-radius: 4px 4px 16px 16px;
+      background: #cfc9bc;
+    }
+    .s1-laptop-notch {
+      position: absolute;
+      left: 50%;
+      top: 268px;
+      width: 74px;
+      height: 8px;
+      margin-left: -37px;
+      border-radius: 0 0 8px 8px;
+      background: #b9b2a4;
+    }
+    .s1-laptop-glow {
+      position: absolute;
+      left: 26px;
+      top: 24px;
+      width: 352px;
+      height: 238px;
+      border-radius: 12px;
+      background: #fffdf7;
+      opacity: 0.55;
+    }
+    .s1-phone {
+      position: absolute;
+      left: 1112px;
+      top: 468px;
+      width: 306px;
+      height: 588px;
+      border-radius: 46px;
+      background: var(--ink);
+      padding: 10px;
+      z-index: 6;
+    }
+    .s1-phone-screen {
+      position: relative;
+      width: 100%;
+      height: 100%;
+      border-radius: 38px;
+      background: var(--paper);
+      overflow: hidden;
+      padding: 18px 18px 16px;
+    }
+    .s1-status {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      font-size: 15px;
+      font-weight: 600;
+      color: var(--ink-soft);
+      letter-spacing: 0.01em;
+    }
+    .s1-status-dots {
+      display: flex;
+      gap: 4px;
+    }
+    .s1-status-dots i {
+      display: block;
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      background: var(--ink-soft);
+      opacity: 0.6;
+    }
+    .s1-app-head {
+      display: flex;
+      align-items: center;
+      gap: 7px;
+      margin-top: 22px;
+      font-size: 19px;
+      font-weight: 700;
+      letter-spacing: -0.02em;
+    }
+    .s1-app-head svg {
+      width: 17px;
+      height: 21px;
+    }
+    .s1-app-sub {
+      margin-top: 2px;
+      font-size: 13px;
+      color: var(--ink-soft);
+    }
+    .s1-phone-title {
+      margin-top: 18px;
+      font-family: "Newsreader", Georgia, serif;
+      font-size: 34px;
+      line-height: 1;
+      letter-spacing: -0.035em;
+    }
+    .s1-tasks {
+      margin-top: 14px;
+      display: flex;
+      flex-direction: column;
+      gap: 9px;
+    }
+    .s1-task {
+      min-height: 62px;
+      border: 1.5px solid var(--line);
+      border-radius: 14px;
+      padding: 10px 11px;
+      display: flex;
+      gap: 9px;
+      align-items: flex-start;
+      background: var(--paper);
+    }
+    .s1-task-dot {
+      flex: 0 0 18px;
+      width: 18px;
+      height: 18px;
+      margin-top: 1px;
+      border-radius: 50%;
+      border: 2px solid var(--line);
+    }
+    .s1-task-text {
+      font-size: 18px;
+      line-height: 1.25;
+      font-weight: 500;
+      letter-spacing: -0.01em;
+      min-height: 22px;
+    }
+    .s1-ch {
+      opacity: 0;
+      display: inline;
+    }
+    .s1-caret {
+      display: inline-block;
+      width: 2px;
+      height: 17px;
+      margin-left: 2px;
+      background: var(--jade-deep);
+      opacity: 0;
+      vertical-align: -2px;
+    }
+    .s1-task-meta {
+      margin-top: 6px;
+      font-size: 12px;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+      color: var(--ink-soft);
+      opacity: 0;
+    }
+    .s1-phone-cta {
+      position: absolute;
+      left: 18px;
+      right: 18px;
+      bottom: 18px;
+      height: 50px;
+      border-radius: 999px;
+      background: var(--ink);
+      color: var(--ivory);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 16px;
+      font-weight: 600;
+      letter-spacing: -0.01em;
+      opacity: 0;
+    }
+    .s1-hand {
+      position: absolute;
+      left: 1330px;
+      top: 610px;
+      width: 420px;
+      height: 300px;
+      z-index: 8;
+      pointer-events: none;
+    }
+    .s1-thumb {
+      position: absolute;
+      left: 0;
+      top: 66px;
+      width: 190px;
+      height: 74px;
+      border-radius: 40px 22px 22px 40px;
+      background: #dda985;
+      transform-origin: 100% 50%;
+    }
+    .s1-thumb-nail {
+      position: absolute;
+      left: 18px;
+      top: 12px;
+      width: 56px;
+      height: 38px;
+      border-radius: 20px;
+      background: #efc7ab;
+    }
+    .s1-palm {
+      position: absolute;
+      left: 160px;
+      top: 18px;
+      width: 260px;
+      height: 268px;
+      border-radius: 60px 0 0 60px;
+      background: #dda985;
+    }
+    .s1-sleeve {
+      position: absolute;
+      left: 330px;
+      top: 0;
+      width: 190px;
+      height: 300px;
+      border-radius: 40px 0 0 40px;
+      background: var(--jade-deep);
+    }
+    .s1-plant {
+      position: absolute;
+      left: 92px;
+      top: 596px;
+      width: 250px;
+      height: 400px;
+    }
+    .s1-pot {
+      position: absolute;
+      left: 48px;
+      bottom: 0;
+      width: 154px;
+      height: 128px;
+      border-radius: 12px 12px 26px 26px;
+      background: var(--umber);
+    }
+    .s1-pot-rim {
+      position: absolute;
+      left: 34px;
+      bottom: 118px;
+      width: 182px;
+      height: 26px;
+      border-radius: 8px;
+      background: #8a6a4d;
+    }
+    .s1-leaf {
+      position: absolute;
+      bottom: 128px;
+      width: 46px;
+      height: 210px;
+      border-radius: 50% 50% 42% 42%;
+      background: var(--jade-deep);
+      transform-origin: 50% 100%;
+    }
+    .s1-leaf.a {
+      left: 58px;
+      height: 200px;
+      transform: rotate(-16deg);
+      background: #3d8b52;
+    }
+    .s1-leaf.b {
+      left: 100px;
+      height: 258px;
+      transform: rotate(-4deg);
+    }
+    .s1-leaf.c {
+      left: 144px;
+      height: 214px;
+      transform: rotate(12deg);
+      background: #3d8b52;
+    }
+    .s1-leaf.d {
+      left: 180px;
+      height: 164px;
+      transform: rotate(24deg);
+      background: #4a9a5e;
+    }
+    .s1-rug {
+      position: absolute;
+      left: 210px;
+      top: 884px;
+      width: 640px;
+      height: 120px;
+      border-radius: 50%;
+      background: var(--sage-pale);
+      opacity: 0.85;
+    }
+    .s1-concept {
+      position: absolute;
+      right: 96px;
+      top: 64px;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      height: 44px;
+      padding: 0 18px;
+      border: 1.5px solid var(--ink);
+      border-radius: 999px;
+      font-size: 15px;
+      font-weight: 600;
+      letter-spacing: 0.14em;
+      text-transform: uppercase;
+      background: var(--ivory);
+      z-index: 20;
+    }
+    .s1-concept-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: var(--verm);
+    }
+    .s1-title {
+      position: absolute;
+      left: 120px;
+      top: 172px;
+      width: 760px;
+      z-index: 12;
+      font-family: "Newsreader", Georgia, serif;
+      font-weight: 400;
+      font-size: 92px;
+      line-height: 1.02;
+      letter-spacing: -0.035em;
+      color: var(--ink);
+    }
+    .s1-title .line {
+      display: block;
+      overflow: hidden;
+      padding-bottom: 6px;
+    }
+    .s1-title .word {
+      display: inline-block;
+      opacity: 0;
+    }
+    .s1-caption {
+      position: absolute;
+      left: 122px;
+      top: 470px;
+      width: 470px;
+      font-size: 23px;
+      line-height: 1.45;
+      color: var(--ink-soft);
+      z-index: 12;
+      opacity: 0;
+    }
+    .s1-grain {
+      position: absolute;
+      left: -10%;
+      top: -10%;
+      width: 120%;
+      height: 120%;
+      background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.8' numOctaves='2' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+      opacity: 0.05;
+      z-index: 40;
+      pointer-events: none;
+    }
+    .s1-wipe {
+      position: absolute;
+      left: 0;
+      top: 0;
+      width: 1920px;
+      height: 1080px;
+      background: var(--jade);
+      z-index: 60;
+    }
+    .s1-orb {
+      position: absolute;
+      left: 300px;
+      top: 760px;
+      width: 148px;
+      height: 148px;
+      z-index: 9;
+    }
+  </style>
+
+  <div data-hf-id="hf-3pu3" id="root" data-composition-id="s1" data-width="1920" data-height="1080">
+    <div data-hf-id="hf-evqx" class="s1-wall"></div>
+    <div data-hf-id="hf-01kx" class="s1-floor"></div>
+    <div data-hf-id="hf-z2go" class="s1-floor-line"></div>
+
+    <div data-hf-id="hf-jm25" class="s1-window">
+      <div data-hf-id="hf-gt1s" class="s1-window-sun"></div>
+      <div data-hf-id="hf-89df" class="s1-window-hill"></div>
+      <div data-hf-id="hf-60k3" class="s1-window-hill2"></div>
+      <div data-hf-id="hf-e86u" class="s1-window-mullion"></div>
+      <div data-hf-id="hf-iwg6" class="s1-window-rail"></div>
+    </div>
+
+    <div data-hf-id="hf-afwh" class="s1-rug"></div>
+
+    <div data-hf-id="hf-5pe2" class="s1-sofa" id="s1-sofa">
+      <div data-hf-id="hf-v4kc" class="s1-sofa-back"></div>
+      <div data-hf-id="hf-iktf" class="s1-cushion a"></div>
+      <div data-hf-id="hf-7pbs" class="s1-cushion b"></div>
+      <div data-hf-id="hf-ajcu" class="s1-sofa-seat"></div>
+      <div data-hf-id="hf-pddn" class="s1-sofa-leg l"></div>
+      <div data-hf-id="hf-cycl" class="s1-sofa-leg r"></div>
+    </div>
+
+    <div data-hf-id="hf-xgr7" class="s1-table">
+      <div data-hf-id="hf-d4i4" class="s1-table-leg l"></div>
+      <div data-hf-id="hf-o3h6" class="s1-table-leg r"></div>
+      <div data-hf-id="hf-n0r9" class="s1-table-top"></div>
+      <div data-hf-id="hf-vsu3" class="s1-table-edge"></div>
+    </div>
+
+    <div data-hf-id="hf-ds66" class="s1-mug">
+      <div data-hf-id="hf-s91z" class="s1-mug-body"></div>
+      <div data-hf-id="hf-hr0p" class="s1-mug-handle"></div>
+    </div>
+
+    <div data-hf-id="hf-ikh0" class="s1-laptop" id="s1-laptop">
+      <div data-hf-id="hf-l2yc" class="s1-laptop-lid" id="s1-laptop-lid">
+        <div data-hf-id="hf-azw2" class="s1-laptop-screen" id="s1-laptop-screen">
+          <div data-hf-id="hf-4z8d" class="s1-screen-brand">
+            <svg data-hf-id="hf-7lbv" viewBox="0 0 24 30" fill="none" aria-hidden="true">
+              <path data-hf-id="hf-vg44" d="M12 29V14" stroke="#2f7b45" stroke-width="2.4" stroke-linecap="round" />
+              <path data-hf-id="hf-qk1y" d="M12 17C7 17 4 13.8 4 9.2C9 9.2 12 12 12 17Z" fill="#59b26f" />
+              <path data-hf-id="hf-negc" d="M12 13C12 8 15 5 20 5C20 10 17 13 12 13Z" fill="#59b26f" />
+            </svg>
+            <span data-hf-id="hf-v5t1">kelp</span>
+          </div>
+          <div data-hf-id="hf-u1xj" class="s1-screen-title">Today,<br data-hf-id="hf-x5px" />handled.</div>
+          <div data-hf-id="hf-ps7s" class="s1-screen-line"></div>
+          <div data-hf-id="hf-9dgw" class="s1-screen-line"></div>
+          <div data-hf-id="hf-1oha" class="s1-screen-line short"></div>
+        </div>
+        <div data-hf-id="hf-7f7i" class="s1-laptop-glow" id="s1-laptop-glow"></div>
+      </div>
+      <div data-hf-id="hf-pxbh" class="s1-laptop-base"></div>
+      <div data-hf-id="hf-0rjo" class="s1-laptop-notch"></div>
+    </div>
+
+    <div data-hf-id="hf-wq2m" class="s1-phone" id="s1-phone">
+      <div data-hf-id="hf-mot8" class="s1-phone-screen">
+        <div data-hf-id="hf-08f7" class="s1-status">
+          <span data-hf-id="hf-zwmt">9:41</span>
+          <span data-hf-id="hf-z69t" class="s1-status-dots"><i data-hf-id="hf-wt6k"></i><i data-hf-id="hf-zeb8"></i><i data-hf-id="hf-y7e5"></i></span>
+        </div>
+        <div data-hf-id="hf-xba9" class="s1-app-head">
+          <svg data-hf-id="hf-lx8b" viewBox="0 0 24 30" fill="none" aria-hidden="true">
+            <path data-hf-id="hf-mdm4" d="M12 29V14" stroke="#2f7b45" stroke-width="2.4" stroke-linecap="round" />
+            <path data-hf-id="hf-glqi" d="M12 17C7 17 4 13.8 4 9.2C9 9.2 12 12 12 17Z" fill="#59b26f" />
+            <path data-hf-id="hf-6yro" d="M12 13C12 8 15 5 20 5C20 10 17 13 12 13Z" fill="#59b26f" />
+          </svg>
+          <span data-hf-id="hf-unw9">kelp</span>
+        </div>
+        <div data-hf-id="hf-tl71" class="s1-app-sub">Tuesday · 3 tasks queued</div>
+        <div data-hf-id="hf-4c5v" class="s1-phone-title">Your day</div>
+
+        <div data-hf-id="hf-re3p" class="s1-tasks">
+          <div data-hf-id="hf-1m5e" class="s1-task">
+            <div data-hf-id="hf-klxw" class="s1-task-dot"></div>
+            <div data-hf-id="hf-yeow">
+              <div data-hf-id="hf-o2q4" class="s1-task-text" id="s1-task-1"><span data-hf-id="hf-tics" class="s1-ch">C</span><span data-hf-id="hf-3g0h" class="s1-ch">l</span><span data-hf-id="hf-70rq" class="s1-ch">e</span><span data-hf-id="hf-5fjm" class="s1-ch">a</span><span data-hf-id="hf-zgy7" class="s1-ch">r</span><span data-hf-id="hf-j4kn" class="s1-ch"> </span><span data-hf-id="hf-3ubi" class="s1-ch">m</span><span data-hf-id="hf-vw6y" class="s1-ch">y</span><span data-hf-id="hf-dj7r" class="s1-ch"> </span><span data-hf-id="hf-293e" class="s1-ch">i</span><span data-hf-id="hf-48mj" class="s1-ch">n</span><span data-hf-id="hf-5tun" class="s1-ch">b</span><span data-hf-id="hf-4mxk" class="s1-ch">o</span><span data-hf-id="hf-vhvx" class="s1-ch">x</span><span data-hf-id="hf-d41v" class="s1-caret"></span></div>
+              <div data-hf-id="hf-8qp0" class="s1-task-meta">Inbox · 40 emails</div>
+            </div>
+          </div>
+          <div data-hf-id="hf-6o92" class="s1-task">
+            <div data-hf-id="hf-ulv0" class="s1-task-dot"></div>
+            <div data-hf-id="hf-y7yw">
+              <div data-hf-id="hf-yy7r" class="s1-task-text" id="s1-task-2"><span data-hf-id="hf-up9v" class="s1-ch">F</span><span data-hf-id="hf-9e8e" class="s1-ch">i</span><span data-hf-id="hf-83nv" class="s1-ch">n</span><span data-hf-id="hf-6mgp" class="s1-ch">d</span><span data-hf-id="hf-d4wq" class="s1-ch"> </span><span data-hf-id="hf-7f2r" class="s1-ch">f</span><span data-hf-id="hf-q7gl" class="s1-ch">l</span><span data-hf-id="hf-9sjf" class="s1-ch">i</span><span data-hf-id="hf-7tds" class="s1-ch">g</span><span data-hf-id="hf-1usd" class="s1-ch">h</span><span data-hf-id="hf-09k9" class="s1-ch">t</span><span data-hf-id="hf-zv98" class="s1-ch">s</span><span data-hf-id="hf-cqlp" class="s1-ch"> </span><span data-hf-id="hf-aee5" class="s1-ch">t</span><span data-hf-id="hf-xsog" class="s1-ch">o</span><span data-hf-id="hf-fiqw" class="s1-ch"> </span><span data-hf-id="hf-t41r" class="s1-ch">B</span><span data-hf-id="hf-kvmy" class="s1-ch">e</span><span data-hf-id="hf-ska7" class="s1-ch">r</span><span data-hf-id="hf-redo" class="s1-ch">l</span><span data-hf-id="hf-a6ug" class="s1-ch">i</span><span data-hf-id="hf-7pcu" class="s1-ch">n</span><span data-hf-id="hf-im2r" class="s1-caret"></span></div>
+              <div data-hf-id="hf-xpko" class="s1-task-meta">Travel · Thu 12 Jun</div>
+            </div>
+          </div>
+          <div data-hf-id="hf-72k3" class="s1-task">
+            <div data-hf-id="hf-texx" class="s1-task-dot"></div>
+            <div data-hf-id="hf-x11t">
+              <div data-hf-id="hf-v03q" class="s1-task-text" id="s1-task-3"><span data-hf-id="hf-idoz" class="s1-ch">F</span><span data-hf-id="hf-7ep9" class="s1-ch">i</span><span data-hf-id="hf-r02n" class="s1-ch">l</span><span data-hf-id="hf-l9xz" class="s1-ch">e</span><span data-hf-id="hf-f4fv" class="s1-ch"> </span><span data-hf-id="hf-4jky" class="s1-ch">m</span><span data-hf-id="hf-974u" class="s1-ch">y</span><span data-hf-id="hf-eq4u" class="s1-ch"> </span><span data-hf-id="hf-s5z6" class="s1-ch">r</span><span data-hf-id="hf-lo90" class="s1-ch">e</span><span data-hf-id="hf-685o" class="s1-ch">c</span><span data-hf-id="hf-m2k1" class="s1-ch">e</span><span data-hf-id="hf-7t0a" class="s1-ch">i</span><span data-hf-id="hf-yoc5" class="s1-ch">p</span><span data-hf-id="hf-blb8" class="s1-ch">t</span><span data-hf-id="hf-rz3o" class="s1-ch">s</span><span data-hf-id="hf-i7rq" class="s1-caret"></span></div>
+              <div data-hf-id="hf-0djq" class="s1-task-meta">Expenses · 3 receipts</div>
+            </div>
+          </div>
+        </div>
+
+        <div data-hf-id="hf-lo9c" class="s1-phone-cta" id="s1-phone-cta">Leave it with me</div>
+      </div>
+    </div>
+
+    <div data-hf-id="hf-y5qa" class="s1-hand" id="s1-hand">
+      <div data-hf-id="hf-srp9" class="s1-sleeve"></div>
+      <div data-hf-id="hf-zrl1" class="s1-palm"></div>
+      <div data-hf-id="hf-3ws6" class="s1-thumb" id="s1-thumb"><div data-hf-id="hf-od3o" class="s1-thumb-nail"></div></div>
+    </div>
+
+    <div data-hf-id="hf-6b78" class="s1-plant">
+      <div data-hf-id="hf-urc8" class="s1-leaf a"></div>
+      <div data-hf-id="hf-3f83" class="s1-leaf b"></div>
+      <div data-hf-id="hf-zh42" class="s1-leaf c"></div>
+      <div data-hf-id="hf-gped" class="s1-leaf d"></div>
+      <div data-hf-id="hf-0011" class="s1-pot-rim"></div>
+      <div data-hf-id="hf-n44i" class="s1-pot"></div>
+    </div>
+
+    <svg data-hf-id="hf-p7hl" class="s1-orb" id="s1-orb" viewBox="0 0 200 200" aria-hidden="true">
+      <g data-hf-id="hf-67hs" id="s1-orb-body">
+        <path data-hf-id="hf-rday" d="M100 34C139 34 166 62 168 102C170 143 142 170 100 170C58 170 30 143 32 102C34 62 61 34 100 34Z" fill="#59b26f" />
+        <path data-hf-id="hf-yhlj" d="M100 44C103 26 113 17 129 15C128 30 118 40 100 44Z" fill="#2f7b45" />
+        <path data-hf-id="hf-tzk2" d="M98 46C92 31 81 25 66 27C70 41 82 48 98 46Z" fill="#3d8b52" />
+        <path data-hf-id="hf-qbx1" d="M100 52V38" stroke="#1b211c" stroke-width="3" stroke-linecap="round" />
+        <ellipse data-hf-id="hf-2nvp" cx="73" cy="104" rx="15" ry="18" fill="#fbf9f5" />
+        <ellipse data-hf-id="hf-zcmn" cx="127" cy="104" rx="15" ry="18" fill="#fbf9f5" />
+        <g data-hf-id="hf-cydl" class="s1-eyes">
+          <circle data-hf-id="hf-4boj" class="s1-pupil" cx="77" cy="106" r="7" fill="#1b211c" />
+          <circle data-hf-id="hf-4dpc" class="s1-pupil" cx="131" cy="106" r="7" fill="#1b211c" />
+        </g>
+        <path data-hf-id="hf-h10m" d="M88 140C94 145 106 145 112 140" stroke="#1b211c" stroke-width="4" stroke-linecap="round" fill="none" />
+      </g>
+    </svg>
+
+    <div data-hf-id="hf-tzzy" class="s1-title" id="s1-title">
+      <span data-hf-id="hf-6c9z" class="line"><span data-hf-id="hf-wagw" class="word">Give</span> <span data-hf-id="hf-puvo" class="word">it</span> <span data-hf-id="hf-3qt2" class="word">your</span> <span data-hf-id="hf-mqhx" class="word">day.</span></span>
+      <span data-hf-id="hf-tvt3" class="line"><span data-hf-id="hf-elay" class="word">Then</span> <span data-hf-id="hf-rwla" class="word">leave.</span></span>
+    </div>
+    <div data-hf-id="hf-ebuw" class="s1-caption" id="s1-caption">Three things off your plate. No instructions needed.</div>
+
+    <div data-hf-id="hf-c10i" class="s1-concept" id="s1-concept"><span data-hf-id="hf-yg58" class="s1-concept-dot"></span>Concept preview</div>
+
+    <div data-hf-id="hf-jjv3" class="s1-grain" id="s1-grain" data-layout-ignore></div>
+    <div data-hf-id="hf-wtky" class="s1-wipe" id="s1-wipe"></div>
+  </div>
+
+  <script>
+    (function () {
+      const tl = gsap.timeline({ paused: true });
+      const sparks = [3, 17, 9, 24, 6, 13, 21, 2, 19, 11];
+
+      gsap.set("#s1-phone", { rotation: -2.4, transformOrigin: "50% 100%" });
+      gsap.set(".s1-eyes", { transformOrigin: "50% 50%" });
+      gsap.set("#s1-laptop-lid", { transformOrigin: "50% 100%" });
+
+      tl.to("#s1-concept .s1-concept-dot", { opacity: 0.35, duration: 0.22, ease: "steps(1)" }, 1.2);
+      tl.to("#s1-concept .s1-concept-dot", { opacity: 1, duration: 0.22, ease: "steps(1)" }, 1.42);
+      tl.to("#s1-concept .s1-concept-dot", { opacity: 0.35, duration: 0.22, ease: "steps(1)" }, 1.64);
+      tl.to("#s1-concept .s1-concept-dot", { opacity: 1, duration: 0.22, ease: "steps(1)" }, 1.86);
+      tl.to("#s1-concept", { opacity: 0, y: -10, duration: 0.3, ease: "power2.in" }, 4.75);
+
+      tl.fromTo("#s1-hand", { x: 150, y: 60, opacity: 0 }, { x: 0, y: 0, opacity: 1, duration: 0.55, ease: "power3.out" }, 1.15);
+
+      const typeRow = (rowId, start, chars) => {
+        tl.fromTo(
+          rowId + " .s1-ch",
+          { opacity: 0 },
+          { opacity: 1, duration: 0.02, ease: "none", stagger: 0.034 },
+          start,
+        );
+        tl.fromTo(rowId + " .s1-caret", { opacity: 0 }, { opacity: 1, duration: 0.12 }, start);
+        tl.to(rowId + " .s1-caret", { opacity: 0, duration: 0.1 }, start + chars * 0.034 + 0.25);
+        tl.fromTo(
+          rowId + " ~ .s1-task-meta",
+          { opacity: 0, y: 4 },
+          { opacity: 1, y: 0, duration: 0.28, ease: "power2.out" },
+          start + chars * 0.034 + 0.15,
+        );
+      };
+
+      typeRow("#s1-task-1", 1.55, 14);
+      typeRow("#s1-task-2", 3.6, 22);
+      typeRow("#s1-task-3", 5.65, 16);
+
+      const tap = (time, y) => {
+        tl.to("#s1-thumb", { y: y, duration: 0.18, ease: "power2.in" }, time);
+        tl.to("#s1-thumb", { y: 0, duration: 0.26, ease: "power3.out" }, time + 0.18);
+      };
+      tap(2.2, 22);
+      tap(4.25, 22);
+      tap(6.3, 22);
+
+      tl.fromTo(
+        "#s1-phone .s1-task-dot",
+        { backgroundColor: "#ffffff", borderColor: "#cdd5c9" },
+        { backgroundColor: "#59b26f", borderColor: "#59b26f", duration: 0.2, stagger: 0.02, ease: "power2.out" },
+        7.1,
+      );
+      tl.fromTo(".s1-task-meta", { opacity: 1 }, { opacity: 1, duration: 0.01 }, 7.1);
+      tl.fromTo("#s1-phone-cta", { opacity: 0, y: 8 }, { opacity: 1, y: 0, duration: 0.35, ease: "power3.out" }, 7.5);
+      tl.to("#s1-phone", { y: -6, duration: 0.35, ease: "power2.out" }, 7.5);
+      tl.to("#s1-hand", { opacity: 0, x: 90, y: 50, duration: 0.4, ease: "power2.in" }, 7.95);
+
+      tl.to(".s1-pupil", { x: -7, y: 0, duration: 0.38, ease: "power2.inOut" }, 8.6);
+      tl.to(".s1-pupil", { x: 0, y: 0, duration: 0.3, ease: "power2.inOut" }, 9.3);
+
+      tl.to("#s1-laptop-screen, #s1-laptop-glow", { opacity: 0.18, duration: 0.5, ease: "power2.inOut" }, 10.2);
+      tl.to("#s1-laptop-lid", { scaleY: 0.06, y: 6, duration: 1.15, ease: "power2.inOut" }, 11.0);
+      tl.to(".s1-pupil", { x: 0, y: 3, duration: 0.3, ease: "power2.out" }, 11.0);
+
+      tl.fromTo("#s1-title .word", { opacity: 0, filter: "blur(8px)", y: 10 }, { opacity: 1, filter: "blur(0px)", y: 0, duration: 0.42, ease: "power3.out", stagger: 0.07 }, 12.7);
+      tl.fromTo("#s1-caption", { opacity: 0, y: 10 }, { opacity: 1, y: 0, duration: 0.45, ease: "power3.out" }, 14.0);
+
+      const blink = (time) => {
+        tl.to(".s1-eyes", { scaleY: 0.12, duration: 0.07, ease: "power2.in" }, time);
+        tl.to(".s1-eyes", { scaleY: 1, duration: 0.12, ease: "power2.out" }, time + 0.08);
+      };
+      blink(9.9);
+      blink(16.6);
+      blink(18.5);
+
+      tl.to("#s1-orb-body", { y: -4, duration: 0.16, ease: "power2.out" }, 17.2);
+      tl.to("#s1-orb-body", { y: 0, duration: 0.22, ease: "power2.in" }, 17.36);
+
+      for (let i = 0; i < 40; i++) {
+        const t = 0.2 + i * 0.48;
+        const s = sparks[i % sparks.length];
+        tl.set("#s1-grain", { x: (s % 5) * 3 - 6, y: ((s * 7) % 5) * 3 - 6 }, t);
+      }
+
+      tl.fromTo("#s1-wipe", { x: 1920 }, { x: 0, duration: 0.4, ease: "power3.in" }, 19.6);
+
+      window.__timelines["s1"] = tl;
+    })();
+  </script>
+</template>

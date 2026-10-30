@@ -1,0 +1,783 @@
+<template>
+  <style>
+    @font-face {
+      font-family: "Newsreader";
+      src: url("assets/fonts/newsreader-latin.woff2") format("woff2");
+      font-weight: 300 600;
+      font-style: normal;
+      font-display: block;
+    }
+    @font-face {
+      font-family: "Newsreader";
+      src: url("assets/fonts/newsreader-latin-italic.woff2") format("woff2");
+      font-weight: 300 600;
+      font-style: italic;
+      font-display: block;
+    }
+    @font-face {
+      font-family: "Inter";
+      src: url("assets/fonts/inter-latin-var.woff2") format("woff2");
+      font-weight: 400 700;
+      font-style: normal;
+      font-display: block;
+    }
+    #root {
+      --ivory: #fbf9f5;
+      --paper: #ffffff;
+      --ink: #1b211c;
+      --ink-soft: #4a544e;
+      --jade: #59b26f;
+      --jade-deep: #276b3c;
+      --jade-light: #e4f0e2;
+      --sage: #c9dfbc;
+      --sage-pale: #e8eddf;
+      --verm: #e52d2d;
+      --butter: #f0e7c5;
+      --line: #d5dcd1;
+      position: absolute;
+      inset: 0;
+      overflow: hidden;
+      background: var(--ivory);
+      font-family: "Inter", system-ui, sans-serif;
+      color: var(--ink);
+      -webkit-font-smoothing: antialiased;
+    }
+    #root * {
+      box-sizing: border-box;
+    }
+    .s4-kicker {
+      position: absolute;
+      left: 120px;
+      top: 116px;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      font-size: 15px;
+      font-weight: 600;
+      letter-spacing: 0.16em;
+      text-transform: uppercase;
+      color: var(--ink-soft);
+    }
+    .s4-kicker i {
+      width: 26px;
+      height: 2px;
+      background: var(--jade);
+    }
+    .s4-headline {
+      position: absolute;
+      left: 116px;
+      top: 158px;
+      width: 900px;
+      font-family: "Newsreader", Georgia, serif;
+      font-weight: 400;
+      font-size: 80px;
+      line-height: 1.03;
+      letter-spacing: -0.04em;
+    }
+    .s4-headline .word {
+      display: inline-block;
+      opacity: 0;
+    }
+    .s4-receipts {
+      position: absolute;
+      left: 96px;
+      top: 404px;
+      width: 400px;
+      height: 560px;
+      z-index: 10;
+    }
+    .s4-receipt {
+      position: absolute;
+      width: 264px;
+      height: 344px;
+      background: var(--paper);
+      border: 1.5px solid #e3ded2;
+      box-shadow: 0 -3px 0 #ffffff, 0 -14px 28px rgba(27, 33, 28, 0.09);
+      padding: 20px 20px 14px;
+      clip-path: polygon(0 0, 100% 0, 100% 96%, 96% 100%, 92% 96%, 88% 100%, 84% 96%, 80% 100%, 76% 96%, 72% 100%, 68% 96%, 64% 100%, 60% 96%, 56% 100%, 52% 96%, 48% 100%, 44% 96%, 40% 100%, 36% 96%, 32% 100%, 28% 96%, 24% 100%, 20% 96%, 16% 100%, 12% 96%, 8% 100%, 4% 96%, 0 100%);
+    }
+    .s4-receipt-1 {
+      left: 28px;
+      top: 160px;
+      z-index: 3;
+    }
+    .s4-receipt-2 {
+      left: 14px;
+      top: 80px;
+      z-index: 2;
+    }
+    .s4-receipt-3 {
+      left: 34px;
+      top: 0;
+      z-index: 1;
+    }
+    .s4-r-brand {
+      font-size: 12px;
+      font-weight: 700;
+      letter-spacing: 0.18em;
+      text-transform: uppercase;
+      color: var(--ink-soft);
+    }
+    .s4-r-name {
+      margin-top: 8px;
+      font-family: "Newsreader", Georgia, serif;
+      font-size: 30px;
+      line-height: 1.02;
+      letter-spacing: -0.02em;
+    }
+    .s4-r-rule {
+      margin-top: 12px;
+      border-top: 1.5px dashed #ddd7c9;
+    }
+    .s4-r-line {
+      margin-top: 10px;
+      display: flex;
+      justify-content: space-between;
+      font-size: 13px;
+      color: var(--ink-soft);
+    }
+    .s4-r-line b {
+      color: var(--ink);
+      font-weight: 600;
+    }
+    .s4-r-total {
+      margin-top: 14px;
+      display: flex;
+      justify-content: space-between;
+      align-items: baseline;
+      font-size: 14px;
+      font-weight: 600;
+    }
+    .s4-r-total b {
+      font-size: 26px;
+      letter-spacing: -0.02em;
+    }
+    .s4-r-paid {
+      position: absolute;
+      right: 14px;
+      bottom: 34px;
+      padding: 3px 8px;
+      border: 2px solid var(--verm);
+      border-radius: 4px;
+      color: var(--verm);
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: 0.14em;
+      transform: rotate(-7deg);
+    }
+    .s4-stack-note {
+      position: absolute;
+      left: 2px;
+      top: 528px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 15px;
+      font-weight: 600;
+      color: var(--ink-soft);
+    }
+    .s4-stack-note i {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: var(--verm);
+    }
+    .s4-win {
+      position: absolute;
+      left: 520px;
+      top: 334px;
+      width: 1310px;
+      height: 640px;
+      border-radius: 20px;
+      background: var(--paper);
+      border: 1.5px solid var(--line);
+      overflow: hidden;
+      z-index: 5;
+    }
+    .s4-win-chrome {
+      height: 58px;
+      border-bottom: 1.5px solid var(--line);
+      display: flex;
+      align-items: center;
+      padding: 0 22px;
+      gap: 8px;
+      background: #fcfaf6;
+    }
+    .s4-dot {
+      width: 11px;
+      height: 11px;
+      border-radius: 50%;
+      background: #ddd8cd;
+    }
+    .s4-win-title {
+      margin-left: 14px;
+      font-size: 16px;
+      font-weight: 600;
+    }
+    .s4-win-chips {
+      margin-left: auto;
+      display: flex;
+      gap: 8px;
+    }
+    .s4-chip {
+      padding: 5px 11px;
+      border-radius: 999px;
+      font-size: 12px;
+      font-weight: 600;
+      background: var(--sage-pale);
+      color: var(--ink-soft);
+    }
+    .s4-chip.jade {
+      background: var(--jade-light);
+      color: var(--jade-deep);
+    }
+    .s4-grid {
+      padding: 0 26px 20px;
+    }
+    .s4-grid-head,
+    .s4-grow {
+      display: flex;
+      align-items: center;
+      height: 62px;
+      border-bottom: 1.5px solid #eeeae1;
+      font-size: 13px;
+      font-weight: 600;
+      letter-spacing: 0.1em;
+      text-transform: uppercase;
+      color: var(--ink-soft);
+    }
+    .s4-c-date {
+      flex: 0 0 150px;
+    }
+    .s4-c-vendor {
+      flex: 0 0 400px;
+    }
+    .s4-c-cat {
+      flex: 0 0 290px;
+    }
+    .s4-c-amount {
+      flex: 0 0 190px;
+      text-align: right;
+    }
+    .s4-c-state {
+      flex: 1;
+      text-align: right;
+    }
+    .s4-grow {
+      height: 104px;
+      font-size: 20px;
+      font-weight: 400;
+      letter-spacing: 0;
+      text-transform: none;
+      color: var(--ink);
+      position: relative;
+    }
+    .s4-grow .s4-c-date {
+      color: var(--ink-soft);
+      font-size: 16px;
+    }
+    .s4-vendor {
+      font-weight: 600;
+      letter-spacing: -0.01em;
+    }
+    .s4-cat-tag {
+      display: inline-block;
+      padding: 4px 10px;
+      border-radius: 999px;
+      background: #f2efe6;
+      font-size: 13px;
+      color: var(--ink-soft);
+    }
+    .s4-amount {
+      font-weight: 600;
+      font-variant-numeric: tabular-nums;
+    }
+    .s4-state {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 13px;
+      color: var(--jade-deep);
+      font-weight: 600;
+    }
+    .s4-state svg {
+      width: 16px;
+      height: 16px;
+    }
+    .s4-flash {
+      position: absolute;
+      inset: 0;
+      background: var(--jade-light);
+      opacity: 0;
+      pointer-events: none;
+    }
+    .s4-row {
+      position: relative;
+    }
+    .s4-row-inner {
+      display: flex;
+      align-items: center;
+      width: 100%;
+      height: 100%;
+      opacity: 0;
+    }
+    .s4-sum {
+      height: 90px;
+      display: flex;
+      align-items: center;
+      justify-content: flex-end;
+      gap: 28px;
+      border-bottom: 1.5px solid #eeeae1;
+      font-size: 15px;
+      color: var(--ink-soft);
+    }
+    .s4-sum b {
+      font-family: "Newsreader", Georgia, serif;
+      font-size: 44px;
+      font-weight: 400;
+      letter-spacing: -0.03em;
+      color: var(--ink);
+      font-variant-numeric: tabular-nums;
+    }
+    .s4-sum .save {
+      font-size: 13px;
+      color: var(--jade-deep);
+      background: var(--jade-light);
+      padding: 5px 10px;
+      border-radius: 999px;
+      font-weight: 600;
+    }
+    .s4-stamp {
+      position: absolute;
+      right: 40px;
+      bottom: 26px;
+      width: 210px;
+      height: 84px;
+      border: 3px solid var(--jade-deep);
+      border-radius: 10px;
+      display: grid;
+      place-items: center;
+      transform: rotate(-6deg);
+      color: var(--jade-deep);
+      font-size: 30px;
+      font-weight: 700;
+      letter-spacing: 0.14em;
+      opacity: 0;
+      z-index: 8;
+      background: rgba(228, 240, 226, 0.7);
+    }
+    .s4-stamp small {
+      display: block;
+      font-size: 10px;
+      letter-spacing: 0.2em;
+      text-align: center;
+      margin-top: 2px;
+    }
+    .s4-orb {
+      position: absolute;
+      left: 1652px;
+      top: 208px;
+      width: 130px;
+      height: 130px;
+      z-index: 9;
+    }
+    .s4-phone {
+      position: absolute;
+      left: 92px;
+      top: 636px;
+      width: 300px;
+      height: 420px;
+      border-radius: 38px;
+      background: var(--ink);
+      padding: 9px;
+      z-index: 20;
+      opacity: 0;
+    }
+    .s4-phone-screen {
+      width: 100%;
+      height: 100%;
+      border-radius: 30px;
+      background: #f6f3ec;
+      padding: 16px;
+    }
+    .s4-p-time {
+      text-align: center;
+      font-size: 12px;
+      font-weight: 600;
+      color: var(--ink-soft);
+    }
+    .s4-notif {
+      margin-top: 12px;
+      background: var(--paper);
+      border-radius: 14px;
+      padding: 12px;
+      display: flex;
+      gap: 10px;
+    }
+    .s4-notif-icon {
+      flex: 0 0 34px;
+      width: 34px;
+      height: 34px;
+      border-radius: 9px;
+      background: var(--jade);
+      display: grid;
+      place-items: center;
+    }
+    .s4-notif-icon svg {
+      width: 17px;
+      height: 21px;
+    }
+    .s4-notif-title {
+      font-size: 14px;
+      font-weight: 600;
+      line-height: 1.25;
+    }
+    .s4-notif-sub {
+      margin-top: 3px;
+      font-size: 12px;
+      color: var(--ink-soft);
+    }
+    .s4-buzz {
+      position: absolute;
+      left: 398px;
+      top: 700px;
+      width: 54px;
+      height: 100px;
+      z-index: 19;
+      opacity: 0;
+      transform: scaleX(-1);
+    }
+    .s4-done {
+      position: absolute;
+      inset: 0;
+      background: var(--ink);
+      z-index: 50;
+      display: grid;
+      place-items: center;
+    }
+    .s4-done-stage {
+      text-align: center;
+      color: var(--ivory);
+      width: 1500px;
+    }
+    .s4-done-kicker {
+      display: inline-flex;
+      align-items: center;
+      gap: 12px;
+      font-size: 20px;
+      font-weight: 600;
+      letter-spacing: 0.2em;
+      text-transform: uppercase;
+      color: var(--sage);
+    }
+    .s4-done-kicker i {
+      width: 34px;
+      height: 2px;
+      background: var(--sage);
+    }
+    .s4-done-word {
+      margin-top: 44px;
+      font-family: "Newsreader", Georgia, serif;
+      font-style: italic;
+      font-size: 280px;
+      line-height: 0.9;
+      letter-spacing: -0.05em;
+      color: var(--ivory);
+    }
+    .s4-done-word u {
+      text-decoration: none;
+      color: var(--jade);
+    }
+    .s4-done-note {
+      margin-top: 10px;
+      font-family: "Newsreader", Georgia, serif;
+      font-size: 40px;
+      color: #a9b3a8;
+    }
+    .s4-done-amount {
+      position: absolute;
+      right: 250px;
+      top: 240px;
+      text-align: right;
+      color: var(--jade);
+      opacity: 0;
+    }
+    .s4-done-amount b {
+      display: block;
+      font-family: "Newsreader", Georgia, serif;
+      font-size: 92px;
+      font-weight: 400;
+      letter-spacing: -0.04em;
+      line-height: 1;
+    }
+    .s4-done-amount span {
+      font-size: 12px;
+      letter-spacing: 0.18em;
+      text-transform: uppercase;
+      color: var(--sage);
+    }
+    .s4-grain {
+      position: absolute;
+      left: -10%;
+      top: -10%;
+      width: 120%;
+      height: 120%;
+      background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.8' numOctaves='2' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+      opacity: 0.045;
+      z-index: 40;
+      pointer-events: none;
+    }
+    .s4-wipe {
+      position: absolute;
+      inset: 0;
+      background: var(--jade);
+      z-index: 60;
+    }
+  </style>
+
+  <div data-hf-id="hf-2tvg" id="root" data-composition-id="s4" data-width="1920" data-height="1080">
+    <div data-hf-id="hf-ih3r" class="s4-kicker" id="s4-kicker"><i data-hf-id="hf-wt6k"></i>Task 03 — Expenses</div>
+    <div data-hf-id="hf-u3ki" class="s4-headline" id="s4-headline">
+      <span data-hf-id="hf-l738" class="word">Receipts</span> <span data-hf-id="hf-a7v8" class="word">in.</span><br data-hf-id="hf-x5px" />
+      <span data-hf-id="hf-w22w" class="word">Expenses</span> <span data-hf-id="hf-t6at" class="word">filed.</span>
+    </div>
+
+    <div data-hf-id="hf-wd7c" class="s4-receipts" id="s4-receipts" data-layout-allow-overlap>
+      <div data-hf-id="hf-h5gg" class="s4-receipt s4-receipt-3" id="s4-receipt-3">
+        <div data-hf-id="hf-h3me" class="s4-r-brand">Papeterie Nord</div>
+        <div data-hf-id="hf-3jl4" class="s4-r-name">Paper<br data-hf-id="hf-rsrt" />&amp; ink</div>
+        <div data-hf-id="hf-wr6n" class="s4-r-rule"></div>
+        <div data-hf-id="hf-x0ej" class="s4-r-line"><span data-hf-id="hf-5ynw">Notebook</span><b data-hf-id="hf-qtip">€24.00</b></div>
+        <div data-hf-id="hf-ldij" class="s4-r-line"><span data-hf-id="hf-jadi">Ink, black</span><b data-hf-id="hf-lfn1">€18.10</b></div>
+        <div data-hf-id="hf-km9l" class="s4-r-total"><span data-hf-id="hf-7qep">Total</span><b data-hf-id="hf-6514">€42.10</b></div>
+      </div>
+      <div data-hf-id="hf-2zzo" class="s4-receipt s4-receipt-2" id="s4-receipt-2">
+        <div data-hf-id="hf-rb6i" class="s4-r-brand">Deutsche Bahn</div>
+        <div data-hf-id="hf-rlks" class="s4-r-name">Berlin<br data-hf-id="hf-szow" />Hbf</div>
+        <div data-hf-id="hf-b1un" class="s4-r-rule"></div>
+        <div data-hf-id="hf-kz7i" class="s4-r-line"><span data-hf-id="hf-m44r">Thu 11 Jun</span><b data-hf-id="hf-tg1f">1 × ticket</b></div>
+        <div data-hf-id="hf-kkwh" class="s4-r-line"><span data-hf-id="hf-fblf">2nd class</span><b data-hf-id="hf-vhy2">€96.00</b></div>
+        <div data-hf-id="hf-u7wt" class="s4-r-total"><span data-hf-id="hf-qkx1">Total</span><b data-hf-id="hf-v8am">€96.00</b></div>
+      </div>
+      <div data-hf-id="hf-tolk" class="s4-receipt s4-receipt-1" id="s4-receipt-1">
+        <div data-hf-id="hf-9vuk" class="s4-r-brand">Café Lumo</div>
+        <div data-hf-id="hf-jyx7" class="s4-r-name">Lunch for<br data-hf-id="hf-sldv" />two</div>
+        <div data-hf-id="hf-anjm" class="s4-r-rule"></div>
+        <div data-hf-id="hf-k6lg" class="s4-r-line"><span data-hf-id="hf-zjse">Two plates</span><b data-hf-id="hf-ti4l">€15.00</b></div>
+        <div data-hf-id="hf-jsaf" class="s4-r-line"><span data-hf-id="hf-w911">Coffee</span><b data-hf-id="hf-1pas">€3.60</b></div>
+        <div data-hf-id="hf-vetw" class="s4-r-total"><span data-hf-id="hf-rru4">Total</span><b data-hf-id="hf-xzv6">€18.60</b></div>
+        <div data-hf-id="hf-pzq1" class="s4-r-paid" id="s4-paid">PAID</div>
+      </div>
+      <div data-hf-id="hf-sae7" class="s4-stack-note" id="s4-stack-note"><i data-hf-id="hf-zeb8"></i>3 receipts · unopened</div>
+    </div>
+
+    <div data-hf-id="hf-82ea" class="s4-win" id="s4-win">
+      <div data-hf-id="hf-1g3f" class="s4-win-chrome">
+        <span data-hf-id="hf-meji" class="s4-dot"></span><span data-hf-id="hf-bf2a" class="s4-dot"></span><span data-hf-id="hf-btdb" class="s4-dot"></span>
+        <span data-hf-id="hf-8mbc" class="s4-win-title">Expenses · June</span>
+        <div data-hf-id="hf-pn0e" class="s4-win-chips"><span data-hf-id="hf-fwz5" class="s4-chip">3 receipts</span><span data-hf-id="hf-ldrn" class="s4-chip jade">Auto-filed</span></div>
+      </div>
+      <div data-hf-id="hf-zkc2" class="s4-grid">
+        <div data-hf-id="hf-1t0d" class="s4-grid-head">
+          <div data-hf-id="hf-nuz6" class="s4-c-date">Date</div>
+          <div data-hf-id="hf-qx9u" class="s4-c-vendor">Vendor</div>
+          <div data-hf-id="hf-zcz2" class="s4-c-cat">Category</div>
+          <div data-hf-id="hf-qt6q" class="s4-c-amount">Amount</div>
+          <div data-hf-id="hf-35m3" class="s4-c-state">Status</div>
+        </div>
+
+        <div data-hf-id="hf-ic21" class="s4-grow s4-row" id="s4-row-1">
+          <div data-hf-id="hf-rfgs" class="s4-flash"></div>
+          <div data-hf-id="hf-afv9" class="s4-row-inner">
+            <div data-hf-id="hf-txj4" class="s4-c-date">12 Jun</div>
+            <div data-hf-id="hf-xwfc" class="s4-c-vendor s4-vendor">Café Lumo</div>
+            <div data-hf-id="hf-t5me" class="s4-c-cat"><span data-hf-id="hf-5wh8" class="s4-cat-tag">Meals</span></div>
+            <div data-hf-id="hf-1ovb" class="s4-c-amount s4-amount">€18.60</div>
+            <div data-hf-id="hf-lmy1" class="s4-c-state"><span data-hf-id="hf-fkgm" class="s4-state"><svg data-hf-id="hf-a7md" viewBox="0 0 24 24" fill="none"><path data-hf-id="hf-5892" d="M5 12.5L10 17.5L19 7" stroke="#2f7b45" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" /></svg>Filed</span></div>
+          </div>
+        </div>
+
+        <div data-hf-id="hf-ma62" class="s4-grow s4-row" id="s4-row-2">
+          <div data-hf-id="hf-too4" class="s4-flash"></div>
+          <div data-hf-id="hf-xamh" class="s4-row-inner">
+            <div data-hf-id="hf-qwft" class="s4-c-date">11 Jun</div>
+            <div data-hf-id="hf-qcwe" class="s4-c-vendor s4-vendor">Deutsche Bahn</div>
+            <div data-hf-id="hf-cobe" class="s4-c-cat"><span data-hf-id="hf-5mo8" class="s4-cat-tag">Travel</span></div>
+            <div data-hf-id="hf-6b6f" class="s4-c-amount s4-amount">€96.00</div>
+            <div data-hf-id="hf-4wv1" class="s4-c-state"><span data-hf-id="hf-h35m" class="s4-state"><svg data-hf-id="hf-k9qh" viewBox="0 0 24 24" fill="none"><path data-hf-id="hf-tyx6" d="M5 12.5L10 17.5L19 7" stroke="#2f7b45" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" /></svg>Filed</span></div>
+          </div>
+        </div>
+
+        <div data-hf-id="hf-ua97" class="s4-grow s4-row" id="s4-row-3">
+          <div data-hf-id="hf-shr1" class="s4-flash"></div>
+          <div data-hf-id="hf-yhjk" class="s4-row-inner">
+            <div data-hf-id="hf-pz22" class="s4-c-date">10 Jun</div>
+            <div data-hf-id="hf-ntru" class="s4-c-vendor s4-vendor">Papeterie Nord</div>
+            <div data-hf-id="hf-d2mf" class="s4-c-cat"><span data-hf-id="hf-6t5b" class="s4-cat-tag">Supplies</span></div>
+            <div data-hf-id="hf-gfp5" class="s4-c-amount s4-amount">€42.10</div>
+            <div data-hf-id="hf-63s4" class="s4-c-state"><span data-hf-id="hf-hhgn" class="s4-state"><svg data-hf-id="hf-lgnk" viewBox="0 0 24 24" fill="none"><path data-hf-id="hf-ud87" d="M5 12.5L10 17.5L19 7" stroke="#2f7b45" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" /></svg>Filed</span></div>
+          </div>
+        </div>
+
+        <div data-hf-id="hf-k7ra" class="s4-sum" id="s4-sum">
+          <span data-hf-id="hf-p85k" class="save">3 receipts matched</span>
+          <span data-hf-id="hf-85i3">Total filed</span>
+          <b data-hf-id="hf-prco" id="s4-total">€0.00</b>
+        </div>
+      </div>
+      <div data-hf-id="hf-9cok" class="s4-stamp" id="s4-stamp">FILED<small data-hf-id="hf-0gsd">12 JUN · KELP</small></div>
+    </div>
+
+    <svg data-hf-id="hf-sath" class="s4-orb" id="s4-orb" viewBox="0 0 200 200" aria-hidden="true">
+      <g data-hf-id="hf-7uvr" id="s4-orb-body">
+        <path data-hf-id="hf-rday" d="M100 34C139 34 166 62 168 102C170 143 142 170 100 170C58 170 30 143 32 102C34 62 61 34 100 34Z" fill="#59b26f" />
+        <path data-hf-id="hf-yhlj" d="M100 44C103 26 113 17 129 15C128 30 118 40 100 44Z" fill="#2f7b45" />
+        <path data-hf-id="hf-tzk2" d="M98 46C92 31 81 25 66 27C70 41 82 48 98 46Z" fill="#3d8b52" />
+        <path data-hf-id="hf-qbx1" d="M100 52V38" stroke="#1b211c" stroke-width="3" stroke-linecap="round" />
+        <ellipse data-hf-id="hf-2nvp" cx="73" cy="104" rx="15" ry="18" fill="#fbf9f5" />
+        <ellipse data-hf-id="hf-zcmn" cx="127" cy="104" rx="15" ry="18" fill="#fbf9f5" />
+        <g data-hf-id="hf-r7oa" class="s4-eyes">
+          <circle data-hf-id="hf-puop" class="s4-pupil" cx="70" cy="106" r="7" fill="#1b211c" />
+          <circle data-hf-id="hf-nu55" class="s4-pupil" cx="124" cy="106" r="7" fill="#1b211c" />
+        </g>
+        <path data-hf-id="hf-h10m" d="M88 140C94 145 106 145 112 140" stroke="#1b211c" stroke-width="4" stroke-linecap="round" fill="none" />
+      </g>
+    </svg>
+
+    <div data-hf-id="hf-rmv6" class="s4-phone" id="s4-phone">
+      <div data-hf-id="hf-96qn" class="s4-phone-screen">
+        <div data-hf-id="hf-5tep" class="s4-p-time">Tuesday 11:20</div>
+        <div data-hf-id="hf-n6v2" class="s4-notif" data-layout-allow-overlap>
+          <div data-hf-id="hf-deh6" class="s4-notif-icon">
+            <svg data-hf-id="hf-5852" viewBox="0 0 24 30" fill="none">
+              <path data-hf-id="hf-xbda" d="M12 29V14" stroke="#fbf9f5" stroke-width="2.4" stroke-linecap="round" />
+              <path data-hf-id="hf-7gns" d="M12 17C7 17 4 13.8 4 9.2C9 9.2 12 12 12 17Z" fill="#fbf9f5" />
+              <path data-hf-id="hf-4kou" d="M12 13C12 8 15 5 20 5C20 10 17 13 12 13Z" fill="#fbf9f5" />
+            </svg>
+          </div>
+          <div data-hf-id="hf-yeow">
+            <div data-hf-id="hf-9uey" class="s4-notif-title">Expenses filed</div>
+            <div data-hf-id="hf-gc0u" class="s4-notif-sub">3 receipts · €156.70 · June</div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <svg data-hf-id="hf-pra3" class="s4-buzz" id="s4-buzz" viewBox="0 0 54 100" fill="none" aria-hidden="true">
+      <path data-hf-id="hf-i49k" d="M44 12C30 24 24 36 24 50C24 64 30 76 44 88" stroke="#1b211c" stroke-width="2.2" stroke-linecap="round" opacity=".5" />
+      <path data-hf-id="hf-spml" d="M34 24C26 33 21 41 21 50C21 59 26 67 34 76" stroke="#1b211c" stroke-width="2.2" stroke-linecap="round" opacity=".32" />
+      <path data-hf-id="hf-l2rv" d="M25 34C21 39 17 45 17 50C17 55 21 61 25 66" stroke="#1b211c" stroke-width="2.2" stroke-linecap="round" opacity=".2" />
+    </svg>
+
+    <div data-hf-id="hf-b67h" class="s4-done" id="s4-done" data-layout-allow-overflow>
+      <div data-hf-id="hf-yk5c" class="s4-done-stage" id="s4-done-stage" data-layout-allow-overlap>
+        <div data-hf-id="hf-3dpu" class="s4-done-kicker" id="s4-done-kicker"><i data-hf-id="hf-y7e5"></i>Task 3<i data-hf-id="hf-ylp6"></i></div>
+        <div data-hf-id="hf-rbu2" class="s4-done-word" id="s4-done-word">done<u data-hf-id="hf-o0c2">.</u></div>
+        <div data-hf-id="hf-gp75" class="s4-done-note" id="s4-done-note">Three receipts, one tidy spreadsheet.</div>
+      </div>
+      <div data-hf-id="hf-6o3i" class="s4-done-amount" id="s4-done-amount"><b data-hf-id="hf-kv4m">€156.70</b><span data-hf-id="hf-vrz0">filed · June</span></div>
+    </div>
+
+    <div data-hf-id="hf-vd2b" class="s4-grain" id="s4-grain" data-layout-ignore></div>
+    <div data-hf-id="hf-jvgj" class="s4-wipe" id="s4-wipe" data-layout-allow-overflow></div>
+  </div>
+
+  <script>
+    (function () {
+      const tl = gsap.timeline({ paused: true });
+      const spark = [6, 16, 2, 21, 9, 13, 5, 18, 11, 3];
+
+      gsap.set(".s4-eyes", { transformOrigin: "50% 50%" });
+      gsap.set("#s4-receipt-1", { rotation: 3 });
+      gsap.set("#s4-receipt-2", { rotation: -2 });
+      gsap.set("#s4-receipt-3", { rotation: -5 });
+      gsap.set("#s4-stamp", { rotation: -6 });
+
+      tl.fromTo("#s4-wipe", { y: 0 }, { y: -1080, duration: 0.6, ease: "power3.inOut" }, 0.05);
+      tl.fromTo("#s4-kicker", { opacity: 0, x: -10 }, { opacity: 1, x: 0, duration: 0.4, ease: "power2.out" }, 0.35);
+      tl.fromTo("#s4-headline .word", { opacity: 0, y: 14, filter: "blur(6px)" }, { opacity: 1, y: 0, filter: "blur(0px)", duration: 0.36, ease: "power3.out", stagger: 0.06 }, 1.0);
+
+      tl.fromTo("#s4-win", { opacity: 0, y: 30 }, { opacity: 1, y: 0, duration: 0.62, ease: "power3.out" }, 1.1);
+      tl.fromTo("#s4-receipts", { opacity: 0, y: 26 }, { opacity: 1, y: 0, duration: 0.55, ease: "power3.out" }, 1.7);
+      tl.fromTo("#s4-orb", { opacity: 0, y: 16 }, { opacity: 1, y: 0, duration: 0.45, ease: "back.out(1.5)" }, 2.0);
+      const fileReceipt = (n, t) => {
+        const r = "#s4-receipt-" + n;
+        const row = "#s4-row-" + n;
+        tl.to(r, { x: 560, y: -80 - (3 - n) * 104, scale: 0.18, rotation: 0, duration: 0.8, ease: "power3.inOut" }, t);
+        tl.to(r, { opacity: 0, duration: 0.22 }, t + 0.62);
+        tl.fromTo(row + " .s4-flash", { opacity: 0 }, { opacity: 0.9, duration: 0.1, ease: "power1.out" }, t + 0.55);
+        tl.to(row + " .s4-flash", { opacity: 0, duration: 0.5, ease: "power2.out" }, t + 0.65);
+        tl.fromTo(row + " .s4-row-inner", { opacity: 0, y: 8 }, { opacity: 1, y: 0, duration: 0.35, ease: "power3.out" }, t + 0.58);
+        tl.to(".s4-pupil", { x: 5, y: 4, duration: 0.3, ease: "power2.inOut" }, t + 0.2);
+      };
+
+      fileReceipt(1, 6.4);
+      fileReceipt(2, 10.6);
+      fileReceipt(3, 14.8);
+
+      tl.to("#s4-stack-note", { opacity: 0, y: -6, duration: 0.3 }, 15.2);
+      tl.fromTo("#s4-sum", { opacity: 0, y: 10 }, { opacity: 1, y: 0, duration: 0.45, ease: "power3.out" }, 19.0);
+      const total = { v: 0 };
+      tl.to(
+        total,
+        {
+          v: 156.7,
+          duration: 1.4,
+          ease: "power2.out",
+          onUpdate: () => {
+            document.getElementById("s4-total").textContent = "€" + total.v.toFixed(2);
+          },
+        },
+        19.2,
+      );
+
+      tl.fromTo("#s4-stamp", { opacity: 0, scale: 1.5, rotation: -6 }, { opacity: 1, scale: 1, rotation: -6, duration: 0.26, ease: "power4.in" }, 22.0);
+      tl.fromTo("#s4-paid", { opacity: 0 }, { opacity: 1, duration: 0.2 }, 22.3);
+      tl.to(".s4-pupil", { x: 6, y: -2, duration: 0.45, ease: "power2.inOut" }, 3.6);
+      tl.to(".s4-pupil", { x: -7, y: 3, duration: 0.45, ease: "power2.inOut" }, 16.8);
+      tl.to(".s4-pupil", { x: 4, y: 0, duration: 0.4, ease: "power2.inOut" }, 20.2);
+      tl.to(".s4-pupil", { x: -12, y: 4, duration: 0.45, ease: "power2.inOut" }, 26.6);
+
+      tl.fromTo("#s4-phone", { opacity: 0, y: 220 }, { opacity: 1, y: 0, duration: 0.45, ease: "power3.out" }, 27.2);
+      tl.fromTo("#s4-buzz", { opacity: 0 }, { opacity: 1, duration: 0.15 }, 28.4);
+      tl.to("#s4-phone", { x: -5, duration: 0.05, ease: "steps(1)" }, 28.42);
+      tl.to("#s4-phone", { x: 5, duration: 0.05, ease: "steps(1)" }, 28.52);
+      tl.to("#s4-phone", { x: 0, duration: 0.06, ease: "steps(1)" }, 28.62);
+      tl.to("#s4-buzz", { opacity: 0, duration: 0.25 }, 29.0);
+
+      tl.fromTo("#s4-done", { y: 1080 }, { y: 0, duration: 0.5, ease: "power3.in" }, 31.0);
+      tl.fromTo("#s4-done-word", { opacity: 0, scale: 1.3, filter: "blur(10px)" }, { opacity: 1, scale: 1, filter: "blur(0px)", duration: 0.34, ease: "power3.out" }, 31.28);
+      tl.fromTo("#s4-done-kicker", { opacity: 0, y: 10 }, { opacity: 1, y: 0, duration: 0.3, ease: "power3.out" }, 31.2);
+      tl.fromTo("#s4-done-note", { opacity: 0, y: 10 }, { opacity: 1, y: 0, duration: 0.35, ease: "power3.out" }, 31.7);
+      tl.fromTo("#s4-done-amount", { opacity: 0, x: 20 }, { opacity: 1, x: 0, duration: 0.4, ease: "power3.out" }, 32.0);
+
+      const buzz = [
+        [31.55, -8],
+        [31.62, 8],
+        [31.69, -4],
+        [31.76, 0],
+      ];
+      buzz.forEach(([t, x]) => tl.to("#s4-done-stage", { x: x, duration: 0.06, ease: "steps(1)" }, t));
+
+      const blink = (time) => {
+        tl.to(".s4-eyes", { scaleY: 0.12, duration: 0.07, ease: "power2.in" }, time);
+        tl.to(".s4-eyes", { scaleY: 1, duration: 0.12, ease: "power2.out" }, time + 0.08);
+      };
+      blink(0.9);
+      blink(4.6);
+      blink(9.2);
+      blink(17.6);
+      blink(20.8);
+      blink(24.4);
+
+      for (let i = 0; i < 34; i++) {
+        const t = 0.2 + i * 0.56;
+        const s = spark[i % spark.length];
+        tl.set("#s4-grain", { x: (s % 5) * 3 - 6, y: ((s * 7) % 5) * 3 - 6 }, t);
+      }
+
+      tl.fromTo("#s4-wipe", { y: 1080 }, { y: 0, duration: 0.4, ease: "power3.in", immediateRender: false }, 34.6);
+
+      window.__timelines["s4"] = tl;
+    })();
+  </script>
+</template>

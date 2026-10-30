@@ -1,0 +1,172 @@
+<!doctype html>
+<html lang="en" data-composition-variables='[
+  { "id": "url", "type": "string", "label": "End-card URL", "default": "kelp.example.com" }
+]'>
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=1920, height=1080" />
+    <title>Kelp — works while you're away</title>
+    <script src="https://cdn.jsdelivr.net/npm/gsap@3.14.2/dist/gsap.min.js"></script>
+    <style>
+      *,
+      *::before,
+      *::after {
+        box-sizing: border-box;
+      }
+      html,
+      body {
+        margin: 0;
+        width: 1920px;
+        height: 1080px;
+        overflow: hidden;
+        background: #fbf9f5;
+      }
+      #root {
+        position: relative;
+        width: 1920px;
+        height: 1080px;
+        overflow: hidden;
+        background: #fbf9f5;
+      }
+      .scene-host {
+        position: absolute;
+        inset: 0;
+        width: 1920px;
+        height: 1080px;
+      }
+    </style>
+  </head>
+  <body>
+    <div data-hf-id="hf-5l3e"
+      id="root"
+      data-composition-id="main"
+      data-start="0"
+      data-duration="160"
+      data-width="1920"
+      data-height="1080"
+      data-motion-blur="on"
+    >
+      <div data-hf-id="hf-w5jp"
+        id="s1"
+        class="scene-host"
+        data-composition-id="s1"
+        data-composition-src="compositions/01-intro.html"
+        data-start="0"
+        data-duration="20"
+        data-track-index="1"
+        data-track-kind="graphics"
+        data-width="1920"
+        data-height="1080"
+      ></div>
+
+      <div data-hf-id="hf-t0id"
+        id="s2"
+        class="scene-host"
+        data-composition-id="s2"
+        data-composition-src="compositions/02-inbox.html"
+        data-start="20"
+        data-duration="35"
+        data-track-index="2"
+        data-track-kind="graphics"
+        data-width="1920"
+        data-height="1080"
+      ></div>
+
+      <div data-hf-id="hf-qjrj"
+        id="s3"
+        class="scene-host"
+        data-composition-id="s3"
+        data-composition-src="compositions/03-flight.html"
+        data-start="55"
+        data-duration="35"
+        data-track-index="3"
+        data-track-kind="graphics"
+        data-width="1920"
+        data-height="1080"
+      ></div>
+
+      <div data-hf-id="hf-2lxl"
+        id="s4"
+        class="scene-host"
+        data-composition-id="s4"
+        data-composition-src="compositions/04-receipts.html"
+        data-start="90"
+        data-duration="35"
+        data-track-index="4"
+        data-track-kind="graphics"
+        data-width="1920"
+        data-height="1080"
+      ></div>
+
+      <div data-hf-id="hf-pfgk"
+        id="s5"
+        class="scene-host"
+        data-composition-id="s5"
+        data-composition-src="compositions/05-split.html"
+        data-start="125"
+        data-duration="25"
+        data-track-index="5"
+        data-track-kind="graphics"
+        data-width="1920"
+        data-height="1080"
+      ></div>
+
+      <div data-hf-id="hf-d91r"
+        id="s6"
+        class="scene-host"
+        data-composition-id="s6"
+        data-composition-src="compositions/06-end.html"
+        data-start="150"
+        data-duration="10"
+        data-track-index="6"
+        data-track-kind="graphics"
+        data-width="1920"
+        data-height="1080"
+      ></div>
+
+      <audio data-hf-id="hf-rr2u"
+        id="bgm"
+        src="assets/bgm/kelp-bed.mp3"
+        data-start="0"
+        data-duration="160"
+        data-volume="0.8"
+        data-fade-in="1.2"
+        data-fade-out="3"
+      ></audio>
+
+      <audio data-hf-id="hf-9woz" id="sfx-type-1" src="assets/sfx/typing.mp3" data-start="1.5" data-volume="0.16"></audio>
+      <audio data-hf-id="hf-krbh" id="sfx-type-2" src="assets/sfx/typing.mp3" data-start="3.55" data-volume="0.16"></audio>
+      <audio data-hf-id="hf-zcb8" id="sfx-type-3" src="assets/sfx/typing.mp3" data-start="5.6" data-volume="0.16"></audio>
+      <audio data-hf-id="hf-by0g" id="sfx-tap-1" src="assets/sfx/click-soft.mp3" data-start="2.25" data-volume="0.22"></audio>
+      <audio data-hf-id="hf-mtzd" id="sfx-tap-2" src="assets/sfx/click-soft.mp3" data-start="4.3" data-volume="0.22"></audio>
+      <audio data-hf-id="hf-6lql" id="sfx-tap-3" src="assets/sfx/click-soft.mp3" data-start="6.35" data-volume="0.22"></audio>
+      <audio data-hf-id="hf-2vfq" id="sfx-lid" src="assets/sfx/click-soft.mp3" data-start="11.95" data-volume="0.3"></audio>
+      <audio data-hf-id="hf-inpf" id="sfx-wipe-2" src="assets/sfx/whoosh-short.mp3" data-start="19.9" data-volume="0.2"></audio>
+      <audio data-hf-id="hf-if37" id="sfx-check-2" src="assets/sfx/pop.mp3" data-start="30.1" data-volume="0.2"></audio>
+      <audio data-hf-id="hf-k8l5" id="sfx-buzz-2" src="assets/sfx/notification.mp3" data-start="48.0" data-volume="0.3"></audio>
+      <audio data-hf-id="hf-cwdg" id="sfx-done-1" src="assets/sfx/pop.mp3" data-start="50.1" data-volume="0.28"></audio>
+      <audio data-hf-id="hf-kgk7" id="sfx-wipe-3" src="assets/sfx/whoosh-short.mp3" data-start="54.9" data-volume="0.2"></audio>
+      <audio data-hf-id="hf-su54" id="sfx-card-3" src="assets/sfx/pop.mp3" data-start="58.2" data-volume="0.14"></audio>
+      <audio data-hf-id="hf-jkkd" id="sfx-hold-3" src="assets/sfx/pop.mp3" data-start="63.0" data-volume="0.16"></audio>
+      <audio data-hf-id="hf-ci6g" id="sfx-approve" src="assets/sfx/click-soft.mp3" data-start="75.5" data-volume="0.28"></audio>
+      <audio data-hf-id="hf-h6bs" id="sfx-booked" src="assets/sfx/sparkle.mp3" data-start="76.6" data-volume="0.2"></audio>
+      <audio data-hf-id="hf-dk7y" id="sfx-wipe-4" src="assets/sfx/whoosh-short.mp3" data-start="89.9" data-volume="0.2"></audio>
+      <audio data-hf-id="hf-3saz" id="sfx-file-1" src="assets/sfx/pop.mp3" data-start="97.2" data-volume="0.1"></audio>
+      <audio data-hf-id="hf-qqh0" id="sfx-file-2" src="assets/sfx/pop.mp3" data-start="101.4" data-volume="0.1"></audio>
+      <audio data-hf-id="hf-c7sp" id="sfx-file-3" src="assets/sfx/pop.mp3" data-start="105.6" data-volume="0.1"></audio>
+      <audio data-hf-id="hf-965p" id="sfx-stamp" src="assets/sfx/pop.mp3" data-start="112.6" data-volume="0.24"></audio>
+      <audio data-hf-id="hf-udfa" id="sfx-buzz-4" src="assets/sfx/notification.mp3" data-start="118.6" data-volume="0.28"></audio>
+      <audio data-hf-id="hf-1k3x" id="sfx-done-3" src="assets/sfx/pop.mp3" data-start="120.2" data-volume="0.28"></audio>
+      <audio data-hf-id="hf-sooq" id="sfx-lid-5" src="assets/sfx/click-soft.mp3" data-start="128.0" data-volume="0.26"></audio>
+      <audio data-hf-id="hf-eptw" id="sfx-check-5a" src="assets/sfx/pop.mp3" data-start="130.8" data-volume="0.12"></audio>
+      <audio data-hf-id="hf-5blu" id="sfx-check-5b" src="assets/sfx/pop.mp3" data-start="131.6" data-volume="0.12"></audio>
+      <audio data-hf-id="hf-vggo" id="sfx-check-5c" src="assets/sfx/pop.mp3" data-start="132.4" data-volume="0.12"></audio>
+      <audio data-hf-id="hf-wsda" id="sfx-chime-6" src="assets/sfx/chime.mp3" data-start="151.6" data-volume="0.16"></audio>
+    </div>
+
+    <script>
+      window.__timelines = window.__timelines || {};
+      window.__timelines["main"] = gsap.timeline({ paused: true });
+    </script>
+  </body>
+</html>

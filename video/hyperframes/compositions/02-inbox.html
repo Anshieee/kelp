@@ -1,0 +1,1009 @@
+<template>
+  <style>
+    @font-face {
+      font-family: "Newsreader";
+      src: url("assets/fonts/newsreader-latin.woff2") format("woff2");
+      font-weight: 300 600;
+      font-style: normal;
+      font-display: block;
+    }
+    @font-face {
+      font-family: "Newsreader";
+      src: url("assets/fonts/newsreader-latin-italic.woff2") format("woff2");
+      font-weight: 300 600;
+      font-style: italic;
+      font-display: block;
+    }
+    @font-face {
+      font-family: "Inter";
+      src: url("assets/fonts/inter-latin-var.woff2") format("woff2");
+      font-weight: 400 700;
+      font-style: normal;
+      font-display: block;
+    }
+    #root {
+      --ivory: #fbf9f5;
+      --paper: #ffffff;
+      --ink: #1b211c;
+      --ink-soft: #4a544e;
+      --jade: #59b26f;
+      --jade-deep: #276b3c;
+      --jade-light: #e4f0e2;
+      --sage: #c9dfbc;
+      --sage-pale: #e8eddf;
+      --verm: #e52d2d;
+      --butter: #f0e7c5;
+      --line: #d5dcd1;
+      position: absolute;
+      inset: 0;
+      overflow: hidden;
+      background: var(--ivory);
+      font-family: "Inter", system-ui, sans-serif;
+      color: var(--ink);
+      -webkit-font-smoothing: antialiased;
+    }
+    #root * {
+      box-sizing: border-box;
+    }
+    .s2-kicker {
+      position: absolute;
+      left: 98px;
+      top: 236px;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      font-size: 15px;
+      font-weight: 600;
+      letter-spacing: 0.16em;
+      text-transform: uppercase;
+      color: var(--ink-soft);
+    }
+    .s2-kicker i {
+      display: block;
+      width: 26px;
+      height: 2px;
+      background: var(--jade);
+    }
+    .s2-headline {
+      position: absolute;
+      left: 96px;
+      top: 282px;
+      width: 386px;
+      font-family: "Newsreader", Georgia, serif;
+      font-weight: 400;
+      font-size: 52px;
+      line-height: 1.06;
+      letter-spacing: -0.035em;
+      color: var(--ink);
+    }
+    .s2-headline .s2-hl-word {
+      display: inline-block;
+      opacity: 0;
+    }
+    .s2-headline .mark {
+      color: var(--jade-deep);
+      font-style: italic;
+    }
+    .s2-left-note {
+      position: absolute;
+      left: 98px;
+      top: 686px;
+      width: 330px;
+      font-size: 20px;
+      line-height: 1.5;
+      color: var(--ink-soft);
+      opacity: 0;
+    }
+    .s2-win {
+      position: absolute;
+      left: 520px;
+      top: 80px;
+      width: 1320px;
+      height: 920px;
+      border-radius: 22px;
+      background: var(--paper);
+      border: 1.5px solid var(--line);
+      overflow: hidden;
+    }
+    .s2-chrome {
+      height: 62px;
+      border-bottom: 1.5px solid var(--line);
+      display: flex;
+      align-items: center;
+      padding: 0 22px;
+      gap: 8px;
+      background: #fcfaf6;
+    }
+    .s2-dot {
+      width: 12px;
+      height: 12px;
+      border-radius: 50%;
+      background: #ddd8cd;
+    }
+    .s2-chrome-title {
+      margin-left: 16px;
+      font-size: 16px;
+      font-weight: 600;
+      letter-spacing: 0.02em;
+      color: var(--ink-soft);
+    }
+    .s2-chrome-tab {
+      margin-left: 22px;
+      padding: 6px 14px;
+      border-radius: 999px;
+      background: var(--sage-pale);
+      font-size: 14px;
+      font-weight: 600;
+      color: var(--ink);
+    }
+    .s2-clock {
+      margin-left: auto;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      font-size: 16px;
+      font-weight: 600;
+      font-variant-numeric: tabular-nums;
+      color: var(--ink);
+    }
+    .s2-speed {
+      padding: 5px 10px;
+      border: 1.5px solid var(--line);
+      border-radius: 999px;
+      font-size: 12px;
+      letter-spacing: 0.1em;
+      color: var(--ink-soft);
+    }
+    .s2-body {
+      display: flex;
+      height: 858px;
+    }
+    .s2-side {
+      width: 230px;
+      border-right: 1.5px solid var(--line);
+      padding: 22px 16px;
+      background: #fdfcf9;
+    }
+    .s2-side-brand {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 0 8px;
+      font-size: 22px;
+      font-weight: 700;
+      letter-spacing: -0.03em;
+    }
+    .s2-side-brand svg {
+      width: 18px;
+      height: 23px;
+    }
+    .s2-side-label {
+      margin: 30px 8px 10px;
+      font-size: 11px;
+      font-weight: 600;
+      letter-spacing: 0.16em;
+      text-transform: uppercase;
+      color: var(--ink-soft);
+    }
+    .s2-nav {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+    .s2-nav-item {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      height: 46px;
+      padding: 0 12px;
+      border-radius: 9px;
+      font-size: 16px;
+      font-weight: 500;
+      color: var(--ink-soft);
+    }
+    .s2-nav-item.active {
+      background: var(--sage-pale);
+      color: var(--ink);
+      font-weight: 600;
+    }
+    .s2-nav-n {
+      font-size: 13px;
+      font-weight: 600;
+      padding: 2px 8px;
+      border-radius: 999px;
+      background: var(--jade-deep);
+      color: #fff;
+      font-variant-numeric: tabular-nums;
+    }
+    .s2-nav-item:not(.active) .s2-nav-n {
+      background: #eeeae1;
+      color: var(--ink-soft);
+    }
+    .s2-side-task {
+      display: flex;
+      gap: 9px;
+      align-items: flex-start;
+      padding: 9px 8px;
+      font-size: 14px;
+      line-height: 1.3;
+      color: var(--ink-soft);
+    }
+    .s2-side-task i {
+      flex: 0 0 8px;
+      width: 8px;
+      height: 8px;
+      margin-top: 5px;
+      border-radius: 50%;
+      background: var(--jade);
+    }
+    .s2-side-task.dim i {
+      background: #d8d3c8;
+    }
+    .s2-main {
+      width: 760px;
+      padding: 26px 26px 0;
+      position: relative;
+      overflow: hidden;
+    }
+    .s2-main-head {
+      display: flex;
+      align-items: flex-end;
+      justify-content: space-between;
+    }
+    .s2-main-title {
+      font-family: "Newsreader", Georgia, serif;
+      font-size: 44px;
+      line-height: 1;
+      letter-spacing: -0.035em;
+    }
+    .s2-main-sub {
+      margin-top: 6px;
+      font-size: 16px;
+      color: var(--ink-soft);
+      font-variant-numeric: tabular-nums;
+    }
+    .s2-progress {
+      margin-top: 18px;
+      height: 6px;
+      border-radius: 4px;
+      background: #ece9e0;
+      overflow: hidden;
+    }
+    .s2-progress-bar {
+      height: 100%;
+      width: 100%;
+      background: var(--jade);
+      transform-origin: 0 50%;
+    }
+    .s2-list {
+      position: relative;
+      margin-top: 16px;
+    }
+    .s2-row {
+      position: relative;
+      height: 92px;
+      border-top: 1.5px solid #eeeae1;
+      display: flex;
+      align-items: center;
+      gap: 14px;
+      padding: 0 8px;
+    }
+    .s2-row:last-child {
+      border-bottom: 1.5px solid #eeeae1;
+    }
+    .s2-avatar {
+      flex: 0 0 44px;
+      width: 44px;
+      height: 44px;
+      border-radius: 50%;
+      display: grid;
+      place-items: center;
+      font-size: 16px;
+      font-weight: 600;
+      color: var(--ink);
+    }
+    .s2-row-body {
+      flex: 1;
+      min-width: 0;
+    }
+    .s2-sender {
+      font-size: 21px;
+      font-weight: 600;
+      letter-spacing: -0.015em;
+      line-height: 1.2;
+    }
+    .s2-subject {
+      margin-top: 4px;
+      font-size: 17px;
+      color: var(--ink-soft);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .s2-time {
+      flex: 0 0 54px;
+      text-align: right;
+      font-size: 14px;
+      color: var(--ink-soft);
+      font-variant-numeric: tabular-nums;
+    }
+    .s2-check {
+      flex: 0 0 26px;
+      width: 26px;
+      height: 26px;
+      border-radius: 50%;
+      border: 2px solid var(--line);
+      position: relative;
+    }
+    .s2-check svg {
+      position: absolute;
+      inset: 3px;
+      width: 20px;
+      height: 20px;
+      opacity: 0;
+    }
+    .s2-chip {
+      position: absolute;
+      right: 8px;
+      top: 12px;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      padding: 4px 10px;
+      border-radius: 999px;
+      font-size: 12px;
+      font-weight: 600;
+      letter-spacing: 0.02em;
+      background: var(--jade-light);
+      color: var(--jade-deep);
+      opacity: 0;
+    }
+    .s2-star {
+      position: absolute;
+      right: 12px;
+      bottom: 12px;
+      width: 20px;
+      height: 20px;
+      opacity: 0;
+    }
+    .s2-scan {
+      position: absolute;
+      left: 0;
+      right: 0;
+      top: 0;
+      height: 3px;
+      background: var(--jade);
+      opacity: 0.55;
+      z-index: 3;
+    }
+    .s2-list-foot {
+      margin-top: 14px;
+      display: flex;
+      justify-content: space-between;
+      font-size: 14px;
+      color: var(--ink-soft);
+      font-variant-numeric: tabular-nums;
+    }
+    .s2-rail {
+      width: 330px;
+      border-left: 1.5px solid var(--line);
+      padding: 26px 24px;
+      background: #fbf9f2;
+    }
+    .s2-rail-title {
+      font-size: 12px;
+      font-weight: 600;
+      letter-spacing: 0.16em;
+      text-transform: uppercase;
+      color: var(--ink-soft);
+    }
+    .s2-stats {
+      margin-top: 18px;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+    .s2-stat {
+      display: flex;
+      align-items: baseline;
+      justify-content: space-between;
+      padding: 12px 14px;
+      border-radius: 12px;
+      background: var(--paper);
+      border: 1.5px solid #eae6dc;
+    }
+    .s2-stat b {
+      font-size: 30px;
+      font-weight: 500;
+      font-family: "Newsreader", Georgia, serif;
+      font-variant-numeric: tabular-nums;
+      line-height: 1;
+    }
+    .s2-stat span {
+      font-size: 14px;
+      color: var(--ink-soft);
+    }
+    .s2-stat.star b {
+      color: var(--jade-deep);
+    }
+    .s2-drafts {
+      margin-top: 22px;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+    .s2-draft {
+      border: 1.5px solid #ded9cd;
+      border-radius: 12px;
+      background: var(--paper);
+      padding: 12px 13px;
+      opacity: 0;
+    }
+    .s2-draft-top {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      font-size: 13px;
+      font-weight: 600;
+      color: var(--jade-deep);
+    }
+    .s2-draft-to {
+      font-size: 16px;
+      font-weight: 600;
+      margin-top: 6px;
+      letter-spacing: -0.01em;
+    }
+    .s2-draft-line {
+      margin-top: 8px;
+      height: 7px;
+      border-radius: 4px;
+      background: #ece8dd;
+    }
+    .s2-draft-line.short {
+      width: 64%;
+    }
+    .s2-orb {
+      position: absolute;
+      left: 156px;
+      top: 796px;
+      width: 158px;
+      height: 158px;
+      z-index: 8;
+    }
+    .s2-phone {
+      position: absolute;
+      left: 1580px;
+      top: 742px;
+      width: 300px;
+      height: 560px;
+      border-radius: 40px;
+      background: var(--ink);
+      padding: 9px;
+      z-index: 30;
+      opacity: 0;
+    }
+    .s2-phone-screen {
+      width: 100%;
+      height: 100%;
+      border-radius: 32px;
+      background: #f6f3ec;
+      padding: 16px;
+      position: relative;
+      overflow: hidden;
+    }
+    .s2-phone-time {
+      text-align: center;
+      font-size: 13px;
+      color: var(--ink-soft);
+      font-weight: 600;
+    }
+    .s2-notif {
+      margin-top: 16px;
+      border-radius: 16px;
+      background: var(--paper);
+      padding: 14px;
+      display: flex;
+      gap: 11px;
+    }
+    .s2-notif-icon {
+      flex: 0 0 38px;
+      width: 38px;
+      height: 38px;
+      border-radius: 10px;
+      background: var(--jade);
+      display: grid;
+      place-items: center;
+    }
+    .s2-notif-icon svg {
+      width: 20px;
+      height: 24px;
+    }
+    .s2-notif-body {
+      flex: 1;
+    }
+    .s2-notif-top {
+      display: flex;
+      justify-content: space-between;
+      font-size: 12px;
+      font-weight: 600;
+      color: var(--ink-soft);
+    }
+    .s2-notif-title {
+      margin-top: 3px;
+      font-size: 15px;
+      font-weight: 600;
+      line-height: 1.25;
+      color: var(--ink);
+    }
+    .s2-notif-sub {
+      margin-top: 3px;
+      font-size: 13px;
+      color: var(--ink-soft);
+    }
+    .s2-buzz-lines {
+      position: absolute;
+      left: 1540px;
+      top: 812px;
+      width: 60px;
+      height: 120px;
+      z-index: 29;
+      opacity: 0;
+    }
+    .s2-done {
+      position: absolute;
+      inset: 0;
+      background: var(--jade-deep);
+      z-index: 60;
+      display: grid;
+      place-items: center;
+    }
+    .s2-done-stage {
+      text-align: center;
+      color: var(--ivory);
+      width: 1400px;
+    }
+    .s2-done-kicker {
+      display: inline-flex;
+      align-items: center;
+      gap: 12px;
+      font-size: 20px;
+      font-weight: 600;
+      letter-spacing: 0.2em;
+      text-transform: uppercase;
+      color: #eaf4e6;
+    }
+    .s2-done-kicker i {
+      width: 34px;
+      height: 2px;
+      background: #eaf4e6;
+    }
+    .s2-done-word {
+      margin-top: 40px;
+      font-family: "Newsreader", Georgia, serif;
+      font-style: italic;
+      font-weight: 400;
+      font-size: 280px;
+      line-height: 0.9;
+      letter-spacing: -0.05em;
+      color: var(--ivory);
+    }
+    .s2-done-note {
+      margin-top: 8px;
+      font-family: "Newsreader", Georgia, serif;
+      font-size: 40px;
+      letter-spacing: -0.02em;
+      color: #dcebd5;
+    }
+    .s2-done-badge {
+      position: absolute;
+      right: 300px;
+      top: 220px;
+      width: 132px;
+      height: 132px;
+      border-radius: 50%;
+      border: 3px solid #eff7ea;
+      display: grid;
+      place-items: center;
+      opacity: 0;
+    }
+    .s2-done-badge svg {
+      width: 66px;
+      height: 66px;
+    }
+    .s2-grain {
+      position: absolute;
+      left: -10%;
+      top: -10%;
+      width: 120%;
+      height: 120%;
+      background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.8' numOctaves='2' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+      opacity: 0.045;
+      z-index: 55;
+      pointer-events: none;
+    }
+    .s2-wipe {
+      position: absolute;
+      inset: 0;
+      background: var(--jade);
+      z-index: 70;
+    }
+  </style>
+
+  <div data-hf-id="hf-u16y" id="root" data-composition-id="s2" data-width="1920" data-height="1080">
+    <div data-hf-id="hf-xjq1" class="s2-kicker"><i data-hf-id="hf-wt6k"></i>Task 01 — Inbox</div>
+    <div data-hf-id="hf-2c9y" class="s2-headline" id="s2-headline">
+      <span data-hf-id="hf-fw28" class="s2-hl-word">40</span> <span data-hf-id="hf-xf09" class="s2-hl-word">emails.</span><br data-hf-id="hf-x5px" />
+      <span data-hf-id="hf-ppk7" class="s2-hl-word">Sorted,</span> <span data-hf-id="hf-xvh1" class="s2-hl-word">starred,</span><br data-hf-id="hf-rsrt" />
+      <span data-hf-id="hf-z77o" class="s2-hl-word">replies</span> <span data-hf-id="hf-jdyf" class="s2-hl-word mark">drafted.</span>
+    </div>
+    <div data-hf-id="hf-biuf" class="s2-left-note" id="s2-left-note">It reads, sorts and answers.<br data-hf-id="hf-szow" />You get the summary.</div>
+
+    <div data-hf-id="hf-dwh6" class="s2-win" id="s2-win">
+      <div data-hf-id="hf-t35u" class="s2-chrome">
+        <span data-hf-id="hf-5688" class="s2-dot"></span><span data-hf-id="hf-6z40" class="s2-dot"></span><span data-hf-id="hf-5s6x" class="s2-dot"></span>
+        <span data-hf-id="hf-36d0" class="s2-chrome-title">Kelp</span>
+        <span data-hf-id="hf-iy7z" class="s2-chrome-tab">Inbox · working</span>
+        <div data-hf-id="hf-yb6m" class="s2-clock"><span data-hf-id="hf-8kyo" class="s2-speed">TIME-LAPSE ×40</span><span data-hf-id="hf-lnck" id="s2-clock">08:02</span></div>
+      </div>
+      <div data-hf-id="hf-vkz4" class="s2-body">
+        <div data-hf-id="hf-a3p1" class="s2-side">
+          <div data-hf-id="hf-zx71" class="s2-side-brand">
+            <svg data-hf-id="hf-7lbv" viewBox="0 0 24 30" fill="none" aria-hidden="true">
+              <path data-hf-id="hf-vg44" d="M12 29V14" stroke="#2f7b45" stroke-width="2.4" stroke-linecap="round" />
+              <path data-hf-id="hf-qk1y" d="M12 17C7 17 4 13.8 4 9.2C9 9.2 12 12 12 17Z" fill="#59b26f" />
+              <path data-hf-id="hf-negc" d="M12 13C12 8 15 5 20 5C20 10 17 13 12 13Z" fill="#59b26f" />
+            </svg>
+            kelp
+          </div>
+          <div data-hf-id="hf-fqtf" class="s2-side-label">Mail</div>
+          <div data-hf-id="hf-is6z" class="s2-nav">
+            <div data-hf-id="hf-vl6x" class="s2-nav-item active"><span data-hf-id="hf-8ae7">Inbox</span><span data-hf-id="hf-knvc" class="s2-nav-n" id="s2-nav-count">40</span></div>
+            <div data-hf-id="hf-64pt" class="s2-nav-item"><span data-hf-id="hf-kflt">Drafts</span><span data-hf-id="hf-c2lh" class="s2-nav-n" id="s2-nav-drafts">0</span></div>
+            <div data-hf-id="hf-8vat" class="s2-nav-item"><span data-hf-id="hf-u1m1">Archive</span><span data-hf-id="hf-txds" class="s2-nav-n">1,204</span></div>
+          </div>
+          <div data-hf-id="hf-bu4t" class="s2-side-label">Today</div>
+          <div data-hf-id="hf-6uzd" class="s2-side-task"><i data-hf-id="hf-zeb8"></i><span data-hf-id="hf-fxjg">Clear my inbox</span></div>
+          <div data-hf-id="hf-lpxz" class="s2-side-task dim"><i data-hf-id="hf-y7e5"></i><span data-hf-id="hf-yj56">Find flights to Berlin</span></div>
+          <div data-hf-id="hf-z0rb" class="s2-side-task dim"><i data-hf-id="hf-ylp6"></i><span data-hf-id="hf-e0fg">File my receipts</span></div>
+          <div data-hf-id="hf-1s1u" class="s2-side-label">Boundaries</div>
+          <div data-hf-id="hf-gw19" class="s2-side-task"><i data-hf-id="hf-0l8b"></i><span data-hf-id="hf-dgy7">No sending without you</span></div>
+        </div>
+
+        <div data-hf-id="hf-52tf" class="s2-main">
+          <div data-hf-id="hf-s35m" class="s2-main-head">
+            <div data-hf-id="hf-yeow">
+              <div data-hf-id="hf-yf8u" class="s2-main-title">Inbox</div>
+              <div data-hf-id="hf-hz3d" class="s2-main-sub"><span data-hf-id="hf-1vhe" id="s2-unread">40 unread</span> · <span data-hf-id="hf-m0xm" id="s2-scanned">0</span> scanned</div>
+            </div>
+            <div data-hf-id="hf-coud" class="s2-main-sub">Auto-sort on</div>
+          </div>
+          <div data-hf-id="hf-7owd" class="s2-progress"><div data-hf-id="hf-zel4" class="s2-progress-bar" id="s2-progress"></div></div>
+
+          <div data-hf-id="hf-f2gu" class="s2-list" id="s2-list">
+            <div data-hf-id="hf-sctn" class="s2-scan" id="s2-scan" data-layout-ignore></div>
+
+            <div data-hf-id="hf-huvc" class="s2-row" id="s2-row-1">
+              <div data-hf-id="hf-102z" class="s2-avatar" style="background: #f0e7c5">AR</div>
+              <div data-hf-id="hf-9y7x" class="s2-row-body">
+                <div data-hf-id="hf-vi1j" class="s2-sender">Ana Ribeiro</div>
+                <div data-hf-id="hf-iop8" class="s2-subject">Re: Thursday dinner — I can do 8pm</div>
+              </div>
+              <div data-hf-id="hf-40nt" class="s2-time">07:58</div>
+              <div data-hf-id="hf-wp7w" class="s2-check"><svg data-hf-id="hf-a7md" viewBox="0 0 24 24" fill="none"><path data-hf-id="hf-mdgw" d="M5 12.5L10 17.5L19 7" stroke="#2f7b45" stroke-width="3.4" stroke-linecap="round" stroke-linejoin="round" /></svg></div>
+              <div data-hf-id="hf-6mf4" class="s2-chip">Reply drafted</div>
+            </div>
+
+            <div data-hf-id="hf-qir7" class="s2-row" id="s2-row-2">
+              <div data-hf-id="hf-2xty" class="s2-avatar" style="background: #e4f0e2">BB</div>
+              <div data-hf-id="hf-a175" class="s2-row-body">
+                <div data-hf-id="hf-nuaz" class="s2-sender">Berlin Bewegt</div>
+                <div data-hf-id="hf-bihr" class="s2-subject">Your ticket is ready for Thursday</div>
+              </div>
+              <div data-hf-id="hf-zo8r" class="s2-time">07:41</div>
+              <div data-hf-id="hf-cqis" class="s2-check"><svg data-hf-id="hf-k9qh" viewBox="0 0 24 24" fill="none"><path data-hf-id="hf-29oo" d="M5 12.5L10 17.5L19 7" stroke="#2f7b45" stroke-width="3.4" stroke-linecap="round" stroke-linejoin="round" /></svg></div>
+              <div data-hf-id="hf-gu2r" class="s2-chip">Filed · travel</div>
+            </div>
+
+            <div data-hf-id="hf-mkn6" class="s2-row" id="s2-row-3">
+              <div data-hf-id="hf-9z70" class="s2-avatar" style="background: #f0e7c5">NF</div>
+              <div data-hf-id="hf-b848" class="s2-row-body">
+                <div data-hf-id="hf-jxk2" class="s2-sender">Noah Feld</div>
+                <div data-hf-id="hf-xzf7" class="s2-subject">Q3 numbers — a quick look before Friday</div>
+              </div>
+              <div data-hf-id="hf-3bq0" class="s2-time">07:22</div>
+              <div data-hf-id="hf-bjlp" class="s2-check"><svg data-hf-id="hf-lgnk" viewBox="0 0 24 24" fill="none"><path data-hf-id="hf-12rl" d="M5 12.5L10 17.5L19 7" stroke="#2f7b45" stroke-width="3.4" stroke-linecap="round" stroke-linejoin="round" /></svg></div>
+              <div data-hf-id="hf-im3t" class="s2-chip">Starred</div>
+            </div>
+
+            <div data-hf-id="hf-3sxh" class="s2-row" id="s2-row-4">
+              <div data-hf-id="hf-o5wz" class="s2-avatar" style="background: #e4f0e2">SB</div>
+              <div data-hf-id="hf-att7" class="s2-row-body">
+                <div data-hf-id="hf-tnk2" class="s2-sender">Stadt Bibliothek</div>
+                <div data-hf-id="hf-8viz" class="s2-subject">Two books are due back on Friday</div>
+              </div>
+              <div data-hf-id="hf-xtj0" class="s2-time">06:58</div>
+              <div data-hf-id="hf-bxwq" class="s2-check"><svg data-hf-id="hf-l2cj" viewBox="0 0 24 24" fill="none"><path data-hf-id="hf-1h2m" d="M5 12.5L10 17.5L19 7" stroke="#2f7b45" stroke-width="3.4" stroke-linecap="round" stroke-linejoin="round" /></svg></div>
+              <div data-hf-id="hf-hcsf" class="s2-chip">Filed · personal</div>
+            </div>
+
+            <div data-hf-id="hf-319o" class="s2-row" id="s2-row-5">
+              <div data-hf-id="hf-hjys" class="s2-avatar" style="background: #f0e7c5">MS</div>
+              <div data-hf-id="hf-8ua2" class="s2-row-body">
+                <div data-hf-id="hf-66p9" class="s2-sender">Mara Stein</div>
+                <div data-hf-id="hf-g91h" class="s2-subject">Photos from the studio, take your pick</div>
+              </div>
+              <div data-hf-id="hf-t3r6" class="s2-time">06:30</div>
+              <div data-hf-id="hf-dxfv" class="s2-check"><svg data-hf-id="hf-j2te" viewBox="0 0 24 24" fill="none"><path data-hf-id="hf-0a5j" d="M5 12.5L10 17.5L19 7" stroke="#2f7b45" stroke-width="3.4" stroke-linecap="round" stroke-linejoin="round" /></svg></div>
+              <div data-hf-id="hf-erml" class="s2-chip">Starred</div>
+            </div>
+
+            <div data-hf-id="hf-dwrb" class="s2-row" id="s2-row-6">
+              <div data-hf-id="hf-6es7" class="s2-avatar" style="background: #e4f0e2">FA</div>
+              <div data-hf-id="hf-8fz1" class="s2-row-body">
+                <div data-hf-id="hf-pxjn" class="s2-sender">Finanzamt</div>
+                <div data-hf-id="hf-tka9" class="s2-subject">Your receipt is attached — June</div>
+              </div>
+              <div data-hf-id="hf-ckkn" class="s2-time">05:54</div>
+              <div data-hf-id="hf-ebqw" class="s2-check"><svg data-hf-id="hf-ioid" viewBox="0 0 24 24" fill="none"><path data-hf-id="hf-0ogk" d="M5 12.5L10 17.5L19 7" stroke="#2f7b45" stroke-width="3.4" stroke-linecap="round" stroke-linejoin="round" /></svg></div>
+              <div data-hf-id="hf-s1w6" class="s2-chip">Filed · receipts</div>
+            </div>
+          </div>
+
+          <div data-hf-id="hf-wy4h" class="s2-list-foot"><span data-hf-id="hf-lpqe" id="s2-foot">Scanning 0 of 40</span><span data-hf-id="hf-toq7">Sorting rules · 6</span></div>
+        </div>
+
+        <div data-hf-id="hf-7nfg" class="s2-rail">
+          <div data-hf-id="hf-uvdc" class="s2-rail-title">Today's sort</div>
+          <div data-hf-id="hf-z2kd" class="s2-stats">
+            <div data-hf-id="hf-4fii" class="s2-stat"><b data-hf-id="hf-7iab" id="s2-stat-filed">0</b><span data-hf-id="hf-lnbt">Filed</span></div>
+            <div data-hf-id="hf-go9a" class="s2-stat star"><b data-hf-id="hf-mhue" id="s2-stat-starred">0</b><span data-hf-id="hf-scvg">Starred</span></div>
+            <div data-hf-id="hf-fiha" class="s2-stat"><b data-hf-id="hf-dil3" id="s2-stat-drafts">0</b><span data-hf-id="hf-gvbu">Drafts ready</span></div>
+          </div>
+          <div data-hf-id="hf-zh61" class="s2-rail-title" style="margin-top: 26px">Drafts for you</div>
+          <div data-hf-id="hf-dt44" class="s2-drafts">
+            <div data-hf-id="hf-aesc" class="s2-draft" id="s2-draft-1">
+              <div data-hf-id="hf-iq1v" class="s2-draft-top"><span data-hf-id="hf-4bj4">DRAFT · TO ANA</span><span data-hf-id="hf-ikog">1</span></div>
+              <div data-hf-id="hf-d2ms" class="s2-draft-to">Thursday, 8pm works</div>
+              <div data-hf-id="hf-j1fg" class="s2-draft-line"></div>
+              <div data-hf-id="hf-kghe" class="s2-draft-line short"></div>
+            </div>
+            <div data-hf-id="hf-la9z" class="s2-draft" id="s2-draft-2">
+              <div data-hf-id="hf-xe1v" class="s2-draft-top"><span data-hf-id="hf-dhzg">DRAFT · TO NOAH</span><span data-hf-id="hf-hdrd">2</span></div>
+              <div data-hf-id="hf-m9pa" class="s2-draft-to">Q3: two notes</div>
+              <div data-hf-id="hf-snzo" class="s2-draft-line"></div>
+              <div data-hf-id="hf-71va" class="s2-draft-line short"></div>
+            </div>
+            <div data-hf-id="hf-f4k6" class="s2-draft" id="s2-draft-3">
+              <div data-hf-id="hf-wzqu" class="s2-draft-top"><span data-hf-id="hf-r5rp">DRAFT · TO MARA</span><span data-hf-id="hf-hs2e">3</span></div>
+              <div data-hf-id="hf-kaoe" class="s2-draft-to">These three, please</div>
+              <div data-hf-id="hf-rh2l" class="s2-draft-line"></div>
+              <div data-hf-id="hf-7g6b" class="s2-draft-line short"></div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <svg data-hf-id="hf-kjk9" class="s2-orb" id="s2-orb" viewBox="0 0 200 200" aria-hidden="true">
+      <g data-hf-id="hf-ti81" id="s2-orb-body">
+        <path data-hf-id="hf-rday" d="M100 34C139 34 166 62 168 102C170 143 142 170 100 170C58 170 30 143 32 102C34 62 61 34 100 34Z" fill="#59b26f" />
+        <path data-hf-id="hf-yhlj" d="M100 44C103 26 113 17 129 15C128 30 118 40 100 44Z" fill="#2f7b45" />
+        <path data-hf-id="hf-tzk2" d="M98 46C92 31 81 25 66 27C70 41 82 48 98 46Z" fill="#3d8b52" />
+        <path data-hf-id="hf-qbx1" d="M100 52V38" stroke="#1b211c" stroke-width="3" stroke-linecap="round" />
+        <ellipse data-hf-id="hf-2nvp" cx="73" cy="104" rx="15" ry="18" fill="#fbf9f5" />
+        <ellipse data-hf-id="hf-zcmn" cx="127" cy="104" rx="15" ry="18" fill="#fbf9f5" />
+        <g data-hf-id="hf-ml90" class="s2-eyes">
+          <circle data-hf-id="hf-ypag" class="s2-pupil" cx="77" cy="106" r="7" fill="#1b211c" />
+          <circle data-hf-id="hf-z9td" class="s2-pupil" cx="131" cy="106" r="7" fill="#1b211c" />
+        </g>
+        <path data-hf-id="hf-h10m" d="M88 140C94 145 106 145 112 140" stroke="#1b211c" stroke-width="4" stroke-linecap="round" fill="none" />
+      </g>
+    </svg>
+
+    <div data-hf-id="hf-3ylq" class="s2-phone" id="s2-phone">
+      <div data-hf-id="hf-hxjt" class="s2-phone-screen">
+        <div data-hf-id="hf-eptn" class="s2-phone-time">Tuesday 9:41</div>
+        <div data-hf-id="hf-thaa" class="s2-notif">
+          <div data-hf-id="hf-ffr8" class="s2-notif-icon">
+            <svg data-hf-id="hf-5852" viewBox="0 0 24 30" fill="none">
+              <path data-hf-id="hf-xbda" d="M12 29V14" stroke="#fbf9f5" stroke-width="2.4" stroke-linecap="round" />
+              <path data-hf-id="hf-7gns" d="M12 17C7 17 4 13.8 4 9.2C9 9.2 12 12 12 17Z" fill="#fbf9f5" />
+              <path data-hf-id="hf-4kou" d="M12 13C12 8 15 5 20 5C20 10 17 13 12 13Z" fill="#fbf9f5" />
+            </svg>
+          </div>
+          <div data-hf-id="hf-e9fv" class="s2-notif-body">
+            <div data-hf-id="hf-kig0" class="s2-notif-top"><span data-hf-id="hf-v5t1">kelp</span><span data-hf-id="hf-9yvn">now</span></div>
+            <div data-hf-id="hf-q4tk" class="s2-notif-title">3 replies are drafted</div>
+            <div data-hf-id="hf-x4de" class="s2-notif-sub">Tap to review before sending.</div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <svg data-hf-id="hf-wi96" class="s2-buzz-lines" id="s2-buzz" viewBox="0 0 60 120" fill="none" aria-hidden="true">
+      <path data-hf-id="hf-dfw9" d="M50 18C34 30 26 45 26 60C26 75 34 90 50 102" stroke="#1b211c" stroke-width="2.4" stroke-linecap="round" opacity=".5" />
+      <path data-hf-id="hf-9p5n" d="M40 30C30 40 24 50 24 60C24 70 30 80 40 90" stroke="#1b211c" stroke-width="2.4" stroke-linecap="round" opacity=".35" />
+      <path data-hf-id="hf-owom" d="M30 42C25 48 20 54 20 60C20 66 25 72 30 78" stroke="#1b211c" stroke-width="2.4" stroke-linecap="round" opacity=".22" />
+    </svg>
+
+    <div data-hf-id="hf-95e9" class="s2-done" id="s2-done" data-layout-allow-overflow>
+      <div data-hf-id="hf-x3cs" class="s2-done-stage" id="s2-done-stage" data-layout-allow-overlap>
+        <div data-hf-id="hf-d364" class="s2-done-kicker" id="s2-done-kicker"><i data-hf-id="hf-0zjc"></i>Task 1<i data-hf-id="hf-zsm9"></i></div>
+        <div data-hf-id="hf-c6uk" class="s2-done-word" id="s2-done-word">done.</div>
+        <div data-hf-id="hf-v5vc" class="s2-done-note" id="s2-done-note">40 emails handled while you were away.</div>
+      </div>
+      <div data-hf-id="hf-63uq" class="s2-done-badge" id="s2-done-badge">
+        <svg data-hf-id="hf-jvfg" viewBox="0 0 24 24" fill="none"><path data-hf-id="hf-0tlb" d="M5 12.5L10 17.5L19 7" stroke="#eff7ea" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round" /></svg>
+      </div>
+    </div>
+
+    <div data-hf-id="hf-ugen" class="s2-grain" id="s2-grain" data-layout-ignore></div>
+    <div data-hf-id="hf-ge9n" class="s2-wipe" id="s2-wipe" data-layout-allow-overflow></div>
+  </div>
+
+  <script>
+    (function () {
+      const tl = gsap.timeline({ paused: true });
+      const spark = [4, 19, 8, 23, 2, 15, 11, 6, 21, 13];
+
+      gsap.set(".s2-eyes", { transformOrigin: "50% 50%" });
+      gsap.set("#s2-scan", { y: 0 });
+      gsap.set("#s2-clock", { textContent: "08:02" });
+
+      tl.fromTo("#s2-wipe", { x: 0 }, { x: -1920, duration: 0.7, ease: "power3.inOut" }, 0.05);
+      tl.fromTo("#s2-win", { opacity: 0, y: 26, scale: 0.985 }, { opacity: 1, y: 0, scale: 1, duration: 0.7, ease: "power3.out" }, 0.25);
+      tl.fromTo("#s2-orb", { opacity: 0, y: 22 }, { opacity: 1, y: 0, duration: 0.5, ease: "back.out(1.5)" }, 0.55);
+      tl.fromTo(".s2-kicker", { opacity: 0, x: -10 }, { opacity: 1, x: 0, duration: 0.4, ease: "power2.out" }, 0.6);
+
+      const clock = { h: 8, m: 2 };
+      tl.to(
+        clock,
+        {
+          m: 41,
+          duration: 22,
+          ease: "power1.inOut",
+          onUpdate: () => {
+            const mins = Math.round(clock.m) % 60;
+            const hrs = String(clock.h).padStart(2, "0");
+            document.getElementById("s2-clock").textContent = hrs + ":" + String(mins).padStart(2, "0");
+          },
+        },
+        1.8,
+      );
+
+      const count = { v: 40 };
+      const filed = { v: 0 };
+      const starred = { v: 0 };
+      const drafts = { v: 0 };
+      tl.to(
+        count,
+        {
+          v: 0,
+          duration: 10.5,
+          ease: "power1.inOut",
+          onUpdate: () => {
+            const n = Math.max(0, Math.round(count.v));
+            document.getElementById("s2-nav-count").textContent = String(n);
+            document.getElementById("s2-unread").textContent = n + " unread";
+            document.getElementById("s2-scanned").textContent = String(40 - n);
+            document.getElementById("s2-foot").textContent = "Scanning " + (40 - n) + " of 40";
+          },
+        },
+        2.1,
+      );
+      tl.to(
+        filed,
+        {
+          v: 34,
+          duration: 10.5,
+          ease: "power1.inOut",
+          onUpdate: () => {
+            document.getElementById("s2-stat-filed").textContent = String(Math.round(filed.v));
+          },
+        },
+        2.1,
+      );
+      tl.to(
+        starred,
+        {
+          v: 3,
+          duration: 10.5,
+          ease: "power1.inOut",
+          onUpdate: () => {
+            document.getElementById("s2-stat-starred").textContent = String(Math.round(starred.v));
+          },
+        },
+        2.1,
+      );
+      tl.to(
+        drafts,
+        {
+          v: 3,
+          duration: 8.5,
+          ease: "power1.inOut",
+          onUpdate: () => {
+            document.getElementById("s2-stat-drafts").textContent = String(Math.round(drafts.v));
+            document.getElementById("s2-nav-drafts").textContent = String(Math.round(drafts.v));
+          },
+        },
+        4.2,
+      );
+
+      for (let i = 0; i < 6; i++) {
+        const t = 2.3 + i * 1.55;
+        const row = "#s2-row-" + (i + 1);
+        tl.to("#s2-scan", { y: (i + 1) * 92 - 40, duration: 0.5, ease: "power2.inOut" }, t - 0.5);
+        tl.to(row + " .s2-check", { borderColor: "#59b26f", duration: 0.2 }, t);
+        tl.to(row + " .s2-check svg", { opacity: 1, duration: 0.18, ease: "power2.out" }, t + 0.05);
+        tl.to(row + " .s2-chip", { opacity: 1, y: 0, duration: 0.26, ease: "power3.out" }, t + 0.15);
+        tl.to(row, { x: 10, backgroundColor: "#f6fbf4", duration: 0.3, ease: "power2.out" }, t + 0.05);
+        tl.to(row + " .s2-sender", { opacity: 0.62, duration: 0.3 }, t + 0.05);
+        tl.to(row + " .s2-subject", { opacity: 0.55, duration: 0.3 }, t + 0.05);
+      }
+
+      tl.to("#s2-scan", { opacity: 0, duration: 0.25 }, 11.5);
+      tl.fromTo("#s2-progress", { scaleX: 1 }, { scaleX: 0, duration: 10.5, ease: "power1.inOut" }, 2.1);
+      tl.to(".s2-pupil", { x: 8, y: -2, duration: 0.4, ease: "power2.inOut" }, 2.0);
+      tl.to(".s2-pupil", { x: 4, y: 5, duration: 0.5, ease: "power2.inOut" }, 6.2);
+      tl.to(".s2-pupil", { x: 8, y: -1, duration: 0.4, ease: "power2.inOut" }, 9.6);
+      tl.to(".s2-pupil", { x: 2, y: 2, duration: 0.45, ease: "power2.inOut" }, 18.6);
+      tl.to(".s2-pupil", { x: 9, y: -3, duration: 0.45, ease: "power2.inOut" }, 22.2);
+      tl.to(".s2-pupil", { x: 5, y: 1, duration: 0.4, ease: "power2.inOut" }, 25.4);
+
+      for (let i = 0; i < 3; i++) {
+        tl.fromTo("#s2-draft-" + (i + 1), { opacity: 0, y: 16 }, { opacity: 1, y: 0, duration: 0.4, ease: "power3.out" }, 14.8 + i * 1.0);
+      }
+
+      tl.fromTo(
+        "#s2-headline .s2-hl-word",
+        { opacity: 0, y: 12, filter: "blur(6px)" },
+        { opacity: 1, y: 0, filter: "blur(0px)", duration: 0.34, ease: "power3.out", stagger: 0.055 },
+        16.4,
+      );
+      tl.fromTo("#s2-left-note", { opacity: 0, y: 8 }, { opacity: 1, y: 0, duration: 0.4, ease: "power3.out" }, 17.2);
+
+      tl.fromTo("#s2-phone", { opacity: 0, y: 240 }, { opacity: 1, y: 0, duration: 0.5, ease: "power3.out" }, 27.1);
+      tl.fromTo("#s2-buzz", { opacity: 0, x: -8 }, { opacity: 1, x: 0, duration: 0.15, ease: "power1.out" }, 28.0);
+      tl.to("#s2-phone", { x: -6, duration: 0.05, ease: "steps(1)" }, 28.02);
+      tl.to("#s2-phone", { x: 6, duration: 0.05, ease: "steps(1)" }, 28.12);
+      tl.to("#s2-phone", { x: -3, duration: 0.05, ease: "steps(1)" }, 28.22);
+      tl.to("#s2-phone", { x: 0, duration: 0.06, ease: "steps(1)" }, 28.32);
+      tl.to("#s2-buzz", { opacity: 0, duration: 0.3 }, 28.7);
+      tl.to(".s2-pupil", { x: 10, y: -4, duration: 0.25, ease: "power2.out" }, 28.0);
+      tl.to(".s2-pupil", { x: 0, y: 0, duration: 0.3, ease: "power2.inOut" }, 29.2);
+
+      tl.fromTo("#s2-done", { y: 1080 }, { y: 0, duration: 0.5, ease: "power3.in" }, 30.0);
+      tl.fromTo("#s2-done-word", { opacity: 0, scale: 1.35, filter: "blur(10px)" }, { opacity: 1, scale: 1, filter: "blur(0px)", duration: 0.34, ease: "power3.out" }, 30.28);
+      tl.fromTo("#s2-done-kicker", { opacity: 0, y: 10 }, { opacity: 1, y: 0, duration: 0.3, ease: "power3.out" }, 30.2);
+      tl.fromTo("#s2-done-note", { opacity: 0, y: 10 }, { opacity: 1, y: 0, duration: 0.35, ease: "power3.out" }, 30.72);
+      tl.fromTo("#s2-done-badge", { opacity: 0, scale: 0.7 }, { opacity: 1, scale: 1, duration: 0.3, ease: "back.out(1.6)" }, 30.95);
+
+      const buzz = [
+        [30.55, -9],
+        [30.62, 9],
+        [30.69, -5],
+        [30.76, 0],
+      ];
+      buzz.forEach(([t, x]) => tl.to("#s2-done-stage", { x: x, duration: 0.06, ease: "steps(1)" }, t));
+      tl.to("#s2-done-badge", { scale: 1.08, duration: 0.26, ease: "power2.out" }, 32.4);
+      tl.to("#s2-done-badge", { scale: 1, duration: 0.3, ease: "power2.inOut" }, 32.66);
+
+      const blink = (time) => {
+        tl.to(".s2-eyes", { scaleY: 0.12, duration: 0.07, ease: "power2.in" }, time);
+        tl.to(".s2-eyes", { scaleY: 1, duration: 0.12, ease: "power2.out" }, time + 0.08);
+      };
+      blink(1.6);
+      blink(12.2);
+      blink(16.3);
+      blink(20.4);
+      blink(24.6);
+
+      for (let i = 0; i < 34; i++) {
+        const t = 0.2 + i * 0.56;
+        const s = spark[i % spark.length];
+        tl.set("#s2-grain", { x: (s % 5) * 3 - 6, y: ((s * 7) % 5) * 3 - 6 }, t);
+      }
+
+      window.__timelines["s2"] = tl;
+    })();
+  </script>
+</template>

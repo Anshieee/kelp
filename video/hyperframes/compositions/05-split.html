@@ -1,0 +1,593 @@
+<template>
+  <style>
+    @font-face {
+      font-family: "Newsreader";
+      src: url("assets/fonts/newsreader-latin.woff2") format("woff2");
+      font-weight: 300 600;
+      font-style: normal;
+      font-display: block;
+    }
+    @font-face {
+      font-family: "Newsreader";
+      src: url("assets/fonts/newsreader-latin-italic.woff2") format("woff2");
+      font-weight: 300 600;
+      font-style: italic;
+      font-display: block;
+    }
+    @font-face {
+      font-family: "Inter";
+      src: url("assets/fonts/inter-latin-var.woff2") format("woff2");
+      font-weight: 400 700;
+      font-style: normal;
+      font-display: block;
+    }
+    #root {
+      --ivory: #fbf9f5;
+      --paper: #ffffff;
+      --ink: #1b211c;
+      --ink-soft: #4a544e;
+      --jade: #59b26f;
+      --jade-deep: #276b3c;
+      --jade-light: #e4f0e2;
+      --sage: #c9dfbc;
+      --sage-pale: #e8eddf;
+      --verm: #e52d2d;
+      --butter: #f0e7c5;
+      --line: #cdd5c9;
+      position: absolute;
+      inset: 0;
+      overflow: hidden;
+      background: var(--ivory);
+      font-family: "Inter", system-ui, sans-serif;
+      color: var(--ink);
+      -webkit-font-smoothing: antialiased;
+    }
+    #root * {
+      box-sizing: border-box;
+    }
+    .s5-left {
+      position: absolute;
+      left: 0;
+      top: 0;
+      width: 960px;
+      height: 1080px;
+      background: var(--ivory);
+    }
+    .s5-right {
+      position: absolute;
+      left: 960px;
+      top: 0;
+      width: 960px;
+      height: 1080px;
+      background: var(--sage-pale);
+    }
+    .s5-divider {
+      position: absolute;
+      left: 959px;
+      top: 0;
+      width: 2px;
+      height: 1080px;
+      background: var(--ink);
+      opacity: 0.85;
+    }
+    .s5-kicker-l,
+    .s5-kicker-r {
+      position: absolute;
+      top: 104px;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      font-size: 14px;
+      font-weight: 600;
+      letter-spacing: 0.16em;
+      text-transform: uppercase;
+      color: var(--ink-soft);
+    }
+    .s5-kicker-l {
+      left: 120px;
+    }
+    .s5-kicker-r {
+      left: 1040px;
+    }
+    .s5-kicker-l i,
+    .s5-kicker-r i {
+      width: 24px;
+      height: 2px;
+      background: var(--jade);
+    }
+    .s5-headline-l,
+    .s5-headline-r {
+      position: absolute;
+      top: 146px;
+      width: 790px;
+      font-family: "Newsreader", Georgia, serif;
+      font-weight: 400;
+      font-size: 76px;
+      line-height: 1.03;
+      letter-spacing: -0.04em;
+    }
+    .s5-headline-l {
+      left: 116px;
+    }
+    .s5-headline-r {
+      left: 1036px;
+    }
+    .s5-headline-l .word,
+    .s5-headline-r .word {
+      display: inline-block;
+      opacity: 0;
+    }
+    .s5-headline-r .mark {
+      font-style: italic;
+      color: var(--jade-deep);
+    }
+    .s5-desk {
+      position: absolute;
+      left: 0;
+      width: 960px;
+      top: 838px;
+      height: 3px;
+      background: #dfd9cc;
+    }
+    .s5-laptop {
+      position: absolute;
+      left: 196px;
+      top: 470px;
+      width: 560px;
+      height: 372px;
+    }
+    .s5-lid {
+      position: absolute;
+      left: 0;
+      top: 0;
+      width: 560px;
+      height: 340px;
+      border-radius: 26px;
+      background: #dcd6c8;
+      border: 2px solid #c3bcac;
+    }
+    .s5-lid-inner {
+      position: absolute;
+      inset: 14px;
+      border-radius: 16px;
+      background: #e8e3d6;
+    }
+    .s5-lid-shine {
+      position: absolute;
+      left: 30px;
+      top: 26px;
+      width: 180px;
+      height: 120px;
+      border-radius: 50%;
+      background: rgba(255, 255, 255, 0.45);
+    }
+    .s5-sticker {
+      position: absolute;
+      right: 58px;
+      bottom: 54px;
+      width: 92px;
+      height: 92px;
+      border-radius: 50%;
+      background: var(--jade-light);
+      display: grid;
+      place-items: center;
+    }
+    .s5-sticker svg {
+      width: 38px;
+      height: 48px;
+    }
+    .s5-base {
+      position: absolute;
+      left: -14px;
+      top: 340px;
+      width: 588px;
+      height: 24px;
+      border-radius: 4px 4px 20px 20px;
+      background: #c8c1b1;
+    }
+    .s5-base-notch {
+      position: absolute;
+      left: 50%;
+      top: 340px;
+      width: 96px;
+      height: 8px;
+      margin-left: -48px;
+      border-radius: 0 0 8px 8px;
+      background: #aca596;
+    }
+    .s5-caption-l {
+      position: absolute;
+      left: 198px;
+      top: 884px;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      font-size: 19px;
+      color: var(--ink-soft);
+      opacity: 0;
+    }
+    .s5-caption-l .dot {
+      width: 9px;
+      height: 9px;
+      border-radius: 50%;
+      background: #b9b3a4;
+    }
+    .s5-mug {
+      position: absolute;
+      left: 104px;
+      top: 742px;
+      width: 84px;
+      height: 96px;
+    }
+    .s5-mug-body {
+      position: absolute;
+      left: 0;
+      bottom: 0;
+      width: 66px;
+      height: 72px;
+      border-radius: 10px 10px 16px 16px;
+      background: var(--jade);
+    }
+    .s5-mug-handle {
+      position: absolute;
+      right: 0;
+      bottom: 16px;
+      width: 30px;
+      height: 40px;
+      border: 7px solid var(--jade);
+      border-left: 0;
+      border-radius: 0 22px 22px 0;
+    }
+    .s5-book {
+      position: absolute;
+      right: 96px;
+      top: 764px;
+      width: 132px;
+      height: 74px;
+      border-radius: 3px;
+      box-shadow: 0 5px 0 #c9b88f, 0 9px 0 #e6dabb, 0 18px 24px rgba(27, 33, 28, 0.08);
+      border-radius: 4px 10px 10px 4px;
+      background: var(--butter);
+    }
+    .s5-book::after {
+      content: "";
+      position: absolute;
+      left: 16px;
+      right: 16px;
+      top: 14px;
+      height: 2px;
+      background: #d8caa2;
+    }
+    .s5-phone {
+      position: absolute;
+      left: 1268px;
+      top: 392px;
+      width: 356px;
+      height: 642px;
+      border-radius: 48px;
+      background: var(--ink);
+      padding: 11px;
+      z-index: 10;
+    }
+    .s5-phone-screen {
+      width: 100%;
+      height: 100%;
+      border-radius: 38px;
+      background: var(--paper);
+      padding: 20px;
+      position: relative;
+      overflow: hidden;
+    }
+    .s5-p-status {
+      display: flex;
+      justify-content: space-between;
+      font-size: 13px;
+      font-weight: 600;
+      color: var(--ink-soft);
+    }
+    .s5-p-brand {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      margin-top: 14px;
+      font-size: 16px;
+      font-weight: 700;
+    }
+    .s5-p-brand svg {
+      width: 14px;
+      height: 18px;
+    }
+    .s5-p-title {
+      margin-top: 16px;
+      font-family: "Newsreader", Georgia, serif;
+      font-size: 40px;
+      line-height: 1;
+      letter-spacing: -0.035em;
+    }
+    .s5-p-sub {
+      margin-top: 6px;
+      font-size: 13px;
+      color: var(--ink-soft);
+    }
+    .s5-done-list {
+      margin-top: 20px;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+    .s5-done-row {
+      display: flex;
+      align-items: center;
+      gap: 11px;
+      padding: 12px 12px;
+      border: 1.5px solid #e7e2d6;
+      border-radius: 13px;
+      background: #fdfcf8;
+    }
+    .s5-check {
+      flex: 0 0 28px;
+      width: 28px;
+      height: 28px;
+      border-radius: 50%;
+      background: var(--jade);
+      display: grid;
+      place-items: center;
+    }
+    .s5-check svg {
+      width: 16px;
+      height: 16px;
+    }
+    .s5-done-row-body {
+      flex: 1;
+    }
+    .s5-done-row-title {
+      font-size: 15px;
+      font-weight: 600;
+      letter-spacing: -0.01em;
+    }
+    .s5-done-row-sub {
+      margin-top: 2px;
+      font-size: 12px;
+      color: var(--ink-soft);
+    }
+    .s5-done-row-time {
+      font-size: 11px;
+      color: var(--ink-soft);
+      font-variant-numeric: tabular-nums;
+    }
+    .s5-p-foot {
+      position: absolute;
+      left: 20px;
+      right: 20px;
+      bottom: 18px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      font-size: 12px;
+      color: var(--ink-soft);
+      border-top: 1.5px solid #efebe0;
+      padding-top: 12px;
+    }
+    .s5-p-foot b {
+      color: var(--jade-deep);
+      font-weight: 600;
+    }
+    .s5-caption-r {
+      position: absolute;
+      left: 1040px;
+      top: 344px;
+      font-size: 19px;
+      color: #4a5c4c;
+      opacity: 0;
+    }
+    .s5-orb {
+      position: absolute;
+      left: 884px;
+      top: 754px;
+      width: 172px;
+      height: 172px;
+      z-index: 20;
+    }
+    .s5-grain {
+      position: absolute;
+      left: -10%;
+      top: -10%;
+      width: 120%;
+      height: 120%;
+      background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.8' numOctaves='2' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+      opacity: 0.045;
+      z-index: 30;
+      pointer-events: none;
+    }
+    .s5-wipe {
+      position: absolute;
+      inset: 0;
+      background: var(--jade);
+      z-index: 50;
+    }
+    .s5-out {
+      position: absolute;
+      inset: 0;
+      background: var(--ivory);
+      z-index: 55;
+      opacity: 0;
+    }
+  </style>
+
+  <div data-hf-id="hf-4473" id="root" data-composition-id="s5" data-width="1920" data-height="1080">
+    <div data-hf-id="hf-0voe" class="s5-left"></div>
+    <div data-hf-id="hf-fjx1" class="s5-right"></div>
+    <div data-hf-id="hf-i5k0" class="s5-divider"></div>
+
+    <div data-hf-id="hf-ke7d" class="s5-kicker-l" id="s5-kicker-l"><i data-hf-id="hf-wt6k"></i>Task 01 · 02 · 03</div>
+    <div data-hf-id="hf-zo4t" class="s5-kicker-r" id="s5-kicker-r"><i data-hf-id="hf-zeb8"></i>Done today</div>
+
+    <div data-hf-id="hf-riuq" class="s5-headline-l" id="s5-headline-l">
+      <span data-hf-id="hf-o4hg" class="word">It</span> <span data-hf-id="hf-wlk7" class="word">has</span> <span data-hf-id="hf-hgo5" class="word">its</span> <span data-hf-id="hf-kxmj" class="word">own</span><br data-hf-id="hf-x5px" />
+      <span data-hf-id="hf-tysm" class="word">computer.</span>
+    </div>
+    <div data-hf-id="hf-stxy" class="s5-headline-r" id="s5-headline-r">
+      <span data-hf-id="hf-5shr" class="word">Yours</span> <span data-hf-id="hf-xagx" class="word">can</span> <span data-hf-id="hf-l4o4" class="word">stay</span><br data-hf-id="hf-rsrt" />
+      <span data-hf-id="hf-cnpq" class="word mark">closed.</span>
+    </div>
+
+    <div data-hf-id="hf-6iy2" class="s5-desk"></div>
+
+    <div data-hf-id="hf-xhea" class="s5-mug">
+      <div data-hf-id="hf-d8m3" class="s5-mug-body"></div>
+      <div data-hf-id="hf-0bm5" class="s5-mug-handle"></div>
+    </div>
+    <div data-hf-id="hf-lgsy" class="s5-book"></div>
+
+    <div data-hf-id="hf-n9fg" class="s5-laptop" id="s5-laptop">
+      <div data-hf-id="hf-o2eo" class="s5-lid">
+        <div data-hf-id="hf-17cj" class="s5-lid-inner"></div>
+        <div data-hf-id="hf-r5em" class="s5-lid-shine"></div>
+        <div data-hf-id="hf-q8ve" class="s5-sticker">
+          <svg data-hf-id="hf-5852" viewBox="0 0 24 30" fill="none">
+            <path data-hf-id="hf-vg44" d="M12 29V14" stroke="#2f7b45" stroke-width="2.4" stroke-linecap="round" />
+            <path data-hf-id="hf-qk1y" d="M12 17C7 17 4 13.8 4 9.2C9 9.2 12 12 12 17Z" fill="#59b26f" />
+            <path data-hf-id="hf-negc" d="M12 13C12 8 15 5 20 5C20 10 17 13 12 13Z" fill="#59b26f" />
+          </svg>
+        </div>
+      </div>
+      <div data-hf-id="hf-w21m" class="s5-base"></div>
+      <div data-hf-id="hf-5bnb" class="s5-base-notch"></div>
+    </div>
+
+    <div data-hf-id="hf-jp2w" class="s5-caption-l" id="s5-caption-l"><span data-hf-id="hf-9gry" class="dot"></span>Nothing waiting on you.</div>
+
+    <div data-hf-id="hf-qjk6" class="s5-phone" id="s5-phone">
+      <div data-hf-id="hf-7afs" class="s5-phone-screen">
+        <div data-hf-id="hf-h82y" class="s5-p-status"><span data-hf-id="hf-zwmt">9:41</span><span data-hf-id="hf-wgth">▮▮▮</span></div>
+        <div data-hf-id="hf-bwpf" class="s5-p-brand">
+          <svg data-hf-id="hf-be8q" viewBox="0 0 24 30" fill="none">
+            <path data-hf-id="hf-mdm4" d="M12 29V14" stroke="#2f7b45" stroke-width="2.4" stroke-linecap="round" />
+            <path data-hf-id="hf-glqi" d="M12 17C7 17 4 13.8 4 9.2C9 9.2 12 12 12 17Z" fill="#59b26f" />
+            <path data-hf-id="hf-6yro" d="M12 13C12 8 15 5 20 5C20 10 17 13 12 13Z" fill="#59b26f" />
+          </svg>
+          kelp
+        </div>
+        <div data-hf-id="hf-7x7j" class="s5-p-title">Today</div>
+        <div data-hf-id="hf-ih45" class="s5-p-sub">Done while you were away</div>
+
+        <div data-hf-id="hf-05rq" class="s5-done-list">
+          <div data-hf-id="hf-gods" class="s5-done-row" id="s5-done-row-1">
+            <div data-hf-id="hf-zx5j" class="s5-check">
+              <svg data-hf-id="hf-a7md" viewBox="0 0 24 24" fill="none"><path data-hf-id="hf-34z2" d="M5 12.5L10 17.5L19 7" stroke="#fff" stroke-width="3.4" stroke-linecap="round" stroke-linejoin="round" /></svg>
+            </div>
+            <div data-hf-id="hf-krj3" class="s5-done-row-body">
+              <div data-hf-id="hf-esh9" class="s5-done-row-title">Inbox cleared</div>
+              <div data-hf-id="hf-pmum" class="s5-done-row-sub">40 emails · 3 replies drafted</div>
+            </div>
+            <div data-hf-id="hf-7u9l" class="s5-done-row-time">08:41</div>
+          </div>
+          <div data-hf-id="hf-pc9n" class="s5-done-row" id="s5-done-row-2">
+            <div data-hf-id="hf-byjb" class="s5-check">
+              <svg data-hf-id="hf-k9qh" viewBox="0 0 24 24" fill="none"><path data-hf-id="hf-1s6q" d="M5 12.5L10 17.5L19 7" stroke="#fff" stroke-width="3.4" stroke-linecap="round" stroke-linejoin="round" /></svg>
+            </div>
+            <div data-hf-id="hf-eg2n" class="s5-done-row-body">
+              <div data-hf-id="hf-zk7j" class="s5-done-row-title">Flight booked</div>
+              <div data-hf-id="hf-8wz2" class="s5-done-row-sub">LIS → BER · Thu 14:05</div>
+            </div>
+            <div data-hf-id="hf-etk8" class="s5-done-row-time">09:05</div>
+          </div>
+          <div data-hf-id="hf-le5m" class="s5-done-row" id="s5-done-row-3">
+            <div data-hf-id="hf-bk8a" class="s5-check">
+              <svg data-hf-id="hf-lgnk" viewBox="0 0 24 24" fill="none"><path data-hf-id="hf-26hr" d="M5 12.5L10 17.5L19 7" stroke="#fff" stroke-width="3.4" stroke-linecap="round" stroke-linejoin="round" /></svg>
+            </div>
+            <div data-hf-id="hf-e1rm" class="s5-done-row-body">
+              <div data-hf-id="hf-4hpk" class="s5-done-row-title">Expenses filed</div>
+              <div data-hf-id="hf-97vd" class="s5-done-row-sub">3 receipts · €156.70</div>
+            </div>
+            <div data-hf-id="hf-pxc2" class="s5-done-row-time">11:20</div>
+          </div>
+        </div>
+
+        <div data-hf-id="hf-q6y2" class="s5-p-foot" id="s5-p-foot"><span data-hf-id="hf-bmn6">3 of 3 done</span><b data-hf-id="hf-c8no">Nothing for you to do</b></div>
+      </div>
+    </div>
+
+    <div data-hf-id="hf-9qt4" class="s5-caption-r" id="s5-caption-r">2h 40m of your day, back.</div>
+
+    <svg data-hf-id="hf-yzwx" class="s5-orb" id="s5-orb" viewBox="0 0 200 200" aria-hidden="true">
+      <g data-hf-id="hf-akk4" id="s5-orb-body">
+        <path data-hf-id="hf-rday" d="M100 34C139 34 166 62 168 102C170 143 142 170 100 170C58 170 30 143 32 102C34 62 61 34 100 34Z" fill="#59b26f" />
+        <path data-hf-id="hf-yhlj" d="M100 44C103 26 113 17 129 15C128 30 118 40 100 44Z" fill="#2f7b45" />
+        <path data-hf-id="hf-tzk2" d="M98 46C92 31 81 25 66 27C70 41 82 48 98 46Z" fill="#3d8b52" />
+        <path data-hf-id="hf-qbx1" d="M100 52V38" stroke="#1b211c" stroke-width="3" stroke-linecap="round" />
+        <ellipse data-hf-id="hf-2nvp" cx="73" cy="104" rx="15" ry="18" fill="#fbf9f5" />
+        <ellipse data-hf-id="hf-zcmn" cx="127" cy="104" rx="15" ry="18" fill="#fbf9f5" />
+        <g data-hf-id="hf-lelx" class="s5-eyes">
+          <circle data-hf-id="hf-yi1n" class="s5-pupil" cx="73" cy="106" r="7" fill="#1b211c" />
+          <circle data-hf-id="hf-8cm9" class="s5-pupil" cx="127" cy="106" r="7" fill="#1b211c" />
+        </g>
+        <path data-hf-id="hf-h10m" d="M88 140C94 145 106 145 112 140" stroke="#1b211c" stroke-width="4" stroke-linecap="round" fill="none" />
+      </g>
+    </svg>
+
+    <div data-hf-id="hf-atb3" class="s5-grain" id="s5-grain" data-layout-ignore></div>
+    <div data-hf-id="hf-cjle" class="s5-wipe" id="s5-wipe"></div>
+    <div data-hf-id="hf-nu1q" class="s5-out" id="s5-out"></div>
+  </div>
+
+  <script>
+    (function () {
+      const tl = gsap.timeline({ paused: true });
+      const spark = [7, 15, 2, 20, 10, 4, 18, 12, 6, 22];
+
+      gsap.set(".s5-eyes", { transformOrigin: "50% 50%" });
+
+      tl.fromTo("#s5-wipe", { y: 0 }, { y: -1080, duration: 0.6, ease: "power3.inOut" }, 0.05);
+      tl.fromTo("#s5-kicker-l, #s5-kicker-r", { opacity: 0 }, { opacity: 1, duration: 0.35, ease: "power2.out" }, 0.45);
+      tl.fromTo("#s5-headline-l .word", { opacity: 0, y: 14, filter: "blur(6px)" }, { opacity: 1, y: 0, filter: "blur(0px)", duration: 0.34, ease: "power3.out", stagger: 0.055 }, 0.9);
+      tl.fromTo("#s5-headline-r .word", { opacity: 0, y: 14, filter: "blur(6px)" }, { opacity: 1, y: 0, filter: "blur(0px)", duration: 0.34, ease: "power3.out", stagger: 0.055 }, 3.8);
+
+      tl.fromTo("#s5-laptop", { opacity: 0, y: 22 }, { opacity: 1, y: 0, duration: 0.6, ease: "power3.out" }, 0.7);
+      tl.fromTo(".s5-mug, .s5-book", { opacity: 0, y: 12 }, { opacity: 1, y: 0, duration: 0.45, ease: "power2.out", stagger: 0.1 }, 0.95);
+      tl.fromTo("#s5-caption-l", { opacity: 0, y: 8 }, { opacity: 1, y: 0, duration: 0.4, ease: "power2.out" }, 1.5);
+
+      tl.fromTo("#s5-phone", { opacity: 0, y: 40, scale: 0.97 }, { opacity: 1, y: 0, scale: 1, duration: 0.6, ease: "power3.out" }, 2.2);
+      tl.fromTo("#s5-orb", { opacity: 0, y: 18 }, { opacity: 1, y: 0, duration: 0.5, ease: "back.out(1.5)" }, 2.6);
+
+      for (let i = 0; i < 3; i++) {
+        const row = "#s5-done-row-" + (i + 1);
+        tl.fromTo(row + " .s5-check", { scale: 0.2, opacity: 0 }, { scale: 1, opacity: 1, duration: 0.34, ease: "back.out(1.8)" }, 5.6 + i * 0.85);
+        tl.fromTo(row, { borderColor: "#59b26f", backgroundColor: "#f1f9ee" }, { borderColor: "#e7e2d6", backgroundColor: "#fdfcf8", duration: 0.7, ease: "power2.out" }, 5.6 + i * 0.85);
+      }
+
+      tl.fromTo("#s5-caption-r", { opacity: 0, y: 8 }, { opacity: 1, y: 0, duration: 0.4, ease: "power2.out" }, 7.8);
+      tl.fromTo("#s5-p-foot b", { opacity: 0 }, { opacity: 1, duration: 0.3, ease: "power2.out" }, 8.3);
+      tl.to("#s5-headline-r .mark", { color: "#2f7b45", duration: 0.4 }, 8.0);
+
+      tl.to(".s5-pupil", { x: -6, y: 2, duration: 0.45, ease: "power2.inOut" }, 3.2);
+      tl.to(".s5-pupil", { x: 8, y: -1, duration: 0.45, ease: "power2.inOut" }, 5.2);
+      tl.to(".s5-pupil", { x: -8, y: 0, duration: 0.4, ease: "power2.inOut" }, 9.4);
+      tl.to(".s5-pupil", { x: 5, y: -3, duration: 0.5, ease: "power2.inOut" }, 12.0);
+      tl.to(".s5-pupil", { x: -4, y: 2, duration: 0.5, ease: "power2.inOut" }, 15.2);
+      tl.to(".s5-pupil", { x: 7, y: 0, duration: 0.45, ease: "power2.inOut" }, 18.6);
+      tl.to(".s5-pupil", { x: -7, y: 1, duration: 0.45, ease: "power2.inOut" }, 21.8);
+
+      const blink = (time) => {
+        tl.to(".s5-eyes", { scaleY: 0.12, duration: 0.07, ease: "power2.in" }, time);
+        tl.to(".s5-eyes", { scaleY: 1, duration: 0.12, ease: "power2.out" }, time + 0.08);
+      };
+      blink(2.4);
+      blink(10.6);
+      blink(13.4);
+      blink(17.2);
+      blink(19.8);
+      blink(22.6);
+
+      for (let i = 0; i < 24; i++) {
+        const t = 0.2 + i * 0.56;
+        const s = spark[i % spark.length];
+        tl.set("#s5-grain", { x: (s % 5) * 3 - 6, y: ((s * 7) % 5) * 3 - 6 }, t);
+      }
+
+      tl.fromTo("#s5-out", { opacity: 0 }, { opacity: 1, duration: 1.0, ease: "power2.inOut" }, 23.7);
+
+      window.__timelines["s5"] = tl;
+    })();
+  </script>
+</template>

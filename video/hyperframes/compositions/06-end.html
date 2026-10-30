@@ -1,0 +1,246 @@
+<template>
+  <style>
+    @font-face {
+      font-family: "Newsreader";
+      src: url("assets/fonts/newsreader-latin.woff2") format("woff2");
+      font-weight: 300 600;
+      font-style: normal;
+      font-display: block;
+    }
+    @font-face {
+      font-family: "Newsreader";
+      src: url("assets/fonts/newsreader-latin-italic.woff2") format("woff2");
+      font-weight: 300 600;
+      font-style: italic;
+      font-display: block;
+    }
+    @font-face {
+      font-family: "Inter";
+      src: url("assets/fonts/inter-latin-var.woff2") format("woff2");
+      font-weight: 400 700;
+      font-style: normal;
+      font-display: block;
+    }
+    #root {
+      --ivory: #fbf9f5;
+      --paper: #ffffff;
+      --ink: #1b211c;
+      --ink-soft: #4a544e;
+      --jade: #59b26f;
+      --jade-deep: #276b3c;
+      --jade-light: #e4f0e2;
+      --sage: #c9dfbc;
+      --sage-pale: #e8eddf;
+      --verm: #e52d2d;
+      --butter: #f0e7c5;
+      --line: #cdd5c9;
+      position: absolute;
+      inset: 0;
+      overflow: hidden;
+      background: var(--ivory);
+      font-family: "Inter", system-ui, sans-serif;
+      color: var(--ink);
+      -webkit-font-smoothing: antialiased;
+    }
+    #root * {
+      box-sizing: border-box;
+    }
+    .s6-circle {
+      position: absolute;
+      left: 720px;
+      top: 118px;
+      width: 480px;
+      height: 480px;
+      border-radius: 50%;
+      background: var(--sage-pale);
+    }
+    .s6-circle-2 {
+      position: absolute;
+      left: 862px;
+      top: 148px;
+      width: 196px;
+      height: 196px;
+      border-radius: 50%;
+      background: var(--butter);
+      opacity: 0.5;
+    }
+    .s6-orb {
+      position: absolute;
+      left: 812px;
+      top: 236px;
+      width: 296px;
+      height: 296px;
+    }
+    .s6-headline {
+      position: absolute;
+      left: 50%;
+      top: 638px;
+      width: 1460px;
+      margin-left: -730px;
+      text-align: center;
+      font-family: "Newsreader", Georgia, serif;
+      font-weight: 400;
+      font-size: 96px;
+      line-height: 1.02;
+      letter-spacing: -0.045em;
+      color: var(--ink);
+    }
+    .s6-headline .word {
+      display: inline-block;
+      opacity: 0;
+    }
+    .s6-headline .mark {
+      font-style: italic;
+      color: var(--jade-deep);
+    }
+    .s6-rule {
+      position: absolute;
+      left: 50%;
+      top: 806px;
+      width: 72px;
+      height: 2px;
+      margin-left: -36px;
+      background: var(--jade);
+      transform-origin: 50% 50%;
+    }
+    .s6-sign {
+      position: absolute;
+      left: 50%;
+      top: 848px;
+      width: 900px;
+      margin-left: -450px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 26px;
+      opacity: 0;
+    }
+    .s6-wordmark {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      font-family: "Newsreader", Georgia, serif;
+      font-size: 60px;
+      line-height: 1;
+      letter-spacing: -0.04em;
+    }
+    .s6-wordmark svg {
+      width: 30px;
+      height: 40px;
+    }
+    .s6-url {
+      padding: 12px 24px;
+      border: 1.5px solid var(--ink);
+      border-radius: 999px;
+      font-size: 20px;
+      font-weight: 500;
+      letter-spacing: 0.01em;
+      color: var(--ink);
+      background: var(--paper);
+    }
+    .s6-note {
+      position: absolute;
+      left: 0;
+      right: 0;
+      top: 984px;
+      text-align: center;
+      font-size: 13px;
+      letter-spacing: 0.14em;
+      text-transform: uppercase;
+      color: var(--ink-soft);
+      opacity: 0;
+    }
+    .s6-grain {
+      position: absolute;
+      left: -10%;
+      top: -10%;
+      width: 120%;
+      height: 120%;
+      background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.8' numOctaves='2' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+      opacity: 0.045;
+      z-index: 20;
+      pointer-events: none;
+    }
+  </style>
+
+  <div data-hf-id="hf-7obi" id="root" data-composition-id="s6" data-width="1920" data-height="1080">
+    <div data-hf-id="hf-rsd2" class="s6-circle" id="s6-circle"></div>
+    <div data-hf-id="hf-6gmn" class="s6-circle-2" id="s6-circle-2" data-layout-ignore></div>
+
+    <svg data-hf-id="hf-23e9" class="s6-orb" id="s6-orb" viewBox="0 0 200 200" aria-hidden="true">
+      <g data-hf-id="hf-sujp" id="s6-orb-body">
+        <path data-hf-id="hf-rday" d="M100 34C139 34 166 62 168 102C170 143 142 170 100 170C58 170 30 143 32 102C34 62 61 34 100 34Z" fill="#59b26f" />
+        <path data-hf-id="hf-yhlj" d="M100 44C103 26 113 17 129 15C128 30 118 40 100 44Z" fill="#2f7b45" />
+        <path data-hf-id="hf-tzk2" d="M98 46C92 31 81 25 66 27C70 41 82 48 98 46Z" fill="#3d8b52" />
+        <path data-hf-id="hf-qbx1" d="M100 52V38" stroke="#1b211c" stroke-width="3" stroke-linecap="round" />
+        <ellipse data-hf-id="hf-2nvp" cx="73" cy="104" rx="15" ry="18" fill="#fbf9f5" />
+        <ellipse data-hf-id="hf-zcmn" cx="127" cy="104" rx="15" ry="18" fill="#fbf9f5" />
+        <g data-hf-id="hf-ygsg" class="s6-eyes">
+          <circle data-hf-id="hf-is19" cx="77" cy="106" r="7" fill="#1b211c" />
+          <circle data-hf-id="hf-rvmy" cx="131" cy="106" r="7" fill="#1b211c" />
+        </g>
+        <path data-hf-id="hf-h10m" d="M88 140C94 145 106 145 112 140" stroke="#1b211c" stroke-width="4" stroke-linecap="round" fill="none" />
+      </g>
+    </svg>
+
+    <div data-hf-id="hf-1xbi" class="s6-headline" id="s6-headline">
+      <span data-hf-id="hf-kd5h" class="word">Kelp</span> <span data-hf-id="hf-4019" class="word">works</span><br data-hf-id="hf-x5px" />
+      <span data-hf-id="hf-3zt6" class="word">while</span> <span data-hf-id="hf-etio" class="word">you're</span> <span data-hf-id="hf-mrug" class="word mark">away.</span>
+    </div>
+
+    <div data-hf-id="hf-y5xt" class="s6-rule" id="s6-rule" data-layout-ignore></div>
+
+    <div data-hf-id="hf-u3ls" class="s6-sign" id="s6-sign">
+      <div data-hf-id="hf-eozv" class="s6-wordmark">
+        <svg data-hf-id="hf-7lbv" viewBox="0 0 24 30" fill="none" aria-hidden="true">
+          <path data-hf-id="hf-vg44" d="M12 29V14" stroke="#2f7b45" stroke-width="2.4" stroke-linecap="round" />
+          <path data-hf-id="hf-qk1y" d="M12 17C7 17 4 13.8 4 9.2C9 9.2 12 12 12 17Z" fill="#59b26f" />
+          <path data-hf-id="hf-negc" d="M12 13C12 8 15 5 20 5C20 10 17 13 12 13Z" fill="#59b26f" />
+        </svg>
+        kelp
+      </div>
+      <div data-hf-id="hf-xe3g" class="s6-url" data-var-text="url">kelp.example.com</div>
+    </div>
+
+    <div data-hf-id="hf-65em" class="s6-note" id="s6-note">Concept preview · not a live service</div>
+    <div data-hf-id="hf-oktb" class="s6-grain" id="s6-grain" data-layout-ignore></div>
+  </div>
+
+  <script>
+    (function () {
+      const tl = gsap.timeline({ paused: true });
+      const spark = [8, 14, 3, 20, 6, 17, 11, 2, 21, 9];
+
+      gsap.set(".s6-eyes", { transformOrigin: "50% 50%" });
+
+      tl.fromTo("#s6-circle", { opacity: 0, scale: 0.9 }, { opacity: 1, scale: 1, duration: 0.9, ease: "power3.out" }, 0.15);
+      tl.fromTo("#s6-circle-2", { opacity: 0, scale: 0.7 }, { opacity: 0.5, scale: 1, duration: 0.8, ease: "power3.out" }, 0.35);
+      tl.fromTo("#s6-orb", { opacity: 0, y: 30, scale: 0.92 }, { opacity: 1, y: 0, scale: 1, duration: 0.7, ease: "power3.out" }, 0.45);
+
+      tl.fromTo("#s6-headline .word", { opacity: 0, y: 14, filter: "blur(8px)" }, { opacity: 1, y: 0, filter: "blur(0px)", duration: 0.42, ease: "power3.out", stagger: 0.06 }, 1.2);
+
+      tl.fromTo("#s6-rule", { scaleX: 0 }, { scaleX: 1, duration: 0.4, ease: "power3.out" }, 2.3);
+      tl.fromTo("#s6-sign", { opacity: 0, y: 14 }, { opacity: 1, y: 0, duration: 0.45, ease: "power3.out" }, 2.5);
+      tl.fromTo("#s6-note", { opacity: 0 }, { opacity: 1, duration: 0.4 }, 3.4);
+
+      const blink = (time) => {
+        tl.to(".s6-eyes", { scaleY: 0.1, duration: 0.08, ease: "power2.in" }, time);
+        tl.to(".s6-eyes", { scaleY: 1, duration: 0.14, ease: "power2.out" }, time + 0.09);
+      };
+      blink(2.1);
+      blink(5.6);
+      blink(8.4);
+
+      tl.to("#s6-orb-body", { y: -5, duration: 0.18, ease: "power2.out" }, 4.4);
+      tl.to("#s6-orb-body", { y: 0, duration: 0.24, ease: "power2.in" }, 4.58);
+
+      for (let i = 0; i < 17; i++) {
+        const t = 0.15 + i * 0.58;
+        const s = spark[i % spark.length];
+        tl.set("#s6-grain", { x: (s % 5) * 3 - 6, y: ((s * 7) % 5) * 3 - 6 }, t);
+      }
+
+      window.__timelines["s6"] = tl;
+    })();
+  </script>
+</template>

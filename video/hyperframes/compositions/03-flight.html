@@ -1,0 +1,819 @@
+<template>
+  <style>
+    @font-face {
+      font-family: "Newsreader";
+      src: url("assets/fonts/newsreader-latin.woff2") format("woff2");
+      font-weight: 300 600;
+      font-style: normal;
+      font-display: block;
+    }
+    @font-face {
+      font-family: "Newsreader";
+      src: url("assets/fonts/newsreader-latin-italic.woff2") format("woff2");
+      font-weight: 300 600;
+      font-style: italic;
+      font-display: block;
+    }
+    @font-face {
+      font-family: "Inter";
+      src: url("assets/fonts/inter-latin-var.woff2") format("woff2");
+      font-weight: 400 700;
+      font-style: normal;
+      font-display: block;
+    }
+    #root {
+      --ivory: #fbf9f5;
+      --paper: #ffffff;
+      --ink: #1b211c;
+      --ink-soft: #4a544e;
+      --jade: #59b26f;
+      --jade-deep: #276b3c;
+      --jade-light: #e4f0e2;
+      --sage: #c9dfbc;
+      --sage-pale: #e8eddf;
+      --verm: #e52d2d;
+      --butter: #f0e7c5;
+      --line: #d5dcd1;
+      position: absolute;
+      inset: 0;
+      overflow: hidden;
+      background: var(--ivory);
+      font-family: "Inter", system-ui, sans-serif;
+      color: var(--ink);
+      -webkit-font-smoothing: antialiased;
+    }
+    #root * {
+      box-sizing: border-box;
+    }
+    .s3-kicker {
+      position: absolute;
+      left: 120px;
+      top: 116px;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      font-size: 15px;
+      font-weight: 600;
+      letter-spacing: 0.16em;
+      text-transform: uppercase;
+      color: var(--ink-soft);
+    }
+    .s3-kicker i {
+      width: 26px;
+      height: 2px;
+      background: var(--jade);
+    }
+    .s3-headline {
+      position: absolute;
+      left: 116px;
+      top: 160px;
+      width: 900px;
+      height: 176px;
+      z-index: 14;
+      font-family: "Newsreader", Georgia, serif;
+      font-weight: 400;
+      font-size: 82px;
+      line-height: 1.02;
+      letter-spacing: -0.04em;
+      color: var(--ink);
+    }
+    .s3-headline .s3-h1,
+    .s3-headline .s3-h2 {
+      position: absolute;
+      left: 0;
+      top: 0;
+      width: 640px;
+    }
+    .s3-headline .word {
+      display: inline-block;
+      opacity: 0;
+    }
+    .s3-route {
+      position: absolute;
+      left: 240px;
+      top: 300px;
+      width: 1440px;
+      height: 40px;
+      opacity: 0.55;
+    }
+    .s3-route svg {
+      width: 100%;
+      height: 100%;
+    }
+    .s3-cards {
+      position: absolute;
+      left: 300px;
+      top: 356px;
+      display: flex;
+      gap: 40px;
+    }
+    .s3-card {
+      position: relative;
+      width: 400px;
+      height: 424px;
+      border-radius: 20px;
+      background: var(--paper);
+      border: 1.5px solid var(--line);
+      padding: 26px 26px 22px;
+      opacity: 0;
+    }
+    .s3-card.best {
+      background: #f4faf2;
+      border: 2.5px solid var(--jade);
+      box-shadow: 0 10px 0 rgba(89, 178, 111, 0.12);
+    }
+    .s3-air {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+    .s3-air-mark {
+      width: 42px;
+      height: 42px;
+      border-radius: 12px;
+      display: grid;
+      place-items: center;
+      font-size: 19px;
+      font-weight: 700;
+      color: var(--paper);
+      background: var(--ink);
+    }
+    .s3-card.best .s3-air-mark {
+      background: var(--jade-deep);
+    }
+    .s3-air-name {
+      font-size: 19px;
+      font-weight: 600;
+      letter-spacing: -0.01em;
+    }
+    .s3-air-sub {
+      font-size: 13px;
+      color: var(--ink-soft);
+    }
+    .s3-tag {
+      position: absolute;
+      right: 22px;
+      top: 24px;
+      padding: 5px 11px;
+      border-radius: 999px;
+      font-size: 12px;
+      font-weight: 600;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+      background: #f1eee5;
+      color: var(--ink-soft);
+    }
+    .s3-card.best .s3-tag {
+      background: var(--jade-deep);
+      color: #fff;
+    }
+    .s3-route-row {
+      margin-top: 34px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+    .s3-code {
+      font-family: "Newsreader", Georgia, serif;
+      font-size: 54px;
+      line-height: 1;
+      letter-spacing: -0.03em;
+    }
+    .s3-city {
+      margin-top: 4px;
+      font-size: 13px;
+      color: var(--ink-soft);
+    }
+    .s3-arrow {
+      flex: 1;
+      margin: 0 14px;
+      height: 22px;
+      position: relative;
+    }
+    .s3-arrow::before {
+      content: "";
+      position: absolute;
+      left: 0;
+      right: 8px;
+      top: 10px;
+      height: 1.5px;
+      background: var(--line);
+    }
+    .s3-arrow::after {
+      content: "";
+      position: absolute;
+      right: 0;
+      top: 5px;
+      width: 10px;
+      height: 10px;
+      border-top: 1.5px solid var(--ink-soft);
+      border-right: 1.5px solid var(--ink-soft);
+      transform: rotate(45deg);
+    }
+    .s3-when {
+      margin-top: 18px;
+      font-size: 16px;
+      color: var(--ink-soft);
+    }
+    .s3-price-row {
+      position: absolute;
+      left: 26px;
+      right: 26px;
+      bottom: 22px;
+      display: flex;
+      align-items: flex-end;
+      justify-content: space-between;
+    }
+    .s3-price {
+      font-size: 32px;
+      font-weight: 600;
+      letter-spacing: -0.03em;
+      font-variant-numeric: tabular-nums;
+    }
+    .s3-price small {
+      font-size: 14px;
+      font-weight: 400;
+      color: var(--ink-soft);
+      margin-left: 5px;
+      letter-spacing: 0;
+    }
+    .s3-seats {
+      font-size: 13px;
+      color: var(--ink-soft);
+      text-align: right;
+    }
+    .s3-hold {
+      position: absolute;
+      left: 50%;
+      top: 800px;
+      transform: translateX(-50%);
+      display: flex;
+      align-items: center;
+      gap: 14px;
+      padding: 10px 18px 10px 12px;
+      border-radius: 999px;
+      background: var(--jade-light);
+      font-size: 16px;
+      font-weight: 600;
+      color: var(--jade-deep);
+      opacity: 0;
+    }
+    .s3-hold .dot {
+      width: 22px;
+      height: 22px;
+      border-radius: 50%;
+      background: var(--jade);
+      display: grid;
+      place-items: center;
+    }
+    .s3-hold .dot svg {
+      width: 13px;
+      height: 13px;
+    }
+    .s3-hold em {
+      font-style: normal;
+      color: var(--ink-soft);
+      font-weight: 400;
+    }
+    .s3-orb {
+      position: absolute;
+      left: 1692px;
+      top: 838px;
+      width: 148px;
+      height: 148px;
+      z-index: 8;
+    }
+    .s3-phone {
+      position: absolute;
+      left: 760px;
+      top: 176px;
+      width: 400px;
+      height: 780px;
+      border-radius: 52px;
+      background: var(--ink);
+      padding: 12px;
+      z-index: 20;
+      opacity: 0;
+    }
+    .s3-phone-screen {
+      position: relative;
+      width: 100%;
+      height: 100%;
+      border-radius: 42px;
+      background: #fbfaf6;
+      overflow: hidden;
+      padding: 20px;
+    }
+    .s3-p-status {
+      display: flex;
+      justify-content: space-between;
+      font-size: 14px;
+      font-weight: 600;
+      color: var(--ink-soft);
+    }
+    .s3-p-head {
+      display: flex;
+      align-items: center;
+      gap: 7px;
+      margin-top: 18px;
+      font-size: 17px;
+      font-weight: 700;
+    }
+    .s3-p-head svg {
+      width: 15px;
+      height: 19px;
+    }
+    .s3-approval {
+      position: absolute;
+      inset: 62px 20px 20px;
+    }
+    .s3-a-kicker {
+      margin-top: 16px;
+      font-size: 12px;
+      font-weight: 600;
+      letter-spacing: 0.16em;
+      text-transform: uppercase;
+      color: var(--ink-soft);
+    }
+    .s3-a-title {
+      margin-top: 8px;
+      font-family: "Newsreader", Georgia, serif;
+      font-size: 44px;
+      line-height: 1.02;
+      letter-spacing: -0.035em;
+    }
+    .s3-ticket-mini {
+      margin-top: 24px;
+      border: 1.5px solid var(--line);
+      border-radius: 16px;
+      padding: 18px;
+      background: var(--paper);
+    }
+    .s3-tm-route {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      font-family: "Newsreader", Georgia, serif;
+      font-size: 38px;
+      letter-spacing: -0.02em;
+    }
+    .s3-tm-route span:first-child,
+    .s3-tm-route span:last-child {
+      font-size: 44px;
+    }
+    .s3-tm-sub {
+      margin-top: 6px;
+      font-size: 15px;
+      color: var(--ink-soft);
+    }
+    .s3-tm-price {
+      margin-top: 18px;
+      display: flex;
+      align-items: flex-end;
+      justify-content: space-between;
+    }
+    .s3-tm-price b {
+      font-size: 40px;
+      font-weight: 600;
+      letter-spacing: -0.03em;
+    }
+    .s3-tm-price span {
+      font-size: 13px;
+      color: var(--ink-soft);
+      text-align: right;
+      line-height: 1.4;
+    }
+    .s3-buttons {
+      position: absolute;
+      left: 0;
+      right: 0;
+      bottom: 8px;
+      display: flex;
+      gap: 10px;
+    }
+    .s3-btn {
+      height: 60px;
+      border-radius: 999px;
+      display: grid;
+      place-items: center;
+      font-size: 18px;
+      font-weight: 600;
+    }
+    .s3-btn.approve {
+      flex: 1.6;
+      background: var(--jade-deep);
+      color: #fff;
+    }
+    .s3-btn.later {
+      flex: 1;
+      border: 1.5px solid var(--line);
+      color: var(--ink-soft);
+    }
+    .s3-thumb {
+      position: absolute;
+      left: 246px;
+      top: 610px;
+      width: 190px;
+      height: 120px;
+      z-index: 25;
+      opacity: 0;
+      pointer-events: none;
+    }
+    .s3-thumb-tip {
+      position: absolute;
+      left: 0;
+      top: 22px;
+      width: 118px;
+      height: 62px;
+      border-radius: 36px 18px 18px 36px;
+      background: #dda985;
+    }
+    .s3-thumb-nail {
+      position: absolute;
+      left: 12px;
+      top: 10px;
+      width: 40px;
+      height: 30px;
+      border-radius: 16px;
+      background: #efc7ab;
+    }
+    .s3-thumb-arm {
+      position: absolute;
+      left: 96px;
+      top: 0;
+      width: 120px;
+      height: 120px;
+      border-radius: 44px 0 0 44px;
+      background: var(--jade-deep);
+    }
+    .s3-ticket {
+      position: absolute;
+      inset: 62px 20px 20px;
+      opacity: 0;
+    }
+    .s3-t-booked {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin-top: 14px;
+      font-size: 13px;
+      font-weight: 700;
+      letter-spacing: 0.16em;
+      text-transform: uppercase;
+      color: var(--jade-deep);
+    }
+    .s3-t-booked svg {
+      width: 20px;
+      height: 20px;
+    }
+    .s3-t-title {
+      margin-top: 6px;
+      font-family: "Newsreader", Georgia, serif;
+      font-size: 54px;
+      line-height: 1;
+      letter-spacing: -0.04em;
+    }
+    .s3-pass {
+      position: relative;
+      margin-top: 22px;
+      border-radius: 16px;
+      background: var(--jade-light);
+      padding: 20px 18px;
+      overflow: hidden;
+    }
+    .s3-pass::after {
+      content: "";
+      position: absolute;
+      left: 16px;
+      right: 16px;
+      bottom: 84px;
+      border-top: 2px dashed #a9cfa9;
+    }
+    .s3-pass-route {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      font-family: "Newsreader", Georgia, serif;
+      font-size: 46px;
+    }
+    .s3-pass-route span {
+      display: inline-block;
+    }
+    .s3-pass-route em {
+      font-style: normal;
+      font-size: 20px;
+      color: var(--jade-deep);
+    }
+    .s3-pass-meta {
+      margin-top: 8px;
+      display: flex;
+      justify-content: space-between;
+      font-size: 14px;
+      color: var(--jade-deep);
+    }
+    .s3-pass-grid {
+      margin-top: 52px;
+      display: flex;
+      justify-content: space-between;
+      font-size: 13px;
+      color: #3b6a4a;
+    }
+    .s3-pass-grid b {
+      display: block;
+      margin-top: 3px;
+      font-size: 17px;
+      color: var(--ink);
+      font-weight: 600;
+    }
+    .s3-barcode {
+      margin-top: 18px;
+      height: 44px;
+      display: flex;
+      align-items: flex-end;
+      gap: 3px;
+    }
+    .s3-barcode i {
+      display: block;
+      width: 3px;
+      background: var(--ink);
+    }
+    .s3-t-note {
+      margin-top: 16px;
+      font-size: 15px;
+      color: var(--ink-soft);
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .s3-t-note .dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: var(--jade);
+    }
+    .s3-dim {
+      position: absolute;
+      inset: 0;
+      background: var(--ivory);
+      opacity: 0;
+      z-index: 12;
+      pointer-events: none;
+    }
+    .s3-grain {
+      position: absolute;
+      left: -10%;
+      top: -10%;
+      width: 120%;
+      height: 120%;
+      background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.8' numOctaves='2' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+      opacity: 0.045;
+      z-index: 40;
+      pointer-events: none;
+    }
+    .s3-wipe {
+      position: absolute;
+      inset: 0;
+      background: var(--jade);
+      z-index: 60;
+    }
+  </style>
+
+  <div data-hf-id="hf-3xc5" id="root" data-composition-id="s3" data-width="1920" data-height="1080">
+    <div data-hf-id="hf-6dj1" class="s3-kicker" id="s3-kicker"><i data-hf-id="hf-wt6k"></i>Task 02 — Travel</div>
+    <div data-hf-id="hf-wlrw" class="s3-headline" id="s3-headline">
+      <div data-hf-id="hf-bmlu" class="s3-h1" id="s3-h1"><span data-hf-id="hf-9nob" class="word">Found</span> <span data-hf-id="hf-3qt2" class="word">your</span> <span data-hf-id="hf-9gar" class="word">flight.</span></div>
+      <div data-hf-id="hf-t5pc" class="s3-h2" id="s3-h2"><span data-hf-id="hf-csdc" class="word">You</span> <span data-hf-id="hf-qjvc" class="word">approve.</span> <span data-hf-id="hf-o4hg" class="word">It</span> <span data-hf-id="hf-d5k1" class="word">books.</span></div>
+    </div>
+
+    <div data-hf-id="hf-zhzz" class="s3-route" id="s3-route" data-layout-ignore>
+      <svg data-hf-id="hf-edi0" viewBox="0 0 1440 40" fill="none">
+        <path data-hf-id="hf-3s40" d="M10 20C320 -18 1120 58 1430 20" stroke="#c9dfbc" stroke-width="2" stroke-dasharray="2 12" stroke-linecap="round" />
+        <circle data-hf-id="hf-4kbd" cx="10" cy="20" r="5" fill="#59b26f" />
+        <circle data-hf-id="hf-5lhy" cx="1430" cy="20" r="5" fill="#59b26f" />
+      </svg>
+    </div>
+
+    <div data-hf-id="hf-yh6a" class="s3-cards" id="s3-cards">
+      <div data-hf-id="hf-5ktm" class="s3-card" id="s3-card-1">
+        <div data-hf-id="hf-yqw1" class="s3-air">
+          <div data-hf-id="hf-wzet" class="s3-air-mark">N</div>
+          <div data-hf-id="hf-yeow">
+            <div data-hf-id="hf-vp9g" class="s3-air-name">Nordline</div>
+            <div data-hf-id="hf-6xwl" class="s3-air-sub">Direct · 1 stop free</div>
+          </div>
+        </div>
+        <div data-hf-id="hf-wrc8" class="s3-tag">Cheapest</div>
+        <div data-hf-id="hf-ljdd" class="s3-route-row">
+          <div data-hf-id="hf-y7yw"><div data-hf-id="hf-ktvo" class="s3-code">06:40</div><div data-hf-id="hf-kgzo" class="s3-city">Lisbon · LIS</div></div>
+          <div data-hf-id="hf-tz0e" class="s3-arrow"></div>
+          <div data-hf-id="hf-jd4s" style="text-align: right"><div data-hf-id="hf-9lno" class="s3-code">10:25</div><div data-hf-id="hf-6df6" class="s3-city">Berlin · BER</div></div>
+        </div>
+        <div data-hf-id="hf-5jn7" class="s3-when">Thu 12 Jun · 2h 45m</div>
+        <div data-hf-id="hf-5wlx" class="s3-price-row">
+          <div data-hf-id="hf-y7sz" class="s3-price">€164<small data-hf-id="hf-59wa">return</small></div>
+          <div data-hf-id="hf-20dd" class="s3-seats">9 seats left</div>
+        </div>
+      </div>
+
+      <div data-hf-id="hf-wp55" class="s3-card best" id="s3-card-2">
+        <div data-hf-id="hf-oyb9" class="s3-air">
+          <div data-hf-id="hf-xs0v" class="s3-air-mark">L</div>
+          <div data-hf-id="hf-x11t">
+            <div data-hf-id="hf-2439" class="s3-air-name">Lufthansa</div>
+            <div data-hf-id="hf-cala" class="s3-air-sub">Direct · bag included</div>
+          </div>
+        </div>
+        <div data-hf-id="hf-hqvn" class="s3-tag">Best for you</div>
+        <div data-hf-id="hf-zv0l" class="s3-route-row">
+          <div data-hf-id="hf-xfcu"><div data-hf-id="hf-kmku" class="s3-code">14:05</div><div data-hf-id="hf-wvgc" class="s3-city">Lisbon · LIS</div></div>
+          <div data-hf-id="hf-tpb6" class="s3-arrow"></div>
+          <div data-hf-id="hf-yx84" style="text-align: right"><div data-hf-id="hf-jc2f" class="s3-code">17:50</div><div data-hf-id="hf-fnzq" class="s3-city">Berlin · BER</div></div>
+        </div>
+        <div data-hf-id="hf-9vkj" class="s3-when">Thu 12 Jun · 2h 45m</div>
+        <div data-hf-id="hf-ll6x" class="s3-price-row">
+          <div data-hf-id="hf-g1bv" class="s3-price">€182<small data-hf-id="hf-2dfi">return</small></div>
+          <div data-hf-id="hf-peuq" class="s3-seats">Window · 14A</div>
+        </div>
+      </div>
+
+      <div data-hf-id="hf-yng0" class="s3-card" id="s3-card-3">
+        <div data-hf-id="hf-q58c" class="s3-air">
+          <div data-hf-id="hf-uzvo" class="s3-air-mark">E</div>
+          <div data-hf-id="hf-w8fr">
+            <div data-hf-id="hf-8hst" class="s3-air-name">Europa Air</div>
+            <div data-hf-id="hf-k1tb" class="s3-air-sub">Direct · cabin bag only</div>
+          </div>
+        </div>
+        <div data-hf-id="hf-o94h" class="s3-tag">Later</div>
+        <div data-hf-id="hf-11xo" class="s3-route-row">
+          <div data-hf-id="hf-wmqs"><div data-hf-id="hf-dd6m" class="s3-code">19:15</div><div data-hf-id="hf-voj9" class="s3-city">Lisbon · LIS</div></div>
+          <div data-hf-id="hf-u3m7" class="s3-arrow"></div>
+          <div data-hf-id="hf-xqb1" style="text-align: right"><div data-hf-id="hf-qviy" class="s3-code">22:00</div><div data-hf-id="hf-g2ar" class="s3-city">Berlin · BER</div></div>
+        </div>
+        <div data-hf-id="hf-9h9i" class="s3-when">Thu 12 Jun · 2h 45m</div>
+        <div data-hf-id="hf-ms40" class="s3-price-row">
+          <div data-hf-id="hf-i422" class="s3-price">€206<small data-hf-id="hf-2rqj">return</small></div>
+          <div data-hf-id="hf-2p7j" class="s3-seats">12 seats left</div>
+        </div>
+      </div>
+    </div>
+
+    <div data-hf-id="hf-4ezl" class="s3-hold" id="s3-hold">
+      <span data-hf-id="hf-9gry" class="dot">
+        <svg data-hf-id="hf-a7md" viewBox="0 0 24 24" fill="none"><path data-hf-id="hf-34z2" d="M5 12.5L10 17.5L19 7" stroke="#fff" stroke-width="3.4" stroke-linecap="round" stroke-linejoin="round" /></svg>
+      </span>
+      Held for you <em data-hf-id="hf-8xm9">· 19:42 left · no charge yet</em>
+    </div>
+
+    <div data-hf-id="hf-q6ty" class="s3-dim" id="s3-dim"></div>
+
+    <div data-hf-id="hf-5xei" class="s3-phone" id="s3-phone" data-layout-allow-overlap>
+      <div data-hf-id="hf-1tpu" class="s3-phone-screen">
+        <div data-hf-id="hf-7ld8" class="s3-p-status"><span data-hf-id="hf-zwmt">9:41</span><span data-hf-id="hf-v5t1">kelp</span></div>
+        <div data-hf-id="hf-jkb8" class="s3-p-head">
+          <svg data-hf-id="hf-5852" viewBox="0 0 24 30" fill="none">
+            <path data-hf-id="hf-vg44" d="M12 29V14" stroke="#2f7b45" stroke-width="2.4" stroke-linecap="round" />
+            <path data-hf-id="hf-qk1y" d="M12 17C7 17 4 13.8 4 9.2C9 9.2 12 12 12 17Z" fill="#59b26f" />
+            <path data-hf-id="hf-negc" d="M12 13C12 8 15 5 20 5C20 10 17 13 12 13Z" fill="#59b26f" />
+          </svg>
+          <span data-hf-id="hf-pakv">Approval needed</span>
+        </div>
+
+        <div data-hf-id="hf-neve" class="s3-approval" id="s3-approval">
+          <div data-hf-id="hf-b2bj" class="s3-a-kicker">One tap and it's done</div>
+          <div data-hf-id="hf-y0m7" class="s3-a-title">Book this<br data-hf-id="hf-x5px" />flight?</div>
+          <div data-hf-id="hf-0nqp" class="s3-ticket-mini">
+            <div data-hf-id="hf-lv6e" class="s3-tm-route"><span data-hf-id="hf-tkej">LIS</span><span data-hf-id="hf-p70p">→</span><span data-hf-id="hf-j0s2">BER</span></div>
+            <div data-hf-id="hf-7w1t" class="s3-tm-sub">Thu 12 Jun · 14:05 – 17:50 · direct</div>
+            <div data-hf-id="hf-6jma" class="s3-tm-price"><b data-hf-id="hf-5iuo">€182</b><span data-hf-id="hf-gkw6">return<br data-hf-id="hf-rsrt" />seat 14A</span></div>
+          </div>
+          <div data-hf-id="hf-hygu" class="s3-buttons">
+            <div data-hf-id="hf-r7uj" class="s3-btn approve" id="s3-approve">Approve</div>
+            <div data-hf-id="hf-2nw8" class="s3-btn later">Not now</div>
+          </div>
+        </div>
+
+        <div data-hf-id="hf-jg18" class="s3-ticket" id="s3-ticket">
+          <div data-hf-id="hf-y96e" class="s3-t-booked" id="s3-t-booked">
+            <svg data-hf-id="hf-k9qh" viewBox="0 0 24 24" fill="none"><path data-hf-id="hf-5892" d="M5 12.5L10 17.5L19 7" stroke="#2f7b45" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" /></svg>
+            Booked
+          </div>
+          <div data-hf-id="hf-8tg4" class="s3-t-title">You're going<br data-hf-id="hf-szow" />to Berlin.</div>
+          <div data-hf-id="hf-81oc" class="s3-pass">
+            <div data-hf-id="hf-upag" class="s3-pass-route"><span data-hf-id="hf-zqi3">LIS</span><em data-hf-id="hf-wp71">✈</em><span data-hf-id="hf-c6eu">BER</span></div>
+            <div data-hf-id="hf-hlxm" class="s3-pass-meta"><span data-hf-id="hf-am9q">Thu 12 Jun</span><span data-hf-id="hf-7l0a">14:05 — 17:50</span></div>
+            <div data-hf-id="hf-ko65" class="s3-pass-grid">
+              <div data-hf-id="hf-1x0x">SEAT<b data-hf-id="hf-5g63">14A</b></div>
+              <div data-hf-id="hf-5ljr">GATE<b data-hf-id="hf-yw3n">B4</b></div>
+              <div data-hf-id="hf-mn31">REF<b data-hf-id="hf-00rg">KLP-2841</b></div>
+            </div>
+          </div>
+          <div data-hf-id="hf-36sh" class="s3-barcode">
+            <i data-hf-id="hf-bkx7" style="height: 34px"></i><i data-hf-id="hf-w5hu" style="height: 44px"></i><i data-hf-id="hf-f97m" style="height: 26px"></i><i data-hf-id="hf-1gae" style="height: 40px"></i><i data-hf-id="hf-wn99" style="height: 18px"></i><i data-hf-id="hf-v2fq" style="height: 44px"></i><i data-hf-id="hf-6iot" style="height: 32px"></i><i data-hf-id="hf-0c47" style="height: 38px"></i><i data-hf-id="hf-a5hi" style="height: 22px"></i><i data-hf-id="hf-vgqr" style="height: 44px"></i><i data-hf-id="hf-u4x0" style="height: 28px"></i><i data-hf-id="hf-ge1m" style="height: 40px"></i><i data-hf-id="hf-t7d7" style="height: 34px"></i><i data-hf-id="hf-ddfg" style="height: 20px"></i><i data-hf-id="hf-vv1s" style="height: 44px"></i><i data-hf-id="hf-6h73" style="height: 30px"></i><i data-hf-id="hf-8orb" style="height: 38px"></i><i data-hf-id="hf-a3zs" style="height: 24px"></i><i data-hf-id="hf-t2wl" style="height: 44px"></i><i data-hf-id="hf-st26" style="height: 34px"></i><i data-hf-id="hf-uz30" style="height: 28px"></i><i data-hf-id="hf-gscn" style="height: 40px"></i><i data-hf-id="hf-afgx" style="height: 18px"></i><i data-hf-id="hf-th7m" style="height: 44px"></i><i data-hf-id="hf-h54h" style="height: 32px"></i><i data-hf-id="hf-8aga" style="height: 38px"></i><i data-hf-id="hf-kzo0" style="height: 24px"></i><i data-hf-id="hf-tvin" style="height: 44px"></i><i data-hf-id="hf-bve7" style="height: 30px"></i><i data-hf-id="hf-3995" style="height: 36px"></i>
+          </div>
+          <div data-hf-id="hf-ncmv" class="s3-t-note" id="s3-t-note"><span data-hf-id="hf-zcc2" class="dot"></span>Confirmation sent to your phone.</div>
+        </div>
+      </div>
+    </div>
+
+    <div data-hf-id="hf-l0ny" class="s3-thumb" id="s3-thumb">
+      <div data-hf-id="hf-s9bk" class="s3-thumb-arm"></div>
+      <div data-hf-id="hf-ti39" class="s3-thumb-tip"><div data-hf-id="hf-oo6i" class="s3-thumb-nail"></div></div>
+    </div>
+
+    <svg data-hf-id="hf-9u0t" class="s3-orb" id="s3-orb" viewBox="0 0 200 200" aria-hidden="true">
+      <g data-hf-id="hf-bpye" id="s3-orb-body">
+        <path data-hf-id="hf-rday" d="M100 34C139 34 166 62 168 102C170 143 142 170 100 170C58 170 30 143 32 102C34 62 61 34 100 34Z" fill="#59b26f" />
+        <path data-hf-id="hf-yhlj" d="M100 44C103 26 113 17 129 15C128 30 118 40 100 44Z" fill="#2f7b45" />
+        <path data-hf-id="hf-tzk2" d="M98 46C92 31 81 25 66 27C70 41 82 48 98 46Z" fill="#3d8b52" />
+        <path data-hf-id="hf-qbx1" d="M100 52V38" stroke="#1b211c" stroke-width="3" stroke-linecap="round" />
+        <ellipse data-hf-id="hf-2nvp" cx="73" cy="104" rx="15" ry="18" fill="#fbf9f5" />
+        <ellipse data-hf-id="hf-zcmn" cx="127" cy="104" rx="15" ry="18" fill="#fbf9f5" />
+        <g data-hf-id="hf-cf4f" class="s3-eyes">
+          <circle data-hf-id="hf-0rpl" class="s3-pupil" cx="73" cy="106" r="7" fill="#1b211c" />
+          <circle data-hf-id="hf-kb63" class="s3-pupil" cx="127" cy="106" r="7" fill="#1b211c" />
+        </g>
+        <path data-hf-id="hf-h10m" d="M88 140C94 145 106 145 112 140" stroke="#1b211c" stroke-width="4" stroke-linecap="round" fill="none" />
+      </g>
+    </svg>
+
+    <div data-hf-id="hf-xgub" class="s3-grain" id="s3-grain" data-layout-ignore></div>
+    <div data-hf-id="hf-g0ip" class="s3-wipe" id="s3-wipe" data-layout-allow-overflow></div>
+  </div>
+
+  <script>
+    (function () {
+      const tl = gsap.timeline({ paused: true });
+      const spark = [5, 18, 9, 2, 21, 12, 7, 16, 3, 20];
+
+      gsap.set(".s3-eyes", { transformOrigin: "50% 50%" });
+
+      tl.fromTo("#s3-wipe", { y: 0 }, { y: -1080, duration: 0.62, ease: "power3.inOut" }, 0.05);
+      tl.fromTo("#s3-kicker", { opacity: 0, x: -10 }, { opacity: 1, x: 0, duration: 0.4, ease: "power2.out" }, 0.2);
+      tl.fromTo("#s3-h1 .word", { opacity: 0, y: 16, filter: "blur(6px)" }, { opacity: 1, y: 0, filter: "blur(0px)", duration: 0.36, ease: "power3.out", stagger: 0.07 }, 1.0);
+      tl.fromTo("#s3-route", { opacity: 0 }, { opacity: 0.55, duration: 0.6, ease: "power2.out" }, 1.1);
+
+      tl.fromTo("#s3-card-1", { opacity: 0, y: 34 }, { opacity: 1, y: 0, duration: 0.5, ease: "power3.out" }, 2.0);
+      tl.fromTo("#s3-card-2", { opacity: 0, y: 34 }, { opacity: 1, y: 0, duration: 0.5, ease: "power3.out" }, 2.18);
+      tl.fromTo("#s3-card-3", { opacity: 0, y: 34 }, { opacity: 1, y: 0, duration: 0.5, ease: "power3.out" }, 2.36);
+      tl.fromTo("#s3-card-2 .s3-tag", { opacity: 0, scale: 0.7 }, { opacity: 1, scale: 1, duration: 0.35, ease: "back.out(1.8)" }, 3.3);
+      tl.fromTo("#s3-hold", { opacity: 0, y: 14 }, { opacity: 1, y: 0, duration: 0.4, ease: "power3.out" }, 5.6);
+      tl.fromTo("#s3-orb", { opacity: 0, y: 20 }, { opacity: 1, y: 0, duration: 0.5, ease: "back.out(1.5)" }, 2.6);
+      tl.to(".s3-pupil", { x: -6, y: 2, duration: 0.4, ease: "power2.inOut" }, 4.2);
+      tl.to(".s3-pupil", { x: 5, y: -2, duration: 0.45, ease: "power2.inOut" }, 8.8);
+      tl.to(".s3-pupil", { x: -8, y: 3, duration: 0.45, ease: "power2.inOut" }, 10.6);
+
+      tl.to("#s3-cards", { scale: 0.94, y: -16, duration: 0.7, ease: "power2.inOut" }, 12.0);
+      tl.to("#s3-hold", { opacity: 0, y: 10, duration: 0.35, ease: "power2.in" }, 12.0);
+      tl.to("#s3-dim", { opacity: 0.72, duration: 0.5, ease: "power2.inOut" }, 12.0);
+
+      tl.fromTo("#s3-phone", { opacity: 0, y: 340 }, { opacity: 1, y: 0, duration: 0.62, ease: "power3.out" }, 12.2);
+      tl.to(".s3-pupil", { x: -10, y: -4, duration: 0.45, ease: "power2.inOut" }, 12.5);
+
+      tl.fromTo("#s3-thumb", { opacity: 0, x: 90, y: 60 }, { opacity: 1, x: 0, y: 0, duration: 0.45, ease: "power3.out" }, 18.6);
+      tl.to("#s3-thumb", { x: -12, y: 26, duration: 0.16, ease: "power2.in" }, 20.3);
+      tl.to("#s3-approve", { scale: 0.96, duration: 0.12, ease: "power2.in" }, 20.34);
+      tl.to("#s3-thumb", { x: 70, y: 46, duration: 0.35, ease: "power3.out" }, 20.5);
+      tl.to("#s3-approve", { scale: 1, duration: 0.2, ease: "power2.out" }, 20.48);
+      tl.to("#s3-thumb", { opacity: 0, x: 140, y: 90, duration: 0.3, ease: "power2.in" }, 20.9);
+      tl.to(".s3-pupil", { x: -13, y: 4, duration: 0.5, ease: "power2.inOut" }, 15.2);
+      tl.to(".s3-pupil", { x: -4, y: 1, duration: 0.45, ease: "power2.inOut" }, 17.4);
+      tl.to(".s3-pupil", { x: 7, y: 2, duration: 0.45, ease: "power2.inOut" }, 23.6);
+      tl.to(".s3-pupil", { x: 2, y: 0, duration: 0.4, ease: "power2.inOut" }, 25.6);
+
+      tl.to("#s3-approval", { opacity: 0, y: -14, duration: 0.3, ease: "power2.in" }, 21.05);
+      tl.fromTo("#s3-ticket", { opacity: 0, y: 18 }, { opacity: 1, y: 0, duration: 0.45, ease: "power3.out" }, 21.3);
+      tl.fromTo("#s3-t-booked", { opacity: 0, x: -8 }, { opacity: 1, x: 0, duration: 0.3, ease: "power2.out" }, 21.4);
+
+      tl.to("#s3-h1 .word", { opacity: 0, y: -14, filter: "blur(6px)", duration: 0.26, ease: "power2.in", stagger: 0.04 }, 21.2);
+      tl.to("#s3-route", { opacity: 0, duration: 0.4, ease: "power2.out" }, 21.3);
+      tl.fromTo("#s3-h2 .word", { opacity: 0, y: 14, filter: "blur(6px)" }, { opacity: 1, y: 0, filter: "blur(0px)", duration: 0.3, ease: "power3.out", stagger: 0.06 }, 21.5);
+
+      tl.fromTo("#s3-t-note", { opacity: 0, y: 8 }, { opacity: 1, y: 0, duration: 0.35, ease: "power2.out" }, 27.0);
+      tl.to(".s3-pupil", { x: 6, y: 3, duration: 0.35, ease: "power2.inOut" }, 26.4);
+
+      const blink = (time) => {
+        tl.to(".s3-eyes", { scaleY: 0.12, duration: 0.07, ease: "power2.in" }, time);
+        tl.to(".s3-eyes", { scaleY: 1, duration: 0.12, ease: "power2.out" }, time + 0.08);
+      };
+      blink(1.4);
+      blink(7.4);
+      blink(10.2);
+      blink(16.4);
+      blink(19.2);
+      blink(24.8);
+      blink(30.4);
+      blink(32.2);
+
+      for (let i = 0; i < 34; i++) {
+        const t = 0.2 + i * 0.56;
+        const s = spark[i % spark.length];
+        tl.set("#s3-grain", { x: (s % 5) * 3 - 6, y: ((s * 7) % 5) * 3 - 6 }, t);
+      }
+
+      tl.fromTo("#s3-wipe", { y: 1080 }, { y: 0, duration: 0.4, ease: "power3.in", immediateRender: false }, 34.6);
+
+      window.__timelines["s3"] = tl;
+    })();
+  </script>
+</template>

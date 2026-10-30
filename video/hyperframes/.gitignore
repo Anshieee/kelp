@@ -1,0 +1,5 @@
+# Render output and local render caches
+renders/
+.hyperframes/
+.thumbnails/
+.waveform-cache/

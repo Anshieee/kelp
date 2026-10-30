@@ -1,0 +1,34 @@
+{
+  "brand": "Kelp",
+  "source": "landing-light design tokens + docs/hyper_dreams_design_system.md palette",
+  "colors": {
+    "ivory": "#FBF9F5",
+    "paper": "#FFFFFF",
+    "ink": "#1B211C",
+    "inkSoft": "#4A544E",
+    "jade": "#59B26F",
+    "jadeDeep": "#276B3C",
+    "jadeLight": "#E4F0E2",
+    "sage": "#C9DFBC",
+    "sagePale": "#E8EDDF",
+    "vermilion": "#E52D2D",
+    "butter": "#F0E7C5",
+    "sand": "#E7D8BE",
+    "umber": "#73553B",
+    "line": "#CDD5C9"
+  },
+  "type": {
+    "display": "Newsreader",
+    "displayWeights": "300 600",
+    "ui": "Inter",
+    "uiWeights": "400 700",
+    "files": "../hyperframes/assets/fonts/"
+  },
+  "motion": {
+    "easeIn": "power2.in",
+    "easeOut": "power3.out",
+    "easeInOut": "power2.inOut",
+    "pattern": "flat 2D, motion wipes between scenes, calm senior-friendly timing"
+  },
+  "canvas": { "width": 1920, "height": 1080, "fps": 30 }
+}
