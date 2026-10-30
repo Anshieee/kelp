@@ -164,12 +164,23 @@
     "entry": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["module", "callable"],
+      "required": ["callable"],
+      "description": "Built-in skills reference an importable 'module'; installed plugins MUST use a package-relative 'path' instead (KEL-25).",
+      "anyOf": [
+        { "required": ["module"] },
+        { "required": ["path"] }
+      ],
       "properties": {
         "module": {
           "type": "string",
           "pattern": "^[A-Za-z_][A-Za-z0-9_]*(\\.[A-Za-z_][A-Za-z0-9_]*)*$",
           "maxLength": 200
+        },
+        "path": {
+          "type": "string",
+          "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.(?:/|$))[A-Za-z0-9._/-]{1,200}$",
+          "maxLength": 200,
+          "description": "POSIX path inside the plugin package, e.g. 'handler.py'. No absolute paths, '..' segments, or backslashes."
         },
         "callable": {
           "type": "string",

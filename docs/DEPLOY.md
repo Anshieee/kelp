@@ -123,6 +123,8 @@ no default: the process refuses to start without them (`missing_api_key` or
 | `KELP_AUDIT_DIR` | no | `/data/audit` | no | Append-only `audit.jsonl` |
 | `KELP_USAGE_DIR` | no | `/data/usage` | no | Append-only `usage.jsonl` |
 | `KELP_SKILL_ROOT` | no | unset → built-in skills | no | Custom skill directory |
+| `KELP_PLUGIN_ROOT` | no | unset → `<repo>/var/plugins` | no | Installed plugin packages and `plugins.lock.json`. In the container set `/data/plugins`: the image rootfs is read-only and only `/data` persists |
+| `KELP_PLUGINS_ALLOW_UNPINNED` | no | unset (`0`) | no | `1` loads packages that have no pin. Local experiments only; leave unset in production |
 | `KELP_SPEND_CAP_DAY_USD` | no | unset → uncapped | no | Refuse new turns once today's persisted spend reaches this amount |
 | `KELP_SPEND_CAP_MONTH_USD` | no | unset → uncapped | no | Same, for the calendar month |
 | `KELP_SPEND_UNKNOWN_PRICE_MODE` | no | `block` | no | `block` or `count_as`: what an unpriced turn means for the cap |
@@ -190,6 +192,53 @@ disagree: `docker compose --env-file /path/.env …` for manual runs and
 `EnvironmentFile=/path/.env` in `deploy/kelp.service` for boot. Compose's
 `env_file:` directive is unrelated to this and must keep pointing at
 `deploy/kelp.env`, which is the container's environment.
+
+### 3.2 Installed plugin packages (KEL-25)
+
+Plugins are optional deploy-time packages, not chat tools. Each package is a
+directory or `.zip` with `manifest.json` and the module named by `entry.path`;
+`python -m skills.cli install` validates it, pins its name, version, and SHA-256
+digest in `<root>/plugins.lock.json`, and the server refuses to boot on a
+missing pin or a digest/version mismatch.
+
+The container root filesystem is read-only, so **set the plugin root under
+`/data`** in `deploy/kelp.env` before installing anything:
+
+```bash
+# deploy/kelp.env (non-secret)
+KELP_PLUGIN_ROOT=/data/plugins
+# KELP_PLUGINS_ALLOW_UNPINNED is for local experiments only; never set it here.
+```
+
+Layout inside the `kelp-data` volume:
+
+```
+/data/plugins/
+  plugins.lock.json       # {name: {name, version, digest}}
+  plugins.echo/           # installed package (or plugins.echo.zip)
+    manifest.json
+    handler.py
+```
+
+Install from the build host with the volume mounted, or run the CLI inside a
+one-off container that mounts the same volume, for example:
+
+```bash
+cd /opt/kelp
+export KELP_IMAGE="$(sed -n 's/^KELP_IMAGE=//p' /opt/kelp/.env)"
+docker run --rm -u 10001:10001 \
+  -v kelp-data:/data \
+  -v "$PWD:/src:ro" \
+  --entrypoint python "$KELP_IMAGE" \
+  -m skills.cli install /src/path/to/plugin --root /data/plugins
+```
+
+`--force` stages the copy beside the destination and swaps it only after the
+staged digest matches the validated one, so a failed replacement leaves the
+previous package and pin in place. `list --json` reports `pinned` and
+`pin_matches` (digest **and** version); `uninstall <name>` removes both the
+package and its pin. Restart the service after any change: packages are read at
+boot, and a mismatch is a startup failure rather than a degraded mode.
 
 ---
 

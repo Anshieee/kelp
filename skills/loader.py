@@ -8,17 +8,24 @@ Adding a skill must not require editing this module.
 from __future__ import annotations
 
 import asyncio
+import atexit
 import hashlib
 import importlib
+import importlib.util
 import inspect
 import json
 import os
 import re
+import shutil
+import stat
+import sys
+import tempfile
 import time
+import zipfile
 from dataclasses import dataclass, replace
 from datetime import datetime, timedelta, timezone
-from pathlib import Path
-from typing import TYPE_CHECKING, Any, Awaitable, Callable, Iterable, Mapping
+from pathlib import Path, PurePosixPath
+from typing import TYPE_CHECKING, Any, Awaitable, Callable, Iterable, Mapping, Sequence
 
 from jsonschema import Draft202012Validator
 from jsonschema.exceptions import SchemaError
@@ -43,10 +50,25 @@ if TYPE_CHECKING:  # pragma: no cover - typing only
 
 __all__ = [
     "APPROVAL_TTL_SECONDS",
+    "DEFAULT_PLUGIN_ROOT",
     "DEFAULT_SKILL_ROOT",
     "LoadedSkill",
+    "PLUGIN_ALLOW_UNPINNED_ENV",
+    "PLUGIN_LOCK_FILENAME",
+    "PLUGIN_LOCK_VERSION",
+    "PLUGIN_MAX_BYTES",
+    "PLUGIN_MAX_ENTRIES",
+    "PLUGIN_ROOT_ENV",
+    "PluginPackage",
+    "PluginPackageError",
     "SkillRegistry",
+    "default_plugin_root",
+    "inspect_plugin_package",
     "load_registry",
+    "materialize_plugin_package",
+    "package_digest",
+    "read_plugin_lock",
+    "write_plugin_lock",
 ]
 
 MANIFEST_FILENAME = "manifest.json"
@@ -55,6 +77,18 @@ SPEC_VERSION = "1.0"
 APPROVAL_TTL_SECONDS = 600
 DEFAULT_SKILL_ROOT = Path(__file__).resolve().parent / "builtin"
 _META_SCHEMA_PATH = Path(__file__).resolve().parent / "manifest.schema.json"
+
+# -- installed plugin packages (KEL-25 / M4-D) ------------------------------
+PLUGIN_ROOT_ENV = "KELP_PLUGIN_ROOT"
+PLUGIN_ALLOW_UNPINNED_ENV = "KELP_PLUGINS_ALLOW_UNPINNED"
+PLUGIN_LOCK_FILENAME = "plugins.lock.json"
+PLUGIN_LOCK_VERSION = 1
+PLUGIN_MAX_BYTES = 8 * 1024 * 1024
+PLUGIN_MAX_ENTRIES = 4096
+DEFAULT_PLUGIN_ROOT = Path(__file__).resolve().parents[1] / "var" / "plugins"
+_PLUGIN_IGNORED_DIRS = frozenset({"__pycache__"})
+_PLUGIN_IGNORED_SUFFIXES = (".pyc", ".pyo")
+_MEMBER_CHARS_RE = re.compile(r"^[A-Za-z0-9._-]+$")
 
 ApprovalHook = Callable[[ApprovalRequest], Awaitable[bool]]
 
@@ -133,6 +167,10 @@ class LoadedSkill:
     scopes: Mapping[str, tuple[str, ...]]
     declared_secrets: tuple[str, ...]
     cost_class: str
+    #: Filesystem origin (skill directory for built-ins, package path for plugins).
+    origin: str = ""
+    #: ``sha256:…`` digest for installed plugins; ``None`` for built-ins.
+    digest: str | None = None
     @property
     def tool_name(self) -> str:
         return self.tool_names[0]
@@ -164,6 +202,374 @@ def _read_manifest(path: Path, dirname: str) -> tuple[dict[str, Any] | None, lis
     if not isinstance(data, dict):
         return None, [Violation(dirname, "", "manifest.json must contain a JSON object")]
     return data, []
+
+
+class PluginPackageError(Exception):
+    """A plugin package (directory or zip) violates the M4-D packaging rules."""
+
+
+@dataclass(frozen=True)
+class PluginPackage:
+    """A validated package image: manifest plus every file's content.
+
+    ``entries`` are ``(posix_relpath, mode, content)`` triples in the exact
+    order the digest covers. The package is never executed at inspection time.
+    """
+
+    name: str
+    version: str
+    digest: str
+    source: Path
+    manifest: Mapping[str, Any]
+    entries: tuple[tuple[str, int, bytes], ...]
+
+
+def default_plugin_root(environ: Mapping[str, str] | None = None) -> Path:
+    """``KELP_PLUGIN_ROOT`` if set, else ``<repo>/var/plugins``."""
+
+    env = os.environ if environ is None else environ
+    raw = str(env.get(PLUGIN_ROOT_ENV, "")).strip()
+    return Path(raw).expanduser() if raw else DEFAULT_PLUGIN_ROOT
+
+
+def package_digest(entries: Iterable[tuple[str, int, bytes]]) -> str:
+    """SHA-256 over the sorted ``(relpath, mode, content)`` set.
+
+    Framing: for each entry in ``relpath`` order, feed ``relpath``, NUL,
+    ``mode`` as four octal digits, NUL, then the 32-byte SHA-256 of the
+    content. Fixed-width frames keep the digest unambiguous. Unreadable
+    caches (``__pycache__``, ``*.pyc``) never enter the set.
+    """
+
+    digest = hashlib.sha256()
+    for relpath, mode, content in sorted(entries, key=lambda item: item[0]):
+        digest.update(relpath.encode("utf-8"))
+        digest.update(b"\x00")
+        digest.update(f"{mode & 0o777:04o}".encode("ascii"))
+        digest.update(b"\x00")
+        digest.update(hashlib.sha256(content).digest())
+    return "sha256:" + digest.hexdigest()
+
+
+def _validate_member(relpath: str, *, owner: str) -> str:
+    """Normalize one archive/directory member and reject unsafe names.
+
+    Members are restricted to portable ASCII so a package cannot smuggle in
+    control characters, newlines, or Unicode look-alikes that render
+    differently in logs and shell output.
+    """
+
+    pure = PurePosixPath(relpath)
+    if not relpath or relpath.startswith(("/", "\\")) or pure.is_absolute():
+        raise PluginPackageError(f"{owner} contains an absolute member: {relpath!r}")
+    if "\\" in relpath or ".." in pure.parts:
+        raise PluginPackageError(f"{owner} contains an unsafe member: {relpath!r}")
+    for part in pure.parts:
+        if part in {"", "."}:
+            continue
+        if not _MEMBER_CHARS_RE.match(part):
+            raise PluginPackageError(
+                f"{owner} contains a member with unsupported characters: {relpath!r} "
+                "(allowed: A-Z, a-z, 0-9, '.', '_' and '-')"
+            )
+    normalized = pure.as_posix()
+    if normalized in {"", "."}:
+        raise PluginPackageError(f"{owner} contains an unsafe member: {relpath!r}")
+    return normalized
+
+
+def _raise_walk_error(error: OSError) -> None:
+    raise error
+
+
+def _check_entry_budget(path: Path, entries: Sequence[tuple[str, int, bytes]]) -> None:
+    if len(entries) > PLUGIN_MAX_ENTRIES:
+        raise PluginPackageError(
+            f"package {path} exceeds the {PLUGIN_MAX_ENTRIES}-entry limit"
+        )
+
+
+def _scan_package_directory(path: Path) -> list[tuple[str, int, bytes]]:
+    entries: list[tuple[str, int, bytes]] = []
+    total = 0
+    try:
+        for dirpath, dirnames, filenames in os.walk(
+            path, followlinks=False, onerror=_raise_walk_error
+        ):
+            base = Path(dirpath)
+            dirnames[:] = sorted(name for name in dirnames if name not in _PLUGIN_IGNORED_DIRS)
+            for name in dirnames:
+                if (base / name).is_symlink():
+                    raise PluginPackageError(
+                        f"package {path} contains a symlinked directory: "
+                        f"{(base / name).relative_to(path).as_posix()}"
+                    )
+            for name in sorted(filenames):
+                file = base / name
+                relpath = file.relative_to(path).as_posix()
+                if file.is_symlink():
+                    raise PluginPackageError(f"package {path} contains a symlink: {relpath}")
+                if name.endswith(_PLUGIN_IGNORED_SUFFIXES):
+                    continue
+                if not file.is_file():
+                    raise PluginPackageError(
+                        f"package {path} contains a non-regular file: {relpath}"
+                    )
+                relpath = _validate_member(relpath, owner=f"package {path}")
+                size = file.stat().st_size
+                total += size
+                if total > PLUGIN_MAX_BYTES:
+                    raise PluginPackageError(
+                        f"package {path} exceeds the {PLUGIN_MAX_BYTES}-byte limit"
+                    )
+                content = file.read_bytes()
+                entries.append((relpath, stat.S_IMODE(file.stat().st_mode), content))
+                _check_entry_budget(path, entries)
+    except OSError as exc:
+        raise PluginPackageError(f"cannot read plugin package {path}: {exc}") from exc
+    return entries
+
+
+def _scan_package_zip(path: Path) -> list[tuple[str, int, bytes]]:
+    entries: list[tuple[str, int, bytes]] = []
+    seen: set[str] = set()
+    total = 0
+    try:
+        archive = zipfile.ZipFile(path)
+    except (OSError, zipfile.BadZipFile) as exc:
+        raise PluginPackageError(f"cannot read plugin archive {path}: {exc}") from exc
+    try:
+        with archive:
+            for info in sorted(archive.infolist(), key=lambda item: item.filename):
+                name = info.filename
+                if info.is_dir():
+                    continue
+                pure = PurePosixPath(name)
+                if not name or name.startswith(("/", "\\")) or pure.is_absolute():
+                    raise PluginPackageError(
+                        f"archive {path} contains an absolute member: {name!r}"
+                    )
+                if "\\" in name or ".." in pure.parts:
+                    raise PluginPackageError(
+                        f"archive {path} contains an unsafe member: {name!r}"
+                    )
+                if any(part in _PLUGIN_IGNORED_DIRS for part in pure.parts):
+                    continue
+                if pure.suffix in _PLUGIN_IGNORED_SUFFIXES:
+                    continue
+                relpath = _validate_member(name, owner=f"archive {path}")
+                if relpath in seen:
+                    raise PluginPackageError(
+                        f"archive {path} contains a duplicate member: {name!r}"
+                    )
+                seen.add(relpath)
+                raw_mode = (info.external_attr >> 16) & 0xFFFF
+                if stat.S_ISLNK(raw_mode):
+                    raise PluginPackageError(
+                        f"archive {path} contains a symlink member: {name!r}"
+                    )
+                total += info.file_size
+                if total > PLUGIN_MAX_BYTES:
+                    raise PluginPackageError(
+                        f"archive {path} exceeds the {PLUGIN_MAX_BYTES}-byte limit"
+                    )
+                entries.append(
+                    (relpath, stat.S_IMODE(raw_mode) or 0o644, archive.read(info))
+                )
+                _check_entry_budget(path, entries)
+    except PluginPackageError:
+        raise
+    except (OSError, zipfile.BadZipFile, RuntimeError) as exc:
+        raise PluginPackageError(f"cannot read plugin archive {path}: {exc}") from exc
+    return entries
+
+
+def _package_entries(path: Path) -> list[tuple[str, int, bytes]]:
+    try:
+        if path.is_symlink():
+            raise PluginPackageError(f"plugin package {path} must not be a symlink")
+        if path.is_dir():
+            return _scan_package_directory(path)
+        if path.is_file() and path.suffix.lower() == ".zip":
+            return _scan_package_zip(path)
+    except OSError as exc:
+        raise PluginPackageError(f"cannot read plugin package {path}: {exc}") from exc
+    raise PluginPackageError(
+        f"plugin package {path} must be a directory or a .zip archive"
+    )
+
+
+def _entry_path_key(value: Any) -> str | None:
+    """Normalize a manifest ``entry.path`` to the package-relative key."""
+
+    if not isinstance(value, str) or not value:
+        return None
+    pure = PurePosixPath(value)
+    if pure.is_absolute() or "\\" in value or ".." in pure.parts:
+        return None
+    for part in pure.parts:
+        if part in {"", "."}:
+            continue
+        if not _MEMBER_CHARS_RE.match(part):
+            return None
+    normalized = pure.as_posix()
+    return normalized if normalized not in {"", "."} else None
+
+
+def inspect_plugin_package(path: str | Path) -> PluginPackage:
+    """Validate a package without importing or executing any of its code."""
+
+    source = Path(path)
+    entries = _package_entries(source)
+    if not entries:
+        raise PluginPackageError(f"plugin package {source} is empty")
+
+    by_relpath = {relpath: content for relpath, _mode, content in entries}
+    try:
+        manifest_bytes = by_relpath[MANIFEST_FILENAME]
+    except KeyError:
+        raise PluginPackageError(
+            f"plugin package {source} has no {MANIFEST_FILENAME} at its root"
+        ) from None
+    try:
+        manifest = json.loads(manifest_bytes.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise PluginPackageError(f"{MANIFEST_FILENAME} in {source} is not valid JSON: {exc}") from exc
+    if not isinstance(manifest, dict):
+        raise PluginPackageError(f"{MANIFEST_FILENAME} in {source} must contain a JSON object")
+
+    name = manifest.get("name")
+    label = name if isinstance(name, str) and name else source.name
+    structural = sorted(
+        _META_VALIDATOR.iter_errors(manifest),
+        key=lambda error: (list(error.absolute_path), error.message),
+    )
+    if structural:
+        details = "; ".join(
+            f"{_error_pointer(error, manifest)}: {_short(error.message)}"
+            for error in structural[:5]
+        )
+        raise PluginPackageError(f"invalid plugin manifest in {source}: {details}")
+    semantic = _check_semantics(manifest, label)
+    if semantic:
+        raise PluginPackageError(
+            "invalid plugin manifest in "
+            f"{source}: " + "; ".join(f"{v.field or '/'}: {v.message}" for v in semantic)
+        )
+
+    entry = manifest["entry"]
+    if "module" in entry:
+        raise PluginPackageError(
+            f"plugin {name!r} in {source} uses entry.module; installed plugins MUST use "
+            "entry.path so the loader never mutates sys.path"
+        )
+    entry_path = _entry_path_key(entry["path"])
+    if entry_path is None:
+        raise PluginPackageError(
+            f"plugin {name!r} in {source} declares an unsafe entry.path "
+            f"{entry['path']!r}; use a package-relative POSIX path"
+        )
+    if entry_path not in by_relpath:
+        raise PluginPackageError(
+            f"plugin {name!r} in {source} declares entry.path {entry['path']!r}, "
+            "which is not present in the package"
+        )
+
+    return PluginPackage(
+        name=manifest["name"],
+        version=manifest["version"],
+        digest=package_digest(entries),
+        source=source,
+        manifest=manifest,
+        entries=tuple(entries),
+    )
+
+
+def _write_package_entries(
+    entries: Iterable[tuple[str, int, bytes]], target: Path
+) -> None:
+    """Write only digest-covered bytes into ``target``."""
+
+    target.mkdir(parents=True, exist_ok=True)
+    for relpath, mode, content in entries:
+        destination = target.joinpath(*PurePosixPath(relpath).parts)
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        destination.write_bytes(content)
+        os.chmod(destination, mode or 0o644)
+
+
+def materialize_plugin_package(package: PluginPackage) -> Path:
+    """Materialize a private import tree from the verified package image.
+
+    This always copies, including for directory packages. The on-disk source
+    may contain ``__pycache__``/``*.pyc`` files that are deliberately outside
+    the digest; importing from the source would let Python prefer a planted
+    cache over the verified ``.py``. The copy contains only digest-covered
+    entries, so a cache that does not match the digest can never execute.
+    """
+
+    slug = re.sub(r"[^0-9A-Za-z_]", "_", package.name)
+    target = Path(tempfile.mkdtemp(prefix=f"kelp-plugin-{slug}-"))
+    atexit.register(shutil.rmtree, target, True)
+    try:
+        _write_package_entries(package.entries, target)
+    except OSError:
+        shutil.rmtree(target, ignore_errors=True)
+        raise
+    return target
+
+
+def read_plugin_lock(root: str | Path) -> dict[str, dict[str, str]]:
+    """Read ``plugins.lock.json``; a missing file means "nothing pinned"."""
+
+    path = Path(root) / PLUGIN_LOCK_FILENAME
+    if not path.exists():
+        return {}
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise PluginPackageError(f"cannot read {path}: {exc}") from exc
+    if not isinstance(raw, Mapping):
+        raise PluginPackageError(f"{path} must contain a JSON object")
+    if raw.get("version", PLUGIN_LOCK_VERSION) != PLUGIN_LOCK_VERSION:
+        raise PluginPackageError(f"{path} has an unsupported lock version {raw.get('version')!r}")
+    plugins = raw.get("plugins", {})
+    if not isinstance(plugins, Mapping):
+        raise PluginPackageError(f"{path} field 'plugins' must be an object")
+    pins: dict[str, dict[str, str]] = {}
+    for name, pin in plugins.items():
+        if not isinstance(name, str) or not isinstance(pin, Mapping):
+            raise PluginPackageError(f"{path} has a malformed pin for {name!r}")
+        digest = pin.get("digest")
+        version = pin.get("version")
+        if not isinstance(digest, str) or not re.fullmatch(r"sha256:[0-9a-f]{64}", digest):
+            raise PluginPackageError(f"{path} pin for {name!r} has an invalid digest")
+        if not isinstance(version, str) or not version:
+            raise PluginPackageError(f"{path} pin for {name!r} has an invalid version")
+        pins[name] = {"name": name, "version": version, "digest": digest}
+    return pins
+
+
+def write_plugin_lock(root: str | Path, pins: Mapping[str, Mapping[str, str]]) -> Path:
+    """Atomically rewrite ``plugins.lock.json`` with sorted pins."""
+
+    path = Path(root) / PLUGIN_LOCK_FILENAME
+    path.parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "version": PLUGIN_LOCK_VERSION,
+        "plugins": {
+            name: {
+                "name": name,
+                "version": str(pin["version"]),
+                "digest": str(pin["digest"]),
+            }
+            for name, pin in sorted(pins.items())
+        },
+    }
+    temporary = path.with_name(path.name + ".tmp")
+    temporary.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    os.replace(temporary, path)
+    return path
 
 
 def _collect_refs(node: Any, pointer: str = "") -> list[tuple[str, str]]:
@@ -241,12 +647,27 @@ def _check_schema(
     return violations
 
 
-def _check_entry(data: Mapping[str, Any], label: str) -> tuple[
-    Callable[..., Awaitable[Mapping[str, Any]]] | None, list[Violation]
-]:
+def _check_entry(
+    data: Mapping[str, Any],
+    label: str,
+    *,
+    base_dir: Path | None = None,
+    module_key: str = "",
+) -> tuple[Callable[..., Awaitable[Mapping[str, Any]]] | None, list[Violation]]:
     entry = data["entry"]
-    module_name = entry["module"]
     callable_name = entry["callable"]
+    if "path" in entry:
+        if base_dir is None:
+            return None, [
+                Violation(
+                    label,
+                    "/entry/path",
+                    "entry.path is only valid for installed plugin packages; "
+                    "built-in skills must use entry.module",
+                )
+            ]
+        return _check_entry_path(base_dir, entry["path"], callable_name, label, module_key)
+    module_name = entry["module"]
     try:
         module = importlib.import_module(module_name)
     except Exception as exc:  # noqa: BLE001 - import can fail in arbitrary ways
@@ -265,6 +686,81 @@ def _check_entry(data: Mapping[str, Any], label: str) -> tuple[
     if not inspect.iscoroutinefunction(handler):
         return None, [
             Violation(label, "/entry/callable", f"{module_name}.{callable_name} must be an async function")
+        ]
+    return handler, []
+
+
+def _check_entry_path(
+    base_dir: Path,
+    entry_path: str,
+    callable_name: str,
+    label: str,
+    module_key: str,
+) -> tuple[Callable[..., Awaitable[Mapping[str, Any]]] | None, list[Violation]]:
+    """Import a plugin entry from its file path without touching ``sys.path``."""
+
+    normalized = _entry_path_key(entry_path)
+    if normalized is None:
+        return None, [
+            Violation(
+                label,
+                "/entry/path",
+                f"entry.path {entry_path!r} must stay inside the package and use "
+                "portable characters (A-Z, a-z, 0-9, '.', '_', '-')",
+            )
+        ]
+    pure = PurePosixPath(normalized)
+    module_file = base_dir.joinpath(*pure.parts)
+    try:
+        resolved = module_file.resolve(strict=True)
+    except OSError as exc:
+        return None, [
+            Violation(label, "/entry/path", f"entry.path {entry_path!r} is unreadable: {exc}")
+        ]
+    try:
+        resolved.relative_to(base_dir.resolve())
+    except ValueError:
+        return None, [
+            Violation(label, "/entry/path", f"entry.path {entry_path!r} escapes the package root")
+        ]
+    if not resolved.is_file():
+        return None, [
+            Violation(label, "/entry/path", f"entry.path {entry_path!r} is not a regular file")
+        ]
+
+    module_name = "_kelp_plugin_" + (module_key or hashlib.sha256(
+        (label + normalized).encode("utf-8")
+    ).hexdigest()[:16])
+    spec = importlib.util.spec_from_file_location(module_name, resolved)
+    if spec is None or spec.loader is None:  # pragma: no cover - defensive
+        return None, [
+            Violation(label, "/entry/path", f"cannot build an import spec for {entry_path!r}")
+        ]
+    module = importlib.util.module_from_spec(spec)
+    previous = sys.modules.get(module_name)
+    sys.modules[module_name] = module
+    try:
+        spec.loader.exec_module(module)
+    except Exception as exc:  # noqa: BLE001 - plugin code can fail in arbitrary ways
+        if previous is None:
+            sys.modules.pop(module_name, None)
+        else:
+            sys.modules[module_name] = previous
+        return None, [
+            Violation(
+                label,
+                "/entry/path",
+                f"cannot execute entry module {entry_path!r}: {type(exc).__name__}: {_short(exc)}",
+            )
+        ]
+    handler = getattr(module, callable_name, None)
+    if handler is None:
+        return None, [
+            Violation(label, "/entry/callable", f"module {entry_path!r} has no attribute {callable_name!r}")
+        ]
+    if not inspect.iscoroutinefunction(handler):
+        return None, [
+            Violation(label, "/entry/callable", f"{entry_path}:{callable_name} must be an async function")
         ]
     return handler, []
 
@@ -396,6 +892,182 @@ def _check_semantics(data: Mapping[str, Any], label: str) -> list[Violation]:
     return violations
 
 
+def _build_skill(
+    data: Mapping[str, Any],
+    manifest_path: Path,
+    handler: Callable[..., Awaitable[Mapping[str, Any]]],
+    *,
+    origin: str,
+    digest: str | None = None,
+) -> LoadedSkill:
+    permissions = data["permissions"]
+    return LoadedSkill(
+        name=data["name"],
+        version=data["version"],
+        description=data["description"],
+        manifest=data,
+        manifest_path=manifest_path,
+        handler=handler,
+        input_validator=Draft202012Validator(data["input_schema"]),
+        output_validator=Draft202012Validator(data["output_schema"]),
+        tool_names=tuple(data["tools"]),
+        timeout_ms=int(data["timeout_ms"]),
+        idempotent=bool(data["idempotent"]),
+        requires_approval=bool(permissions["requires_approval"]),
+        effects=tuple(permissions["effects"]),
+        scopes={key: tuple(values) for key, values in permissions["scopes"].items()},
+        declared_secrets=tuple(permissions["secrets"]),
+        cost_class=data["cost_class"],
+        origin=origin,
+        digest=digest,
+    )
+
+
+def _load_plugins(
+    root: Path,
+    loaded: dict[str, LoadedSkill],
+    origins: dict[str, str],
+    violations: list[Violation],
+    *,
+    environ: Mapping[str, str] | None = None,
+) -> None:
+    """Discover installed packages after built-ins, pinned by digest."""
+
+    env = os.environ if environ is None else environ
+    try:
+        if not root.exists():
+            return
+        if not root.is_dir():
+            violations.append(
+                Violation("*", "", f"plugin root {str(root)!r} is not a directory")
+            )
+            return
+    except OSError as exc:
+        violations.append(
+            Violation("*", "", f"cannot read plugin root {str(root)!r}: {exc}")
+        )
+        return
+    try:
+        pins = read_plugin_lock(root)
+    except PluginPackageError as exc:
+        violations.append(Violation("*", "", str(exc)))
+        pins = {}
+
+    allow_unpinned = env.get(PLUGIN_ALLOW_UNPINNED_ENV, "").strip() == "1"
+    candidates: list[Path] = []
+    try:
+        children = sorted(root.iterdir(), key=lambda item: item.name)
+    except OSError as exc:
+        violations.append(
+            Violation("*", "", f"cannot list plugin root {str(root)!r}: {exc}")
+        )
+        return
+    for candidate in children:
+        if candidate.name.startswith((".", "_")):
+            continue
+        if candidate.is_file() and candidate.suffix.lower() != ".zip":
+            continue  # plugins.lock.json and operator scratch files
+        candidates.append(candidate)
+
+    for candidate in candidates:
+        label = candidate.name
+        try:
+            package = inspect_plugin_package(candidate)
+        except PluginPackageError as exc:
+            violations.append(Violation(label, "", str(exc)))
+            continue
+        except OSError as exc:
+            violations.append(
+                Violation(
+                    label,
+                    "",
+                    f"cannot read plugin package {str(candidate)!r}: {exc}",
+                )
+            )
+            continue
+
+        pin = pins.get(package.name)
+        if pin is None:
+            if not allow_unpinned:
+                violations.append(
+                    Violation(
+                        package.name,
+                        "",
+                        f"plugin package {str(candidate)!r} is not pinned in "
+                        f"{PLUGIN_LOCK_FILENAME}; install it with "
+                        f"`python -m skills.cli install <package>` or set "
+                        f"{PLUGIN_ALLOW_UNPINNED_ENV}=1 for a local experiment",
+                    )
+                )
+                continue
+        else:
+            if pin["digest"] != package.digest:
+                violations.append(
+                    Violation(
+                        package.name,
+                        "",
+                        f"digest mismatch for plugin {package.name!r} at {str(candidate)!r}: "
+                        f"pinned {pin['digest']}, computed {package.digest}; refusing to start",
+                    )
+                )
+                continue
+            if pin["version"] != package.version:
+                violations.append(
+                    Violation(
+                        package.name,
+                        "/version",
+                        f"pinned version {pin['version']!r} does not match plugin "
+                        f"{package.name!r} version {package.version!r} at {str(candidate)!r}",
+                    )
+                )
+                continue
+
+        if package.name in loaded:
+            violations.append(
+                Violation(
+                    package.name,
+                    "/name",
+                    f"duplicate skill name {package.name!r}; provided by "
+                    f"{origins.get(package.name, 'an earlier package')!r} and plugin "
+                    f"package {str(candidate)!r}",
+                )
+            )
+            continue
+
+        try:
+            materialized = materialize_plugin_package(package)
+        except OSError as exc:
+            violations.append(
+                Violation(
+                    package.name,
+                    "",
+                    f"cannot materialize plugin {package.name!r} from "
+                    f"{str(candidate)!r}: {exc}",
+                )
+            )
+            continue
+        module_key = re.sub(r"[^0-9A-Za-z_]", "_", package.name) + "_" + package.digest[7:19]
+        handler, entry_violations = _check_entry(
+            package.manifest,
+            package.name,
+            base_dir=materialized,
+            module_key=module_key,
+        )
+        if entry_violations:
+            violations.extend(entry_violations)
+            continue
+
+        skill = _build_skill(
+            package.manifest,
+            materialized / MANIFEST_FILENAME,
+            handler,  # type: ignore[arg-type]
+            origin=str(candidate),
+            digest=package.digest,
+        )
+        loaded[skill.name] = skill
+        origins[skill.name] = str(candidate)
+
+
 class SkillRegistry:
     """Immutable set of loaded skills plus the validated invocation pipeline.
 
@@ -411,8 +1083,10 @@ class SkillRegistry:
         *,
         policy: "PolicyConfig | PolicyEngine | None" = None,
         audit: "AuditLog | None" = None,
+        plugin_root: str | Path | None = None,
     ):
         self.root = Path(root)
+        self.plugin_root = Path(plugin_root) if plugin_root is not None else None
         self._skills: dict[str, LoadedSkill] = dict(skills)
         self._by_tool: dict[str, LoadedSkill] = {
             tool: skill for skill in self._skills.values() for tool in skill.tool_names
@@ -429,6 +1103,8 @@ class SkillRegistry:
         *,
         policy: "PolicyConfig | PolicyEngine | None" = None,
         audit: "AuditLog | None" = None,
+        plugin_root: str | Path | None = None,
+        environ: Mapping[str, str] | None = None,
     ) -> "SkillRegistry":
         root_path = Path(root) if root is not None else DEFAULT_SKILL_ROOT
         if not root_path.is_dir():
@@ -449,7 +1125,7 @@ class SkillRegistry:
 
         violations: list[Violation] = []
         loaded: dict[str, LoadedSkill] = {}
-        origin: dict[str, str] = {}
+        origins: dict[str, str] = {}
 
         for skill_dir in dirs:
             dirname = skill_dir.name
@@ -486,39 +1162,27 @@ class SkillRegistry:
                     Violation(
                         label,
                         "/name",
-                        f"duplicate skill name {name!r}; already provided by {origin[name]!r}",
+                        f"duplicate skill name {name!r}; already provided by {origins[name]!r}",
                     )
                 )
                 continue
 
-            permissions = data["permissions"]
-            skill = LoadedSkill(
-                name=name,
-                version=data["version"],
-                description=data["description"],
-                manifest=data,
-                manifest_path=manifest_path,
-                handler=handler,  # type: ignore[arg-type]
-                input_validator=Draft202012Validator(data["input_schema"]),
-                output_validator=Draft202012Validator(data["output_schema"]),
-                tool_names=tuple(data["tools"]),
-                timeout_ms=int(data["timeout_ms"]),
-                idempotent=bool(data["idempotent"]),
-                requires_approval=bool(permissions["requires_approval"]),
-                effects=tuple(permissions["effects"]),
-                scopes={
-                    key: tuple(values) for key, values in permissions["scopes"].items()
-                },
-                declared_secrets=tuple(permissions["secrets"]),
-                cost_class=data["cost_class"],
+            loaded[name] = _build_skill(
+                data, manifest_path, handler, origin=str(skill_dir)  # type: ignore[arg-type]
             )
-            loaded[name] = skill
-            origin[name] = dirname
+            origins[name] = str(skill_dir)
+
+        # KEL-25: installed packages load after built-ins so a fresh plugin can
+        # never redefine a shipped tool. Any violation here aborts startup.
+        plugins_root = (
+            Path(plugin_root) if plugin_root is not None else default_plugin_root(environ)
+        )
+        _load_plugins(plugins_root, loaded, origins, violations, environ=environ)
 
         if violations:
             raise SkillManifestError(root_path, violations)
 
-        return cls(loaded, root_path, policy=policy, audit=audit)
+        return cls(loaded, root_path, policy=policy, audit=audit, plugin_root=plugins_root)
 
     # -- introspection -----------------------------------------------------
 
@@ -1063,7 +1727,12 @@ def _error_envelope(
     return envelope
 
 
-def load_registry(root: str | Path | None = None) -> SkillRegistry:
+def load_registry(
+    root: str | Path | None = None,
+    *,
+    plugin_root: str | Path | None = None,
+    environ: Mapping[str, str] | None = None,
+) -> SkillRegistry:
     """Convenience wrapper used at startup: ``registry = load_registry()``."""
 
-    return SkillRegistry.load(root)
+    return SkillRegistry.load(root, plugin_root=plugin_root, environ=environ)
