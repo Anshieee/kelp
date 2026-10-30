@@ -62,6 +62,7 @@ from openshell.audit import AuditLog
 from .logging import log
 
 __all__ = [
+    "Cron",
     "CronError",
     "CronSpec",
     "DEFAULT_GRACE_SECONDS",
@@ -80,6 +81,7 @@ __all__ = [
     "SchedulerRuntime",
     "SchedulerStore",
     "ScheduledTask",
+    "create_task",
     "load_tasks",
     "next_run_at",
     "next_run_local",
@@ -846,6 +848,9 @@ class ScheduleStore:
             )
         return tasks
 
+    #: Short alias for embedders that already speak "load the store".
+    load = load_tasks
+
     def read_task(self, task_id: str, *, now: datetime | None = None) -> dict[str, Any]:
         path = self.task_path(task_id)
         try:
@@ -958,6 +963,9 @@ class ScheduleStore:
         # the scheduler directory rather than silently skipping the audit.
         _audit_created(audit or AuditLog(self.root / "audit.jsonl"), task)
         return task
+
+    #: Short alias; the long name is clearer in the handler and docs.
+    create = create_task
 
     def _new_task_id(self) -> str:
         for _ in range(16):
@@ -1079,6 +1087,11 @@ class SchedulerRuntime:
         self._thread_lock = threading.Lock()
 
     # -- tick --------------------------------------------------------------
+
+    def run_once(self, *, now: datetime | None = None) -> dict[str, Any]:
+        """Alias matching :class:`~chat.retention.RetentionMaintenance`'s boot pass."""
+
+        return self.tick(now=now)
 
     def tick(self, *, now: datetime | None = None) -> dict[str, Any]:
         """Run one due-set pass. Never raises for a single bad task."""
@@ -1357,7 +1370,40 @@ def load_tasks(
     return store.load_tasks(now=now)
 
 
+def create_task(
+    workspace_root: str | Path,
+    *,
+    title: Any,
+    prompt: Any,
+    schedule: Any = None,
+    expr: Any = None,
+    timezone: Any = None,
+    start_at: Any = None,
+    end_at: Any = None,
+    created_by: str = "agent",
+    now: datetime | None = None,
+    audit: AuditLog | None = None,
+    max_tasks: int | None = None,
+) -> dict[str, Any]:
+    """Convenience wrapper around :meth:`ScheduleStore.create_task`."""
+
+    store = ScheduleStore(workspace_root, max_tasks=max_tasks)
+    return store.create_task(
+        title=title,
+        prompt=prompt,
+        schedule=schedule,
+        expr=expr,
+        timezone=timezone,
+        start_at=start_at,
+        end_at=end_at,
+        created_by=created_by,
+        now=now,
+        audit=audit,
+    )
+
+
 # Conventional aliases: both spellings read naturally, and the shorter one is
 # what callers tend to guess.
 SchedulerStore = ScheduleStore
 Scheduler = SchedulerRuntime
+Cron = CronSpec
