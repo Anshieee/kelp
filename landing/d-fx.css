@@ -1,0 +1,364 @@
+/* Effects layer (d). Load after c-copy.css; d-fx.js builds the canvas artwork.
+   Additive only: every rule hangs off an existing selector or a class this
+   layer adds itself, no rule hides content by default, and no rule claims
+   layout. Motion is transform/opacity only; reduced motion is fully static. */
+:root {
+  --d-ease: cubic-bezier(0.23, 1, 0.32, 1);
+  /* Bitmap Dreams / Dither Matter inks, tuned for the ivory ground. */
+  --d-jade: #2e8b67;
+  --d-sea-glass: #8fd0d8;
+  --d-umber: #73553b;
+  --d-vermilion: #e4572e;
+  --d-amber: #b98524;
+  --d-rose: #c07b84;
+}
+
+/* 1 · Whole-page dither field ------------------------------------------------
+   One fixed canvas behind the content, at a tenth opacity, so the ambient
+   grain runs edge to edge instead of stopping with the hero artwork. It sits
+   under every card and over the page ground, which is why nothing is tinted
+   twice. d-fx.js paints it; without JS the page keeps its own grain only. */
+#d-fx-field {
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  width: 100%;
+  height: 100%;
+  opacity: 0.1;
+  mix-blend-mode: multiply;
+  pointer-events: none;
+  image-rendering: pixelated;
+}
+
+/* 2 · Hero load dissolve -----------------------------------------------------
+   Clipped to the hero, above its own children (z-index 3) and its artwork.
+   The canvas is removed by d-fx.js as soon as the dissolve ends, on any
+   input, or by its watchdog. It never exists for reduced motion. */
+#d-fx-dissolve {
+  position: absolute;
+  inset: 0;
+  z-index: 4;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+  image-rendering: pixelated;
+}
+
+/* 3 · Roster hover motion ----------------------------------------------------
+   Hyper Dreams dims the roster around the active name; here the same idea
+   runs at a third of the contrast, and the dossier rows keep their existing
+   lift. Only the row's own glyphs move, so the hits target stays still. */
+.proof-list > li {
+  transition: opacity 380ms var(--d-ease);
+}
+
+.proof-row {
+  position: relative;
+  isolation: isolate;
+}
+
+/* A dithered ink wash in the row's accent, under the copy. */
+.proof-row::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  border-radius: inherit;
+  opacity: 0;
+  pointer-events: none;
+  background-image:
+    radial-gradient(
+      circle at 1px 1px,
+      var(--d-accent, rgba(143, 208, 216, 0.5)) 0 1px,
+      transparent 1.3px
+    ),
+    radial-gradient(
+      circle at 3px 3px,
+      var(--d-accent, rgba(143, 208, 216, 0.5)) 0 1px,
+      transparent 1.3px
+    );
+  background-size: 4px 4px;
+  transform: scale(1.01);
+  transition:
+    opacity 420ms var(--d-ease),
+    transform 620ms var(--d-ease);
+}
+
+.proof-number,
+.proof-open,
+.proof-title em {
+  transition:
+    transform 460ms var(--d-ease),
+    color 320ms var(--d-ease),
+    background-color 320ms var(--d-ease);
+}
+
+.proof-title em {
+  background-image: linear-gradient(currentColor, currentColor);
+  background-repeat: no-repeat;
+  background-position: 0 100%;
+  background-size: 0 2px;
+  transition:
+    background-size 520ms var(--d-ease),
+    color 320ms var(--d-ease);
+}
+
+.proof-list > li:nth-child(1) .proof-row {
+  --d-accent: rgba(143, 208, 216, 0.5);
+}
+.proof-list > li:nth-child(2) .proof-row {
+  --d-accent: rgba(46, 139, 103, 0.42);
+}
+.proof-list > li:nth-child(3) .proof-row {
+  --d-accent: rgba(115, 85, 59, 0.36);
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .proof-list:has(.proof-row:hover) > li:not(:has(.proof-row:hover)) {
+    opacity: 0.6;
+  }
+
+  .proof-row:hover::after,
+  .proof-row:focus-visible::after {
+    opacity: 0.55;
+    transform: scale(1);
+  }
+
+  .proof-row:hover .proof-number,
+  .proof-row:focus-visible .proof-number {
+    transform: translateX(6px);
+  }
+
+  .proof-row:hover .proof-open,
+  .proof-row:focus-visible .proof-open {
+    transform: rotate(45deg);
+    background-color: rgba(255, 255, 255, 0.75);
+    color: var(--d-jade);
+  }
+
+  .proof-row:hover .proof-title em,
+  .proof-row:focus-visible .proof-title em {
+    background-size: 100% 2px;
+  }
+}
+
+/* 4 · Section settles --------------------------------------------------------
+   A short riso registration tick at the top edge of each shell, drawn left to
+   right as the section arrives. It is one 2px rule in the gutter: no space of
+   its own, nothing to read, and it stays drawn if JS is switched off. */
+html.d-fx .section-shell {
+  position: relative;
+}
+
+/* Positioned even without JS, so the tick cannot resolve against the page. */
+.section-shell {
+  position: relative;
+}
+
+.section-shell::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: 5.2%;
+  display: block;
+  width: 68px;
+  height: 2px;
+  pointer-events: none;
+  color: var(--d-ink, rgba(69, 67, 63, 0.55));
+  background-image: repeating-linear-gradient(
+    90deg,
+    currentColor 0 2px,
+    transparent 2px 5px
+  );
+  opacity: 0.6;
+  transform: scaleX(1);
+  transform-origin: left center;
+}
+
+html.d-fx .section-shell::before {
+  transform: scaleX(0);
+  transition: transform 760ms var(--d-ease);
+}
+
+html.d-fx .section-shell.d-in::before {
+  transform: scaleX(1);
+}
+
+.c-computer {
+  --d-ink: var(--d-sea-glass);
+}
+.c-examples {
+  --d-ink: var(--d-amber);
+}
+.conversation {
+  --d-ink: var(--d-jade);
+}
+.c-comparison {
+  --d-ink: var(--d-umber);
+}
+.possibilities {
+  --d-ink: var(--d-sea-glass);
+}
+.c-companion {
+  --d-ink: var(--d-umber);
+}
+.trust {
+  --d-ink: var(--d-jade);
+}
+.closing {
+  --d-ink: var(--d-vermilion);
+}
+.site-footer {
+  --d-ink: var(--d-umber);
+}
+
+/* 5 · Phone mockup ----------------------------------------------------------
+   d-fx.js rotates .phone-mockup (or [data-phone-mockup]) on scroll. Nothing
+   here depends on the markup existing yet; the origin and the 3D hint only
+   take effect once a mockup lands. */
+.phone-mockup,
+[data-phone-mockup] {
+  transform-origin: 50% 62%;
+  backface-visibility: hidden;
+}
+
+/* 6 · Pet dither states -----------------------------------------------------
+   Targets .pet-dither[data-state]. The element is the swatch: a tinted card
+   with a masked dither face in its ::after, so the same small field as the
+   hero reads at pet scale. Each state keeps its own ink and cadence. */
+[data-pet-swatches] {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: stretch;
+  gap: 14px;
+}
+
+.pet-dither {
+  --d-pet: var(--d-jade);
+  position: relative;
+  isolation: isolate;
+  display: inline-grid;
+  place-items: end center;
+  width: 104px;
+  height: 104px;
+  padding: 12px 10px;
+  overflow: hidden;
+  border: 1px solid rgba(69, 67, 63, 0.14);
+  border-radius: 20px;
+  background-color: var(--canvas, #fbf9f5);
+  color: var(--body, #45433f);
+  font: 500 11px/1.2 var(--sans, system-ui, sans-serif);
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  text-align: center;
+}
+
+.pet-dither::after {
+  content: "";
+  position: absolute;
+  inset: 6px;
+  z-index: -1;
+  border-radius: 15px;
+  opacity: 0.7;
+  background-color: color-mix(in srgb, var(--d-pet) 8%, transparent);
+  background-image:
+    radial-gradient(circle at 1px 1px, var(--d-pet) 0 1px, transparent 1.3px),
+    radial-gradient(circle at 3px 3px, var(--d-pet) 0 1px, transparent 1.3px);
+  background-size: 4px 4px;
+  -webkit-mask-image: radial-gradient(
+    circle at 50% 42%,
+    #000 0 44%,
+    transparent 76%
+  );
+  mask-image: radial-gradient(circle at 50% 42%, #000 0 44%, transparent 76%);
+  transform: translateZ(0);
+}
+
+.pet-dither[data-state="working"] {
+  --d-pet: var(--d-jade);
+}
+
+.pet-dither[data-state="working"]::after {
+  animation: d-pet-drift 7s linear infinite;
+}
+
+.pet-dither[data-state="waiting"] {
+  --d-pet: var(--d-amber);
+}
+
+.pet-dither[data-state="waiting"]::after {
+  animation: d-pet-wait 2.6s ease-in-out infinite alternate;
+}
+
+.pet-dither[data-state="done"] {
+  --d-pet: var(--d-rose);
+}
+
+.pet-dither[data-state="done"]::after {
+  animation: d-pet-done 900ms var(--d-ease) 1 both;
+}
+
+/* One tile of travel: the seam is invisible because it wraps on the grid. */
+@keyframes d-pet-drift {
+  from {
+    transform: translate3d(0, 0, 0);
+  }
+  to {
+    transform: translate3d(-4px, -4px, 0);
+  }
+}
+
+@keyframes d-pet-wait {
+  from {
+    opacity: 0.45;
+    transform: scale(0.985);
+  }
+  to {
+    opacity: 0.85;
+    transform: scale(1.03);
+  }
+}
+
+@keyframes d-pet-done {
+  from {
+    opacity: 0;
+    transform: scale(1.16);
+  }
+  to {
+    opacity: 0.72;
+    transform: scale(1);
+  }
+}
+
+/* A ninth of the motion, with the same reading order. */
+@media (max-width: 600px) {
+  .section-shell::before {
+    left: 22px;
+    width: 52px;
+  }
+}
+
+/* Everything above resolves to a still frame: the field paints once, the
+   dissolve never runs, the ticks are already drawn, the pets hold a state. */
+@media (prefers-reduced-motion: reduce) {
+  html.d-fx .section-shell::before,
+  html.d-fx .section-shell.d-in::before {
+    transform: scaleX(1);
+    transition: none;
+  }
+
+  .proof-list > li {
+    opacity: 1 !important;
+  }
+
+  .phone-mockup,
+  [data-phone-mockup] {
+    transform: none !important;
+  }
+
+  .pet-dither::after {
+    opacity: 0.7;
+    animation: none !important;
+    transform: none !important;
+  }
+}
