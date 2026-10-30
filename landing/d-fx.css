@@ -17,8 +17,9 @@
    One fixed canvas behind the content, at a fifth opacity, so the ambient
    grain runs edge to edge instead of stopping with the hero artwork. It sits
    under every card and over the page ground, which is why nothing is tinted
-   twice. d-fx.js paints the grain and, around the pointer, the same ink at
-   tile scale; without JS the page keeps its own grain only. */
+   twice. d-fx.js paints the grain; the frosted mosaic that follows the pointer
+   reads this canvas as its texture (f-fx.js). Without JS the page keeps its
+   own grain only. */
 #d-fx-field {
   position: fixed;
   inset: 0;

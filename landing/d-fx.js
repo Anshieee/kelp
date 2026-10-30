@@ -1,7 +1,7 @@
 /* Effects layer (d). Load with defer after c-copy.js, with d-fx.css beside it.
  *
  * Adds five optional effects to the existing page and never edits its markup:
- * a whole-page dither field that turns to mosaic under the pointer, a hero
+ * a whole-page dither field that the glass layer frosts under the pointer, a hero
  * load dissolve, roster hover accents, section settles, and scroll-linked
  * phone/pet states.
  *
@@ -86,12 +86,9 @@
     [".site-footer", 3, [115, 85, 59], [251, 249, 245]],
   ];
 
-  /* One density field feeds both registers: the grain samples it at every
-     canvas pixel, the mosaic samples it once per brick, so the two agree about
-     where the ink sits even though one is eight times coarser. Every term is
-     periodic over the tile, so the repeat has no seam. */
+  /* One density field feeds the grain: it samples it at every canvas pixel.
+     Every term is periodic over the tile, so the repeat has no seam. */
   const TILE = 128;        // canvas px: repeats every 384 CSS px on the page
-  const MOSAIC_CELL = 8;   // canvas px: 24 CSS px square tiles, gapless grid
 
   function densityAt(motif, u, v) {
     const tau = Math.PI * 2;
@@ -158,59 +155,6 @@
     return source;
   }
 
-  /* Mosaic: the same density read one tile at a time, on a single aligned
-     grid. Every tile is a full square cell, edge to edge: no seam, no running
-     bond, no chipped corner, so the field reads as laid tile and the repeat
-     has to line up exactly. Only the ink changes from tile to tile. */
-  function mosaicTile(from, to, motif) {
-    const size = TILE;
-    const cell = MOSAIC_CELL;
-    const source = document.createElement("canvas");
-    source.width = source.height = size;
-    const context = source.getContext("2d", { alpha: true });
-    if (!context) return null;
-    // Whole cells only: a partial last row or column would break the grid.
-    const count = Math.floor(size / cell);
-    const tau = Math.PI * 2;
-
-    for (let row = 0; row < count; row++) {
-      const y = row * cell;
-      for (let column = 0; column < count; column++) {
-        const x = column * cell;
-        // Sample the tile centre; the density is periodic over the tile, so
-        // the sampled tone repeats without a seam.
-        const u = (x + cell / 2) / size;
-        const v = (y + cell / 2) / size;
-        const weight = densityAt(motif, u, v);
-        const hash =
-          Math.abs(Math.sin((x + 13.7) * 91.3 + (y + 7.1) * 47.7) * 24634.6345) % 1;
-        // A tile the density barely reaches is left out, so the patch keeps
-        // the section's shape instead of becoming a flat sheet of tiles.
-        if (weight < 0.11) continue;
-
-        const mix = 0.5 + 0.5 * Math.sin(tau * v);
-        // Denser ink sets as a deeper tile: the mosaic reads as tone, not
-        // just as texture.
-        const shade = 0.94 - weight * 0.3 - hash * 0.05;
-        const ink = [0, 1, 2].map((channel) =>
-          Math.max(
-            0,
-            Math.min(
-              255,
-              Math.round(
-                (from[channel] + (to[channel] - from[channel]) * mix) * shade,
-              ),
-            ),
-          ),
-        );
-        context.fillStyle = `rgb(${ink[0]}, ${ink[1]}, ${ink[2]})`;
-        // Full cell, exact origin: adjacent tiles share their edge.
-        context.fillRect(x, y, cell, cell);
-      }
-    }
-    return source;
-  }
-
   function field() {
     if (!CANVAS) return;
     const canvas = document.createElement("canvas");
@@ -223,14 +167,11 @@
       const element = document.querySelector(selector);
       if (!element) return null;
       const grain = tile(from, to, motif);
-      const bricks = mosaicTile(from, to, motif);
       const pattern = grain && context.createPattern(grain, "repeat");
       if (!pattern) return null;
-      const mosaic = bricks && context.createPattern(bricks, "repeat");
       return {
         element,
         pattern,
-        mosaic: mosaic || pattern,
         top: 0,
         height: 1,
         end: 0,
@@ -238,73 +179,21 @@
     }).filter(Boolean);
     if (!entries.length) return;
 
-    const scratch = document.createElement("canvas");
-    const paint = scratch.getContext("2d", { alpha: true });
-    if (!paint) return;
-
     document.body.append(canvas);
 
     /* Three CSS pixels per canvas pixel: a hard cap on the backing store, so a
        2x or 3x display never pays for a larger field. */
-    const CELL = 3;
-    const FOCUS = 210; // CSS px of mosaic reach around the pointer
+    const CELL = 3; // canvas px per CSS px
 
     let width = 1;
     let height = 1;
     let frame = 0;
-    let last = 0;
     let start = performance.now();
     let time = 0;
     let driftX = 0;
     let driftY = 0;
     let frames = 0;
     let cost = 0;
-
-    // Focus patch in CSS pixels, plus how strongly it is showing.
-    const focus = { x: 0, y: 0, e: 0 };
-    const target = { x: 0, y: 0, on: 0 };
-    let moved = -Infinity;
-
-    const fine = matchMedia("(hover: hover) and (pointer: fine)");
-    let radius = 70; // canvas px
-    let mask = null;
-
-    /* A soft radial mask, built once per size: full strength in the middle,
-       easing to nothing at the rim, so the mosaic arrives as a patch rather
-       than as a disc edge. */
-    function buildMask() {
-      const wanted = Math.min(
-        FOCUS,
-        Math.min(window.innerWidth, window.innerHeight) * 0.46,
-      );
-      radius = Math.max(36, Math.round(wanted / CELL));
-      const size = radius * 2;
-      if (scratch.width !== size || scratch.height !== size) {
-        scratch.width = size;
-        scratch.height = size;
-      }
-      if (mask && mask.width === size) return;
-      mask = document.createElement("canvas");
-      mask.width = mask.height = size;
-      const ink = mask.getContext("2d", { alpha: true });
-      if (!ink) return;
-      const gradient = ink.createRadialGradient(
-        radius,
-        radius,
-        0,
-        radius,
-        radius,
-        radius,
-      );
-      gradient.addColorStop(0, "rgba(0, 0, 0, 1)");
-      gradient.addColorStop(0.42, "rgba(0, 0, 0, 0.94)");
-      gradient.addColorStop(0.66, "rgba(0, 0, 0, 0.62)");
-      gradient.addColorStop(0.84, "rgba(0, 0, 0, 0.24)");
-      gradient.addColorStop(0.95, "rgba(0, 0, 0, 0.05)");
-      gradient.addColorStop(1, "rgba(0, 0, 0, 0)");
-      ink.fillStyle = gradient;
-      ink.fillRect(0, 0, size, size);
-    }
 
     function measure() {
       entries.forEach((entry) => {
@@ -323,7 +212,6 @@
         canvas.width = width;
         canvas.height = height;
       }
-      buildMask();
       measure();
       draw();
     }
@@ -355,53 +243,9 @@
       ctx.fillRect(0, 0, width, height);
     }
 
-    /* The patch buffer is filled in its own coordinates, so the pattern origin
-       moves with the destination and the bricks stay put on the page. */
-    function fillPatch(pattern, destinationX, destinationY) {
-      try {
-        pattern.setTransform(
-          new DOMMatrix([1, 0, 0, 1, driftX - destinationX, driftY - destinationY]),
-        );
-      } catch {
-        /* As above: a still field is still a field. */
-      }
-      paint.fillStyle = pattern;
-      paint.fillRect(0, 0, radius * 2, radius * 2);
-    }
-
-    /* The pointer patch: the same two section mosaics, crossfaded inside the
-       soft mask and composited over the grain. One small buffer means the cost
-       stays with the patch, not with the viewport. */
-    function patch(current, next, progress) {
-      const strength = focus.e;
-      if (strength < 0.012) return;
-      const size = radius * 2;
-      const destinationX = Math.round(focus.x / CELL) - radius;
-      const destinationY = Math.round(focus.y / CELL) - radius;
-      if (
-        destinationX > width ||
-        destinationY > height ||
-        destinationX + size < 0 ||
-        destinationY + size < 0
-      )
-        return;
-
-      paint.globalCompositeOperation = "source-over";
-      paint.globalAlpha = 1;
-      paint.clearRect(0, 0, size, size);
-      paint.globalAlpha = (1 - progress) * strength;
-      fillPatch(current.mosaic, destinationX, destinationY);
-      if (progress > 0.002) {
-        paint.globalAlpha = progress * strength;
-        fillPatch(next.mosaic, destinationX, destinationY);
-      }
-      paint.globalAlpha = 1;
-      paint.globalCompositeOperation = "destination-in";
-      paint.drawImage(mask, 0, 0);
-      paint.globalCompositeOperation = "source-over";
-      context.drawImage(scratch, destinationX, destinationY);
-    }
-
+    /* The pointer mosaic that used to be composited here now runs on its own
+       WebGL layer (f-fx.js), which reads this canvas as its texture. This
+       field stays the ground: grain and drift, nothing else. */
     function draw() {
       if (!context || !canvas.isConnected) return;
       const [current, next, progress] = blend();
@@ -415,51 +259,15 @@
         fill(context, next.pattern);
       }
       context.globalAlpha = 1;
-      patch(current, next, progress);
       frames++;
       canvas.__frames = frames;
-    }
-
-    /* Where the patch wants to be. A fine pointer leads it; a coarse one lets
-       it wander on its own, slowly enough to read as drift rather than motion. */
-    function advance(delta, now) {
-      if (reduced.matches) {
-        target.on = 0;
-      } else if (fine.matches) {
-        target.on = now - moved < 4200 ? 1 : 0;
-      } else {
-        target.on = 0.66;
-        const seconds = (now - start) / 1000;
-        target.x =
-          window.innerWidth *
-          (0.5 + Math.sin(seconds * 0.13) * 0.29 + Math.sin(seconds * 0.043) * 0.07);
-        target.y = window.innerHeight * (0.42 + Math.cos(seconds * 0.1) * 0.24);
-      }
-
-      // Start on the pointer rather than sweeping in from the corner.
-      if (target.on > 0 && focus.e < 0.01) {
-        focus.x = target.x;
-        focus.y = target.y;
-      }
-      // Exponential easing: calm, and the same at any frame rate.
-      const follow = 1 - Math.exp(-delta / 190);
-      const settle = 1 - Math.exp(-delta / 320);
-      if (target.on > 0) {
-        focus.x += (target.x - focus.x) * follow;
-        focus.y += (target.y - focus.y) * follow;
-      }
-      focus.e += (target.on - focus.e) * settle;
-      if (focus.e < 0.008) focus.e = 0;
     }
 
     function tick(now) {
       frame = 0;
       if (!running()) return;
       frame = requestAnimationFrame(tick);
-      const delta = last ? Math.min(80, now - last) : 16.7;
-      last = now;
       time = (now - start) / 1000;
-      advance(delta, now);
       const began = performance.now();
       draw();
       cost += (performance.now() - began - cost) * 0.08;
@@ -469,36 +277,18 @@
     function sync() {
       cancelAnimationFrame(frame);
       frame = 0;
-      last = 0;
       if (running()) {
         frame = requestAnimationFrame(tick);
         return;
       }
-      // A still frame: no patch for reduced motion, one held patch otherwise.
-      if (reduced.matches) focus.e = 0;
+      // A still frame, held: reduced motion paints one and leaves it.
       draw();
     }
 
-    function onPointer(event) {
-      if (event.pointerType === "touch") return;
-      moved = performance.now();
-      target.x = event.clientX;
-      target.y = event.clientY;
-    }
-
-    window.addEventListener("pointermove", onPointer, { passive: true });
-    window.addEventListener("pointerdown", onPointer, { passive: true });
-    document.addEventListener("mouseleave", () => {
-      moved = -Infinity;
-    });
-    window.addEventListener("blur", () => {
-      moved = -Infinity;
-    });
     window.addEventListener("resize", resize, { passive: true });
     window.addEventListener("pageshow", sync);
     document.addEventListener("visibilitychange", sync);
     reduced.addEventListener("change", sync);
-    fine.addEventListener?.("change", sync);
     new MutationObserver(sync).observe(document.body, {
       attributes: true,
       attributeFilter: ["class"],
