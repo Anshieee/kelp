@@ -185,6 +185,9 @@ sessions durable, listable devices, and KEL-23, KEL-25, and KEL-26 followed with
 plugin packages, and the sharing decision. KEL-27 then made a due schedule a real turn, and KEL-28
 built the link the decision specified, which completed M4.
 
+The entries below run in the order the work merged, not by KEL number, so the story reads
+straight through: KEL-10 before KEL-9, KEL-20 and KEL-21 before KEL-19, and KEL-24 before KEL-23.
+
 ### KEL-5 — Skill contracts — DONE
 
 The rulebook every new ability follows: what it does, what it takes in, what it gives back, and
