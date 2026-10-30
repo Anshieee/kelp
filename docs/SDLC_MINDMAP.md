@@ -11,12 +11,13 @@ that goes with it is [`sdlc-mindmap.svg`](sdlc-mindmap.svg), with a PNG fallback
 site embeds a copy of the SVG directly in the page, so every box there can be clicked; that copy
 and these two files must be updated together.
 
-What this snapshot rests on: `main` is at `a9814ff`, all **902 tests pass**, and the repository is
+What this snapshot rests on: `main` is at `05d7508`, all **1004 tests pass**, and the repository is
 public. KEL-5 through KEL-10 are merged, reviewed, and done; KEL-11, KEL-12, KEL-13, KEL-14, KEL-15,
 and KEL-16 are merged and reviewed too, and close M2. KEL-17, KEL-18, KEL-20, KEL-21, KEL-19, and
 KEL-22 then carried M3 to completion and are merged and reviewed: abuse resistance, spend ceilings,
 invoke-time policy, retention, owner sign-in, and the written privacy review. KEL-24 then opened M4
-by making those owner sessions durable devices. KEL-10, payments,
+by making those owner sessions durable devices, and KEL-23, KEL-25, and KEL-26 followed it with
+scheduled work, installable plugins, and the written sharing decision. KEL-10, payments,
 carries both its paths: the Stripe saved-card scaffold, the Razorpay gateway, and the Razorpay
 hosted Checkout.
 
@@ -94,8 +95,25 @@ KEL-24 opened **M4 Full vision** on 30 October 2026. It is device sessions: the 
 KEL-19 kept in process memory now persist in the `sessions` table of the chat database, so several
 devices survive a restart, the owner can list them, and one can be revoked without signing the rest
 out. It merged at `a9814ff` from `kel-24` (head `bc009cd`) and added 6 tests, taking the suite from
-896 to **902**. M4's remaining items — work the assistant starts itself, abilities added by others,
-and team sharing — are still to come.
+896 to **902**.
+
+KEL-23, KEL-25, and KEL-26 then gave M4 four of its six pieces, all merged on 30 October 2026.
+KEL-23 is scheduled work: one JSON task file per schedule written atomically under a `0700`
+directory, a five-field cron with named rejections for six-field and shortcut forms, next-run times
+computed in the task's own timezone with both DST edges resolved, a ticker that fires a due run once
+and records anything older than its grace window as `missed`, and one content-free audit row per
+fire. It merged at `13fc687` from `kel-23` (head `4dd78e6`) and added 67 tests, taking the suite from
+902 to **969**. KEL-25 is plugin packages: a directory or zip with `manifest.json` and an entry
+module, installed by a deploy-time CLI into a plugin root, pinned by a SHA-256 tree digest in
+`plugins.lock.json`, loaded by file path without touching `sys.path`, and refused at boot when a pin
+or version disagrees. It merged at `08f87e5` from `kel-25` (head `5d639fc`) and added 35 tests,
+taking the suite from 969 to **1004**. KEL-26 is the sharing and identity decision: an accepted ADR
+that keeps exactly one principal, the owner, and gives everyone else only a per-thread, revocable,
+read-only capability link, with approval authority, attribution, rate and spend composition,
+retention, revocation, and migration all settled on paper. It merged at `05d7508` from `kel-26`
+(head `a1a5b1f`) and changed documentation only, so the suite stays at **1004**. M4's last two
+pieces — KEL-27, the proactive turn runner, and KEL-28, the share link this ADR specifies — are still
+to come.
 
 ## How to read the labels
 
@@ -112,17 +130,18 @@ An **M number** is a milestone, a stage of the build. A **KEL number** is a work
 our task tracker. Linear can lag behind by a day; the statuses below match the tracker site on the
 snapshot date.
 
-**LATER** on the three remaining M4 leaves means outside this round; KEL-24, the first M4 item, is DONE.
+**LATER** on the last M4 leaf means outside this round; KEL-23, KEL-24, KEL-25, and KEL-26 are DONE,
+and KEL-27 is the one M4 item still marked TO COME.
 
 ## The map
 
-![Mind map of the delivery: milestones M0 to M4, work items KEL-5 to KEL-24, product surfaces, payments, and design.](sdlc-mindmap.svg)
+![Mind map of the delivery: milestones M0 to M4, work items KEL-5 to KEL-26, product surfaces, payments, and design.](sdlc-mindmap.svg)
 
 The same map in words, in case the image does not load:
 
 - **Milestones** — five stages, M0 to M4: M1, M2, and M3 are complete, and M4 is in progress.
-- **The work** — nineteen work items, KEL-5 to KEL-24: all nineteen are done, and the four
-  remaining M4 pieces are still to come.
+- **The work** — twenty-two work items, KEL-5 to KEL-26: all twenty-two are done, and M4's two
+  remaining pieces, proactive turns and the live share link, are still to come.
 - **Surfaces** — where you talk to the assistant: dashboard first, Telegram next, WhatsApp and voice memos later.
 - **Money** — saved cards through Stripe and hosted Checkout through Razorpay, both merged and closed out; an in-app balance later.
 - **Design** — the screen plan is written, and so is the chat spec. The chat surface code is merged; the drawing file and the browser screen are next.
@@ -143,9 +162,9 @@ promise that full-vision scope lands this week. Scope is cumulative: M2 includes
 | **M1 Prototype** | 30 Oct 2026 | COMPLETE | The end-to-end story: ask, get an answer with sources, read a file, approve an action, pay with a saved card, watch the six-scene demo. All six work items live here, and all six are done: KEL-5 to KEL-9 were merged earlier, and KEL-10 closed on owner confirmation on 30 October 2026. |
 | **M2 Polished MVP** | 30 Oct 2026 | COMPLETE | Survives ordinary use: picks up after a restart, self-checks, better search over your documents, an honest account of what it did, repeatable quality measurements, and a deploy a stranger can repeat. All six work items are done: KEL-11, the serve entrypoint; KEL-12, health and readiness; KEL-13, real document search with citations; KEL-14, structured logs and metrics; KEL-15, the eval harness that measures answer quality; KEL-16, the image and runbook. The runbook's end-to-end pass on a real Nebius host is still to be done. |
 | **M3 Hardening** | 30 Oct 2026 | COMPLETE | The privacy and cost promises hold under pressure: who sees what, where keys live, caps on traffic, a retention rule, a spend ceiling, and a written privacy review. All six pieces are done: KEL-17, the traffic, body, and concurrency caps; KEL-18, the spend ceilings; KEL-19, owner sign-in with a session cookie, CSRF, and lockout; KEL-20, the policy enforced at every skill call; KEL-21, the retention rule; and KEL-22, the written privacy review with the egress ledger and the exec-boundary decision. |
-| **M4 Full vision** | 30 Oct 2026 | IN PROGRESS | More devices, work the assistant starts on its own, abilities added by others, and team sharing. A direction, not a deadline. KEL-24 is in: owner sessions persist as listable, revocable devices. The other three are still to come. |
+| **M4 Full vision** | 30 Oct 2026 | IN PROGRESS | More devices, work the assistant starts on its own, abilities added by others, and team sharing. A direction, not a deadline. Four of its six pieces are in: KEL-24, owner sessions as listable, revocable devices; KEL-23, durable scheduled tasks with a real cron runtime; KEL-25, digest-pinned plugin packages loaded by path; and KEL-26, the written decision that keeps one owner and gives everyone else only a per-thread read-only link. Still to come: KEL-27, proactive turns, and KEL-28, the share link. |
 
-## The nineteen work items
+## The twenty-two work items
 
 KEL-5 feeds KEL-6 and KEL-7. Those two feed KEL-8. KEL-7 also feeds KEL-10. KEL-8 comes before the
 demo, KEL-9. The first twelve are done. KEL-10, payments, closed M1 on owner confirmation on 30
@@ -155,7 +174,8 @@ and KEL-16 followed with health checks, real document search, observability, the
 the deploy. KEL-17 and KEL-18 opened M3 the same day, with abuse resistance and spend ceilings, and
 KEL-20 and KEL-21 followed it with invoke-time policy and retention, then KEL-19 and KEL-22 closed
 it with owner sign-in and the written privacy review. KEL-24 then opened M4 by making those owner
-sessions durable, listable devices.
+sessions durable, listable devices, and KEL-23, KEL-25, and KEL-26 followed with scheduled work,
+plugin packages, and the sharing decision. KEL-27 and KEL-28 are the two M4 items still to come.
 
 ### KEL-5 — Skill contracts — DONE
 
@@ -197,7 +217,7 @@ price is counted per chunk.
 - Merge: [`d3c763e`](https://github.com/Anshieee/kelp/commit/d3c763e) (branch [`kel-6`](https://github.com/Anshieee/kelp/tree/kel-6), head `4c72afc`)
 
 Status detail: merged into `main` at `d3c763e`. The kernel suite is 43 tests — 25 for the loop and
-18 for the streaming client — and passes with the rest of the 902. The review written up in
+18 for the streaming client — and passes with the rest of the 1004. The review written up in
 [`docs/REVIEW_KEL6_KEL7.md`](REVIEW_KEL6_KEL7.md) signed off, and KEL-8 built on top of it.
 
 ### KEL-7 — Approval gate — DONE
@@ -240,7 +260,7 @@ showing where an answer came from, and approval requests shown in the conversati
 Status detail: merged into `main` at `e0bbb72`. The chat surface is in: named threads that can be
 reopened, an append-only stream of events, a card for each tool step, approvals shown in the
 conversation over the KEL-7 gate, artifacts, and a cooperative cancel token so Stop works. The chat
-suite is 86 tests, part of the 902. The spec is on `main` at 1,164 lines; the review fixes that
+suite is 86 tests, part of the 1004. The spec is on `main` at 1,164 lines; the review fixes that
 shaped it landed at `56b0785`:
 
 - **Honest dependencies (M1).** The web search, GitHub read, and document handlers are still stubs.
@@ -995,6 +1015,168 @@ others but keep me" call: `DELETE /api/auth/sessions` is the global reset and si
 too. And the coarse user-agent class and revocation reason the ticket describes are not stored; a
 device is its label, timestamps, and hash.
 
+
+### KEL-23 — Scheduled work — DONE
+
+KEL-5 shipped a `schedule_create` skill that could write down a task; KEL-23 gives it somewhere real
+to live and something to run it. Each task is one JSON file under
+`${WORKSPACE}/var/scheduler/<task_id>.json`, written as a temporary file in the same directory
+followed by `fsync`, a rename, and a directory `fsync`, so a reader sees the old document or the
+complete new one and never a partial line. Files are `0600` inside a `0700` directory, at most 200
+tasks exist by default (`KELP_SCHEDULER_MAX_TASKS`), and titles and prompts are capped at 120 and
+2000 characters. A file that fails JSON, schema, cron, or timezone validation is renamed `.bad` at
+the next scan while the other tasks still load, and a file whose `task_id` differs from its own name
+is quarantined the same way, so a stray copy can never fire in place of the canonical task.
+
+The clock is the standard five fields — minute, hour, day-of-month, month, day-of-week — with `*`,
+integers, ranges, lists, steps, and three-letter month and weekday names. Six-field (seconds)
+expressions, `@daily`-style shortcuts, and Quartz modifiers (`L`, `W`, `#`, `?`) are rejected with a
+named `CronError` rather than silently reinterpreted. `next_run_at` is a pure function of the
+expression, the task's `zoneinfo` timezone, and "after now", stored as a UTC instant, and is used by
+both the store and the ticker. On the spring-forward night a wall time inside the gap fires once at
+the first valid instant after it; on the fall-back night a wall time that occurs twice fires once,
+on the first occurrence.
+
+`chat.scheduler.SchedulerRuntime` owns one daemon tick and an advisory `flock` on a lock file in the
+task directory, so a second ticker on the same directory reports a skipped tick instead of firing
+the due set twice. A run up to an hour late (configurable) fires once, and its next run is placed in
+the future, so a long outage never becomes a burst. A run older than that, or one whose `end_at`
+window has already closed, is recorded `missed`; in the second case the task becomes `completed`.
+State is persisted before the callback runs, which is what makes a restart mid-run idempotent, and
+`KELP_SCHEDULER_ENABLED=0` makes both `start` and `tick` a no-op. The audit trail gets one
+content-free `schedule_created` row per task and one `schedule_run` row per fire, missed window, or
+expired window; the title and prompt never enter it. A direct call with no server trail writes a
+local `var/scheduler/audit.jsonl`, which is a convenience sink inside the declared write scope, not a
+second retention row.
+
+*Why it matters:* "later" is only a promise if it survives a restart, and a schedule you cannot
+audit is one you cannot trust. When a task does not run the owner needs to know whether the box was
+down, the window had passed, or the task was disabled — and a long outage must not become a burst of
+model calls and charges the moment the process returns.
+
+*Plain words:* a **cron** is the old five-column way of saying "when": minute, hour, day of the
+month, month, and day of the week. A **timezone** matters because 09:00 is a different instant in
+two cities, and twice a year the clock jumps. A **missed** window is one that went by while nothing
+was running; it is written down and skipped, not fired late in a pile.
+
+- Linear: https://linear.app/kelp-ai/issue/KEL-23/m4-a-scheduler-store-cron-runtime
+- Store, cron, and ticker: [`chat/scheduler.py`](../chat/scheduler.py)
+- The skill that writes a task: [`skills/builtin/schedule_create/handler.py`](../skills/builtin/schedule_create/handler.py)
+- Spec: [`docs/SKILL_SPEC.md`](SKILL_SPEC.md) §12
+- Tests: [`tests/test_scheduler.py`](../tests/test_scheduler.py)
+- Merge: [`13fc687`](https://github.com/Anshieee/kelp/commit/13fc687) (branch
+  [`kel-23`](https://github.com/Anshieee/kelp/tree/kel-23), head `4dd78e6`)
+
+Status detail: merged into `main` at `13fc687`, adding 67 tests to a suite of 902, taking it to 969.
+Two honest limits. The runtime is built and tested but the server does not start it yet:
+`chat/server.py` does not import `chat.scheduler`, so a task is stored, validated, and visible to the
+skill while nothing fires it in the running service until the proactive-turn wiring (KEL-27) lands.
+And the lock is an advisory `flock` on one directory, which is right for one process on one box and
+is not a distributed scheduler; a hard kill inside a callback leaves a started run with no finish.
+
+### KEL-25 — Plugins — DONE
+
+A plugin package is a directory or `.zip` holding `manifest.json` and the module its `entry.path`
+names; `manifest_version` stays `1.0` and `entry.path` is an additive optional field. An operator
+installs it with `python -m skills.cli install <path|zip>` into `KELP_PLUGIN_ROOT` (default
+`var/plugins`), and the command validates the package, copies it to a staging path under the root,
+re-checks the staged digest, swaps it into place, and pins the name, version, and digest in
+`plugins.lock.json` with an atomic sorted write. `list` reports version, digest, and whether the pin
+still matches, where a pin only counts when the digest and the manifest version both agree;
+`uninstall` removes the package and its pin. The CLI is a deploy-time operator tool: it is not
+registered as a skill and cannot be reached from chat or the model.
+
+The digest is SHA-256 over the sorted file set, framing each entry as its relative path, a NUL, four
+octal permission digits, a NUL, and the SHA-256 of its bytes, so every path, mode, and content byte
+is covered. `__pycache__` and `*.pyc`/`*.pyo` are excluded from the digest and are also never
+imported: install and boot each write a private tree from the digest-covered set and import from
+that copy, so a planted cache that matches a source file's timestamp and size cannot execute. At
+boot, installed packages are discovered after built-ins in sorted order, and the loader imports the
+entry module by file path — never by bare name and never by changing `sys.path`.
+
+A package over 8 MiB or with more than 4096 entries is refused, as is any archive with `..`
+segments, absolute paths, backslashes, symlinks, duplicate member names, or member names outside
+`A-Z a-z 0-9 . _ -`, all before any plugin code runs. A plugin may not shadow a built-in: boot fails
+naming both the built-in and the package origin, and the installer refuses it up front. Manifest
+validation is the same schema, semantics, and invocation pipeline as a built-in, the `execute`
+effect stays forbidden with no plugin exception, and unpinned packages are refused unless
+`KELP_PLUGINS_ALLOW_UNPINNED=1`, which is documented as a local experiment only.
+
+*Why it matters:* "it can use abilities other people wrote" is the difference between one assistant
+and a platform, and it is also the easiest way to lose the privacy claim. A digest pin makes the
+installed code the code that was reviewed, loading by path keeps an unrelated file on disk from
+being imported instead, and refusing to boot on a mismatch turns a silent swap into a loud failure.
+
+*Plain words:* a **plugin** is an ability written by someone else and dropped in without rebuilding
+the assistant. A **digest** is a fingerprint of the package's bytes: change anything and the
+fingerprint changes. A **pin** is that fingerprint written down, so the next boot can tell whether
+the package is still the one that was installed.
+
+- Linear: https://linear.app/kelp-ai/issue/KEL-25/m4-d-plugin-packages-install-digest-pin-load-by-path
+- Installer: [`skills/cli.py`](../skills/cli.py)
+- Loader, digest, and pins: [`skills/loader.py`](../skills/loader.py)
+- Schema: [`skills/manifest.schema.json`](../skills/manifest.schema.json)
+- Runbook: [`docs/DEPLOY.md`](DEPLOY.md) §3.2
+- Spec: [`docs/SKILL_SPEC.md`](SKILL_SPEC.md) §15.1
+- Tests: [`tests/test_plugins.py`](../tests/test_plugins.py)
+- Merge: [`08f87e5`](https://github.com/Anshieee/kelp/commit/08f87e5) (branch
+  [`kel-25`](https://github.com/Anshieee/kelp/tree/kel-25), head `5d639fc`)
+
+Status detail: merged into `main` at `08f87e5`, adding 35 tests to a suite of 969, taking it to
+1004. The tests cover install, list, and invoke envelopes, a digest mismatch, zip traversal,
+absolute and symlink members, the size caps, built-in shadowing, uninstall, the private-copy rule,
+and the no-`sys.path`-mutation guarantee. Three honest limits. A digest pin is integrity, not a
+sandbox: plugin code runs in the assistant's own process with the privileges of a built-in. There is
+no signing, trusted publishing, or remote registry yet, so the pin proves "unchanged since install",
+not "written by whom". And packages are read at boot only, so installing or removing one requires a
+restart, and the plugin root must be writable — inside the container, a path under `/data`.
+
+### KEL-26 — Sharing and identity decision — DONE
+
+Sharing is the most expensive thing in M4 to undo, so the decision is written before any share code
+exists. `docs/adr/0002-sharing-and-identity.md` is an accepted ADR that answers one question for
+every principal — owner, collaborator, anonymous viewer, scheduled actor, plugin: how it
+authenticates, what it can read, what it can do, whose credentials a delegated action uses, whose
+spend it bills, who can revoke it, and what the audit says about it. The answer is deliberately
+small. There is no workspace, no membership, no invitation, no role, and no second credential
+family; the owner stays the only principal, and everyone else gets only a per-thread, revocable,
+read-only capability link that shows one frozen snapshot.
+
+The ADR fixes what would be expensive to change later: a collaborator can never approve a spend or a
+write; audit rows carry the actor and an "on behalf of" for shared and agent-originated actions; the
+M3 rate classes and spend ceilings stay machine-wide with the owner's wallet billed; revoking a
+principal stops the next request and deliberately cannot recall a copy already read; deleting a
+thread takes its links with it in the same transaction; and every owner-less table has a stated
+additive migration path if named collaborators are ever admitted. It also specifies the smallest
+shippable slice, KEL-28, with its acceptance tests, and records the two options it rejected —
+workspace membership and full multi-tenancy — with the trigger that would reopen the first. The
+review round before the merge fixed the token path, the attribution wording, and the retention
+class in both the ADR and `docs/PRIVACY.md`.
+
+*Why it matters:* the shipped build assumes exactly one principal in five load-bearing places: one
+credential family, one limiter identity, one spend budget, no owner column on any table, and
+"approval means the owner said yes". Adding a second person is not a screen; it is a data-ownership
+model that would have to be migrated out of a database while it holds someone's conversations.
+Deciding it in writing first keeps the next slice cheap and the privacy story short enough to be
+true.
+
+*Plain words:* a **capability link** is a URL that is itself the permission: whoever holds it can
+read the one thing it points at, and nothing else. It is not an account, so it carries no identity
+and nothing to revoke beyond the link. **Read-only** means no reply, no edit, no download, and no
+asking the assistant anything.
+
+- Linear: https://linear.app/kelp-ai/issue/KEL-26/m4-e-sharing-and-identity-adr-spike
+- Decision: [`docs/adr/0002-sharing-and-identity.md`](adr/0002-sharing-and-identity.md)
+- Privacy review: [`docs/PRIVACY.md`](PRIVACY.md)
+- Merge: [`05d7508`](https://github.com/Anshieee/kelp/commit/05d7508) (branch
+  [`kel-26`](https://github.com/Anshieee/kelp/tree/kel-26), head `a1a5b1f`)
+
+Status detail: documentation only, so no tests were added and the suite stays at 1004. Two honest
+limits. Nothing is built: KEL-28, the read-only share link, is specified and not started, so today
+sharing exists only on paper and the product still has exactly one user. And the decision admits no
+named collaborator at all, so "several people work in one thread" — the thing most people mean by
+sharing — is explicitly out of scope until someone asks for it concretely.
+
 ## Decisions that shape the map
 
 ### Surfaces
@@ -1031,7 +1213,7 @@ device is its label, timestamps, and hash.
 ### GitHub
 
 - Repository (public): https://github.com/Anshieee/kelp
-- Shared copy of the code: https://github.com/Anshieee/kelp/tree/main — head `a9814ff`
+- Shared copy of the code: https://github.com/Anshieee/kelp/tree/main — head `05d7508`
 - All branches: https://github.com/Anshieee/kelp/branches
   - `kel-5` — merged (`b8de92f`)
   - `kel-6` — merged at `d3c763e`; branch head `4c72afc`
@@ -1055,9 +1237,12 @@ device is its label, timestamps, and hash.
   - `kel-19` — merged at `b5d7196`; branch head `5fdc1f8`
   - `kel-22` — merged at `f2fa77f`; branch head `824522b`
   - `kel-24` — merged at `a9814ff`; branch head `bc009cd`
+  - `kel-23` — merged at `13fc687`; branch head `4dd78e6`
+  - `kel-25` — merged at `08f87e5`; branch head `5d639fc`
+  - `kel-26` — merged at `05d7508`; branch head `a1a5b1f`
 - Change history: https://github.com/Anshieee/kelp/commits/main
 - Pull requests: https://github.com/Anshieee/kelp/pulls
-- Tests: 902 pass on `main` (`python -m pytest`); `make demo` plays all six beats, and
+- Tests: 1004 pass on `main` (`python -m pytest`); `make demo` plays all six beats, and
   `make eval` passes offline with the network blocked
 
 ### Linear
@@ -1083,7 +1268,10 @@ device is its label, timestamps, and hash.
   [KEL-21](https://linear.app/kelp-ai/issue/KEL-21/m3-b-retention-purge-hard-delete-orphan-sweep-log-rotation),
   [KEL-19](https://linear.app/kelp-ai/issue/KEL-19/m3-e-owner-auth-session-cookie-csrf-auth-audit-trail),
   [KEL-22](https://linear.app/kelp-ai/issue/KEL-22/m3-f-privacy-review-privacymd-egress-ledger-exec-boundary-decision),
-  [KEL-24](https://linear.app/kelp-ai/issue/KEL-24/m4-c-device-sessions-durable-listable-revocable-presence)
+  [KEL-24](https://linear.app/kelp-ai/issue/KEL-24/m4-c-device-sessions-durable-listable-revocable-presence),
+  [KEL-23](https://linear.app/kelp-ai/issue/KEL-23/m4-a-scheduler-store-cron-runtime),
+  [KEL-25](https://linear.app/kelp-ai/issue/KEL-25/m4-d-plugin-packages-install-digest-pin-load-by-path),
+  [KEL-26](https://linear.app/kelp-ai/issue/KEL-26/m4-e-sharing-and-identity-adr-spike)
 
 ### Docs and code
 
@@ -1097,6 +1285,7 @@ device is its label, timestamps, and hash.
 - Deploy runbook: [`docs/DEPLOY.md`](DEPLOY.md)
 - Code review for KEL-6 and KEL-7: [`docs/REVIEW_KEL6_KEL7.md`](REVIEW_KEL6_KEL7.md)
 - ADR 0001, one document skill: [`docs/adr/0001-docs-answer-single-skill.md`](adr/0001-docs-answer-single-skill.md)
+- ADR 0002, sharing and identity: [`docs/adr/0002-sharing-and-identity.md`](adr/0002-sharing-and-identity.md)
 - Screen plan: [`docs/frontend-scope-simple.md`](frontend-scope-simple.md)
 - Issue pack: [`docs/linear-issue-pack-kel.md`](linear-issue-pack-kel.md)
 - Linear setup notes: [`docs/linear-setup.md`](linear-setup.md)

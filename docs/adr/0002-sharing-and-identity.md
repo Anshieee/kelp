@@ -51,6 +51,15 @@ with shipped behaviour:
 2. Nothing in the share surface can ship before this ADR is merged, because the
    slice (`KEL-28`) needs the token, scope, and revocation semantics decided here.
 
+**Update, 30 October 2026 — after merge.** This ADR was written before `kel-23`
+and `kel-25` joined `main`. Both are now merged (`13fc687` and `08f87e5`), so the
+scheduler store and the plugin loader exist as code; the scheduled/system
+principal is still not *running*, because the server does not start the ticker
+yet (that is KEL-27). The rules in §4 and §5 for that principal therefore still
+describe a binding contract rather than shipped behaviour, and the plugin
+principal's constraints are now enforced by the digest pin described in
+`docs/SKILL_SPEC.md` §15.1. Nothing else in this ADR changes.
+
 ## 2. The question
 
 Sharing is the most expensive thing in M4 to undo. A wrong choice here is not a bad
