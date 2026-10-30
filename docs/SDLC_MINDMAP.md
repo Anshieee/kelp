@@ -11,11 +11,12 @@ that goes with it is [`sdlc-mindmap.svg`](sdlc-mindmap.svg), with a PNG fallback
 site embeds a copy of the SVG directly in the page, so every box there can be clicked; that copy
 and these two files must be updated together.
 
-What this snapshot rests on: `main` is at `f2fa77f`, all **896 tests pass**, and the repository is
+What this snapshot rests on: `main` is at `a9814ff`, all **902 tests pass**, and the repository is
 public. KEL-5 through KEL-10 are merged, reviewed, and done; KEL-11, KEL-12, KEL-13, KEL-14, KEL-15,
 and KEL-16 are merged and reviewed too, and close M2. KEL-17, KEL-18, KEL-20, KEL-21, KEL-19, and
 KEL-22 then carried M3 to completion and are merged and reviewed: abuse resistance, spend ceilings,
-invoke-time policy, retention, owner sign-in, and the written privacy review. KEL-10, payments,
+invoke-time policy, retention, owner sign-in, and the written privacy review. KEL-24 then opened M4
+by making those owner sessions durable devices. KEL-10, payments,
 carries both its paths: the Stripe saved-card scaffold, the Razorpay gateway, and the Razorpay
 hosted Checkout.
 
@@ -89,6 +90,13 @@ boundary is settled by removing the promise rather than wiring a gate. It merged
 `kel-22` (head `824522b`) and added 34 tests, taking the suite from 862 to **896**. With that every
 work item in M3 is done and the milestone is complete.
 
+KEL-24 opened **M4 Full vision** on 30 October 2026. It is device sessions: the owner sessions that
+KEL-19 kept in process memory now persist in the `sessions` table of the chat database, so several
+devices survive a restart, the owner can list them, and one can be revoked without signing the rest
+out. It merged at `a9814ff` from `kel-24` (head `bc009cd`) and added 6 tests, taking the suite from
+896 to **902**. M4's remaining items — work the assistant starts itself, abilities added by others,
+and team sharing — are still to come.
+
 ## How to read the labels
 
 | Label | What it means |
@@ -104,17 +112,17 @@ An **M number** is a milestone, a stage of the build. A **KEL number** is a work
 our task tracker. Linear can lag behind by a day; the statuses below match the tracker site on the
 snapshot date.
 
-**LATER** on the M4 leaves means outside this round.
+**LATER** on the three remaining M4 leaves means outside this round; KEL-24, the first M4 item, is DONE.
 
 ## The map
 
-![Mind map of the delivery: milestones M0 to M4, work items KEL-5 to KEL-22, product surfaces, payments, and design.](sdlc-mindmap.svg)
+![Mind map of the delivery: milestones M0 to M4, work items KEL-5 to KEL-24, product surfaces, payments, and design.](sdlc-mindmap.svg)
 
 The same map in words, in case the image does not load:
 
-- **Milestones** — five stages, M0 to M4.
-- **The work** — eighteen work items, KEL-5 to KEL-22: all eighteen are done, M1, M2, and M3 are
-  complete, and M4 is the only stage still to come.
+- **Milestones** — five stages, M0 to M4: M1, M2, and M3 are complete, and M4 is in progress.
+- **The work** — nineteen work items, KEL-5 to KEL-24: all nineteen are done, and the four
+  remaining M4 pieces are still to come.
 - **Surfaces** — where you talk to the assistant: dashboard first, Telegram next, WhatsApp and voice memos later.
 - **Money** — saved cards through Stripe and hosted Checkout through Razorpay, both merged and closed out; an in-app balance later.
 - **Design** — the screen plan is written, and so is the chat spec. The chat surface code is merged; the drawing file and the browser screen are next.
@@ -135,9 +143,9 @@ promise that full-vision scope lands this week. Scope is cumulative: M2 includes
 | **M1 Prototype** | 30 Oct 2026 | COMPLETE | The end-to-end story: ask, get an answer with sources, read a file, approve an action, pay with a saved card, watch the six-scene demo. All six work items live here, and all six are done: KEL-5 to KEL-9 were merged earlier, and KEL-10 closed on owner confirmation on 30 October 2026. |
 | **M2 Polished MVP** | 30 Oct 2026 | COMPLETE | Survives ordinary use: picks up after a restart, self-checks, better search over your documents, an honest account of what it did, repeatable quality measurements, and a deploy a stranger can repeat. All six work items are done: KEL-11, the serve entrypoint; KEL-12, health and readiness; KEL-13, real document search with citations; KEL-14, structured logs and metrics; KEL-15, the eval harness that measures answer quality; KEL-16, the image and runbook. The runbook's end-to-end pass on a real Nebius host is still to be done. |
 | **M3 Hardening** | 30 Oct 2026 | COMPLETE | The privacy and cost promises hold under pressure: who sees what, where keys live, caps on traffic, a retention rule, a spend ceiling, and a written privacy review. All six pieces are done: KEL-17, the traffic, body, and concurrency caps; KEL-18, the spend ceilings; KEL-19, owner sign-in with a session cookie, CSRF, and lockout; KEL-20, the policy enforced at every skill call; KEL-21, the retention rule; and KEL-22, the written privacy review with the egress ledger and the exec-boundary decision. |
-| **M4 Full vision** | 30 Oct 2026 | TO COME | More devices, work the assistant starts on its own, abilities added by others, and team sharing. A direction, not a deadline. |
+| **M4 Full vision** | 30 Oct 2026 | IN PROGRESS | More devices, work the assistant starts on its own, abilities added by others, and team sharing. A direction, not a deadline. KEL-24 is in: owner sessions persist as listable, revocable devices. The other three are still to come. |
 
-## The eighteen work items
+## The nineteen work items
 
 KEL-5 feeds KEL-6 and KEL-7. Those two feed KEL-8. KEL-7 also feeds KEL-10. KEL-8 comes before the
 demo, KEL-9. The first twelve are done. KEL-10, payments, closed M1 on owner confirmation on 30
@@ -146,7 +154,8 @@ owner's word. KEL-11 then opened M2 with the serve entrypoint, and KEL-12, KEL-1
 and KEL-16 followed with health checks, real document search, observability, the eval harness, and
 the deploy. KEL-17 and KEL-18 opened M3 the same day, with abuse resistance and spend ceilings, and
 KEL-20 and KEL-21 followed it with invoke-time policy and retention, then KEL-19 and KEL-22 closed
-it with owner sign-in and the written privacy review.
+it with owner sign-in and the written privacy review. KEL-24 then opened M4 by making those owner
+sessions durable, listable devices.
 
 ### KEL-5 — Skill contracts — DONE
 
@@ -188,7 +197,7 @@ price is counted per chunk.
 - Merge: [`d3c763e`](https://github.com/Anshieee/kelp/commit/d3c763e) (branch [`kel-6`](https://github.com/Anshieee/kelp/tree/kel-6), head `4c72afc`)
 
 Status detail: merged into `main` at `d3c763e`. The kernel suite is 43 tests — 25 for the loop and
-18 for the streaming client — and passes with the rest of the 896. The review written up in
+18 for the streaming client — and passes with the rest of the 902. The review written up in
 [`docs/REVIEW_KEL6_KEL7.md`](REVIEW_KEL6_KEL7.md) signed off, and KEL-8 built on top of it.
 
 ### KEL-7 — Approval gate — DONE
@@ -231,7 +240,7 @@ showing where an answer came from, and approval requests shown in the conversati
 Status detail: merged into `main` at `e0bbb72`. The chat surface is in: named threads that can be
 reopened, an append-only stream of events, a card for each tool step, approvals shown in the
 conversation over the KEL-7 gate, artifacts, and a cooperative cancel token so Stop works. The chat
-suite is 86 tests, part of the 896. The spec is on `main` at 1,164 lines; the review fixes that
+suite is 86 tests, part of the 902. The spec is on `main` at 1,164 lines; the review fixes that
 shaped it landed at `56b0785`:
 
 - **Honest dependencies (M1).** The web search, GitHub read, and document handlers are still stubs.
@@ -931,6 +940,61 @@ them, because absent beats invented. One honest limit: the ledger counts the cal
 through its own doors, and the socket guard from KEL-20 is cooperative, so a call made from outside
 the process or from a child process is stopped at the deployment boundary, not here.
 
+### KEL-24 — Device sessions — DONE
+
+KEL-19 kept owner sessions in an in-process map, so a restart signed every browser out and the owner
+could not see or kill a device that was not in front of them. KEL-24 moves them into the `sessions`
+table of the chat database: `id_hash` (the SHA-256 of the session id) as the primary key, plus a
+short label, `created_at`, `last_seen`, `expires_at`, and `revoked_at`. Two routes sit beside the
+existing sign-in: `GET /api/auth/devices` returns each device's short id, label, timestamps, and an
+`online` and `current` flag, and `DELETE /api/auth/devices/{id_short}` revokes one. The route names
+follow the existing `/api/auth/*` family rather than the `/api/sessions/…` sketch in the ticket.
+
+No credential is written down. The CSRF half is
+`HMAC-SHA256(SHA-256(KELP_SESSION_SECRET), "kelp-csrf:" + id_hash)` in unpadded base64url, derived on
+demand and never stored; the signing key is itself a digest, so the secret is not the key, and the DB
+holds no value that can be replayed as a cookie or a mutation token. With `KELP_SESSION_SECRET`
+unset the root `KELP_AUTH_TOKEN` is the fallback, which keeps every live device's pair valid across a
+restart without a second secret. A device's public id is the first 12 hex characters of the hash —
+48 bits, enough to be unique and useless for replaying a login. Labels are scrubbed of control,
+zero-width, and bidi characters, whitespace is collapsed, the result is capped at 40 characters and
+defaults to `Unknown device`, and no log or audit line carries a label. Presence is derived, not a
+heartbeat: a device reads `online` when its last authenticated request is within 60 seconds, so it
+falls offline by itself.
+
+Revocation is a fresh row read on every check, so a revoked device's next request is `401` and its
+open stream ends at the next auth check rather than at process exit. The session cap still evicts the
+oldest idle device, now across restarts, and expired or long-revoked rows are pruned on use, so the
+table stays bounded.
+
+*Why it matters:* a session you cannot see is a session you cannot end. Persisting it with a hash and
+a derived second proof turns "only the owner is signed in" into a list the owner can read and act on,
+without putting a working credential in the database, a log, or a backup.
+
+*Plain words:* a **device** is one signed-in browser. **Presence** is a guess from recent activity,
+not a live connection. **Revoking** means the pass stops working now, including for a page that is
+already open.
+
+- Linear: https://linear.app/kelp-ai/issue/KEL-24/m4-c-device-sessions-durable-listable-revocable-presence
+- Table and queries: [`chat/store.py`](../chat/store.py)
+- Session store, devices, revocation: [`chat/api.py`](../chat/api.py)
+- Spec: [`docs/CHAT_SPEC.md`](https://github.com/Anshieee/kelp/blob/main/docs/CHAT_SPEC.md) §12.2
+- Runbook: [`docs/DEPLOY.md`](DEPLOY.md)
+- Tests: [`tests/test_devices.py`](https://github.com/Anshieee/kelp/blob/main/tests/test_devices.py)
+- Merge: [`a9814ff`](https://github.com/Anshieee/kelp/commit/a9814ff) (branch
+  [`kel-24`](https://github.com/Anshieee/kelp/tree/kel-24), head `bc009cd`)
+
+Status detail: merged into `main` at `a9814ff`, adding 6 tests to a suite of 896, taking it to 902.
+The six cover two devices surviving a restart with a valid CSRF pair, the `current` flag marking only
+the calling cookie, one device's revocation closing its live stream while the other keeps working, a
+byte-level grep of the database for the session id and the CSRF token, cap eviction across restarts,
+and a label that is scrubbed, defaulted, and absent from the logs. Three honest limits. Mint and
+revoke do not write their own audit rows yet, so the existing `auth_failed` trail still covers
+rejections only, and a successful sign-in or revocation is not in the trail. There is no "revoke the
+others but keep me" call: `DELETE /api/auth/sessions` is the global reset and signs the caller out
+too. And the coarse user-agent class and revocation reason the ticket describes are not stored; a
+device is its label, timestamps, and hash.
+
 ## Decisions that shape the map
 
 ### Surfaces
@@ -967,7 +1031,7 @@ the process or from a child process is stopped at the deployment boundary, not h
 ### GitHub
 
 - Repository (public): https://github.com/Anshieee/kelp
-- Shared copy of the code: https://github.com/Anshieee/kelp/tree/main — head `f2fa77f`
+- Shared copy of the code: https://github.com/Anshieee/kelp/tree/main — head `a9814ff`
 - All branches: https://github.com/Anshieee/kelp/branches
   - `kel-5` — merged (`b8de92f`)
   - `kel-6` — merged at `d3c763e`; branch head `4c72afc`
@@ -990,9 +1054,10 @@ the process or from a child process is stopped at the deployment boundary, not h
   - `kel-21` — merged at `25584f8`; branch head `4f96577`
   - `kel-19` — merged at `b5d7196`; branch head `5fdc1f8`
   - `kel-22` — merged at `f2fa77f`; branch head `824522b`
+  - `kel-24` — merged at `a9814ff`; branch head `bc009cd`
 - Change history: https://github.com/Anshieee/kelp/commits/main
 - Pull requests: https://github.com/Anshieee/kelp/pulls
-- Tests: 896 pass on `main` (`python -m pytest`); `make demo` plays all six beats, and
+- Tests: 902 pass on `main` (`python -m pytest`); `make demo` plays all six beats, and
   `make eval` passes offline with the network blocked
 
 ### Linear
@@ -1017,7 +1082,8 @@ the process or from a child process is stopped at the deployment boundary, not h
   [KEL-20](https://linear.app/kelp-ai/issue/KEL-20/m3-d-enforce-declared-effects-and-scopes-at-invoke-time),
   [KEL-21](https://linear.app/kelp-ai/issue/KEL-21/m3-b-retention-purge-hard-delete-orphan-sweep-log-rotation),
   [KEL-19](https://linear.app/kelp-ai/issue/KEL-19/m3-e-owner-auth-session-cookie-csrf-auth-audit-trail),
-  [KEL-22](https://linear.app/kelp-ai/issue/KEL-22/m3-f-privacy-review-privacymd-egress-ledger-exec-boundary-decision)
+  [KEL-22](https://linear.app/kelp-ai/issue/KEL-22/m3-f-privacy-review-privacymd-egress-ledger-exec-boundary-decision),
+  [KEL-24](https://linear.app/kelp-ai/issue/KEL-24/m4-c-device-sessions-durable-listable-revocable-presence)
 
 ### Docs and code
 
