@@ -18,7 +18,7 @@
    grain runs edge to edge instead of stopping with the hero artwork. It sits
    under every card and over the page ground, which is why nothing is tinted
    twice. d-fx.js paints the grain and, around the pointer, the same ink at
-   brick scale; without JS the page keeps its own grain only. */
+   tile scale; without JS the page keeps its own grain only. */
 #d-fx-field {
   position: fixed;
   inset: 0;

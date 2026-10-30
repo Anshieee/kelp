@@ -91,7 +91,7 @@
      where the ink sits even though one is eight times coarser. Every term is
      periodic over the tile, so the repeat has no seam. */
   const TILE = 128;        // canvas px: repeats every 384 CSS px on the page
-  const MOSAIC_CELL = 8;   // canvas px: 24 CSS px bricks, seams included
+  const MOSAIC_CELL = 8;   // canvas px: 24 CSS px square tiles, gapless grid
 
   function densityAt(motif, u, v) {
     const tau = Math.PI * 2;
@@ -158,10 +158,10 @@
     return source;
   }
 
-  /* Mosaic: the same density read one brick at a time, in running bond. Each
-     brick is a cut of the section ink with its own slight shade, the ground
-     shows through a one-pixel seam, and the occasional chipped brick leaves a
-     corner open — tile, not grid. */
+  /* Mosaic: the same density read one tile at a time, on a single aligned
+     grid. Every tile is a full square cell, edge to edge: no seam, no running
+     bond, no chipped corner, so the field reads as laid tile and the repeat
+     has to line up exactly. Only the ink changes from tile to tile. */
   function mosaicTile(from, to, motif) {
     const size = TILE;
     const cell = MOSAIC_CELL;
@@ -169,28 +169,27 @@
     source.width = source.height = size;
     const context = source.getContext("2d", { alpha: true });
     if (!context) return null;
-    const rows = Math.round(size / cell);
-    const wide = cell * 2;
-    const seam = 1;
+    // Whole cells only: a partial last row or column would break the grid.
+    const count = Math.floor(size / cell);
     const tau = Math.PI * 2;
 
-    for (let row = 0; row < rows; row++) {
+    for (let row = 0; row < count; row++) {
       const y = row * cell;
-      const offset = row % 2 ? cell : 0;
-      for (let column = 0; column < size / wide; column++) {
-        const x = column * wide + offset;
-        // Sample the brick centre, wrapped so the repeat stays continuous.
-        const u = ((((x + wide / 2) % size) + size) % size) / size;
+      for (let column = 0; column < count; column++) {
+        const x = column * cell;
+        // Sample the tile centre; the density is periodic over the tile, so
+        // the sampled tone repeats without a seam.
+        const u = (x + cell / 2) / size;
         const v = (y + cell / 2) / size;
         const weight = densityAt(motif, u, v);
         const hash =
           Math.abs(Math.sin((x + 13.7) * 91.3 + (y + 7.1) * 47.7) * 24634.6345) % 1;
-        // A brick the density barely reaches is left out, so the patch keeps
+        // A tile the density barely reaches is left out, so the patch keeps
         // the section's shape instead of becoming a flat sheet of tiles.
         if (weight < 0.11) continue;
 
         const mix = 0.5 + 0.5 * Math.sin(tau * v);
-        // Denser ink sets as a deeper brick: the mosaic reads as tone, not
+        // Denser ink sets as a deeper tile: the mosaic reads as tone, not
         // just as texture.
         const shade = 0.94 - weight * 0.3 - hash * 0.05;
         const ink = [0, 1, 2].map((channel) =>
@@ -205,16 +204,8 @@
           ),
         );
         context.fillStyle = `rgb(${ink[0]}, ${ink[1]}, ${ink[2]})`;
-
-        // Bricks in the thin parts of the motif are cut smaller: the joints
-        // widen and the ground comes through, without breaking the bond.
-        const chip =
-          weight < 0.3 ? cell * 0.3 : hash > 0.86 ? cell * 0.22 : 0;
-        const brickWidth = wide - seam - chip;
-        const brickHeight = cell - seam - chip;
-        context.fillRect(x, y, brickWidth, brickHeight);
-        // A brick that runs off the tile edge repeats on the other side.
-        if (x + wide > size) context.fillRect(x - size, y, brickWidth, brickHeight);
+        // Full cell, exact origin: adjacent tiles share their edge.
+        context.fillRect(x, y, cell, cell);
       }
     }
     return source;
