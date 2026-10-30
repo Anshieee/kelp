@@ -1,8 +1,9 @@
 /* Effects layer (d). Load with defer after c-copy.js, with d-fx.css beside it.
  *
  * Adds five optional effects to the existing page and never edits its markup:
- * a whole-page dither field, a hero load dissolve, roster hover accents,
- * section settles, and scroll-linked phone/pet states.
+ * a whole-page dither field that turns to mosaic under the pointer, a hero
+ * load dissolve, roster hover accents, section settles, and scroll-linked
+ * phone/pet states.
  *
  * Rules this file keeps: nothing is created before the page is parsed, every
  * effect is decorative, every failure is silent and leaves the page visible,
@@ -19,6 +20,35 @@
   const clamp = (value, min = 0, max = 1) =>
     value < min ? min : value > max ? max : value;
   const smooth = (t) => t * t * (3 - 2 * t);
+
+  /* cubic-bezier(x1, y1, x2, y2) as a 128-step table: exact enough for a
+     reveal, and cheaper than solving the curve on every frame. */
+  function bezier(x1, y1, x2, y2) {
+    const steps = 128;
+    const table = new Float32Array(steps + 1);
+    const at = (t, a, b) =>
+      3 * a * t * (1 - t) * (1 - t) + 3 * b * t * t * (1 - t) + t * t * t;
+    for (let index = 0; index <= steps; index++) {
+      const x = index / steps;
+      let low = 0;
+      let high = 1;
+      for (let pass = 0; pass < 22; pass++) {
+        const middle = (low + high) / 2;
+        if (at(middle, x1, x2) < x) low = middle;
+        else high = middle;
+      }
+      table[index] = at((low + high) / 2, y1, y2);
+    }
+    return (x) => {
+      const position = clamp(x) * steps;
+      const index = Math.min(steps - 1, Math.floor(position));
+      return table[index] + (table[index + 1] - table[index]) * (position - index);
+    };
+  }
+
+  // CSS ease-in-out, so the reveal settles in and out instead of snapping.
+  const REVEAL_EASE = bezier(0.42, 0, 0.58, 1);
+
   const pause = () => document.body?.classList.contains("motion-paused");
   const running = () => !document.hidden && !reduced.matches && !pause();
 
@@ -56,11 +86,49 @@
     [".site-footer", 3, [115, 85, 59], [251, 249, 245]],
   ];
 
-  /* A 128px tile in canvas pixels, repeating on a 384px grid on the page.
-     Every function below is periodic over the tile, so the repeat has no seam;
-     a per-pixel hash then breaks the lattice into grain. */
+  /* One density field feeds both registers: the grain samples it at every
+     canvas pixel, the mosaic samples it once per brick, so the two agree about
+     where the ink sits even though one is eight times coarser. Every term is
+     periodic over the tile, so the repeat has no seam. */
+  const TILE = 128;        // canvas px: repeats every 384 CSS px on the page
+  const MOSAIC_CELL = 8;   // canvas px: 24 CSS px square tiles, gapless grid
+
+  function densityAt(motif, u, v) {
+    const tau = Math.PI * 2;
+    if (motif === 0) {
+      // Marbled veins: nested sines, all whole cycles across the tile.
+      const cells =
+        Math.sin(tau * (u + Math.sin(tau * v) * 0.18)) *
+        Math.cos(tau * (v * 2 + Math.sin(tau * u) * 0.22));
+      const marble = Math.sin(tau * (u * 2 + v + cells * 0.35));
+      return 0.12 + Math.pow(Math.abs(marble), 8) * 0.5;
+    }
+    if (motif === 1) {
+      // Cellular halftone: one disc per lattice cell.
+      const gx = u * 8;
+      const gy = v * 8;
+      const distance = Math.hypot(gx - Math.floor(gx) - 0.5, gy - Math.floor(gy) - 0.5);
+      return clamp(0.52 - distance * 1.25, 0, 0.6);
+    }
+    if (motif === 2) {
+      // Tonal bands, drifting with the tile.
+      const band = Math.sin(tau * (v * 4 + Math.sin(tau * u) * 0.12));
+      return (
+        0.09 +
+        Math.pow(Math.abs(band), 3) * 0.3 * (0.55 + 0.45 * Math.sin(tau * u * 2))
+      );
+    }
+    // Soft cloud.
+    const cloud =
+      Math.sin(tau * u + Math.sin(tau * v * 2) * 0.5) *
+      Math.cos(tau * v * 2 + Math.sin(tau * u) * 0.4);
+    return 0.07 + (cloud * 0.5 + 0.5) * 0.3;
+  }
+
+  /* Grain: the density thresholded per pixel, ordered through bayer, with a
+     per-pixel hash to break the lattice. */
   function tile(from, to, motif) {
-    const size = 128;
+    const size = TILE;
     const source = document.createElement("canvas");
     source.width = source.height = size;
     const context = source.getContext("2d", { alpha: true });
@@ -72,48 +140,74 @@
       const v = y / size;
       for (let x = 0; x < size; x++) {
         const u = x / size;
-        let density;
-        if (motif === 0) {
-          // Marbled veins: nested sines, all whole cycles across the tile.
-          const cells =
-            Math.sin(tau * (u + Math.sin(tau * v) * 0.18)) *
-            Math.cos(tau * (v * 2 + Math.sin(tau * u) * 0.22));
-          const marble = Math.sin(tau * (u * 2 + v + cells * 0.35));
-          density = 0.12 + Math.pow(Math.abs(marble), 8) * 0.5;
-        } else if (motif === 1) {
-          // Cellular halftone: one disc per lattice cell.
-          const gx = u * 8;
-          const gy = v * 8;
-          const distance = Math.hypot(gx - Math.floor(gx) - 0.5, gy - Math.floor(gy) - 0.5);
-          density = clamp(0.52 - distance * 1.25, 0, 0.6);
-        } else if (motif === 2) {
-          // Tonal bands, drifting with the tile.
-          const band = Math.sin(tau * (v * 4 + Math.sin(tau * u) * 0.12));
-          density =
-            0.09 +
-            Math.pow(Math.abs(band), 3) * 0.3 * (0.55 + 0.45 * Math.sin(tau * u * 2));
-        } else {
-          // Soft cloud.
-          const cloud =
-            Math.sin(tau * u + Math.sin(tau * v * 2) * 0.5) *
-            Math.cos(tau * v * 2 + Math.sin(tau * u) * 0.4);
-          density = 0.07 + (cloud * 0.5 + 0.5) * 0.3;
-        }
+        const weight = densityAt(motif, u, v);
         // Ordered threshold plus a little per-pixel scatter: dither, not weave.
         const scatter = Math.abs(Math.sin(x * 12.9898 + y * 78.233) * 43758.5453) % 1;
         const threshold =
           (BAYER[(y % 4) * 4 + (x % 4)] + 0.5) / 16 + (scatter - 0.5) * 0.18;
-        if (density <= threshold) continue;
+        if (weight <= threshold) continue;
         const mix = 0.5 + 0.5 * Math.sin(tau * v);
         const index = (y * size + x) * 4;
         for (let channel = 0; channel < 3; channel++) {
-          data[index + channel] =
-            from[channel] + (to[channel] - from[channel]) * mix;
+          data[index + channel] = from[channel] + (to[channel] - from[channel]) * mix;
         }
         data[index + 3] = 255;
       }
     }
     context.putImageData(image, 0, 0);
+    return source;
+  }
+
+  /* Mosaic: the same density read one tile at a time, on a single aligned
+     grid. Every tile is a full square cell, edge to edge: no seam, no running
+     bond, no chipped corner, so the field reads as laid tile and the repeat
+     has to line up exactly. Only the ink changes from tile to tile. */
+  function mosaicTile(from, to, motif) {
+    const size = TILE;
+    const cell = MOSAIC_CELL;
+    const source = document.createElement("canvas");
+    source.width = source.height = size;
+    const context = source.getContext("2d", { alpha: true });
+    if (!context) return null;
+    // Whole cells only: a partial last row or column would break the grid.
+    const count = Math.floor(size / cell);
+    const tau = Math.PI * 2;
+
+    for (let row = 0; row < count; row++) {
+      const y = row * cell;
+      for (let column = 0; column < count; column++) {
+        const x = column * cell;
+        // Sample the tile centre; the density is periodic over the tile, so
+        // the sampled tone repeats without a seam.
+        const u = (x + cell / 2) / size;
+        const v = (y + cell / 2) / size;
+        const weight = densityAt(motif, u, v);
+        const hash =
+          Math.abs(Math.sin((x + 13.7) * 91.3 + (y + 7.1) * 47.7) * 24634.6345) % 1;
+        // A tile the density barely reaches is left out, so the patch keeps
+        // the section's shape instead of becoming a flat sheet of tiles.
+        if (weight < 0.11) continue;
+
+        const mix = 0.5 + 0.5 * Math.sin(tau * v);
+        // Denser ink sets as a deeper tile: the mosaic reads as tone, not
+        // just as texture.
+        const shade = 0.94 - weight * 0.3 - hash * 0.05;
+        const ink = [0, 1, 2].map((channel) =>
+          Math.max(
+            0,
+            Math.min(
+              255,
+              Math.round(
+                (from[channel] + (to[channel] - from[channel]) * mix) * shade,
+              ),
+            ),
+          ),
+        );
+        context.fillStyle = `rgb(${ink[0]}, ${ink[1]}, ${ink[2]})`;
+        // Full cell, exact origin: adjacent tiles share their edge.
+        context.fillRect(x, y, cell, cell);
+      }
+    }
     return source;
   }
 
@@ -128,24 +222,89 @@
     const entries = SECTIONS.map(([selector, motif, from, to]) => {
       const element = document.querySelector(selector);
       if (!element) return null;
-      const source = tile(from, to, motif);
-      const pattern = source && context.createPattern(source, "repeat");
+      const grain = tile(from, to, motif);
+      const bricks = mosaicTile(from, to, motif);
+      const pattern = grain && context.createPattern(grain, "repeat");
       if (!pattern) return null;
-      return { element, pattern, top: 0, height: 1, end: 0 };
+      const mosaic = bricks && context.createPattern(bricks, "repeat");
+      return {
+        element,
+        pattern,
+        mosaic: mosaic || pattern,
+        top: 0,
+        height: 1,
+        end: 0,
+      };
     }).filter(Boolean);
     if (!entries.length) return;
 
+    const scratch = document.createElement("canvas");
+    const paint = scratch.getContext("2d", { alpha: true });
+    if (!paint) return;
+
     document.body.append(canvas);
 
-    // Three CSS pixels per dither pixel: the grain stays chunky and the
-    // backing store never grows with device pixel ratio.
+    /* Three CSS pixels per canvas pixel: a hard cap on the backing store, so a
+       2x or 3x display never pays for a larger field. */
     const CELL = 3;
-    let width = 0;
-    let height = 0;
+    const FOCUS = 210; // CSS px of mosaic reach around the pointer
+
+    let width = 1;
+    let height = 1;
     let frame = 0;
     let last = 0;
     let start = performance.now();
     let time = 0;
+    let driftX = 0;
+    let driftY = 0;
+    let frames = 0;
+    let cost = 0;
+
+    // Focus patch in CSS pixels, plus how strongly it is showing.
+    const focus = { x: 0, y: 0, e: 0 };
+    const target = { x: 0, y: 0, on: 0 };
+    let moved = -Infinity;
+
+    const fine = matchMedia("(hover: hover) and (pointer: fine)");
+    let radius = 70; // canvas px
+    let mask = null;
+
+    /* A soft radial mask, built once per size: full strength in the middle,
+       easing to nothing at the rim, so the mosaic arrives as a patch rather
+       than as a disc edge. */
+    function buildMask() {
+      const wanted = Math.min(
+        FOCUS,
+        Math.min(window.innerWidth, window.innerHeight) * 0.46,
+      );
+      radius = Math.max(36, Math.round(wanted / CELL));
+      const size = radius * 2;
+      if (scratch.width !== size || scratch.height !== size) {
+        scratch.width = size;
+        scratch.height = size;
+      }
+      if (mask && mask.width === size) return;
+      mask = document.createElement("canvas");
+      mask.width = mask.height = size;
+      const ink = mask.getContext("2d", { alpha: true });
+      if (!ink) return;
+      const gradient = ink.createRadialGradient(
+        radius,
+        radius,
+        0,
+        radius,
+        radius,
+        radius,
+      );
+      gradient.addColorStop(0, "rgba(0, 0, 0, 1)");
+      gradient.addColorStop(0.42, "rgba(0, 0, 0, 0.94)");
+      gradient.addColorStop(0.66, "rgba(0, 0, 0, 0.62)");
+      gradient.addColorStop(0.84, "rgba(0, 0, 0, 0.24)");
+      gradient.addColorStop(0.95, "rgba(0, 0, 0, 0.05)");
+      gradient.addColorStop(1, "rgba(0, 0, 0, 0)");
+      ink.fillStyle = gradient;
+      ink.fillRect(0, 0, size, size);
+    }
 
     function measure() {
       entries.forEach((entry) => {
@@ -164,6 +323,7 @@
         canvas.width = width;
         canvas.height = height;
       }
+      buildMask();
       measure();
       draw();
     }
@@ -185,54 +345,160 @@
       return [current, next, smooth(progress)];
     }
 
-    function fill(pattern, seconds) {
-      const driftX = Math.sin(seconds * 0.09) * 3;
-      const driftY = Math.cos(seconds * 0.07) * 2.4;
+    function fill(ctx, pattern) {
       try {
         pattern.setTransform(new DOMMatrix([1, 0, 0, 1, driftX, driftY]));
       } catch {
         /* Without pattern transforms the grain simply holds still. */
       }
-      context.fillStyle = pattern;
-      context.fillRect(0, 0, width, height);
+      ctx.fillStyle = pattern;
+      ctx.fillRect(0, 0, width, height);
+    }
+
+    /* The patch buffer is filled in its own coordinates, so the pattern origin
+       moves with the destination and the bricks stay put on the page. */
+    function fillPatch(pattern, destinationX, destinationY) {
+      try {
+        pattern.setTransform(
+          new DOMMatrix([1, 0, 0, 1, driftX - destinationX, driftY - destinationY]),
+        );
+      } catch {
+        /* As above: a still field is still a field. */
+      }
+      paint.fillStyle = pattern;
+      paint.fillRect(0, 0, radius * 2, radius * 2);
+    }
+
+    /* The pointer patch: the same two section mosaics, crossfaded inside the
+       soft mask and composited over the grain. One small buffer means the cost
+       stays with the patch, not with the viewport. */
+    function patch(current, next, progress) {
+      const strength = focus.e;
+      if (strength < 0.012) return;
+      const size = radius * 2;
+      const destinationX = Math.round(focus.x / CELL) - radius;
+      const destinationY = Math.round(focus.y / CELL) - radius;
+      if (
+        destinationX > width ||
+        destinationY > height ||
+        destinationX + size < 0 ||
+        destinationY + size < 0
+      )
+        return;
+
+      paint.globalCompositeOperation = "source-over";
+      paint.globalAlpha = 1;
+      paint.clearRect(0, 0, size, size);
+      paint.globalAlpha = (1 - progress) * strength;
+      fillPatch(current.mosaic, destinationX, destinationY);
+      if (progress > 0.002) {
+        paint.globalAlpha = progress * strength;
+        fillPatch(next.mosaic, destinationX, destinationY);
+      }
+      paint.globalAlpha = 1;
+      paint.globalCompositeOperation = "destination-in";
+      paint.drawImage(mask, 0, 0);
+      paint.globalCompositeOperation = "source-over";
+      context.drawImage(scratch, destinationX, destinationY);
     }
 
     function draw() {
       if (!context || !canvas.isConnected) return;
       const [current, next, progress] = blend();
+      driftX = Math.sin(time * 0.09) * 3;
+      driftY = Math.cos(time * 0.07) * 2.4;
       context.clearRect(0, 0, width, height);
       context.globalAlpha = 1 - progress;
-      fill(current.pattern, time);
+      fill(context, current.pattern);
       if (progress > 0.002) {
         context.globalAlpha = progress;
-        fill(next.pattern, time);
+        fill(context, next.pattern);
       }
       context.globalAlpha = 1;
+      patch(current, next, progress);
+      frames++;
+      canvas.__frames = frames;
+    }
+
+    /* Where the patch wants to be. A fine pointer leads it; a coarse one lets
+       it wander on its own, slowly enough to read as drift rather than motion. */
+    function advance(delta, now) {
+      if (reduced.matches) {
+        target.on = 0;
+      } else if (fine.matches) {
+        target.on = now - moved < 4200 ? 1 : 0;
+      } else {
+        target.on = 0.66;
+        const seconds = (now - start) / 1000;
+        target.x =
+          window.innerWidth *
+          (0.5 + Math.sin(seconds * 0.13) * 0.29 + Math.sin(seconds * 0.043) * 0.07);
+        target.y = window.innerHeight * (0.42 + Math.cos(seconds * 0.1) * 0.24);
+      }
+
+      // Start on the pointer rather than sweeping in from the corner.
+      if (target.on > 0 && focus.e < 0.01) {
+        focus.x = target.x;
+        focus.y = target.y;
+      }
+      // Exponential easing: calm, and the same at any frame rate.
+      const follow = 1 - Math.exp(-delta / 190);
+      const settle = 1 - Math.exp(-delta / 320);
+      if (target.on > 0) {
+        focus.x += (target.x - focus.x) * follow;
+        focus.y += (target.y - focus.y) * follow;
+      }
+      focus.e += (target.on - focus.e) * settle;
+      if (focus.e < 0.008) focus.e = 0;
     }
 
     function tick(now) {
       frame = 0;
       if (!running()) return;
       frame = requestAnimationFrame(tick);
-      const interval = 1000 / 30;
-      if (last && now - last < interval) return;
-      last = now - ((now - last) % interval);
+      const delta = last ? Math.min(80, now - last) : 16.7;
+      last = now;
       time = (now - start) / 1000;
+      advance(delta, now);
+      const began = performance.now();
       draw();
+      cost += (performance.now() - began - cost) * 0.08;
+      canvas.__cost = cost;
     }
 
     function sync() {
       cancelAnimationFrame(frame);
       frame = 0;
       last = 0;
-      if (running()) frame = requestAnimationFrame(tick);
-      else draw();
+      if (running()) {
+        frame = requestAnimationFrame(tick);
+        return;
+      }
+      // A still frame: no patch for reduced motion, one held patch otherwise.
+      if (reduced.matches) focus.e = 0;
+      draw();
     }
 
+    function onPointer(event) {
+      if (event.pointerType === "touch") return;
+      moved = performance.now();
+      target.x = event.clientX;
+      target.y = event.clientY;
+    }
+
+    window.addEventListener("pointermove", onPointer, { passive: true });
+    window.addEventListener("pointerdown", onPointer, { passive: true });
+    document.addEventListener("mouseleave", () => {
+      moved = -Infinity;
+    });
+    window.addEventListener("blur", () => {
+      moved = -Infinity;
+    });
     window.addEventListener("resize", resize, { passive: true });
     window.addEventListener("pageshow", sync);
     document.addEventListener("visibilitychange", sync);
     reduced.addEventListener("change", sync);
+    fine.addEventListener?.("change", sync);
     new MutationObserver(sync).observe(document.body, {
       attributes: true,
       attributeFilter: ["class"],
@@ -256,7 +522,6 @@
     } catch {
       /* Font metrics only refine the section boundaries. */
     }
-    start = performance.now();
     resize();
     sync();
   }
@@ -287,8 +552,10 @@
 
     const CELL = 7;
     // The dissolve itself, timed for the space after the page's own veil.
+    // Slower than a snap and eased in and out, so it reads as the page
+    // settling rather than as a wipe.
     const HOLD = 0;
-    const SPAN = 520;
+    const SPAN = 1360;
     const width = Math.max(1, Math.ceil(hero.clientWidth / CELL));
     const height = Math.max(1, Math.ceil(hero.clientHeight / CELL));
     canvas.width = width;
@@ -331,7 +598,8 @@
     let finished = false;
     let watcher = null;
     let cap = 0;
-    const watchdog = setTimeout(finish, 2200);
+    // Long enough for the slowest path (veil cap + span) and no longer.
+    const watchdog = setTimeout(finish, 3000);
 
     function finish() {
       if (finished) return;
@@ -371,7 +639,7 @@
       frame = 0;
       if (finished) return;
       const progress = clamp((now - start - HOLD) / SPAN);
-      const cut = smooth(progress) * 1.18;
+      const cut = REVEAL_EASE(progress) * 1.18;
       for (let index = 0; index < keys.length; index++) {
         data[index * 4 + 3] = keys[index] < cut ? 0 : 255;
       }
