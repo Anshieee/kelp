@@ -11,7 +11,7 @@ that goes with it is [`sdlc-mindmap.svg`](sdlc-mindmap.svg), with a PNG fallback
 site embeds a copy of the SVG directly in the page, so every box there can be clicked; that copy
 and these two files must be updated together.
 
-What this snapshot rests on: `main` is at `dc50925`, all **1045 tests pass**, and the repository is
+What this snapshot rests on: `main` is at `bbff376`, all **1045 tests pass**, and the repository is
 public. KEL-5 through KEL-10 are merged, reviewed, and done; KEL-11, KEL-12, KEL-13, KEL-14, KEL-15,
 and KEL-16 are merged and reviewed too, and close M2. KEL-17, KEL-18, KEL-20, KEL-21, KEL-19, and
 KEL-22 then carried M3 to completion and are merged and reviewed: abuse resistance, spend ceilings,
@@ -1345,7 +1345,7 @@ explicit revoke routes are the only kill switch. And a revoke cannot recall a co
 ### GitHub
 
 - Repository (public): https://github.com/Anshieee/kelp
-- Shared copy of the code: https://github.com/Anshieee/kelp/tree/main — head `dc50925`
+- Shared copy of the code: https://github.com/Anshieee/kelp/tree/main — head `bbff376`
 - All branches: https://github.com/Anshieee/kelp/branches
   - `kel-5` — merged (`b8de92f`)
   - `kel-6` — merged at `d3c763e`; branch head `4c72afc`
