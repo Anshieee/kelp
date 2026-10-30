@@ -362,15 +362,17 @@
   }
 
   /* ---------------------------------------------------------------------
-     Phone: one whole turn in as it arrives, one whole turn out as it leaves.
+     Phone: exactly one whole turn, once, as it arrives.
      A trigger, not a scroll position: the angle used to be a function of how
-     far the frame had travelled through the viewport, which put the turns at
-     the edges of the screen — barely visible, and shorter still on a tall
+     far the frame had travelled through the viewport, which put the turn at
+     the edge of the screen — barely visible, and shorter still on a tall
      handset. Now the arrival starts one complete turn and finishes on its
      own, so the spin looks the same at every viewport and section height. The
      observer root is inset so the turn begins and ends while the frame is
-     still on screen. Re-arms on re-entry; reduced motion, a hidden tab and
-     the page’s own "Pause motion" leave it still and fully visible.
+     still on screen. Leaving is a rest at identity, not a second turn, so the
+     handset is only ever spun once per arrival and re-arms on re-entry.
+     Reduced motion, a hidden tab and the page’s own "Pause motion" leave it
+     still and fully visible.
      --------------------------------------------------------------------- */
   function initPhoneSpin() {
     const frames = [...document.querySelectorAll("[data-phone-spin]")];
@@ -395,13 +397,13 @@
       node.style.willChange = "";
     }
 
-    /* `to` is the resting angle: 0 for the turn in, 360 for the turn out.
-       Both animations end at identity on screen, so nothing is left behind
-       and no transform depends on where the page happened to be. */
+    /* `to` is the resting angle: always identity, so the handset arrives by
+       turning in once and simply stays there. Nothing is left behind and no
+       transform depends on where the page happened to be. */
     function turn(node, to) {
       stop(node);
       if (held() || !node.animate) return;
-      const from = to === 0 ? -360 : 0;
+      const from = to - 360;
       let animation;
       try {
         node.style.willChange = "transform";
@@ -409,7 +411,7 @@
           [
             {
               transform: `perspective(1200px) rotateY(${from}deg) scale(0.92)`,
-              opacity: from === -360 ? 0.72 : 1,
+              opacity: 0.72,
             },
             {
               transform: `perspective(1200px) rotateY(${to}deg) scale(1)`,
@@ -450,9 +452,9 @@
     if (reduce.matches || !("IntersectionObserver" in window)) return;
 
     // The observer root is the middle 44% of the viewport, so arrival starts
-    // one band up from the bottom edge and departure one band below the top:
-    // both turns run with the handset still on screen. Fully out of that band
-    // is also what re-arms the next turn in.
+    // one band up from the bottom edge: the turn runs with the handset still
+    // on screen. Fully out of that band is also what re-arms the next entry,
+    // so the spin plays once per arrival and not again on the way out.
     const observer = new IntersectionObserver(
       (entries) => {
         entries.forEach((entry) => {
@@ -463,11 +465,9 @@
             turn(node, 0);
             return;
           }
-          // Out of view: nothing to spin away from until it has arrived.
-          if (!armed.has(node)) {
-            armed.add(node);
-            turn(node, 360);
-          }
+          // Out of view: rest at identity, and owe the next arrival one turn.
+          armed.add(node);
+          stop(node);
         });
       },
       { threshold: [0, 0.12], rootMargin: "-28% 0px -28% 0px" },

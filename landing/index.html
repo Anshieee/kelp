@@ -25,6 +25,7 @@
     <link rel="stylesheet" href="c-copy.css" />
     <link rel="stylesheet" href="d-fx.css" />
     <link rel="stylesheet" href="e-fx.css" />
+    <link rel="stylesheet" href="f-fx.css" />
     <!-- a-motion.js must run before the GSAP/app renderer: it composites the
          existing canvas artwork and only observes state the app sets up. -->
     <script defer src="a-motion.js"></script>
@@ -42,6 +43,9 @@
     <script defer src="c-copy.js"></script>
     <script defer src="d-fx.js"></script>
     <script defer src="e-fx.js"></script>
+    <!-- f-fx.js must run after d-fx.js: it reads d-fx's field canvas as its
+         texture. Without WebGL it adds nothing and the field stays as painted. -->
+    <script defer src="f-fx.js"></script>
   </head>
   <body>
     <a class="skip-link pill" href="#main">Skip to content</a>
