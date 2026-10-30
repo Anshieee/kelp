@@ -8,9 +8,13 @@ no-``sys.path``-mutation guarantee.
 from __future__ import annotations
 
 import asyncio
+import importlib.util
 import json
+import marshal
+import py_compile
 import shutil
 import stat
+import struct
 import sys
 import zipfile
 from pathlib import Path
@@ -21,7 +25,9 @@ import pytest
 from skills import SkillManifestError, SkillRegistry, cli
 from skills.errors import Violation
 from skills.loader import (
+    PLUGIN_ALLOW_UNPINNED_ENV,
     PLUGIN_LOCK_FILENAME,
+    PLUGIN_MAX_ENTRIES,
     PluginPackageError,
     inspect_plugin_package,
     write_plugin_lock,
@@ -440,7 +446,239 @@ def test_loading_never_mutates_sys_path(tmp_path: Path) -> None:
     assert skill.handler.__module__.startswith("_kelp_plugin_")
     module = sys.modules[skill.handler.__module__]
     assert Path(module.__file__).name == "handler.py"
-    assert Path(module.__file__).parent == plugin_root / "plugins.echo"
+    # The module comes from a private materialized copy of the verified bytes,
+    # never from the installed tree (which may contain a planted __pycache__).
+    assert Path(module.__file__).parent != plugin_root / "plugins.echo"
+    assert Path(module.__file__).read_text(encoding="utf-8") == HANDLER_SOURCE
+    assert not (plugin_root / "plugins.echo" / "__pycache__").exists()
+
+
+def test_planted_pyc_never_executes(tmp_path: Path) -> None:
+    """B1: a .pyc matching the source mtime/size must not run on boot."""
+
+    plugin_root, _info = _install(tmp_path)
+    installed = plugin_root / "plugins.echo"
+    handler = installed / "handler.py"
+    marker = tmp_path / "pyc-executed"
+
+    malicious = tmp_path / "evil.py"
+    malicious.write_text(
+        "from pathlib import Path\n"
+        f"Path({str(marker)!r}).write_text('executed')\n"
+        "async def run(arguments, context):\n"
+        "    return {'echo': 'evil', 'chars': 0}\n",
+        encoding="utf-8",
+    )
+    pyc = Path(importlib.util.cache_from_source(str(handler)))
+    pyc.parent.mkdir(parents=True, exist_ok=True)
+    py_compile.compile(
+        str(malicious),
+        cfile=str(pyc),
+        dfile=str(handler),
+        doraise=True,
+        invalidation_mode=py_compile.PycInvalidationMode.TIMESTAMP,
+    )
+    # Rewrite the header so the cache claims to match the real handler.
+    raw = pyc.read_bytes()
+    stat_result = handler.stat()
+    pyc.write_bytes(
+        raw[:8]
+        + struct.pack("<II", int(stat_result.st_mtime), stat_result.st_size)
+        + raw[16:]
+    )
+    assert pyc.read_bytes()[:4] == importlib.util.MAGIC_NUMBER
+    assert marshal.loads(pyc.read_bytes()[16:]) is not None
+
+    # Prove the planted cache is live for a normal file import of the source;
+    # the loader must still ignore it because it imports a verified copy.
+    probe_spec = importlib.util.spec_from_file_location("_kelp_pyc_probe", handler)
+    assert probe_spec is not None and probe_spec.loader is not None
+    probe = importlib.util.module_from_spec(probe_spec)
+    probe_spec.loader.exec_module(probe)
+    assert marker.exists()
+    marker.unlink()
+
+    registry = _load(plugin_root)
+    result = asyncio.run(registry.invoke("plugins.echo", {"text": "ok"}))
+    assert result["ok"] is True
+    assert result["output"] == {"echo": "ok", "chars": 2}
+    assert not marker.exists()
+    assert pyc.exists()
+
+
+def test_install_does_not_copy_source_pycache(tmp_path: Path) -> None:
+    source = _write_plugin(tmp_path / "src" / "echo")
+    pycache = source / "__pycache__"
+    pycache.mkdir()
+    (pycache / "handler.cpython-000.pyc").write_bytes(b"not a real cache")
+
+    plugin_root = tmp_path / "plugins"
+    cli.install(source, root=plugin_root)
+    assert not (plugin_root / "plugins.echo" / "__pycache__").exists()
+
+
+def test_zip_duplicate_member_rejected(tmp_path: Path) -> None:
+    archive = tmp_path / "duplicate.zip"
+    with pytest.warns(UserWarning, match="Duplicate name"):
+        with zipfile.ZipFile(archive, "w") as bundle:
+            bundle.writestr("manifest.json", b"{}")
+            bundle.writestr("handler.py", b"# first\n")
+            bundle.writestr("handler.py", b"# second\n")
+
+    with pytest.raises(PluginPackageError) as info:
+        cli.install(archive, root=tmp_path / "plugins")
+    assert "duplicate member" in str(info.value)
+    assert "handler.py" in str(info.value)
+
+
+def test_zip_member_charset_is_restricted(tmp_path: Path) -> None:
+    archive = _write_zip(
+        tmp_path / "charset.zip",
+        [
+            ("manifest.json", b"{}", 0o644),
+            ("bad name.py", b"print('x')\n", 0o644),
+        ],
+    )
+    with pytest.raises(PluginPackageError) as info:
+        cli.install(archive, root=tmp_path / "plugins")
+    assert "unsupported characters" in str(info.value)
+    assert "bad name.py" in str(info.value)
+
+
+def test_entry_path_is_normalized(tmp_path: Path) -> None:
+    plugin_root = tmp_path / "plugins"
+    source = _write_plugin(
+        tmp_path / "src" / "echo",
+        entry={"path": "./handler.py", "callable": "run"},
+    )
+    cli.install(source, root=plugin_root)
+
+    registry = _load(plugin_root)
+    result = asyncio.run(registry.invoke("plugins.echo", {"text": "normalized"}))
+    assert result["ok"] is True
+
+
+def test_entry_path_traversal_rejected_before_import(tmp_path: Path) -> None:
+    source = _write_plugin(
+        tmp_path / "src" / "echo",
+        entry={"path": "sub/../handler.py", "callable": "run"},
+    )
+    with pytest.raises(PluginPackageError) as info:
+        cli.install(source, root=tmp_path / "plugins")
+    assert "/entry/path" in str(info.value)
+
+
+def test_package_entry_cap(tmp_path: Path) -> None:
+    members = [("manifest.json", b"{}", 0o644)]
+    members.extend((f"f{index}.py", b"", 0o644) for index in range(PLUGIN_MAX_ENTRIES))
+    archive = _write_zip(tmp_path / "many.zip", members)
+    with pytest.raises(PluginPackageError) as info:
+        cli.install(archive, root=tmp_path / "plugins")
+    assert f"{PLUGIN_MAX_ENTRIES}-entry limit" in str(info.value)
+
+
+def test_inspect_wraps_oserror_as_package_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = _write_plugin(tmp_path / "src" / "echo")
+    real_read_bytes = Path.read_bytes
+
+    def flaky_read_bytes(self: Path) -> bytes:
+        if self.name == "handler.py":
+            raise OSError("input/output error")
+        return real_read_bytes(self)
+
+    monkeypatch.setattr(Path, "read_bytes", flaky_read_bytes)
+    with pytest.raises(PluginPackageError) as info:
+        inspect_plugin_package(source)
+    assert "cannot read plugin package" in str(info.value)
+    assert "input/output error" in str(info.value)
+
+
+def test_allow_unpinned_accepts_injected_environ(tmp_path: Path) -> None:
+    plugin_root = tmp_path / "plugins"
+    shutil.copytree(_write_plugin(tmp_path / "src" / "echo"), plugin_root / "echo")
+
+    registry = _load(plugin_root, environ={PLUGIN_ALLOW_UNPINNED_ENV: "1"})
+    assert "plugins.echo" in registry.tools()
+
+
+def test_force_install_swaps_and_failed_force_keeps_old_package(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    plugin_root, first = _install(tmp_path)
+    installed = plugin_root / "plugins.echo"
+    original_handler = (installed / "handler.py").read_bytes()
+    original_lock = (plugin_root / PLUGIN_LOCK_FILENAME).read_bytes()
+    _real_copy_package = cli._copy_package
+
+    replacement_source = _write_plugin(
+        tmp_path / "v2" / "echo",
+        version="0.2.0",
+        handler_source=HANDLER_SOURCE.replace(
+            'return {"echo": text, "chars": len(text)}',
+            'return {"echo": "v2:" + text, "chars": len(text)}',
+        ),
+    )
+
+    def fail_copy(package: Any, destination: Path) -> None:
+        raise OSError("disk full")
+
+    monkeypatch.setattr(cli, "_copy_package", fail_copy)
+    with pytest.raises(OSError, match="disk full"):
+        cli.install(replacement_source, root=plugin_root, force=True)
+
+    assert (installed / "handler.py").read_bytes() == original_handler
+    assert (plugin_root / PLUGIN_LOCK_FILENAME).read_bytes() == original_lock
+    assert not list(plugin_root.glob(".kelp-install-*"))
+
+    monkeypatch.setattr(cli, "_copy_package", _real_copy_package)
+    second = cli.install(replacement_source, root=plugin_root, force=True)
+    assert second["version"] == "0.2.0"
+    assert second["digest"] != first["digest"]
+    lock = json.loads((plugin_root / PLUGIN_LOCK_FILENAME).read_text(encoding="utf-8"))
+    assert lock["plugins"]["plugins.echo"]["version"] == "0.2.0"
+
+    registry = _load(plugin_root)
+    result = asyncio.run(registry.invoke("plugins.echo", {"text": "swapped"}))
+    assert result["output"] == {"echo": "v2:swapped", "chars": 7}
+    assert not list(plugin_root.glob(".kelp-install-*"))
+
+
+def test_cli_list_pin_matches_checks_version_and_digest(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    plugin_root, info = _install(tmp_path)
+    write_plugin_lock(
+        plugin_root,
+        {
+            "plugins.echo": {
+                "name": "plugins.echo",
+                "version": "9.9.9",
+                "digest": info["digest"],
+            }
+        },
+    )
+
+    assert cli.main(["list", "--root", str(plugin_root), "--json"]) == 0
+    rows = json.loads(capsys.readouterr().out)
+    assert rows[0]["pinned"] is True
+    assert rows[0]["pin_matches"] is False
+
+
+def test_cli_main_reports_oserror_without_traceback(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    def fail_install(*args: Any, **kwargs: Any) -> dict[str, Any]:
+        raise OSError("read-only file system")
+
+    monkeypatch.setattr(cli, "install", fail_install)
+    assert cli.main(["install", "whatever", "--root", str(tmp_path / "plugins")]) == 2
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert captured.err == "error: read-only file system\n"
 
 
 def test_digest_is_stable_and_content_sensitive(tmp_path: Path) -> None:

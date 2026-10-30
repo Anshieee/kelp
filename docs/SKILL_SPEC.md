@@ -588,9 +588,11 @@ plus the module named by `entry.path`. Plugins use the same manifest shape, meta
 semantic rules, and invocation pipeline as built-ins, with three differences:
 
 - `entry.path` is a package-relative POSIX path (for example `"handler.py"`). It is an additive
-  optional field; `manifest_version` stays `1.0`. Built-ins keep using `entry.module`, and a
-  plugin manifest that sets `entry.module` is rejected: installed code is imported by file path,
-  so the loader never mutates `sys.path`.
+  optional field; `manifest_version` stays `1.0`. The value is normalized before lookup
+  (`./handler.py` and `handler.py` are the same entry), and `..`, absolute paths, backslashes,
+  and characters outside `A-Z a-z 0-9 . _ -` are rejected. Built-ins keep using `entry.module`,
+  and a plugin manifest that sets `entry.module` is rejected: installed code is imported by
+  file path, so the loader never mutates `sys.path`.
 - The permission, timeout, secret, and `execute`-rejection rules are unchanged. `execute` is
   still forbidden for plugins; there is no sandbox exception.
 - A plugin cannot shadow a built-in. Boot fails naming both the built-in directory and the
@@ -606,22 +608,28 @@ var/plugins/                      # KELP_PLUGIN_ROOT (default)
     handler.py
 ```
 
-`python -m skills.cli install <package>` validates the package, copies it verbatim into the
-plugin root, and pins `{name, version, digest}` in `plugins.lock.json` (atomic write, sorted).
-`uninstall <name>` removes the package and its pin; `list` prints version, digest, and pin
-status. The CLI is a **deploy-time operator tool**: it is not registered as a skill and MUST
-NOT be reachable from chat or the model.
+`python -m skills.cli install <package>` validates the package, copies it into a staging path
+under the plugin root, re-checks the staged digest, and only then swaps it into place and pins
+`{name, version, digest}` in `plugins.lock.json` (atomic write, sorted). A failed `--force`
+install leaves the previous package and pin untouched. `uninstall <name>` removes the package
+and its pin; `list` prints version, digest, and pin status, where a pin only counts as matching
+when both the digest and the manifest version agree. The CLI is a **deploy-time operator
+tool**: it is not registered as a skill and MUST NOT be reachable from chat or the model.
 
 **Digest.** SHA-256 over the sorted file set, framed per entry as
 `relpath`, NUL, four-digit octal permission bits, NUL, then the 32-byte SHA-256 of the content.
 `__pycache__` directories and `*.pyc`/`*.pyo` files are excluded so caches never alter the pin.
 The digest therefore covers every code and manifest byte; changing one byte changes the digest.
+Excluded cache bytes are also never imported: both install and boot write a private tree from
+the digest-covered entry set and import from that tree, so a planted `.pyc` that matches the
+source's mtime and size cannot execute.
 
 **Boot rules (fail fast, I2).** Installed packages are discovered after built-ins, in sorted
 order. A package is refused when:
 
-- its total uncompressed content exceeds **8 MiB**;
-- it contains `..` segments, absolute paths, backslashes, or symlinks (directories or zip members);
+- its total uncompressed content exceeds **8 MiB** or it has more than **4096** entries;
+- it contains `..` segments, absolute paths, backslashes, symlinks (directories or zip members),
+  duplicate zip member names, or member names outside `A-Z a-z 0-9 . _ -`;
 - its manifest is structurally or semantically invalid, including any `execute` effect;
 - its entry path is missing, escapes the package, or fails to import as an async callable;
 - its name is absent from `plugins.lock.json` (unless `KELP_PLUGINS_ALLOW_UNPINNED=1`);
@@ -629,10 +637,14 @@ order. A package is refused when:
 - its computed digest or manifest version differs from the pin — startup aborts with an error
   that names the plugin, both digests, and the package path.
 
-Zip packages are unpacked to a temporary directory for import only; that directory is never
-added to `sys.path`, and the module is registered under a digest-derived `_kelp_plugin_*` name.
-Because the package root is never placed on `sys.path`, the entry module must be
-self-contained; plain `import sibling` statements inside a plugin are not supported.
+Packages are unpacked/rebuilt into a temporary directory for import only; that directory is
+never added to `sys.path`, and the module is registered under a digest-derived
+`_kelp_plugin_*` name. Because the package root is never placed on `sys.path`, the entry module
+must be self-contained; plain `import sibling` statements inside a plugin are not supported.
+
+**Contract tests.** `tests/test_plugins.py` exercises the CLI, pinning, boot refusal, package
+safety, planted-cache regression, and the no-`sys.path` guarantee (35 cases when this section
+was written). Keep that count in sync with §16 when cases are added.
 
 ---
 

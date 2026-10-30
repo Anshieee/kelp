@@ -25,7 +25,7 @@ import zipfile
 from dataclasses import dataclass, replace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path, PurePosixPath
-from typing import TYPE_CHECKING, Any, Awaitable, Callable, Iterable, Mapping
+from typing import TYPE_CHECKING, Any, Awaitable, Callable, Iterable, Mapping, Sequence
 
 from jsonschema import Draft202012Validator
 from jsonschema.exceptions import SchemaError
@@ -57,6 +57,7 @@ __all__ = [
     "PLUGIN_LOCK_FILENAME",
     "PLUGIN_LOCK_VERSION",
     "PLUGIN_MAX_BYTES",
+    "PLUGIN_MAX_ENTRIES",
     "PLUGIN_ROOT_ENV",
     "PluginPackage",
     "PluginPackageError",
@@ -83,9 +84,11 @@ PLUGIN_ALLOW_UNPINNED_ENV = "KELP_PLUGINS_ALLOW_UNPINNED"
 PLUGIN_LOCK_FILENAME = "plugins.lock.json"
 PLUGIN_LOCK_VERSION = 1
 PLUGIN_MAX_BYTES = 8 * 1024 * 1024
+PLUGIN_MAX_ENTRIES = 4096
 DEFAULT_PLUGIN_ROOT = Path(__file__).resolve().parents[1] / "var" / "plugins"
 _PLUGIN_IGNORED_DIRS = frozenset({"__pycache__"})
 _PLUGIN_IGNORED_SUFFIXES = (".pyc", ".pyo")
+_MEMBER_CHARS_RE = re.compile(r"^[A-Za-z0-9._-]+$")
 
 ApprovalHook = Callable[[ApprovalRequest], Awaitable[bool]]
 
@@ -248,81 +251,169 @@ def package_digest(entries: Iterable[tuple[str, int, bytes]]) -> str:
     return "sha256:" + digest.hexdigest()
 
 
+def _validate_member(relpath: str, *, owner: str) -> str:
+    """Normalize one archive/directory member and reject unsafe names.
+
+    Members are restricted to portable ASCII so a package cannot smuggle in
+    control characters, newlines, or Unicode look-alikes that render
+    differently in logs and shell output.
+    """
+
+    pure = PurePosixPath(relpath)
+    if not relpath or relpath.startswith(("/", "\\")) or pure.is_absolute():
+        raise PluginPackageError(f"{owner} contains an absolute member: {relpath!r}")
+    if "\\" in relpath or ".." in pure.parts:
+        raise PluginPackageError(f"{owner} contains an unsafe member: {relpath!r}")
+    for part in pure.parts:
+        if part in {"", "."}:
+            continue
+        if not _MEMBER_CHARS_RE.match(part):
+            raise PluginPackageError(
+                f"{owner} contains a member with unsupported characters: {relpath!r} "
+                "(allowed: A-Z, a-z, 0-9, '.', '_' and '-')"
+            )
+    normalized = pure.as_posix()
+    if normalized in {"", "."}:
+        raise PluginPackageError(f"{owner} contains an unsafe member: {relpath!r}")
+    return normalized
+
+
+def _raise_walk_error(error: OSError) -> None:
+    raise error
+
+
+def _check_entry_budget(path: Path, entries: Sequence[tuple[str, int, bytes]]) -> None:
+    if len(entries) > PLUGIN_MAX_ENTRIES:
+        raise PluginPackageError(
+            f"package {path} exceeds the {PLUGIN_MAX_ENTRIES}-entry limit"
+        )
+
+
 def _scan_package_directory(path: Path) -> list[tuple[str, int, bytes]]:
     entries: list[tuple[str, int, bytes]] = []
     total = 0
-    for dirpath, dirnames, filenames in os.walk(path, followlinks=False):
-        base = Path(dirpath)
-        dirnames[:] = sorted(name for name in dirnames if name not in _PLUGIN_IGNORED_DIRS)
-        for name in dirnames:
-            if (base / name).is_symlink():
-                raise PluginPackageError(
-                    f"package {path} contains a symlinked directory: "
-                    f"{(base / name).relative_to(path).as_posix()}"
-                )
-        for name in sorted(filenames):
-            file = base / name
-            relpath = file.relative_to(path).as_posix()
-            if file.is_symlink():
-                raise PluginPackageError(f"package {path} contains a symlink: {relpath}")
-            if name.endswith(_PLUGIN_IGNORED_SUFFIXES):
-                continue
-            if not file.is_file():
-                raise PluginPackageError(f"package {path} contains a non-regular file: {relpath}")
-            size = file.stat().st_size
-            total += size
-            if total > PLUGIN_MAX_BYTES:
-                raise PluginPackageError(
-                    f"package {path} exceeds the {PLUGIN_MAX_BYTES}-byte limit"
-                )
-            content = file.read_bytes()
-            entries.append((relpath, stat.S_IMODE(file.stat().st_mode), content))
+    try:
+        for dirpath, dirnames, filenames in os.walk(
+            path, followlinks=False, onerror=_raise_walk_error
+        ):
+            base = Path(dirpath)
+            dirnames[:] = sorted(name for name in dirnames if name not in _PLUGIN_IGNORED_DIRS)
+            for name in dirnames:
+                if (base / name).is_symlink():
+                    raise PluginPackageError(
+                        f"package {path} contains a symlinked directory: "
+                        f"{(base / name).relative_to(path).as_posix()}"
+                    )
+            for name in sorted(filenames):
+                file = base / name
+                relpath = file.relative_to(path).as_posix()
+                if file.is_symlink():
+                    raise PluginPackageError(f"package {path} contains a symlink: {relpath}")
+                if name.endswith(_PLUGIN_IGNORED_SUFFIXES):
+                    continue
+                if not file.is_file():
+                    raise PluginPackageError(
+                        f"package {path} contains a non-regular file: {relpath}"
+                    )
+                relpath = _validate_member(relpath, owner=f"package {path}")
+                size = file.stat().st_size
+                total += size
+                if total > PLUGIN_MAX_BYTES:
+                    raise PluginPackageError(
+                        f"package {path} exceeds the {PLUGIN_MAX_BYTES}-byte limit"
+                    )
+                content = file.read_bytes()
+                entries.append((relpath, stat.S_IMODE(file.stat().st_mode), content))
+                _check_entry_budget(path, entries)
+    except OSError as exc:
+        raise PluginPackageError(f"cannot read plugin package {path}: {exc}") from exc
     return entries
 
 
 def _scan_package_zip(path: Path) -> list[tuple[str, int, bytes]]:
     entries: list[tuple[str, int, bytes]] = []
+    seen: set[str] = set()
     total = 0
     try:
         archive = zipfile.ZipFile(path)
     except (OSError, zipfile.BadZipFile) as exc:
         raise PluginPackageError(f"cannot read plugin archive {path}: {exc}") from exc
-    with archive:
-        for info in sorted(archive.infolist(), key=lambda item: item.filename):
-            name = info.filename
-            if info.is_dir():
-                continue
-            pure = PurePosixPath(name)
-            if not name or name.startswith(("/", "\\")) or pure.is_absolute():
-                raise PluginPackageError(f"archive {path} contains an absolute member: {name!r}")
-            if "\\" in name or ".." in pure.parts:
-                raise PluginPackageError(f"archive {path} contains an unsafe member: {name!r}")
-            if any(part in _PLUGIN_IGNORED_DIRS for part in pure.parts):
-                continue
-            if pure.suffix in _PLUGIN_IGNORED_SUFFIXES:
-                continue
-            raw_mode = (info.external_attr >> 16) & 0xFFFF
-            if stat.S_ISLNK(raw_mode):
-                raise PluginPackageError(f"archive {path} contains a symlink member: {name!r}")
-            total += info.file_size
-            if total > PLUGIN_MAX_BYTES:
-                raise PluginPackageError(
-                    f"archive {path} exceeds the {PLUGIN_MAX_BYTES}-byte limit"
+    try:
+        with archive:
+            for info in sorted(archive.infolist(), key=lambda item: item.filename):
+                name = info.filename
+                if info.is_dir():
+                    continue
+                pure = PurePosixPath(name)
+                if not name or name.startswith(("/", "\\")) or pure.is_absolute():
+                    raise PluginPackageError(
+                        f"archive {path} contains an absolute member: {name!r}"
+                    )
+                if "\\" in name or ".." in pure.parts:
+                    raise PluginPackageError(
+                        f"archive {path} contains an unsafe member: {name!r}"
+                    )
+                if any(part in _PLUGIN_IGNORED_DIRS for part in pure.parts):
+                    continue
+                if pure.suffix in _PLUGIN_IGNORED_SUFFIXES:
+                    continue
+                relpath = _validate_member(name, owner=f"archive {path}")
+                if relpath in seen:
+                    raise PluginPackageError(
+                        f"archive {path} contains a duplicate member: {name!r}"
+                    )
+                seen.add(relpath)
+                raw_mode = (info.external_attr >> 16) & 0xFFFF
+                if stat.S_ISLNK(raw_mode):
+                    raise PluginPackageError(
+                        f"archive {path} contains a symlink member: {name!r}"
+                    )
+                total += info.file_size
+                if total > PLUGIN_MAX_BYTES:
+                    raise PluginPackageError(
+                        f"archive {path} exceeds the {PLUGIN_MAX_BYTES}-byte limit"
+                    )
+                entries.append(
+                    (relpath, stat.S_IMODE(raw_mode) or 0o644, archive.read(info))
                 )
-            entries.append((pure.as_posix(), stat.S_IMODE(raw_mode) or 0o644, archive.read(info)))
+                _check_entry_budget(path, entries)
+    except PluginPackageError:
+        raise
+    except (OSError, zipfile.BadZipFile, RuntimeError) as exc:
+        raise PluginPackageError(f"cannot read plugin archive {path}: {exc}") from exc
     return entries
 
 
 def _package_entries(path: Path) -> list[tuple[str, int, bytes]]:
-    if path.is_symlink():
-        raise PluginPackageError(f"plugin package {path} must not be a symlink")
-    if path.is_dir():
-        return _scan_package_directory(path)
-    if path.is_file() and path.suffix.lower() == ".zip":
-        return _scan_package_zip(path)
+    try:
+        if path.is_symlink():
+            raise PluginPackageError(f"plugin package {path} must not be a symlink")
+        if path.is_dir():
+            return _scan_package_directory(path)
+        if path.is_file() and path.suffix.lower() == ".zip":
+            return _scan_package_zip(path)
+    except OSError as exc:
+        raise PluginPackageError(f"cannot read plugin package {path}: {exc}") from exc
     raise PluginPackageError(
         f"plugin package {path} must be a directory or a .zip archive"
     )
+
+
+def _entry_path_key(value: Any) -> str | None:
+    """Normalize a manifest ``entry.path`` to the package-relative key."""
+
+    if not isinstance(value, str) or not value:
+        return None
+    pure = PurePosixPath(value)
+    if pure.is_absolute() or "\\" in value or ".." in pure.parts:
+        return None
+    for part in pure.parts:
+        if part in {"", "."}:
+            continue
+        if not _MEMBER_CHARS_RE.match(part):
+            return None
+    normalized = pure.as_posix()
+    return normalized if normalized not in {"", "."} else None
 
 
 def inspect_plugin_package(path: str | Path) -> PluginPackage:
@@ -372,10 +463,15 @@ def inspect_plugin_package(path: str | Path) -> PluginPackage:
             f"plugin {name!r} in {source} uses entry.module; installed plugins MUST use "
             "entry.path so the loader never mutates sys.path"
         )
-    entry_path = entry["path"]
+    entry_path = _entry_path_key(entry["path"])
+    if entry_path is None:
+        raise PluginPackageError(
+            f"plugin {name!r} in {source} declares an unsafe entry.path "
+            f"{entry['path']!r}; use a package-relative POSIX path"
+        )
     if entry_path not in by_relpath:
         raise PluginPackageError(
-            f"plugin {name!r} in {source} declares entry.path {entry_path!r}, "
+            f"plugin {name!r} in {source} declares entry.path {entry['path']!r}, "
             "which is not present in the package"
         )
 
@@ -389,19 +485,37 @@ def inspect_plugin_package(path: str | Path) -> PluginPackage:
     )
 
 
-def materialize_plugin_package(package: PluginPackage) -> Path:
-    """Return an importable directory for the package (zip archives unpack once)."""
+def _write_package_entries(
+    entries: Iterable[tuple[str, int, bytes]], target: Path
+) -> None:
+    """Write only digest-covered bytes into ``target``."""
 
-    if package.source.is_dir():
-        return package.source.resolve()
-    slug = re.sub(r"[^0-9A-Za-z_]", "_", package.name)
-    target = Path(tempfile.mkdtemp(prefix=f"kelp-plugin-{slug}-"))
-    atexit.register(shutil.rmtree, target, True)
-    for relpath, mode, content in package.entries:
+    target.mkdir(parents=True, exist_ok=True)
+    for relpath, mode, content in entries:
         destination = target.joinpath(*PurePosixPath(relpath).parts)
         destination.parent.mkdir(parents=True, exist_ok=True)
         destination.write_bytes(content)
         os.chmod(destination, mode or 0o644)
+
+
+def materialize_plugin_package(package: PluginPackage) -> Path:
+    """Materialize a private import tree from the verified package image.
+
+    This always copies, including for directory packages. The on-disk source
+    may contain ``__pycache__``/``*.pyc`` files that are deliberately outside
+    the digest; importing from the source would let Python prefer a planted
+    cache over the verified ``.py``. The copy contains only digest-covered
+    entries, so a cache that does not match the digest can never execute.
+    """
+
+    slug = re.sub(r"[^0-9A-Za-z_]", "_", package.name)
+    target = Path(tempfile.mkdtemp(prefix=f"kelp-plugin-{slug}-"))
+    atexit.register(shutil.rmtree, target, True)
+    try:
+        _write_package_entries(package.entries, target)
+    except OSError:
+        shutil.rmtree(target, ignore_errors=True)
+        raise
     return target
 
 
@@ -585,11 +699,17 @@ def _check_entry_path(
 ) -> tuple[Callable[..., Awaitable[Mapping[str, Any]]] | None, list[Violation]]:
     """Import a plugin entry from its file path without touching ``sys.path``."""
 
-    pure = PurePosixPath(entry_path)
-    if pure.is_absolute() or ".." in pure.parts:
+    normalized = _entry_path_key(entry_path)
+    if normalized is None:
         return None, [
-            Violation(label, "/entry/path", f"entry.path {entry_path!r} must stay inside the package")
+            Violation(
+                label,
+                "/entry/path",
+                f"entry.path {entry_path!r} must stay inside the package and use "
+                "portable characters (A-Z, a-z, 0-9, '.', '_', '-')",
+            )
         ]
+    pure = PurePosixPath(normalized)
     module_file = base_dir.joinpath(*pure.parts)
     try:
         resolved = module_file.resolve(strict=True)
@@ -609,7 +729,7 @@ def _check_entry_path(
         ]
 
     module_name = "_kelp_plugin_" + (module_key or hashlib.sha256(
-        (label + entry_path).encode("utf-8")
+        (label + normalized).encode("utf-8")
     ).hexdigest()[:16])
     spec = importlib.util.spec_from_file_location(module_name, resolved)
     if spec is None or spec.loader is None:  # pragma: no cover - defensive
@@ -808,14 +928,23 @@ def _load_plugins(
     loaded: dict[str, LoadedSkill],
     origins: dict[str, str],
     violations: list[Violation],
+    *,
+    environ: Mapping[str, str] | None = None,
 ) -> None:
     """Discover installed packages after built-ins, pinned by digest."""
 
-    if not root.exists():
-        return
-    if not root.is_dir():
+    env = os.environ if environ is None else environ
+    try:
+        if not root.exists():
+            return
+        if not root.is_dir():
+            violations.append(
+                Violation("*", "", f"plugin root {str(root)!r} is not a directory")
+            )
+            return
+    except OSError as exc:
         violations.append(
-            Violation("*", "", f"plugin root {str(root)!r} is not a directory")
+            Violation("*", "", f"cannot read plugin root {str(root)!r}: {exc}")
         )
         return
     try:
@@ -824,9 +953,16 @@ def _load_plugins(
         violations.append(Violation("*", "", str(exc)))
         pins = {}
 
-    allow_unpinned = os.environ.get(PLUGIN_ALLOW_UNPINNED_ENV, "").strip() == "1"
+    allow_unpinned = env.get(PLUGIN_ALLOW_UNPINNED_ENV, "").strip() == "1"
     candidates: list[Path] = []
-    for candidate in sorted(root.iterdir(), key=lambda item: item.name):
+    try:
+        children = sorted(root.iterdir(), key=lambda item: item.name)
+    except OSError as exc:
+        violations.append(
+            Violation("*", "", f"cannot list plugin root {str(root)!r}: {exc}")
+        )
+        return
+    for candidate in children:
         if candidate.name.startswith((".", "_")):
             continue
         if candidate.is_file() and candidate.suffix.lower() != ".zip":
@@ -839,6 +975,15 @@ def _load_plugins(
             package = inspect_plugin_package(candidate)
         except PluginPackageError as exc:
             violations.append(Violation(label, "", str(exc)))
+            continue
+        except OSError as exc:
+            violations.append(
+                Violation(
+                    label,
+                    "",
+                    f"cannot read plugin package {str(candidate)!r}: {exc}",
+                )
+            )
             continue
 
         pin = pins.get(package.name)
@@ -889,7 +1034,18 @@ def _load_plugins(
             )
             continue
 
-        materialized = materialize_plugin_package(package)
+        try:
+            materialized = materialize_plugin_package(package)
+        except OSError as exc:
+            violations.append(
+                Violation(
+                    package.name,
+                    "",
+                    f"cannot materialize plugin {package.name!r} from "
+                    f"{str(candidate)!r}: {exc}",
+                )
+            )
+            continue
         module_key = re.sub(r"[^0-9A-Za-z_]", "_", package.name) + "_" + package.digest[7:19]
         handler, entry_violations = _check_entry(
             package.manifest,
@@ -948,6 +1104,7 @@ class SkillRegistry:
         policy: "PolicyConfig | PolicyEngine | None" = None,
         audit: "AuditLog | None" = None,
         plugin_root: str | Path | None = None,
+        environ: Mapping[str, str] | None = None,
     ) -> "SkillRegistry":
         root_path = Path(root) if root is not None else DEFAULT_SKILL_ROOT
         if not root_path.is_dir():
@@ -1018,9 +1175,9 @@ class SkillRegistry:
         # KEL-25: installed packages load after built-ins so a fresh plugin can
         # never redefine a shipped tool. Any violation here aborts startup.
         plugins_root = (
-            Path(plugin_root) if plugin_root is not None else default_plugin_root()
+            Path(plugin_root) if plugin_root is not None else default_plugin_root(environ)
         )
-        _load_plugins(plugins_root, loaded, origins, violations)
+        _load_plugins(plugins_root, loaded, origins, violations, environ=environ)
 
         if violations:
             raise SkillManifestError(root_path, violations)
@@ -1571,8 +1728,11 @@ def _error_envelope(
 
 
 def load_registry(
-    root: str | Path | None = None, *, plugin_root: str | Path | None = None
+    root: str | Path | None = None,
+    *,
+    plugin_root: str | Path | None = None,
+    environ: Mapping[str, str] | None = None,
 ) -> SkillRegistry:
     """Convenience wrapper used at startup: ``registry = load_registry()``."""
 
-    return SkillRegistry.load(root, plugin_root=plugin_root)
+    return SkillRegistry.load(root, plugin_root=plugin_root, environ=environ)

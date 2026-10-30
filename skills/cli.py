@@ -17,8 +17,10 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import shutil
 import sys
+import tempfile
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
@@ -28,6 +30,7 @@ from .loader import (
     PLUGIN_LOCK_FILENAME,
     PluginPackage,
     PluginPackageError,
+    _write_package_entries,
     default_plugin_root,
     inspect_plugin_package,
     read_plugin_lock,
@@ -61,16 +64,24 @@ def _builtin_names() -> dict[str, str]:
 
 
 def _copy_package(package: PluginPackage, destination: Path) -> None:
-    """Copy the package verbatim so the boot-time digest matches the pin."""
+    """Write the verified package image to ``destination``.
+
+    Directory packages are rebuilt from ``package.entries`` rather than copied
+    with ``copytree`` so bytes that are outside the digest (notably
+    ``__pycache__``/``*.pyc``) can never reach the installed tree.
+    """
 
     if package.source.is_dir():
-        shutil.copytree(
-            package.source,
-            destination,
-            ignore=shutil.ignore_patterns("__pycache__", "*.pyc", "*.pyo"),
-        )
+        _write_package_entries(package.entries, destination)
     else:
         shutil.copy2(package.source, destination)
+
+
+def _remove_package(path: Path) -> None:
+    if path.is_symlink() or not path.is_dir():
+        path.unlink(missing_ok=True)
+    else:
+        shutil.rmtree(path)
 
 
 def install(
@@ -79,7 +90,7 @@ def install(
     root: str | Path | None = None,
     force: bool = False,
 ) -> dict[str, Any]:
-    """Validate, copy, and pin one directory or zip package."""
+    """Validate, stage, atomically swap, and pin one directory or zip package."""
 
     root_path = _resolve_root(root)
     inspected = inspect_plugin_package(package)
@@ -93,6 +104,8 @@ def install(
     root_path.mkdir(parents=True, exist_ok=True)
     suffix = ".zip" if inspected.source.is_file() else ""
     destination = root_path / (inspected.name + suffix)
+
+    conflicts: list[Path] = []
     for candidate in _installed_packages(root_path):
         if candidate == destination:
             continue
@@ -100,30 +113,47 @@ def install(
             existing_name = inspect_plugin_package(candidate).name
         except PluginPackageError:
             existing_name = candidate.name
-        if existing_name != inspected.name:
-            continue
-        if not force:
+        if existing_name == inspected.name:
+            conflicts.append(candidate)
+
+    if not force:
+        if conflicts:
             raise PluginPackageError(
-                f"{inspected.name!r} is already installed at {str(candidate)!r}; "
+                f"{inspected.name!r} is already installed at {str(conflicts[0])!r}; "
                 "re-run with --force to replace it"
             )
-        if candidate.is_dir() and not candidate.is_symlink():
-            shutil.rmtree(candidate)
-        else:
-            candidate.unlink()
-    if destination.exists():
-        if not force:
+        if destination.exists() or destination.is_symlink():
             raise PluginPackageError(
                 f"{inspected.name!r} is already installed at {str(destination)!r}; "
                 "re-run with --force to replace it"
             )
-        if destination.is_dir() and not destination.is_symlink():
-            shutil.rmtree(destination)
-        else:
-            destination.unlink()
 
+    # Stage beside the destination (same filesystem) and swap only after the
+    # copy re-inspects to the same digest. A failed --force install therefore
+    # leaves the previous package and pin untouched.
+    staging = Path(tempfile.mkdtemp(prefix=".kelp-install-", dir=root_path))
+    staged = staging / destination.name
+    backup = staging / (destination.name + ".old")
+    parked: list[tuple[Path, Path]] = []
+    swapped = False
     try:
-        _copy_package(inspected, destination)
+        _copy_package(inspected, staged)
+        staged_package = inspect_plugin_package(staged)
+        if staged_package.digest != inspected.digest:
+            raise PluginPackageError(
+                f"staged copy of {inspected.name!r} does not match the validated "
+                f"digest: expected {inspected.digest}, got {staged_package.digest}"
+            )
+
+        for index, candidate in enumerate(conflicts):
+            parked_path = staging / f"conflict-{index}"
+            os.replace(candidate, parked_path)
+            parked.append((candidate, parked_path))
+        if destination.exists() or destination.is_symlink():
+            os.replace(destination, backup)
+        os.replace(staged, destination)
+        swapped = True
+
         pins = read_plugin_lock(root_path)
         pins[inspected.name] = {
             "name": inspected.name,
@@ -132,11 +162,16 @@ def install(
         }
         write_plugin_lock(root_path, pins)
     except Exception:
-        if destination.is_dir() and not destination.is_symlink():
-            shutil.rmtree(destination, ignore_errors=True)
-        elif destination.exists():
-            destination.unlink(missing_ok=True)
+        if swapped:
+            _remove_package(destination)
+        if backup.exists() or backup.is_symlink():
+            os.replace(backup, destination)
+        for original, parked_path in reversed(parked):
+            if parked_path.exists() or parked_path.is_symlink():
+                os.replace(parked_path, original)
         raise
+    finally:
+        shutil.rmtree(staging, ignore_errors=True)
 
     return {
         "name": inspected.name,
@@ -173,10 +208,7 @@ def uninstall(name: str, *, root: str | Path | None = None) -> dict[str, Any]:
             package_name = candidate.name
         if package_name != name and candidate.name != name:
             continue
-        if candidate.is_dir() and not candidate.is_symlink():
-            shutil.rmtree(candidate)
-        else:
-            candidate.unlink()
+        _remove_package(candidate)
         removed.append(str(candidate))
 
     if not removed and name not in pins:
@@ -219,7 +251,9 @@ def list_plugins(*, root: str | Path | None = None) -> list[dict[str, Any]]:
                 "version": package.version,
                 "digest": package.digest,
                 "pinned": pin is not None,
-                "pin_matches": pin is not None and pin["digest"] == package.digest,
+                "pin_matches": pin is not None
+                and pin["digest"] == package.digest
+                and pin["version"] == package.version,
                 "valid": True,
                 "root": str(root_path),
             }
@@ -236,7 +270,7 @@ def _format_row(row: Mapping[str, Any]) -> str:
     elif row.get("pin_matches"):
         status = "pinned"
     else:
-        status = "DIGEST MISMATCH"
+        status = "PIN MISMATCH"
     return f"{row['name']}\t{row['version']}\t{row['digest']}\t{status}\t{row['path']}"
 
 
@@ -285,6 +319,9 @@ def main(argv: Sequence[str] | None = None) -> int:
                     print(_format_row(row))
             return 0
     except PluginPackageError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+    except OSError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 2
     return 2  # pragma: no cover - argparse enforces a known command
