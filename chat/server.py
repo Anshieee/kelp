@@ -52,8 +52,18 @@ from .api import (
 from .artifacts import ArtifactRegistry
 from .logging import configure_logging, log
 from .metrics import LoggedUsageStore, Metrics
+from .proactive import ProactiveConfig, ProactiveRunner
 from .recovery import RecoveryReport, settle_interrupted
 from .retention import RetentionMaintenance, RetentionPolicy
+from .scheduler import (
+    DEFAULT_GRACE_SECONDS,
+    DEFAULT_TICK_SECONDS,
+    ENABLED_ENV,
+    GRACE_ENV,
+    TICK_ENV,
+    ScheduleStore,
+    SchedulerRuntime,
+)
 from .service import ChatService
 from .store import ChatStore
 
@@ -149,6 +159,28 @@ def _flag(source: Mapping[str, str], name: str, default: bool) -> bool:
     if raw is None:
         return default
     return str(raw).strip().lower() not in {"", "0", "false", "no", "off", "disabled"}
+
+
+def _env_int_value(
+    source: Mapping[str, str], name: str, default: int, *, minimum: int
+) -> int:
+    """Read one bounded integer from the same mapping the rest of boot uses.
+
+    ``SchedulerRuntime`` also reads its knobs from ``os.environ`` when they are
+    not passed; passing them explicitly keeps ``build_app(environ=...)`` and
+    ``main(env=...)`` honest instead of silently ignoring the caller's map.
+    """
+
+    raw = _text(source, name)
+    if not raw:
+        return default
+    try:
+        value = int(raw, 10)
+    except ValueError:
+        raise ConfigError("invalid_config", f"{name} must be an integer.") from None
+    if value < minimum:
+        raise ConfigError("invalid_config", f"{name} must be >= {minimum}.")
+    return value
 
 
 def _mkdir_private(directory: Path) -> None:
@@ -376,16 +408,25 @@ class Application:
     provider: Any | None = None
     owns_provider: bool = False
     maintenance: RetentionMaintenance | None = field(default=None, repr=False)
+    # KEL-27: the cron ticker and the runner it dispatches into. Closed before
+    # the store so a fire cannot race the shutdown, and after boot recovery.
+    scheduler: SchedulerRuntime | None = field(default=None, repr=False)
+    proactive: ProactiveRunner | None = field(default=None, repr=False)
     _closed: bool = field(default=False, init=False, repr=False)
 
     def close(self) -> None:
         if self._closed:
             return
         self._closed = True
-        # Turns first: cancel and await them while the loop and the store are
-        # still alive, so each one ends ``interrupted`` (§10.4) instead of
-        # vanishing with the process.
+        # No new scheduled work may start once shutdown begins. The ticker
+        # stops first, then in-flight turns (including proactive ones) are
+        # cancelled and awaited while the loop and the store are still alive,
+        # so each one ends ``interrupted`` (§10.4) instead of vanishing.
+        if self.scheduler is not None:
+            self.scheduler.stop()
         self._close_turns()
+        if self.proactive is not None:
+            self.proactive.close()
         if self.maintenance is not None:
             self.maintenance.stop()
         if self.owns_provider and self.provider is not None:
@@ -485,6 +526,8 @@ def build_app(
     lock = DatabaseLock(config.db_path).acquire()
     store: ChatStore | None = None
     maintenance: RetentionMaintenance | None = None
+    scheduler: SchedulerRuntime | None = None
+    proactive: ProactiveRunner | None = None
     owns_provider = provider is None
     runtime_provider = provider
     try:
@@ -581,6 +624,37 @@ def build_app(
             auth_failures=AuthFailureTracker.from_env(source),
             cookie_secure=_flag(source, SESSION_SECURE_ENV, True),
         )
+        # KEL-27: wire the M4-A ticker to a real turn runner. The scheduler
+        # starts only after recovery above has settled every interrupted turn,
+        # so a proactive turn killed with the process is never retried; the
+        # only thing added here is the run row the kill prevented.
+        try:
+            proactive_config = ProactiveConfig.from_env(source)
+        except ValueError as exc:
+            raise ConfigError("invalid_config", str(exc)) from None
+        schedule_store = ScheduleStore(config.workspace_root)
+        proactive = ProactiveRunner(
+            service=service,
+            store=store,
+            schedule_store=schedule_store,
+            audit=audit,
+            runner=api.runner,
+            config=proactive_config,
+        )
+        proactive.after_recovery(recovery.closed_turns)
+        scheduler = SchedulerRuntime(
+            schedule_store,
+            on_fire=proactive.fire,
+            audit=proactive.audit_gate,
+            enabled=_flag(source, ENABLED_ENV, True),
+            tick_seconds=_env_int_value(
+                source, TICK_ENV, DEFAULT_TICK_SECONDS, minimum=1
+            ),
+            grace_seconds=_env_int_value(
+                source, GRACE_ENV, DEFAULT_GRACE_SECONDS, minimum=0
+            ),
+        )
+        scheduler.start()
         return Application(
             config=config,
             store=store,
@@ -592,8 +666,14 @@ def build_app(
             provider=runtime_provider,
             owns_provider=owns_provider,
             maintenance=maintenance,
+            scheduler=scheduler,
+            proactive=proactive,
         )
     except BaseException:
+        if scheduler is not None:
+            scheduler.stop()
+        if proactive is not None:
+            proactive.close()
         if maintenance is not None:
             maintenance.stop()
         if store is not None:

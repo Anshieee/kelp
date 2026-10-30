@@ -144,6 +144,11 @@ states are composer-chip states (§16.1) and are never persisted as message cont
 handles on the message must match the turn's `attachment_handles` (§5.1); a mismatch is
 `400 invalid_message`.
 
+A proactive turn (KEL-27) is still an ordinary turn. Its first user block is
+`{"type": "schedule_trigger", "origin": "schedule", "schedule_id": "task_…", "run_id": "run_…", "scheduled_for": "…Z", "title": "…"}`,
+followed by the task prompt as a text block. The block marks where the turn came from; it
+grants no approval authority and the scheduled turn can never satisfy a gate.
+
 ```json
 {
   "id": "msg_2b7a…",
@@ -288,6 +293,7 @@ fields and the events the UI needs to place blocks.
 | `type` | Emitted when | Data (beyond `seq`, `thread_id`, `turn_id`, `ts`) | Source |
 |---|---|---|---|
 | `message_created` | Once per message: user message accepted, then assistant message opened | `message` (full message record) | chat layer |
+| `schedule_trigger` | A due schedule started this turn (KEL-27) | `turn_id`, `message_id`, `origin`, `schedule_id`, `run_id`, `scheduled_for`, `title` | chat layer |
 | `turn_started` | Turn begins | `turn_id`, `message_id`, `model`, `limits` (from `TurnStarted`) | KEL-6 |
 | `token_delta` | Provider text | `message_id`, `text`, `step` | KEL-6 `TokenDelta` |
 | `tool_call_started` | Model called a tool | `message_id`, `call_id`, `tool`, `label`, `summary`, `arguments` (redacted), `effects`, `step` | KEL-6 `ToolCallStarted` + manifest |

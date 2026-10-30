@@ -111,9 +111,9 @@ taking the suite from 969 to **1004**. KEL-26 is the sharing and identity decisi
 that keeps exactly one principal, the owner, and gives everyone else only a per-thread, revocable,
 read-only capability link, with approval authority, attribution, rate and spend composition,
 retention, revocation, and migration all settled on paper. It merged at `05d7508` from `kel-26`
-(head `a1a5b1f`) and changed documentation only, so the suite stays at **1004**. M4's last two
-pieces — KEL-27, the proactive turn runner, and KEL-28, the share link this ADR specifies — are still
-to come.
+(head `a1a5b1f`) and changed documentation only, so the suite stays at **1004**. KEL-27, the
+proactive turn runner, is built on branch `kel-27` and awaiting review; KEL-28, the share link this
+ADR specifies, is still to come.
 
 ## How to read the labels
 
@@ -131,7 +131,7 @@ our task tracker. Linear can lag behind by a day; the statuses below match the t
 snapshot date.
 
 **LATER** on the last M4 leaf means outside this round; KEL-23, KEL-24, KEL-25, and KEL-26 are DONE,
-and KEL-27 is the one M4 item still marked TO COME.
+KEL-27 is IN PROGRESS on its branch, and KEL-28 is the one M4 item still marked TO COME.
 
 ## The map
 
@@ -140,8 +140,8 @@ and KEL-27 is the one M4 item still marked TO COME.
 The same map in words, in case the image does not load:
 
 - **Milestones** — five stages, M0 to M4: M1, M2, and M3 are complete, and M4 is in progress.
-- **The work** — twenty-two work items, KEL-5 to KEL-26: all twenty-two are done, and M4's two
-  remaining pieces, proactive turns and the live share link, are still to come.
+- **The work** — twenty-two work items, KEL-5 to KEL-26: all twenty-two are done. KEL-27, proactive
+  turns, is built and under review on its branch; KEL-28, the live share link, is still to come.
 - **Surfaces** — where you talk to the assistant: dashboard first, Telegram next, WhatsApp and voice memos later.
 - **Money** — saved cards through Stripe and hosted Checkout through Razorpay, both merged and closed out; an in-app balance later.
 - **Design** — the screen plan is written, and so is the chat spec. The chat surface code is merged; the drawing file and the browser screen are next.
@@ -162,7 +162,7 @@ promise that full-vision scope lands this week. Scope is cumulative: M2 includes
 | **M1 Prototype** | 30 Oct 2026 | COMPLETE | The end-to-end story: ask, get an answer with sources, read a file, approve an action, pay with a saved card, watch the six-scene demo. All six work items live here, and all six are done: KEL-5 to KEL-9 were merged earlier, and KEL-10 closed on owner confirmation on 30 October 2026. |
 | **M2 Polished MVP** | 30 Oct 2026 | COMPLETE | Survives ordinary use: picks up after a restart, self-checks, better search over your documents, an honest account of what it did, repeatable quality measurements, and a deploy a stranger can repeat. All six work items are done: KEL-11, the serve entrypoint; KEL-12, health and readiness; KEL-13, real document search with citations; KEL-14, structured logs and metrics; KEL-15, the eval harness that measures answer quality; KEL-16, the image and runbook. The runbook's end-to-end pass on a real Nebius host is still to be done. |
 | **M3 Hardening** | 30 Oct 2026 | COMPLETE | The privacy and cost promises hold under pressure: who sees what, where keys live, caps on traffic, a retention rule, a spend ceiling, and a written privacy review. All six pieces are done: KEL-17, the traffic, body, and concurrency caps; KEL-18, the spend ceilings; KEL-19, owner sign-in with a session cookie, CSRF, and lockout; KEL-20, the policy enforced at every skill call; KEL-21, the retention rule; and KEL-22, the written privacy review with the egress ledger and the exec-boundary decision. |
-| **M4 Full vision** | 30 Oct 2026 | IN PROGRESS | More devices, work the assistant starts on its own, abilities added by others, and team sharing. A direction, not a deadline. Four of its six pieces are in: KEL-24, owner sessions as listable, revocable devices; KEL-23, durable scheduled tasks with a real cron runtime; KEL-25, digest-pinned plugin packages loaded by path; and KEL-26, the written decision that keeps one owner and gives everyone else only a per-thread read-only link. Still to come: KEL-27, proactive turns, and KEL-28, the share link. |
+| **M4 Full vision** | 30 Oct 2026 | IN PROGRESS | More devices, work the assistant starts on its own, abilities added by others, and team sharing. A direction, not a deadline. Four of its six pieces are in: KEL-24, owner sessions as listable, revocable devices; KEL-23, durable scheduled tasks with a real cron runtime; KEL-25, digest-pinned plugin packages loaded by path; and KEL-26, the written decision that keeps one owner and gives everyone else only a per-thread read-only link. KEL-27, proactive turns, is built and under review on its branch; KEL-28, the share link, is still to come. |
 
 ## The twenty-two work items
 
@@ -175,7 +175,7 @@ the deploy. KEL-17 and KEL-18 opened M3 the same day, with abuse resistance and 
 KEL-20 and KEL-21 followed it with invoke-time policy and retention, then KEL-19 and KEL-22 closed
 it with owner sign-in and the written privacy review. KEL-24 then opened M4 by making those owner
 sessions durable, listable devices, and KEL-23, KEL-25, and KEL-26 followed with scheduled work,
-plugin packages, and the sharing decision. KEL-27 and KEL-28 are the two M4 items still to come.
+plugin packages, and the sharing decision. KEL-27 is built and under review on its branch; KEL-28 is the one M4 item still to come.
 
 ### KEL-5 — Skill contracts — DONE
 
@@ -1068,11 +1068,10 @@ was running; it is written down and skipped, not fired late in a pile.
   [`kel-23`](https://github.com/Anshieee/kelp/tree/kel-23), head `4dd78e6`)
 
 Status detail: merged into `main` at `13fc687`, adding 67 tests to a suite of 902, taking it to 969.
-Two honest limits. The runtime is built and tested but the server does not start it yet:
-`chat/server.py` does not import `chat.scheduler`, so a task is stored, validated, and visible to the
-skill while nothing fires it in the running service until the proactive-turn wiring (KEL-27) lands.
-And the lock is an advisory `flock` on one directory, which is right for one process on one box and
-is not a distributed scheduler; a hard kill inside a callback leaves a started run with no finish.
+One honest limit: the lock is an advisory `flock` on one directory, which is right for one process
+on one box and is not a distributed scheduler; a hard kill inside a callback leaves a started run
+with no finish. The runtime is now started by `chat/server.py` after boot recovery and stopped
+before the store closes (KEL-27), so a stored task is also a task something fires.
 
 ### KEL-25 — Plugins — DONE
 
@@ -1176,6 +1175,65 @@ limits. Nothing is built: KEL-28, the read-only share link, is specified and not
 sharing exists only on paper and the product still has exactly one user. And the decision admits no
 named collaborator at all, so "several people work in one thread" — the thing most people mean by
 sharing — is explicitly out of scope until someone asks for it concretely.
+
+### KEL-27 — Proactive turn runner — IN PROGRESS
+
+KEL-23 could store and validate a schedule, but nothing in the running server fired it. KEL-27 closes
+that loop: a due task now becomes a real assistant turn through `chat/proactive.py`, on the same
+`ChatService` path, kernel loop, policy gate, and SSE stream as an interactive message. There is no
+second execution path and no duplicate message store. Each schedule gets a stable dedicated thread
+(`ses_<task_id>`, titled `Scheduled: …`, `title_source: "schedule"`); the user message carries one
+`schedule_trigger` block with `origin=schedule`, the schedule id, the run id, and the scheduled
+instant, followed by the task's prompt as ordinary text.
+
+Three gates run before any thread, message, turn, or provider call exists, in this order: the
+persisted spend ceiling (`ChatService._refuse_if_over_spend`), a concurrency ceiling
+(`KELP_PROACTIVE_MAX_CONCURRENT`, default 1), and a rolling hourly ceiling
+(`KELP_PROACTIVE_MAX_RUNS_PER_HOUR`, default 5). Being over either proactive cap is a **skip**, never
+a queue: the due window is consumed and the skip is recorded with a reason code (`spend_cap`,
+`concurrency_cap`, `hourly_cap`) on the task's `skipped_count`. Spend is checked first, so a capped
+window never spends an hourly admission on a run that cannot start.
+
+A per-schedule failure breaker sits on top of those gates. Consecutive failed turns increment the
+task's `failure_count`; a clean turn resets it; at `KELP_PROACTIVE_FAILURE_LIMIT` (default 3) the
+schedule is parked `disabled` so one broken task cannot burn the hour's allowance retrying itself.
+An interrupted or cancelled turn does not count, because a restart or an owner shutdown says
+nothing about the task.
+
+Headless approval follows ADR 0002 §5. When a tool asks for a decision, the runner records a denial
+through the same service path an owner's Deny uses, leaves the tool unexecuted, and parks the
+schedule in `paused_needs_approval`; it never auto-approves and never resumes on its own. The
+denial's `approval_resolved` event and audit row carry `actor="schedule"`, not the owner's. Every fire
+writes exactly one content-free `schedule_run` audit row — schedule id, run id, turn id, outcome,
+duration, input/output tokens, estimated cost, `actor="schedule"`, `on_behalf_of="owner"`,
+`origin_ref={schedule_id, run_id}` — and never the title or prompt. The M4-A scheduler's own row for
+a handled fire is suppressed so there is one row, not two.
+
+`chat/server.py` starts the ticker after boot recovery has settled interrupted turns and stops it
+before the store closes. A turn killed with the process is settled `interrupted` by recovery and is
+**never retried**; boot reconciliation only writes the one run row the kill prevented, so a killed
+fire ends with one interrupted turn and no duplicate message or run.
+
+- Linear: https://linear.app/kelp-ai/issue/KEL-27/m4-b-proactive-turn-runner
+- Runner: [`chat/proactive.py`](../chat/proactive.py)
+- Wiring: [`chat/server.py`](../chat/server.py) (`build_app`, `Application.close`)
+- Tests: [`tests/test_proactive.py`](../tests/test_proactive.py)
+
+Status detail: implemented on branch `kel-27`, not yet merged. The twelve M4-B tests cover one due
+task producing one turn and one row, a second fire reusing the same dedicated thread, a headless
+approval parking the schedule with no side effect and `actor="schedule"` on its resolution, twenty
+simultaneous due tasks capped at one run with nineteen recorded skips, an hourly cap that skips
+past its limit, a spend cap winning over the hourly cap before any provider call, a failure breaker
+disabling the schedule at its limit, a clean turn resetting that count, a dead event loop failing
+the run without leaving an un-awaited coroutine, a live SSE stream seeing the proactive turn, and a
+`SIGKILL` mid-run that restarts to one interrupted turn with one recovered run row. The full suite
+is 1016 passing. Three honest limits. The hourly cap is counted from this
+process, so a restart resets it; it bounds a runaway runner, not a fleet. A proactive turn that
+needs approval is denied rather than offered as an owner decision card: the schedule pauses and the
+owner can act on the schedule, but the specific tool call cannot be approved after the fact. And
+the per-schedule health counters are written with an unlocked read-modify-write over the task file,
+so a tick landing in the same few milliseconds can lose one counter bump; the `schedule_run` audit
+row still records every fire and skip, and the next turn repairs the counter.
 
 ## Decisions that shape the map
 

@@ -1571,7 +1571,17 @@ class ChatService:
             if self.store.get_thread(str(card.get("thread_id") or "")) is not None
         ]
 
-    def decide(self, approval_id: str, decision: str, note: str | None = None) -> dict[str, Any]:
+    def decide(
+        self,
+        approval_id: str,
+        decision: str,
+        note: str | None = None,
+        *,
+        actor: str = "owner",
+    ) -> dict[str, Any]:
+        # ``actor`` is internal attribution, never a client field: the HTTP
+        # layer calls this with the default. The proactive runner passes
+        # ``"schedule"`` so a headless denial is not recorded as the owner's.
         if decision not in {"approve", "deny"}:
             raise ChatError(
                 "invalid_request",
@@ -1595,11 +1605,11 @@ class ChatService:
             raise ChatError("unknown_approval", status=404)
         status = "approved" if decision == "approve" else "denied"
         if card.get("source") == "openshell":
-            return self._decide_exec(card, decision, status)
+            return self._decide_exec(card, decision, status, actor=actor)
         replay = self._replay_decision(card, status)
         if replay is not None:
             return replay
-        return self._decide_card(card, status)
+        return self._decide_card(card, status, actor=actor)
 
     def _replay_decision(
         self, card: Mapping[str, Any], status: str
@@ -1622,7 +1632,9 @@ class ChatService:
             raise ChatError("not_approved", status=409)
         return None
 
-    def _decide_card(self, card: Mapping[str, Any], status: str) -> dict[str, Any]:
+    def _decide_card(
+        self, card: Mapping[str, Any], status: str, *, actor: str = "owner"
+    ) -> dict[str, Any]:
         """Decide a skill-runtime approval: the guarded UPDATE is the authority."""
 
         approval_id = str(card["id"])
@@ -1631,7 +1643,9 @@ class ChatService:
             datetime.fromisoformat(str(card["expires_at"]).replace("Z", "+00:00"))
         )
         if now >= expires:
-            self._record_resolution(None, approval_id, "expired", executed=False)
+            self._record_resolution(
+                None, approval_id, "expired", executed=False, actor=actor
+            )
             raise ChatError("expired", status=409)
         updated, applied = self._record_resolution(
             None,
@@ -1640,6 +1654,7 @@ class ChatService:
             executed=False,
             decided_at=iso_now(now),
             allowed_from=("pending",),
+            actor=actor,
         )
         if not applied:
             replay = self._replay_decision(updated, status)
@@ -1654,7 +1669,12 @@ class ChatService:
         }
 
     def _decide_exec(
-        self, card: Mapping[str, Any], decision: str, status: str
+        self,
+        card: Mapping[str, Any],
+        decision: str,
+        status: str,
+        *,
+        actor: str = "owner",
     ) -> dict[str, Any]:
         """Decide an exec approval through KEL-7, whose store owns single use."""
 
@@ -1665,7 +1685,9 @@ class ChatService:
             else:
                 self.approvals.deny(approval_id)
         except ApprovalExpired:
-            self._record_resolution(None, approval_id, "expired", executed=False)
+            self._record_resolution(
+                None, approval_id, "expired", executed=False, actor=actor
+            )
             raise ChatError("expired", status=409) from None
         except ApprovalAlreadyUsed:
             raise ChatError("already_used", status=409) from None
@@ -1681,6 +1703,7 @@ class ChatService:
             executed=False,
             decided_at=iso_now(self._now()),
             allowed_from=("pending",),
+            actor=actor,
         )
         if not applied:
             # A concurrent decision mirrored first: report as a replay so both
@@ -1705,6 +1728,7 @@ class ChatService:
         executed: bool,
         decided_at: str | None = None,
         allowed_from: Sequence[str] | None = None,
+        actor: str = "owner",
     ) -> tuple[dict[str, Any], bool]:
         """Record a status change atomically; announce it only when we won.
 
@@ -1762,7 +1786,7 @@ class ChatService:
                 "decided_at": (
                     updated.get("decided_at") if status == "consumed" else decided
                 ),
-                "actor": "owner",
+                "actor": actor,
                 "executed": executed,
             },
         )
@@ -1798,6 +1822,7 @@ class ChatService:
             ),
             decision=status,
             outcome=status,
+            actor=actor,
         )
         return updated, True
 

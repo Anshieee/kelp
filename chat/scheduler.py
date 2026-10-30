@@ -1261,6 +1261,10 @@ class SchedulerRuntime:
                 _invoke_callback(self.on_fire, task, scheduled_for)
         except Exception as exc:  # noqa: BLE001 - a failed run is data, not a crash
             outcome = "error"
+            # This counter is the scheduler's view: the callback raised. A
+            # callback that returns normally but whose turn later settles
+            # ``failed`` is counted by its owner (``chat.proactive``) instead,
+            # which also resets the field on a clean turn.
             task["failure_count"] = int(task.get("failure_count") or 0) + 1
             task["updated_at"] = _iso(now)
             try:
@@ -1275,6 +1279,9 @@ class SchedulerRuntime:
                 status="error",
             )
         duration_ms = int((time.perf_counter() - started) * 1000)
+        # ``fired`` counts attempts, not successes: a callback that raised is
+        # still one fire and one audit row. ``errors`` is its failure count and
+        # ``completed`` only counts a task that reached its end date cleanly.
         report["fired"] += 1
         if outcome == "ok" and task.get("state") == "completed":
             report["completed"] += 1
