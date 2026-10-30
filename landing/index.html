@@ -203,8 +203,23 @@
           </p>
         </div>
         <figure class="e-phone reveal">
-          <div class="phone-mockup" aria-hidden="true">
-            <div class="phone-screen"></div>
+          <div class="phone-shell" data-phone-spin aria-hidden="true">
+            <span class="phone-key phone-key--silent"></span>
+            <span class="phone-key phone-key--volume-up"></span>
+            <span class="phone-key phone-key--volume-down"></span>
+            <span class="phone-key phone-key--power"></span>
+            <div class="phone-screen">
+              <div class="phone-notch"></div>
+              <div class="phone-status">
+                <span class="phone-time">9:41</span>
+                <span class="phone-reception">
+                  <i></i><i></i><i></i><i></i>
+                  <b></b>
+                </span>
+              </div>
+              <span class="phone-home"></span>
+              <div class="phone-glare"></div>
+            </div>
           </div>
           <figcaption>Demo video coming soon.</figcaption>
         </figure>
@@ -564,49 +579,18 @@
       >
         <div class="c-companion-art">
           <div class="e-pet">
-            <canvas
-              class="e-pet-id"
-              data-dither="pet"
-              width="300"
-              height="300"
-              role="img"
-              aria-label="Kelp’s mark: a soft dithered bloom in coral, butter and green, the same artwork as the top of the page."
-            ></canvas>
-            <p class="e-pet-caption">
-              The same mark, scaled down — how the agent would look on screen.
-            </p>
-            <ul
-              class="e-pet-states"
-              aria-label="The three states the companion would show"
-            >
-              <li class="pet-dither" data-state="working">
-                <canvas
-                  data-dither="state"
-                  width="84"
-                  height="84"
-                  aria-hidden="true"
-                ></canvas>
-                <span>Working</span>
-              </li>
-              <li class="pet-dither" data-state="waiting">
-                <canvas
-                  data-dither="state"
-                  width="84"
-                  height="84"
-                  aria-hidden="true"
-                ></canvas>
-                <span>Waiting on you</span>
-              </li>
-              <li class="pet-dither" data-state="done">
-                <canvas
-                  data-dither="state"
-                  width="84"
-                  height="84"
-                  aria-hidden="true"
-                ></canvas>
-                <span>Done</span>
-              </li>
-            </ul>
+            <div class="e-orb" data-orb>
+              <canvas
+                class="e-orb-canvas"
+                width="320"
+                height="320"
+                role="img"
+                aria-label="Kelp’s desktop-companion mark: a soft jade orb with two dark eyes that follow the pointer, its body drifting between jade, coral and sky."
+              ></canvas>
+              <div class="e-orb-face" aria-hidden="true">
+                <span class="e-orb-eye"></span><span class="e-orb-eye"></span>
+              </div>
+            </div>
           </div>
         </div>
         <div class="c-companion-copy">
@@ -621,8 +605,8 @@
           </p>
           <p class="c-scope-note">
             Not built yet. The desktop companion is a planned part of Kelp, not a
-            feature you can use today. The three states above are a design
-            sketch.
+            feature you can use today. The drifting bloom beside this note is a
+            design sketch.
           </p>
         </div>
       </section>
