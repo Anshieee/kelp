@@ -949,6 +949,45 @@
     section { padding-top: 52px; scroll-margin-top: 112px; }
   }
 
+  /* ---------- coarse pointer: 44px targets ---------- */
+
+  /* Keyed to input, not width: a tablet or touchscreen laptop gets the roomier
+     rows, a narrow window driven by a mouse keeps the compact ones. 2.5.8 is
+     already met either way; this is the platform-comfort size. */
+
+  @media (pointer: coarse) {
+    .toc a,
+    .jump-list a {
+      display: inline-flex;
+      align-items: center;
+      min-height: 44px;
+    }
+
+    /* In a 44px box the hover hairline would float below the words */
+    .toc a:hover {
+      border-bottom-color: transparent;
+      text-decoration: underline;
+      text-underline-offset: 6px;
+    }
+  }
+
+  /* Narrow + touch: growing the 3-column toc grid to 44px rows would nearly
+     double the sticky header and push jump targets under it. One swipeable
+     row keeps every link and lands shorter than the current two-row grid. */
+
+  @media (pointer: coarse) and (max-width: 720px) {
+    .toc {
+      display: flex;
+      flex-wrap: nowrap;
+      gap: 24px;
+      overflow-x: auto;
+      padding: 5px 0; /* room for the 2px + 3px focus ring */
+      -webkit-overflow-scrolling: touch;
+    }
+
+    .toc a { padding: 0; }
+  }
+
   @media (prefers-reduced-motion: reduce) {
     html { scroll-behavior: auto; }
   }
