@@ -20,14 +20,6 @@
       rel="stylesheet"
     />
     <link rel="stylesheet" href="styles.css" />
-    <script
-      defer
-      src="https://cdn.jsdelivr.net/npm/gsap@3.12.5/dist/gsap.min.js"
-    ></script>
-    <script
-      defer
-      src="https://cdn.jsdelivr.net/npm/gsap@3.12.5/dist/ScrollTrigger.min.js"
-    ></script>
     <script defer src="app.js"></script>
   </head>
   <body>
@@ -62,6 +54,18 @@
         <symbol id="close" viewBox="0 0 24 24">
           <path d="m6 6 12 12M18 6 6 18" />
         </symbol>
+        <symbol id="diagonal" viewBox="0 0 24 24">
+          <path d="M6 18 18 6M6 6h12v12" />
+        </symbol>
+        <symbol id="check" viewBox="0 0 24 24">
+          <path d="m5 12 4 4L19 6" />
+        </symbol>
+        <symbol id="limits" viewBox="0 0 24 24">
+          <path d="M4 7v10m16-10v10M5 12h14m-11-3-3 3 3 3m8-6 3 3-3 3" />
+        </symbol>
+        <symbol id="record" viewBox="0 0 24 24">
+          <path d="M7 4h10a2 2 0 0 1 2 2v14H5V6a2 2 0 0 1 2-2Zm2 5h6m-6 4h6m-6 4h4" />
+        </symbol>
       </defs>
     </svg>
 
@@ -77,68 +81,21 @@
         class="pill nav-cta dashboard-link"
         href="https://app.kelp.local"
         aria-describedby="dashboard-note"
-        >Dashboard <span aria-hidden="true">↗</span></a
+        >Dashboard <svg aria-hidden="true"><use href="#diagonal" /></svg></a
       >
     </header>
 
     <main id="main">
-      <section class="hero" aria-labelledby="hero-title">
-        <div class="hero-art" aria-hidden="true">
-          <canvas id="kelp-field"></canvas>
-          <div class="art-orbit"></div>
+      <section class="hero section-shell" aria-labelledby="hero-title">
+        <h1 id="hero-title">A little less<br /><span class="headline-pill">on your <em>mind.</em><svg aria-hidden="true"><use href="#sprout" /></svg></span></h1>
+        <p class="hero-copy">Meet Kelp. A private assistant to talk things through,<br class="desktop-break" /> take the next step, and keep the everyday moving.</p>
+        <div class="conversation" id="a-conversation">
+        <div class="conversation-intro">
+          <h2 id="conversation-title">No perfect <br />prompt <em>needed.</em></h2>
+          <p>A question, a document, a thing you’ve been putting off. Start where you are.</p>
+          <p class="conversation-aside">One thing at a time.</p>
         </div>
-        <h1 id="hero-title" class="reveal">
-          A little less<br />on your <em>mind.</em>
-        </h1>
-        <div class="hero-note" aria-hidden="true">
-          Your call.<br /><em>Always.</em><span>↙</span>
-        </div>
-        <div class="hero-copy reveal">
-          <p>
-            Meet Kelp. A private assistant to talk things through, take the next
-            step, and keep the everyday moving.
-          </p>
-          <div class="hero-actions">
-            <a
-              class="pill primary dashboard-link"
-              href="https://app.kelp.local"
-              aria-describedby="dashboard-note"
-              >Meet your assistant
-              <svg aria-hidden="true"><use href="#arrow" /></svg></a
-            ><a class="pill tertiary" href="#a-conversation"
-              >Take a look <span aria-hidden="true">↓</span></a
-            >
-          </div>
-          <p class="destination-note" id="dashboard-note">
-            Dashboard link is a placeholder. This is a product preview.
-          </p>
-        </div>
-        <div class="hero-bottom">
-          <span>Less remembering. More living.</span
-          ><a href="#a-conversation"
-            >A little room to breathe <span aria-hidden="true">↓</span></a
-          >
-        </div>
-      </section>
-
-      <section
-        class="conversation section-shell"
-        id="a-conversation"
-        aria-labelledby="conversation-title"
-      >
-        <div class="conversation-intro reveal">
-          <h2 id="conversation-title">
-            No perfect<br />prompt <em>needed.</em>
-          </h2>
-          <p>
-            A question, a document, a thing you’ve been putting off. Start where
-            you are.
-          </p>
-          <div class="handwritten" aria-hidden="true">
-            One thing at a time. <span>↘</span>
-          </div>
-        </div>
-        <div class="stage reveal">
+        <div class="stage" aria-labelledby="conversation-title">
           <div class="stage-top">
             <span class="assistant-avatar" aria-hidden="true"
               ><svg><use href="#sprout" /></svg></span
@@ -186,13 +143,13 @@
             </div>
             <div class="starter-pills" aria-label="Try a starting point">
               <button type="button" data-starter="bill">
-                Summarise a bill <span aria-hidden="true">↗</span></button
+                Summarise a bill <svg aria-hidden="true"><use href="#diagonal" /></svg></button
               ><button type="button" data-starter="spend">
-                My weekly spend <span aria-hidden="true">↗</span></button
+                My weekly spend <svg aria-hidden="true"><use href="#diagonal" /></svg></button
               ><button type="button" data-starter="doctor">
-                A note for my doctor <span aria-hidden="true">↗</span></button
+                A note for my doctor <svg aria-hidden="true"><use href="#diagonal" /></svg></button
               ><button type="button" data-starter="scam">
-                Is this a scam? <span aria-hidden="true">↗</span>
+                Is this a scam? <svg aria-hidden="true"><use href="#diagonal" /></svg>
               </button>
             </div>
           </form>
@@ -211,28 +168,15 @@
             happen without your tap.
           </p>
         </div>
+        </div>
+        <div class="hero-bottom">
+          <p class="destination-note" id="dashboard-note">Product preview. Dashboard links are placeholders.</p>
+          <button type="button" class="pill motion-toggle" id="motion-toggle" aria-pressed="false">Pause motion</button>
+        </div>
       </section>
 
-      <div class="marquee-wrap">
-        <div class="marquee" aria-hidden="true">
-          <div class="marquee-track">
-            <span
-              >Your assistant. <i>Your say.</i> <b>∗</b> A little less on your
-              mind. <b>∗</b>&nbsp;</span
-            ><span
-              >Your assistant. <i>Your say.</i> <b>∗</b> A little less on your
-              mind. <b>∗</b>&nbsp;</span
-            >
-          </div>
-        </div>
-        <button
-          type="button"
-          class="pill motion-toggle"
-          id="motion-toggle"
-          aria-pressed="false"
-        >
-          Pause motion <span aria-hidden="true">Ⅱ</span>
-        </button>
+      <div class="promise-band" aria-label="Your assistant, your say">
+        <span>Your assistant.</span><svg aria-hidden="true"><use href="#sprout" /></svg><span><em>Your say.</em></span>
       </div>
 
       <section
@@ -244,7 +188,7 @@
           <h2 id="possibilities-title">
             A thought. A tap.<br />A little <em>follow-through.</em>
           </h2>
-          <p>Three ways to make room.<br />Open one to look a little closer.</p>
+          <p>Three ways to make room.<br />Choose one to look a little closer.</p>
         </div>
         <ol class="proof-list">
           <li class="reveal">
@@ -255,12 +199,11 @@
               aria-haspopup="dialog"
               aria-controls="dossier-chat"
             >
-              <span class="proof-number" aria-hidden="true">01</span
-              ><span class="proof-title"
+              <span class="proof-title"
                 >Talk it <em>through.</em><small>Chat</small></span
               ><span class="proof-description"
-                >From a loose thought<br />to a useful next step.</span
-              ><span class="proof-open" aria-hidden="true">↗</span>
+                 >From a loose thought <br />to a useful next step.</span
+               ><span class="proof-open" aria-hidden="true"><svg><use href="#diagonal" /></svg></span>
             </button>
           </li>
           <li class="reveal">
@@ -271,12 +214,11 @@
               aria-haspopup="dialog"
               aria-controls="dossier-approvals"
             >
-              <span class="proof-number" aria-hidden="true">02</span
-              ><span class="proof-title"
+              <span class="proof-title"
                 >You have the <em>say.</em><small>Approvals</small></span
               ><span class="proof-description"
-                >A clear proposal.<br />A decision that stays yours.</span
-              ><span class="proof-open" aria-hidden="true">↗</span>
+                 >A clear proposal. <br />A decision that stays yours.</span
+               ><span class="proof-open" aria-hidden="true"><svg><use href="#diagonal" /></svg></span>
             </button>
           </li>
           <li class="reveal">
@@ -287,12 +229,11 @@
               aria-haspopup="dialog"
               aria-controls="dossier-scheduled"
             >
-              <span class="proof-number" aria-hidden="true">03</span
-              ><span class="proof-title"
+              <span class="proof-title"
                 >Find your <em>rhythm.</em><small>Scheduled work</small></span
               ><span class="proof-description"
-                >Give recurring work<br />a time of its own.</span
-              ><span class="proof-open" aria-hidden="true">↗</span>
+                 >Give recurring work <br />a time of its own.</span
+               ><span class="proof-open" aria-hidden="true"><svg><use href="#diagonal" /></svg></span>
             </button>
           </li>
         </ol>
@@ -308,7 +249,7 @@
       <section class="trust section-shell" aria-labelledby="trust-title">
         <div class="trust-heading reveal">
           <h2 id="trust-title">
-            A little help.<br /><em>Clear boundaries.</em>
+            A little help. <br /><em>Clear boundaries.</em>
           </h2>
           <p>Especially when money is involved.</p>
         </div>
@@ -321,12 +262,12 @@
             <p>Saved cards are held by Stripe, not by your assistant.</p>
           </article>
           <article>
-            <span class="trust-icon cap-icon" aria-hidden="true">↔</span>
+            <span class="trust-icon cap-icon" aria-hidden="true"><svg><use href="#limits" /></svg></span>
             <h3>Limits you set.</h3>
             <p>Spending caps put a boundary around what can be spent.</p>
           </article>
           <article>
-            <span class="trust-icon audit-icon" aria-hidden="true">↳</span>
+            <span class="trust-icon audit-icon" aria-hidden="true"><svg><use href="#record" /></svg></span>
             <h3>A trail you can follow.</h3>
             <p>An activity log records the decisions and what happened next.</p>
           </article>
@@ -334,7 +275,7 @@
       </section>
 
       <section class="closing section-shell" aria-labelledby="closing-title">
-        <div class="closing-cell" aria-hidden="true"></div>
+        <svg class="closing-sprout" aria-hidden="true"><use href="#sprout" /></svg>
         <h2 id="closing-title">Make a little <em>room.</em></h2>
         <div class="closing-actions">
           <a
@@ -363,8 +304,8 @@
             class="dashboard-link"
             href="https://app.kelp.local"
             aria-describedby="dashboard-note"
-            >Dashboard (placeholder) ↗</a
-          ><a href="https://kelp-sdlc.netlify.app">Follow the build ↗</a>
+            >Dashboard (placeholder) <svg aria-hidden="true"><use href="#diagonal" /></svg></a
+          ><a href="https://kelp-sdlc.netlify.app">Follow the build <svg aria-hidden="true"><use href="#diagonal" /></svg></a>
         </nav>
       </div>
       <div class="footer-bottom">
@@ -383,7 +324,7 @@
         </button>
       </p>
       <button class="pill" id="dismiss-cookie" type="button">
-        Got it <span aria-hidden="true">×</span>
+        Got it <svg aria-hidden="true"><use href="#close" /></svg>
       </button>
     </aside>
 
@@ -433,9 +374,9 @@
               rest.
             </p>
             <div class="file-pill">
-              <span aria-hidden="true">↳</span
+              <svg aria-hidden="true"><use href="#record" /></svg
               ><span>week-ahead.md<small>Example document</small></span
-              ><span aria-hidden="true">↗</span>
+              ><svg aria-hidden="true"><use href="#diagonal" /></svg>
             </div>
           </div>
         </div>
@@ -497,7 +438,7 @@
             </div>
             <div class="mock-actions">
               <button class="pill demo-approve" type="button">
-                Approve example <span aria-hidden="true">✓</span></button
+                 Approve example <svg aria-hidden="true"><use href="#check" /></svg></button
               ><button class="pill demo-reject" type="button">Reject</button>
             </div>
             <p class="example-result" role="status">
@@ -598,8 +539,8 @@
           saves one preference in local storage.
         </p>
         <p>
-          Fonts load from Google Fonts and animation scripts from jsDelivr.
-          Those providers receive standard network request information. Replace
+          Fonts load from Google Fonts. That provider receives standard network
+          request information. Replace
           this draft with the final privacy policy before launch.
         </p>
       </div>

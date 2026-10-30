@@ -1,0 +1,112 @@
+{
+  "widths": [
+    {
+      "width": 320,
+      "overflow": false,
+      "allDialogs": "pass"
+    },
+    {
+      "width": 360,
+      "overflow": false,
+      "allDialogs": "pass"
+    },
+    {
+      "width": 390,
+      "overflow": false,
+      "allDialogs": "pass"
+    },
+    {
+      "width": 540,
+      "overflow": false,
+      "allDialogs": "pass"
+    },
+    {
+      "width": 768,
+      "overflow": false,
+      "allDialogs": "pass"
+    },
+    {
+      "width": 800,
+      "overflow": false,
+      "allDialogs": "pass"
+    },
+    {
+      "width": 1024,
+      "overflow": false,
+      "allDialogs": "pass"
+    },
+    {
+      "width": 1280,
+      "overflow": false,
+      "allDialogs": "pass"
+    },
+    {
+      "width": 1440,
+      "overflow": false,
+      "allDialogs": "pass"
+    },
+    {
+      "width": 1920,
+      "overflow": false,
+      "allDialogs": "pass"
+    }
+  ],
+  "axe": [
+    {
+      "name": "desktop with storage notice",
+      "violations": []
+    },
+    {
+      "name": "active response",
+      "violations": []
+    },
+    {
+      "name": "chat 390",
+      "violations": []
+    },
+    {
+      "name": "approvals 390",
+      "violations": []
+    },
+    {
+      "name": "scheduled 390",
+      "violations": []
+    },
+    {
+      "name": "chat 1440",
+      "violations": []
+    },
+    {
+      "name": "approvals 1440",
+      "violations": []
+    },
+    {
+      "name": "scheduled 1440",
+      "violations": []
+    },
+    {
+      "name": "privacy dialog",
+      "violations": []
+    },
+    {
+      "name": "final mobile",
+      "violations": []
+    },
+    {
+      "name": "final desktop",
+      "violations": []
+    }
+  ],
+  "keyboard": [
+    "skip link reachable; empty submit returns focus to input",
+    "all dialogs: Enter, initial close focus, forward/reverse focus containment, Escape, opener focus restoration at all widths"
+  ],
+  "interactions": [
+    "storage notice dismisses and persists",
+    "all four starters, custom input, empty input, attachment and microphone disclosures; no network requests",
+    "manual motion pause suppresses response animation",
+    "approve and reject are explicit simulations"
+  ],
+  "reducedMotion": true,
+  "errors": []
+}

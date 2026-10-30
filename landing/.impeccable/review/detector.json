@@ -1,0 +1,106 @@
+[
+  {
+    "antipattern": "italic-serif-display",
+    "name": "Italic serif display headline",
+    "description": "Oversized italic serif (Fraunces, Recoleta, Playfair, Newsreader-italic) as the primary hero headline reads as taste in isolation but has become the universal AI-startup landing page hero. Set roman, or move to a non-serif display face. Editorial / magazine register may legitimately want this — judge by context.",
+    "severity": "warning",
+    "category": "slop",
+    "file": "/home/ansh/Projects/kelp-impeccable/landing/index.html",
+    "line": 0,
+    "snippet": "italic serif h1 (newsreader) at 58px \"A little lesson your mind.\""
+  },
+  {
+    "antipattern": "italic-serif-display",
+    "name": "Italic serif display headline",
+    "description": "Oversized italic serif (Fraunces, Recoleta, Playfair, Newsreader-italic) as the primary hero headline reads as taste in isolation but has become the universal AI-startup landing page hero. Set roman, or move to a non-serif display face. Editorial / magazine register may legitimately want this — judge by context.",
+    "severity": "warning",
+    "category": "slop",
+    "file": "/home/ansh/Projects/kelp-impeccable/landing/index.html",
+    "line": 0,
+    "snippet": "italic serif h2 (newsreader) at 50px \"A thought. A tap.A little follow-through.\""
+  },
+  {
+    "antipattern": "italic-serif-display",
+    "name": "Italic serif display headline",
+    "description": "Oversized italic serif (Fraunces, Recoleta, Playfair, Newsreader-italic) as the primary hero headline reads as taste in isolation but has become the universal AI-startup landing page hero. Set roman, or move to a non-serif display face. Editorial / magazine register may legitimately want this — judge by context.",
+    "severity": "warning",
+    "category": "slop",
+    "file": "/home/ansh/Projects/kelp-impeccable/landing/index.html",
+    "line": 0,
+    "snippet": "italic serif h2 (newsreader) at 51px \"Make a little room.\""
+  },
+  {
+    "antipattern": "cramped-padding",
+    "name": "Cramped padding",
+    "description": "Text is too close to the edge of its container. Two shapes: (1) an element with its own text where the space between the rendered text and the border box is too small for the font size, and (2) a wrapper whose children's text lands flush against a visible boundary (border, outline, or non-transparent background) with nothing to inset it. Add at least 8px (ideally 12–16px) of space inside bordered, outlined, or colored containers.",
+    "severity": "warning",
+    "category": "quality",
+    "file": "/home/ansh/Projects/kelp-impeccable/landing/index.html",
+    "line": 0,
+    "snippet": "<div> \"clock\": children flush against border+bg on all sides (no inset)"
+  },
+  {
+    "antipattern": "gpt-thin-border-wide-shadow",
+    "name": "Hairline border with wide shadow",
+    "description": "Every card of this row wears a hairline border paired with a wide, diffuse shadow, which is a recurring generated-UI signature. One floating panel earns both; a whole row wearing them reads as a default nobody chose. Across the row, commit to one: a defined edge or a soft elevation.",
+    "severity": "advisory",
+    "category": "slop",
+    "file": "/home/ansh/Projects/kelp-impeccable/landing/index.html",
+    "line": 0,
+    "snippet": "1px border + 80px shadow blur, repeated across the row",
+    "advisory": true
+  },
+  {
+    "antipattern": "gpt-thin-border-wide-shadow",
+    "name": "Hairline border with wide shadow",
+    "description": "Every card of this row wears a hairline border paired with a wide, diffuse shadow, which is a recurring generated-UI signature. One floating panel earns both; a whole row wearing them reads as a default nobody chose. Across the row, commit to one: a defined edge or a soft elevation.",
+    "severity": "advisory",
+    "category": "slop",
+    "file": "/home/ansh/Projects/kelp-impeccable/landing/index.html",
+    "line": 0,
+    "snippet": "1px border + 80px shadow blur, repeated across the row",
+    "advisory": true
+  },
+  {
+    "antipattern": "gpt-thin-border-wide-shadow",
+    "name": "Hairline border with wide shadow",
+    "description": "Every card of this row wears a hairline border paired with a wide, diffuse shadow, which is a recurring generated-UI signature. One floating panel earns both; a whole row wearing them reads as a default nobody chose. Across the row, commit to one: a defined edge or a soft elevation.",
+    "severity": "advisory",
+    "category": "slop",
+    "file": "/home/ansh/Projects/kelp-impeccable/landing/index.html",
+    "line": 0,
+    "snippet": "1px border + 80px shadow blur, repeated across the row",
+    "advisory": true
+  },
+  {
+    "antipattern": "gpt-thin-border-wide-shadow",
+    "name": "Hairline border with wide shadow",
+    "description": "Every card of this row wears a hairline border paired with a wide, diffuse shadow, which is a recurring generated-UI signature. One floating panel earns both; a whole row wearing them reads as a default nobody chose. Across the row, commit to one: a defined edge or a soft elevation.",
+    "severity": "advisory",
+    "category": "slop",
+    "file": "/home/ansh/Projects/kelp-impeccable/landing/index.html",
+    "line": 0,
+    "snippet": "1px border + 80px shadow blur, repeated across the row",
+    "advisory": true
+  },
+  {
+    "antipattern": "overused-font",
+    "name": "Overused font",
+    "description": "Inter, Roboto, Fraunces, Geist, Plus Jakarta Sans, and Space Grotesk are used on so many sites they no longer feel distinctive. Each new wave of AI-generated UIs converges on the same handful of faces. Choose a face that gives your interface personality.",
+    "severity": "warning",
+    "category": "slop",
+    "file": "/home/ansh/Projects/kelp-impeccable/landing/index.html",
+    "line": 0,
+    "snippet": "Primary font: inter"
+  },
+  {
+    "antipattern": "cream-palette",
+    "name": "Cream / beige palette",
+    "description": "A warm cream or beige page background has become the default \"tasteful\" AI surface, reached for by reflex. Choose a background that comes from a deliberate palette, not the safe warm off-white.",
+    "severity": "warning",
+    "category": "slop",
+    "file": "/home/ansh/Projects/kelp-impeccable/landing/index.html",
+    "line": 0,
+    "snippet": "cream/beige page background rgb(251, 249, 245)"
+  }
+]
