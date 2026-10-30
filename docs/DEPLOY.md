@@ -1,12 +1,12 @@
-# Deploy the KELP assistant (KEL-16, M2-F)
+# Deploy the KELP assistant
 
-- **Status:** implemented, merged into `main` at `3f4d6cc`, 30 October 2026
-- **Branch:** `kel-16` (head `a63d49a`), cut from `origin/main` at `e08b027`
+- **Status:** implemented, merged into `main` at `7addf56`, 30 October 2026
+- **Branch:** `main` (head `7addf56`)
 - **Scope:** one container image, one Compose service, one systemd wrapper, one
   health probe, one `/data` volume. No application code changed.
 - **Tests:** `tests/test_deploy_healthcheck.py` (25 cases) and
-  `tests/test_deploy_assets.py` (40 cases); full suite 712 passed on the branch
-  and 734 on `main` after the merge, which added KEL-15's 22 eval tests
+  `tests/test_deploy_assets.py` (40 cases); full suite **1045** passed on
+  `main`
 - **Not in scope:** evals, chat/turn logic, payments, the tracker site, and any
   actual server. Nothing here was deployed to Nebius; every command below was
   executed locally against this image and is reported with its measured time.
@@ -33,7 +33,7 @@ browser ──TLS──▶ Caddy/nginx on :443 ──HTTP──▶ kelp containe
 ```
 
 The image is CPU-only. The "GPU" in the milestone is the *model host*: this
-service is a thin client of Token Factory, so a 2 vCPU / 4 GB VM is enough
+service is a thin client of Token Factory, so a 2 vCPU / 8 GB VM is enough
 (measured idle footprint: ~50 MiB RSS, ~2% CPU).
 
 ### Files in this slice
@@ -52,8 +52,9 @@ service is a thin client of Token Factory, so a 2 vCPU / 4 GB VM is enough
 
 ## 2. Prerequisites
 
-- A Linux VM you can SSH into (x86_64; any Nebius CPU shape with 2 vCPU / 4 GB
-  is sufficient). Open only `22`, `80`, `443`.
+- A Linux VM you can SSH into (x86_64; any Nebius CPU shape with 2 vCPU / 8 GB
+  is sufficient — the smallest CPU preset is `2vcpu-8gb`). Open only `22`,
+  `80`, `443`.
 - Docker Engine 24+ with the Compose v2 plugin (`docker compose version`).
   Verified against Docker 29.9.1 / Compose 5.6.0.
 - `curl` 8.2+ on the VM for the smoke steps (`--header @file`, so the owner
@@ -919,10 +920,9 @@ if the VM is also the checkout you tested; otherwise record the numbers from the
 build host next to the commit, and treat the VM as proven by §12.1 and §12.2.
 
 Measured on the verification host: **68 passed in 0.74 s** for the
-retrieval/answer suites and **712 passed in 12.82 s** for the full suite on the
-`kel-16` branch; `main` after the merge reports **734 passed in 15.02 s**,
-because it also carries KEL-15's eval tests. Record both numbers next to the
-commit in the release note; a drop means the deploy is not the code you tested.
+retrieval/answer suites and **1045 passed** for the full suite on the current
+`main`. Record this number next to the commit in the release note; a drop means
+the deploy is not the code you tested.
 
 ---
 
@@ -1085,9 +1085,10 @@ sends the token as a header and never prints it.
   depends on the backup, not a down-migration.
 - **No remote state.** SQLite is a local file by design; do not put it on NFS.
 - **Nothing was deployed.** All timings above were measured locally on 30
-  October 2026 against this branch, image `kelp:9b1c863`, and a disposable
+  October 2026 against `main`, image `kelp:7addf56`, and a disposable
   `kelp-data` volume; the volume, network, and containers were removed
-  afterwards.
+  afterwards. The tag `kelp:7addf56` corresponds to the commit pinned in §1; a
+  fresh build from another checkout must use its own new tag.
 
 ---
 
@@ -1102,7 +1103,7 @@ sends the token as a header and never prints it.
 | Unit guard | the two `ExecStartPre` checks, run for `""` / missing / present tag | `KELP_IMAGE is unset` / `No such image` / exit 0 | — |
 | Unit verifies | `systemd-analyze verify deploy/kelp.service` | no output, exit 0 | — |
 | Boot to healthy | `docker compose up -d --no-build`, then poll `State.Health` | `healthy`, 0 restarts | 7 s |
-| Liveness | `GET /api/healthz` | 200, `{"ok":true,...,"commit":"9b1c863"}` | 1.3 ms |
+| Liveness | `GET /api/healthz` | 200, `{"ok":true,...,"commit":"7addf56"}` | 1.3 ms |
 | Readiness without token | `GET /api/readyz` | 401 `unauthorized` | — |
 | Readiness with token | `healthcheck.py --ready` | `provider=unavailable` (dummy upstream), all other checks ok | — |
 | Read-only rootfs | `touch /app/nope` in container | `Read-only file system` | — |
@@ -1113,7 +1114,7 @@ sends the token as a header and never prints it.
 | Backup | tar of `/data` into a host backup dir | archive with numeric owners | 1 s |
 | Restore | fresh volume + `tar --numeric-owner` | 2 threads / 2 turns, uid 10001 | < 1 s |
 | Offline eval | `pytest tests/test_docs_answer*.py` | 68 passed | 0.74 s |
-| Full suite | `python -m pytest` | 712 passed on the branch; 734 on `main` after the merge | 12.82 s / 15.02 s |
+| Full suite | `python -m pytest` | 1045 passed on `main` | — |
 | Asset tests | `pytest tests/test_deploy_assets.py` | 40 passed | 0.12 s |
 | Probe tests | `pytest tests/test_deploy_healthcheck.py` | 25 passed | 4.08 s |
 | Live checkout receipt | test-mode order `order_TtyLUT5JHr4pdK`, ₹1 (100 paise) netbanking payment `pay_TtyOkNxvfHSKFS` captured; confirm → HTTP 200 `idempotent=false` with receipt `pi_rzpTtyOkNxvfHSKFS`; replay idempotent; ledger shows one paid proposal + one provider payment | verified | 2026-10-30 |
@@ -1121,7 +1122,7 @@ sends the token as a header and never prints it.
 Re-run on 30 October 2026 for the `--no-build` change: build, compose
 resolution, both failure paths, the unit guard, boot-to-healthy, the container's
 ids and read-only rootfs, the `/data` layout, and the second-replica exit code
-were executed again against `kelp:9b1c863` and a disposable volume (removed
+were executed again against `kelp:7addf56` and a disposable volume (removed
 afterwards). The backup/restore rows were measured on the original pass; the
 `/data` layout they depend on is unchanged.
 
