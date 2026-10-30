@@ -357,9 +357,13 @@ and the tests inject a fake, so no request leaves the machine and no money moves
 Closed on owner confirmation, 30 October 2026 (Assume-Done). The code paths are merged, reviewed, and
 green: the order path was proven earlier against the Razorpay test API. The step not physically
 observed is a person finishing a Checkout in a browser with `RAZORPAY_KEY_ID` and
-`RAZORPAY_KEY_SECRET` set in the server environment; the owner confirmed that run, and the receipt it
-returns is to be verified on the next live run. Nothing in the code is outstanding for it. The Linear
-item is Done. An in-app balance is outside this round.
+`RAZORPAY_KEY_SECRET` set in the server environment; the owner confirmed that run, and the live
+receipt is now verified: test-mode order `order_TtyLUT5JHr4pdK`, a ₹1 (100 paise) netbanking
+payment `pay_TtyOkNxvfHSKFS` captured, confirm returning HTTP 200 `idempotent=false` with receipt
+`pi_rzpTtyOkNxvfHSKFS`, an idempotent replay, and a ledger showing exactly one paid proposal and one
+provider payment — no code changes were needed. The earlier failed card attempt `pay_TtyO1S0XnBcilq`
+(domestic-card-only rejection) was correctly ignored. Nothing in the code is outstanding for it. The
+Linear item is Done. An in-app balance is outside this round.
 
 ### KEL-9 — Demo run — DONE
 

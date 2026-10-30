@@ -1116,6 +1116,7 @@ sends the token as a header and never prints it.
 | Full suite | `python -m pytest` | 712 passed on the branch; 734 on `main` after the merge | 12.82 s / 15.02 s |
 | Asset tests | `pytest tests/test_deploy_assets.py` | 40 passed | 0.12 s |
 | Probe tests | `pytest tests/test_deploy_healthcheck.py` | 25 passed | 4.08 s |
+| Live checkout receipt | test-mode order `order_TtyLUT5JHr4pdK`, ₹1 (100 paise) netbanking payment `pay_TtyOkNxvfHSKFS` captured; confirm → HTTP 200 `idempotent=false` with receipt `pi_rzpTtyOkNxvfHSKFS`; replay idempotent; ledger shows one paid proposal + one provider payment | verified | 2026-10-30 |
 
 Re-run on 30 October 2026 for the `--no-build` change: build, compose
 resolution, both failure paths, the unit guard, boot-to-healthy, the container's
