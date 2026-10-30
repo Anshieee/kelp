@@ -64,5 +64,8 @@ the "best for you" card legible behind the phone.
 
 ## Render
 
-`renders/kelp-explainer-v1.mp4` — H.264 / AAC, 1920×1080, 30 fps, 160.0 s.
-Source is deterministic; re-rendering the same commit reproduces the cut.
+`renders/kelp-explainer-v1.mp4` — H.264 / AAC, 1920×1080, 30 fps, 160.0 s,
+42,885,720 bytes. The HyperFrames mix measured −22.2 LUFS integrated; a
++4 dB delivery gain brings it to −18.2 LUFS / −3.3 dBFS true peak with the
+video stream copied. Source is deterministic; re-rendering the same commit
+reproduces the cut (the audio gain is a separate, repeatable ffmpeg step).

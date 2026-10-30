@@ -38,10 +38,15 @@ chime. All levels authored in `index.html`.
 
 - `npx hyperframes check --json`: 0 errors (lint, runtime, layout, contrast,
   audio, craft, motion).
-- `npx hyperframes snapshot`: frames sampled at every scene midpoint, every
-  buzz, the first frame and the last frame.
-- Render: `renders/kelp-explainer-v1.mp4`, `ffprobe` duration 160.0 s.
-- Frame-sampled the encoded MP4 at 12 points and compared against this table.
+- `npx hyperframes snapshot --review`: beat sheet, six seam strips and the
+  360 px phone sheet; plus targeted frames at every handwriting and buzz.
+- Render: `renders/kelp-explainer-v1.mp4` — H.264 / AAC, 1920×1080, 30 fps,
+  160.000 s, 42,885,720 bytes.
+- Audio mastered to −18.2 LUFS integrated, −3.3 dBFS true peak (a +4 dB
+  delivery gain on the HyperFrames mix; video stream copied untouched).
+- Frame-sampled the encoded MP4 at 14 points and compared against this table.
+- SHA-256 `a0cb4cf24ca37c52edbd496b292c431b98be52db473da384b9894ba8e60d2f7a`.
+- Weakest shot and warnings kept on purpose: `REVIEW.md`.
 
 ## Known deviations / notes
 
