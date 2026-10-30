@@ -362,89 +362,141 @@
   }
 
   /* ---------------------------------------------------------------------
-     Phone: turn into place on entry, away on exit.
-     The angle is driven by the frame’s own travel through the viewport, so
-     the window is the same at every screen size and does not depend on how
-     tall the section happens to be:
-       p = 0    frame's top edge at the bottom of the viewport
-       p = 0.5  frame centred
-       p = 1    frame's bottom edge at the top of the viewport
-     Entry finishes by p = 0.34 (top edge around the middle), and the exit
-     turn starts at p = 0.58, while the frame is still half on screen, so both
-     halves are actually reachable. ease-out cubic, one axis plus a small
-     vertical tilt; the section clips the overhang.
+     Phone: one whole turn in as it arrives, one whole turn out as it leaves.
+     A trigger, not a scroll position: the angle used to be a function of how
+     far the frame had travelled through the viewport, which put the turns at
+     the edges of the screen — barely visible, and shorter still on a tall
+     handset. Now the arrival starts one complete turn and finishes on its
+     own, so the spin looks the same at every viewport and section height. The
+     observer root is inset so the turn begins and ends while the frame is
+     still on screen. Re-arms on re-entry; reduced motion, a hidden tab and
+     the page’s own "Pause motion" leave it still and fully visible.
      --------------------------------------------------------------------- */
   function initPhoneSpin() {
     const frames = [...document.querySelectorAll("[data-phone-spin]")];
     if (!frames.length) return;
 
-    let queued = 0;
-    const easeOut = (t) => 1 - Math.pow(1 - t, 3);
+    const TURN = 1200;
+    // Cubic ease-in-out: slow off the mark, slow into the landing.
+    const EASE = "cubic-bezier(0.42, 0, 0.58, 1)";
     const held = () =>
       reduce.matches || document.body.classList.contains("motion-paused");
+    const playing = new WeakMap();
+    // A spin-in is still owed to this frame.
+    const armed = new Set(frames);
 
-    function reset() {
-      frames.forEach((node) => {
-        node.style.transform = "";
+    function stop(node) {
+      const running = playing.get(node);
+      if (running) {
+        playing.delete(node);
+        running.cancel();
+      }
+      node.style.transform = "";
+      node.style.willChange = "";
+    }
+
+    /* `to` is the resting angle: 0 for the turn in, 360 for the turn out.
+       Both animations end at identity on screen, so nothing is left behind
+       and no transform depends on where the page happened to be. */
+    function turn(node, to) {
+      stop(node);
+      if (held() || !node.animate) return;
+      const from = to === 0 ? -360 : 0;
+      let animation;
+      try {
+        node.style.willChange = "transform";
+        animation = node.animate(
+          [
+            {
+              transform: `perspective(1200px) rotateY(${from}deg) scale(0.92)`,
+              opacity: from === -360 ? 0.72 : 1,
+            },
+            {
+              transform: `perspective(1200px) rotateY(${to}deg) scale(1)`,
+              opacity: 1,
+            },
+          ],
+          { duration: TURN, easing: EASE, fill: "none" },
+        );
+      } catch {
         node.style.willChange = "";
-      });
+        return;
+      }
+      playing.set(node, animation);
+      const done = () => {
+        if (playing.get(node) !== animation) return;
+        playing.delete(node);
+        node.style.willChange = "";
+      };
+      animation.onfinish = done;
+      animation.oncancel = done;
     }
 
-    function paint() {
-      queued = 0;
-      if (held()) return;
-      const view = window.innerHeight || 1;
+    function sync() {
       frames.forEach((node) => {
+        if (held()) {
+          stop(node);
+          return;
+        }
+        if (!armed.has(node)) return;
         const rect = node.getBoundingClientRect();
-        if (rect.bottom < -40 || rect.top > view + 40) return;
-
-        const p = (view - rect.top) / Math.max(1, view + rect.height);
-        const enter = easeOut(clamp(p / 0.34));
-        const exit = easeOut(clamp((p - 0.58) / 0.32));
-        const turn = -26 * (1 - enter) + 18 * exit;
-        const tilt = -7 * (1 - enter) + 6 * exit;
-        const scale = 0.955 + 0.045 * enter - 0.018 * exit;
-        const settled = enter === 1 && exit === 0;
-
-        node.style.transform = settled
-          ? ""
-          : `perspective(1300px) rotateY(${turn.toFixed(2)}deg) rotateX(${tilt.toFixed(
-              2,
-            )}deg) scale(${scale.toFixed(3)})`;
-        node.style.willChange = settled ? "" : "transform";
+        if (rect.bottom <= 0 || rect.top >= (window.innerHeight || 0)) return;
+        armed.delete(node);
+        turn(node, 0);
       });
     }
 
-    function request() {
-      if (queued || document.hidden) return;
-      queued = window.requestAnimationFrame(paint);
-    }
+    frames.forEach(stop);
+    if (reduce.matches || !("IntersectionObserver" in window)) return;
 
-    window.addEventListener("scroll", request, { passive: true });
-    window.addEventListener("resize", request, { passive: true });
-    document.addEventListener("visibilitychange", request);
-    new MutationObserver(() => {
-      if (held()) reset();
-      else request();
-    }).observe(document.body, { attributes: true, attributeFilter: ["class"] });
-    reduce.addEventListener("change", () => {
-      if (reduce.matches) reset();
-      else request();
+    // The observer root is the middle 44% of the viewport, so arrival starts
+    // one band up from the bottom edge and departure one band below the top:
+    // both turns run with the handset still on screen. Fully out of that band
+    // is also what re-arms the next turn in.
+    const observer = new IntersectionObserver(
+      (entries) => {
+        entries.forEach((entry) => {
+          const node = entry.target;
+          if (entry.isIntersecting) {
+            if (entry.intersectionRatio < 0.12 || !armed.has(node)) return;
+            armed.delete(node);
+            turn(node, 0);
+            return;
+          }
+          // Out of view: nothing to spin away from until it has arrived.
+          if (!armed.has(node)) {
+            armed.add(node);
+            turn(node, 360);
+          }
+        });
+      },
+      { threshold: [0, 0.12], rootMargin: "-28% 0px -28% 0px" },
+    );
+
+    frames.forEach((node) => observer.observe(node));
+
+    document.addEventListener("visibilitychange", () => {
+      if (document.hidden) frames.forEach(stop);
+      else sync();
     });
-
-    if (reduce.matches) reset();
-    else request();
+    new MutationObserver(sync).observe(document.body, {
+      attributes: true,
+      attributeFilter: ["class"],
+    });
+    reduce.addEventListener("change", sync);
   }
 
   /* ---------------------------------------------------------------------
      Desktop companion: a WebGL orb.
-     One sphere, two capsule eyes. The eyes follow the pointer, blink on their
-     own cadence, and glance about when the pointer rests; the orb itself never
-     moves. The body crossfades between three palettes on a two-second cadence
-     (the old working / waiting / done flavours) so the surface keeps drifting
-     without ever cutting. Ivory rim light keeps it seated on the page.
+     One flat disc, two capsule eyes. The eyes follow the pointer, blink on
+     their own cadence, and glance about when the pointer rests; the disc itself
+     never moves. The body crossfades between three flat palettes on a
+     two-second cadence (the old working / waiting / done flavours) so the
+     colour keeps drifting without ever cutting. No light model: the wash is a
+     constant body colour, so the face reads as a drawn mark on ivory.
      When GL is unavailable, reduced motion is on, or the context is lost, the
-     CSS face in the markup is what shows: eyes on a jade disc, a still frame.
+     CSS face in the markup is what shows: eyes on a flat jade disc, a still
+     frame.
      --------------------------------------------------------------------- */
   /* Each flavour keeps the cadence of the state it stands in for: working is
      busy, waiting settles and watches, done is unhurried. The colours and the
@@ -516,23 +568,10 @@
         return;
       }
 
-      float z = sqrt(max(0.0, R * R - d * d)) / R;
-      vec3 n = normalize(vec3(p / R, z));
-
-      float key = clamp(dot(n, normalize(vec3(-0.55, 0.62, 0.7))), 0.0, 1.0);
-      float fill = clamp(dot(n, normalize(vec3(0.5, -0.55, 0.4))), 0.0, 1.0);
-
-      vec3 col = mix(uDeep, uBody, pow(key, 1.05));
-      col += uBody * 0.14 * fill * z;
-
-      // The underside settles into ink, so the orb carries weight on ivory.
-      col *= 0.86 + 0.14 * smoothstep(-0.9, 0.55, n.y);
-
-      float rim = pow(1.0 - z, 2.4);
-      col = mix(col, vec3(0.984, 0.976, 0.961), rim * 0.42);
-
-      float breath = 0.5 + 0.5 * sin(uTime * 0.9);
-      col += pow(clamp(n.y, 0.0, 1.0), 3.0) * (0.03 + 0.04 * breath);
+      // Flat body: one constant wash at 20% over the palette colour. No key
+      // light, no fill, no rim, no underside shading — the disc reads as a
+      // single tone and the only modelling left is the eyes and their glint.
+      vec3 col = clamp(uBody * 1.2, 0.0, 1.0);
 
       vec2 g = clamp(uGaze, -1.0, 1.0) * 0.115;
       float open = mix(0.12, 1.0, uBlink);

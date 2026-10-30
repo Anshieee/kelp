@@ -350,20 +350,10 @@
   padding-bottom: 6%;
   aspect-ratio: 1;
   border-radius: 9999px;
-  /* Jade body, ink underside, ivory rim: the same light as the shader. */
-  background:
-    radial-gradient(
-      circle at 34% 24%,
-      #8acda8 0%,
-      #4f9f75 32%,
-      #2c6a4e 64%,
-      #1d4634 100%
-    );
-  box-shadow:
-    inset 0 -12px 26px rgba(9, 26, 19, 0.45),
-    inset 0 10px 20px rgba(255, 255, 255, 0.18),
-    inset 0 0 0 1px rgba(251, 249, 245, 0.22),
-    0 24px 34px -18px rgba(25, 24, 23, 0.42);
+  /* One flat jade disc, no gradient: the same constant wash as the shader,
+     lifted 20% to match. Only the page shadow keeps it off the canvas. */
+  background: #57b486;
+  box-shadow: 0 24px 34px -18px rgba(25, 24, 23, 0.42);
 }
 
 .e-orb-eye {
