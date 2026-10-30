@@ -23,6 +23,9 @@
     <link rel="stylesheet" href="a-motion.css" />
     <link rel="stylesheet" href="b-scroll.css" />
     <link rel="stylesheet" href="c-copy.css" />
+    <!-- a-motion.js must run before the GSAP/app renderer: it composites the
+         existing canvas artwork and only observes state the app sets up. -->
+    <script defer src="a-motion.js"></script>
     <script
       defer
       src="https://cdn.jsdelivr.net/npm/gsap@3.12.5/dist/gsap.min.js"
@@ -32,7 +35,7 @@
       src="https://cdn.jsdelivr.net/npm/gsap@3.12.5/dist/ScrollTrigger.min.js"
     ></script>
     <script defer src="app.js"></script>
-    <script defer src="a-motion.js"></script>
+    <!-- b-scroll.js must run after app.js; it retires the legacy GSAP tweens. -->
     <script defer src="b-scroll.js"></script>
     <script defer src="c-copy.js"></script>
   </head>
