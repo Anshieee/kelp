@@ -22,8 +22,24 @@ let currentThread = new URLSearchParams(location.search).get("thread") || null;
 let streamHandle = null;
 
 function setState(state) {
-  if (state) orb?.setPetState?.(state);
+  if (!state) return;
+  host.dataset.petState = state; // SVG tints by state even with no GL
+  orb?.setPetState?.(state);
 }
+
+// Pointer gaze for the SVG eyes (CSS vars drive .pet-gaze transform).
+window.addEventListener(
+  "pointermove",
+  (e) => {
+    const r = host.getBoundingClientRect();
+    if (!r.width) return;
+    const gx = (((e.clientX - r.left) / r.width) * 2 - 1).toFixed(3);
+    const gy = (((e.clientY - r.top) / r.height) * 2 - 1).toFixed(3);
+    host.style.setProperty("--gx", gx);
+    host.style.setProperty("--gy", gy);
+  },
+  { passive: true },
+);
 
 /** Hook the pet to a thread's SSE stream (called by main window / deep link). */
 export function watchThread(threadId) {

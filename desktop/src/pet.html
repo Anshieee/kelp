@@ -11,9 +11,17 @@
     </style>
   </head>
   <body class="pet-window">
-    <div data-orb title="Kelp">
-      <canvas class="e-orb-canvas" width="148" height="148"></canvas>
-      <div class="e-orb-face" aria-hidden="true"></div>
+    <div data-orb data-pet-state="idle" title="Kelp">
+      <svg class="pet-svg" viewBox="0 0 148 148" role="img" aria-label="Kelp">
+        <circle class="pet-disc" cx="74" cy="74" r="60" />
+        <ellipse class="pet-spec" cx="56" cy="52" rx="16" ry="9" transform="rotate(-24 56 52)" />
+        <g class="pet-gaze">
+          <g class="pet-eyes">
+            <rect class="pet-eye" x="38" y="62" width="28" height="17" rx="8.5" />
+            <rect class="pet-eye" x="82" y="62" width="28" height="17" rx="8.5" />
+          </g>
+        </g>
+      </svg>
     </div>
     <script type="module" src="./pet.js"></script>
   </body>

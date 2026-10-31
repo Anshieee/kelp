@@ -41,3 +41,27 @@ li { padding: 6px 4px; border-bottom: 1px solid #f0ece3; display: flex; justify-
   .e-orb-face { display: block; }
 }
 .demo-banner { background: #fdf0d5; border: 1px solid #e0a100; border-radius: 8px; padding: 8px; font-weight: bold; }
+
+/* SVG desk pet (pet.svg, inlined in pet.html). State tints mirror the
+   website orb flavours; blink matches the 6.4s website cadence. */
+.pet-svg { width: 148px; height: 148px; display: block; }
+.pet-disc { fill: #92d2a5; }
+.pet-spec { fill: #fbf9f5; opacity: 0.85; }
+.pet-eye { fill: #101614; }
+[data-pet-state="working"] .pet-disc { fill: #49966f; }
+[data-pet-state="waiting"] .pet-disc { fill: #e08d69; }
+[data-pet-state="done"] .pet-disc { fill: #76adc6; }
+[data-pet-state="idle"] .pet-disc { fill: #92d2a5; }
+.pet-gaze { transform: translate(calc(var(--gx, 0) * 6px), calc(var(--gy, 0) * 5px)); }
+.pet-eyes {
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: pet-blink 6.4s ease-in-out infinite;
+}
+@keyframes pet-blink {
+  0%, 93%, 100% { transform: scaleY(1); }
+  95.5% { transform: scaleY(0.08); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .pet-eyes { animation: none; }
+}
