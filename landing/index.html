@@ -37,6 +37,10 @@
       defer
       src="https://cdn.jsdelivr.net/npm/gsap@3.12.5/dist/ScrollTrigger.min.js"
     ></script>
+    <script type="importmap">
+      {"imports": {"three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js"}}
+    </script>
+    <script type="module" src="g-phone.js"></script>
     <script defer src="app.js"></script>
     <!-- b-scroll.js must run after app.js; it retires the legacy GSAP tweens. -->
     <script defer src="b-scroll.js"></script>

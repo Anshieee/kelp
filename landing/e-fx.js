@@ -362,128 +362,15 @@
   }
 
   /* ---------------------------------------------------------------------
-     Phone: exactly one whole turn, once, as it arrives.
-     A trigger, not a scroll position: the angle used to be a function of how
-     far the frame had travelled through the viewport, which put the turn at
-     the edge of the screen — barely visible, and shorter still on a tall
-     handset. Now the arrival starts one complete turn and finishes on its
-     own, so the spin looks the same at every viewport and section height. The
-     observer root is inset so the turn begins and ends while the frame is
-     still on screen. Leaving is a rest at identity, not a second turn, so the
-     handset is only ever spun once per arrival and re-arms on re-entry.
-     Reduced motion, a hidden tab and the page’s own "Pause motion" leave it
-     still and fully visible.
+     Phone: scroll-linked 3D handset (g-phone.js).
+     The one-shot WebGL trigger spin lived here; it is retired. g-phone.js
+     owns the figure now: a procedural Three.js phone scrubbed 1:1 with
+     scroll (0deg on arrival, 360deg at center, 720deg on exit). When GL is
+     missing or motion is held, the CSS .phone-shell is the still fallback.
+     This stub stays so initPhoneSpin() calls remain safe no-ops.
      --------------------------------------------------------------------- */
   function initPhoneSpin() {
-    const frames = [...document.querySelectorAll("[data-phone-spin]")];
-    if (!frames.length) return;
-
-    const TURN = 1200;
-    // Cubic ease-in-out: slow off the mark, slow into the landing.
-    const EASE = "cubic-bezier(0.42, 0, 0.58, 1)";
-    const held = () =>
-      reduce.matches || document.body.classList.contains("motion-paused");
-    const playing = new WeakMap();
-    // A spin-in is still owed to this frame.
-    const armed = new Set(frames);
-
-    function stop(node) {
-      const running = playing.get(node);
-      if (running) {
-        playing.delete(node);
-        running.cancel();
-      }
-      node.style.transform = "";
-      node.style.willChange = "";
-    }
-
-    /* `to` is the resting angle: always identity, so the handset arrives by
-       turning in once and simply stays there. Nothing is left behind and no
-       transform depends on where the page happened to be. */
-    function turn(node, to) {
-      stop(node);
-      if (held() || !node.animate) return;
-      const from = to - 360;
-      let animation;
-      try {
-        node.style.willChange = "transform";
-        animation = node.animate(
-          [
-            {
-              transform: `perspective(1200px) rotateY(${from}deg) scale(0.92)`,
-              opacity: 0.72,
-            },
-            {
-              transform: `perspective(1200px) rotateY(${to}deg) scale(1)`,
-              opacity: 1,
-            },
-          ],
-          { duration: TURN, easing: EASE, fill: "none" },
-        );
-      } catch {
-        node.style.willChange = "";
-        return;
-      }
-      playing.set(node, animation);
-      const done = () => {
-        if (playing.get(node) !== animation) return;
-        playing.delete(node);
-        node.style.willChange = "";
-      };
-      animation.onfinish = done;
-      animation.oncancel = done;
-    }
-
-    function sync() {
-      frames.forEach((node) => {
-        if (held()) {
-          stop(node);
-          return;
-        }
-        if (!armed.has(node)) return;
-        const rect = node.getBoundingClientRect();
-        if (rect.bottom <= 0 || rect.top >= (window.innerHeight || 0)) return;
-        armed.delete(node);
-        turn(node, 0);
-      });
-    }
-
-    frames.forEach(stop);
-    if (reduce.matches || !("IntersectionObserver" in window)) return;
-
-    // The observer root is the middle 44% of the viewport, so arrival starts
-    // one band up from the bottom edge: the turn runs with the handset still
-    // on screen. Fully out of that band is also what re-arms the next entry,
-    // so the spin plays once per arrival and not again on the way out.
-    const observer = new IntersectionObserver(
-      (entries) => {
-        entries.forEach((entry) => {
-          const node = entry.target;
-          if (entry.isIntersecting) {
-            if (entry.intersectionRatio < 0.12 || !armed.has(node)) return;
-            armed.delete(node);
-            turn(node, 0);
-            return;
-          }
-          // Out of view: rest at identity, and owe the next arrival one turn.
-          armed.add(node);
-          stop(node);
-        });
-      },
-      { threshold: [0, 0.12], rootMargin: "-28% 0px -28% 0px" },
-    );
-
-    frames.forEach((node) => observer.observe(node));
-
-    document.addEventListener("visibilitychange", () => {
-      if (document.hidden) frames.forEach(stop);
-      else sync();
-    });
-    new MutationObserver(sync).observe(document.body, {
-      attributes: true,
-      attributeFilter: ["class"],
-    });
-    reduce.addEventListener("change", sync);
+    return;
   }
 
   /* ---------------------------------------------------------------------
