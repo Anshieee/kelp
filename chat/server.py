@@ -540,7 +540,6 @@ def build_app(
     owns_provider = provider is None
     runtime_provider = provider
     try:
-        store = ChatStore(config.db_path)
         registry = SkillRegistry.load(config.skill_root)
         secrets = _service_secrets(registry, config, source)
         secret_values = tuple(dict.fromkeys(secrets.values()))
@@ -552,6 +551,9 @@ def build_app(
         )
         metrics = Metrics(scrubber=SecretScrubber(secret_values))
         audit = AuditLog(config.audit_path, secret_values=secret_values)
+        # KEL-29: the store shares the process audit trail, so session mint
+        # and revoke land in the same scrubbed JSONL as every other decision.
+        store = ChatStore(config.db_path, audit=audit)
         # KEL-22: one per-recipient egress account, written into the same audit
         # trail (so its retention and scrubbing apply) and shared by the model
         # client and every skill's egress client.

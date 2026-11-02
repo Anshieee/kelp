@@ -13,6 +13,8 @@ from datetime import datetime
 from typing import Any, Iterable, Mapping, Sequence
 from urllib.parse import quote
 
+from .store import scrub_artifact_handles
+
 __all__ = [
     "APPROVAL_RATIONALE_SUFFIX",
     "ERROR_COPY",
@@ -21,6 +23,7 @@ __all__ = [
     "MAX_ARGUMENT_BYTES",
     "MAX_SOURCES",
     "MAX_SUMMARY_CHARS",
+    "SHARE_DROPPED_FIELDS",
     "apply_sweeps",
     "approval_card",
     "approval_rationale",
@@ -29,6 +32,7 @@ __all__ = [
     "error_copy",
     "merge_sources",
     "redact_arguments",
+    "share_snapshot",
     "source_key",
     "sources_from_envelope",
     "summarize_arguments",
@@ -719,3 +723,191 @@ def apply_sweeps(blocks: Sequence[Mapping[str, Any]]) -> None:
                 member_detail.pop("sweep", None)
                 member_detail["sweep_anchor"] = anchor_id
         index = cursor
+
+
+# -- share projection (KEL-29) ---------------------------------------------
+
+
+#: Every field name a read-only share snapshot must never carry, wherever it
+#: is found. The allow-lists in ``share_snapshot`` are the structural
+#: guarantee — anything unlisted is dropped — and this set is the belt to
+#: their braces: a key on this list is refused even if a future allow-list
+#: edit mistakenly admits it. Derived from what those allow-lists drop plus
+#: the approval card (``approval_card``), whose payload pending approvals
+#: count but never copy.
+SHARE_DROPPED_FIELDS: frozenset[str] = frozenset(
+    {
+        # artifact identity and storage (ADR 0002 §8)
+        "handle",
+        "storage_path",
+        "sha256",
+        # tool-call plumbing, argv and results (ADR 0002 §8)
+        "call_id",
+        "approval_id",
+        "detail",
+        "arguments",
+        "result",
+        "result_summary",
+        "error",
+        "command",
+        "argument_hash",
+        # message, turn and thread identity
+        "id",
+        "thread_id",
+        "turn_id",
+        "client_turn_id",
+        "superseded_by",
+        "sources_total",
+        "updated_at",
+        # approval lifecycle: approval cards are counted, never copied
+        "decided_at",
+        "consumed_at",
+        # attachment URLs and derived metadata the allow-list does not keep
+        "open_url",
+        "preview_url",
+        "download_url",
+        "pages",
+        "rows",
+        "columns",
+        "table",
+        # sweep bookkeeping attached to tool_call detail
+        "sweep",
+        "sweep_anchor",
+    }
+)
+
+#: A snapshot source keeps only these display fields. Anything else — an
+#: artifact handle, a storage path, a content hash — is dropped structurally
+#: rather than filtered by a query someone must remember.
+_SHARE_SOURCE_KEYS: tuple[str, ...] = (
+    "kind",
+    "title",
+    "url",
+    "snippet",
+    "locator",
+    "published_at",
+    "status",
+    "tool",
+)
+
+#: A snapshot attachment block keeps only these display fields; the handle
+#: and every derived URL stay behind.
+_SHARE_ATTACHMENT_KEYS: tuple[str, ...] = (
+    "name",
+    "kind",
+    "mime",
+    "size_bytes",
+    "status",
+)
+
+#: A snapshot tool_call block keeps only these display fields; the call and
+#: approval ids and the whole ``detail`` payload (argv, result, error) stay
+#: behind.
+_SHARE_TOOL_CALL_KEYS: tuple[str, ...] = (
+    "tool",
+    "label",
+    "summary",
+    "status",
+    "duration_ms",
+    "effects",
+)
+
+
+def _allowlisted(mapping: Mapping[str, Any], keys: tuple[str, ...]) -> dict[str, Any]:
+    """Copy only allow-listed keys with a value, and never a forbidden name."""
+
+    return {
+        key: mapping[key]
+        for key in keys
+        if key not in SHARE_DROPPED_FIELDS and mapping.get(key) is not None
+    }
+
+
+def _project_source(source: Any) -> dict[str, Any]:
+    if not isinstance(source, Mapping):
+        return {}
+    return _allowlisted(source, _SHARE_SOURCE_KEYS)
+
+
+def _project_block(block: Any) -> dict[str, Any]:
+    """Allow-list one block; every unlisted shape becomes ``unknown``."""
+
+    if not isinstance(block, Mapping):
+        return {"type": "unknown"}
+    kind = block.get("type")
+    if kind == "text":
+        return {"type": "text", "text": str(block.get("text") or "")}
+    if kind == "attachment":
+        attachment = block.get("attachment")
+        attachment = attachment if isinstance(attachment, Mapping) else {}
+        return {
+            "type": "attachment",
+            "attachment": _allowlisted(attachment, _SHARE_ATTACHMENT_KEYS),
+        }
+    if kind == "tool_call":
+        projected: dict[str, Any] = {"type": "tool_call"}
+        for key in _SHARE_TOOL_CALL_KEYS:
+            if key in SHARE_DROPPED_FIELDS:  # pragma: no cover - deny-list belt
+                continue
+            if key == "effects":
+                projected[key] = list(block.get(key) or [])
+            else:
+                projected[key] = block.get(key)
+        return projected
+    return {"type": "unknown"}
+
+
+def _project_message(message: Mapping[str, Any]) -> dict[str, Any]:
+    return {
+        "role": message.get("role"),
+        "status": message.get("status"),
+        "created_at": message.get("created_at"),
+        "blocks": [_project_block(block) for block in message.get("blocks") or []],
+        "sources": [
+            _project_source(source) for source in message.get("sources") or []
+        ],
+    }
+
+
+def _scrub_handles(value: Any) -> Any:
+    """Replace every artifact handle anywhere in the share projection.
+
+    Runs over the finished dict rather than at each field, so a block shape
+    added later cannot forget it. Keys are never rewritten: they are fixed
+    names, not user content.
+    """
+
+    if isinstance(value, str):
+        return scrub_artifact_handles(value)
+    if isinstance(value, Mapping):
+        return {key: _scrub_handles(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_scrub_handles(item) for item in value]
+    return value
+
+
+def share_snapshot(
+    thread: Mapping[str, Any],
+    messages: Sequence[Mapping[str, Any]],
+    pending_approval_count: int,
+) -> dict[str, Any]:
+    """Project the settled thread once, dropping every owner-only field.
+
+    The snapshot behind a read-only share link is a frozen, scrubbed copy:
+    the allow-lists above keep only display fields, ``SHARE_DROPPED_FIELDS``
+    names what must never reappear, and every artifact handle embedded in
+    free text is replaced by ``[attachment]``. Pending approval cards are
+    excluded and counted, so a half-finished turn cannot leak an argv
+    payload. See ``docs/adr/0002-sharing-and-identity.md`` §8 and §14.1.
+    """
+
+    snapshot: dict[str, Any] = {
+        "version": 1,
+        "title": str(thread.get("title") or "Shared chat"),
+        "message_count": len(messages),
+        "messages": [_project_message(message) for message in messages],
+        "omitted": {"approvals": int(pending_approval_count)},
+        "viewer": "anonymous-share",
+        "read_only": True,
+    }
+    return _scrub_handles(snapshot)
