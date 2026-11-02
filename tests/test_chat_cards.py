@@ -245,6 +245,37 @@ def test_approval_card_shape_uses_argv_and_no_cost() -> None:
     assert card["status"] == "pending"
 
 
+def test_approval_card_rationale_names_exact_effect_scope_amount_and_expiry() -> None:
+    card = approval_card(
+        approval_id="apr_scoped",
+        source="openshell",
+        thread_id="ses_1",
+        turn_id="turn_1",
+        call_id="call_1",
+        tool="billing.charge",
+        effects=("network", "write"),
+        arguments={"amount_usd": 12.5, "payload": "x" * 5000},
+        scopes={
+            "hosts": ["payments.example"],
+            "paths": ["/v1/charge"],
+            "repos": ["acme/billing"],
+        },
+        requested_at="2026-10-29T09:00:00+00:00",
+        expires_at="2026-10-29T09:03:00+00:00",
+    )
+
+    rationale = card["rationale"]
+    assert "Requested tool: billing.charge." in rationale
+    assert "network access, write changes" in rationale
+    assert "Hosts: payments.example." in rationale
+    assert "Paths: /v1/charge." in rationale
+    assert "Repositories: acme/billing." in rationale
+    assert "Monetary amount: amount_usd=12.5." in rationale
+    assert "Expiry: 2026-10-29T09:03:00+00:00" in rationale
+    assert "Some request details are truncated" in rationale
+    assert card["arguments"] == {"truncated": True}
+
+
 def test_github_write_approval_summarizes_bounded_files_when_arguments_redact() -> None:
     files = [
         {"path": f"src/file-{index}.txt", "content": "x" * 10_000}

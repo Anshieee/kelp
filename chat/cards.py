@@ -48,7 +48,7 @@ SWEEP_ITEM_LIMIT = 5
 _SNIPPET_CHARS = 240
 
 APPROVAL_RATIONALE_SUFFIX = (
-    "Nothing has run yet. This approval expires in 10 minutes and works once."
+    "Nothing has run yet. This approval works once."
 )
 
 #: Whether this build can execute an approved command (KEL-22 decision).
@@ -490,36 +490,75 @@ def artifact_card(meta: Mapping[str, Any], *, base: str = "/api/artifacts") -> d
 # -- approvals -------------------------------------------------------------
 
 
+def _approval_amounts(
+    arguments: Mapping[str, Any] | None, secrets: Sequence[str]
+) -> list[str]:
+    """Render declared monetary bounds without copying arbitrary arguments."""
+    result: list[str] = []
+    for key in ("amount", "amount_usd", "max_amount", "max_amount_usd", "limit_usd"):
+        value = (arguments or {}).get(key)
+        if isinstance(value, (int, float)) and not isinstance(value, bool):
+            result.append(f"{key}={_scrub(str(value), secrets)}")
+    return result
+
+
 def approval_rationale(
     effects: Sequence[str],
     *,
     scopes: Mapping[str, Any] | None = None,
     command: Sequence[str] | None = None,
     tool: str = "",
+    expires_at: str | None = None,
+    amounts: Sequence[str] = (),
+    truncated: bool = False,
 ) -> str:
+    # Adapted from OpenMausBot's PendingApproval/ApprovalCard plain-language
+    # pending-card pattern (milind-soni/OpenMausBot, Apache-2.0); modified for
+    # Kelp's server-derived, single-use approval payloads.
     effect_set = {str(effect) for effect in effects}
     clauses: list[str] = []
+    clauses.append(f"Requested tool: {tool or 'unspecified'}.")
+    effect_words = {
+        "read": "read access",
+        "write": "write changes",
+        "network": "network access",
+        "execute": "command execution",
+    }
+    plain_effects = [effect_words.get(effect, effect) for effect in sorted(effect_set)]
+    clauses.append(
+        "Requested effects: "
+        + (", ".join(plain_effects) if plain_effects else "none declared")
+        + "."
+    )
+    scope_values = scopes or {}
+    for key, label in (("hosts", "Hosts"), ("paths", "Paths"), ("repos", "Repositories")):
+        values = [str(value) for value in scope_values.get(key, ()) or ()]
+        clauses.append(f"{label}: {', '.join(values) if values else 'none declared'}.")
+    clauses.append(
+        f"Monetary amount: {', '.join(amounts) if amounts else 'none declared'}."
+    )
+    clauses.append(
+        f"Expiry: {expires_at or 'not specified'}; this approval works once."
+    )
+    if "execute" in effect_set and not EXEC_AVAILABLE:
+        clauses.append(EXEC_UNAVAILABLE_CLAUSE)
     if tool == "github.write":
-        repos = list((scopes or {}).get("repos") or [])
-        repo = str(repos[0]) if repos else "the approved repository"
         clauses.append(
-            "After you approve, the assistant will create a branch, commit the "
-            f"files summarized below, and open a pull request in {repo}."
+            "After you approve, the repository action is to create a branch, commit the files "
+            "summarized below, and open a pull request."
         )
     elif "write" in effect_set:
         clauses.append("The assistant wants to change something in your workspace.")
-    if "execute" in effect_set:
-        if EXEC_AVAILABLE:
-            clauses.append(
-                "The assistant wants to run a command on this machine. It runs once."
-            )
-        else:
-            clauses.append(EXEC_UNAVAILABLE_CLAUSE)
-    hosts = list((scopes or {}).get("hosts") or [])
-    if not hosts and command and effect_set & {"execute", "network"}:
-        hosts = []
-    if "network" in effect_set and hosts:
-        clauses.append(f"The assistant wants to send data to {hosts[0]}.")
+    if "network" in effect_set and (scope_values.get("hosts") or ()):
+        clauses.append(
+            "The assistant wants to send data to "
+            + ", ".join(str(host) for host in scope_values.get("hosts", ()))
+            + "."
+        )
+    elif "execute" in effect_set and EXEC_AVAILABLE:
+        clauses.append("The assistant wants to run the requested command on this machine.")
+    if truncated:
+        clauses.append("Some request details are truncated; see the card's truncation markers.")
     if not clauses:
         clauses.append("The assistant needs your permission for this step.")
     return " ".join(clauses + [APPROVAL_RATIONALE_SUFFIX])
@@ -618,7 +657,14 @@ def approval_card(
         "skill": skill or tool,
         "title": title or f"Use {tool_label(tool)}",
         "rationale": approval_rationale(
-            effects, scopes=safe_scopes, command=command_list, tool=tool
+            effects,
+            scopes=safe_scopes,
+            command=command_list,
+            tool=tool,
+            expires_at=expires,
+            amounts=_approval_amounts(arguments, secret_values),
+            truncated=cleaned_arguments == {"truncated": True}
+            or (file_summary is not None and file_summary["truncated"]),
         ),
         "summary": summary,
         "effects": [str(effect) for effect in effects],
