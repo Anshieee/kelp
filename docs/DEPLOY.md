@@ -435,10 +435,11 @@ Notes:
 | `GET /api/health` | same token | Legacy alias, byte-compatible `{"ok":true}` |
 
 Readiness checks: `store` (SQLite write lock), `artifacts` (throwaway file),
-`audit` and `usage` (zero-byte append), `registry` (skill manifests loaded),
-`provider` (`GET {base_url}/models`, 2 s timeout, cached 30 s). A check reports
-only `not_configured`, `timeout`, or `unavailable` — never a path, a value, or
-an exception message.
+`audit` and `usage` (zero-byte append), `unpriced_models` (usage records finished
+this month with no known price; the payload carries the count only), `registry`
+(skill manifests loaded), `provider` (`GET {base_url}/models`, 2 s timeout,
+cached 30 s). A check reports only `not_configured`, `timeout`, `unavailable`, or
+`unpriced`, never a path, a value, a model id, or an exception message.
 
 ```bash
 # liveness, unauthenticated, local
@@ -1021,6 +1022,7 @@ this gets expensive.
 | `(health: starting)` for the first minute | Normal: 40 s `start_period` plus a 30 s interval | Wait, then re-read `docker inspect --format '{{.State.Health.Status}}' kelp-kelp-1` |
 | Healthy, but `readyz` 503 `provider=timeout` | Egress blocked, DNS broken, or key rejected | Probe the provider from the same network with the key in a 0600 header file (`-H @file`, §12.2), not on the command line |
 | `readyz` 503 `store=unavailable` | `/data` not writable by 10001 | Recreate the volume/dir with owner `10001:10001` |
+| `readyz` 503 `unpriced_models=unpriced` | A usage record this month has no known price, so the spend total is incomplete | Add the model to the pricing table, or set `KELP_SPEND_UNKNOWN_PRICE_MODE=count_as` with `KELP_SPEND_UNKNOWN_PRICE_USD` (§13.2). The check clears when the next month starts or the records rotate out |
 | `401 unauthorized` on `/api/*` | Token mismatch, or the proxy strips `Authorization` | Send `Authorization: Bearer …`; check the proxy passes request headers untouched |
 | `403 csrf_failed` on a browser mutation | `Origin` and `Host` disagree behind the proxy | Forward the original `Host`; or set `KELP_CSRF_TOKEN` and send `X-CSRF-Token` |
 | Upload fails `413` | Proxy limit below the 20 MiB app cap | Raise `client_max_body_size` / Caddy `max_size` to ~24 MB |
@@ -1069,8 +1071,8 @@ environment, and `KELP_AUTH_TOKEN` / `NEBIUS_API_KEY` are in it in clear text.
 check code (`provider=timeout`), and whether the file exists — not its contents.
 
 On the verification run: image env clean, layer history clean, container logs
-clean, and readiness details were `not_configured`, `timeout`, or `unavailable`
-only. The env file lives outside the build context and is gitignored; the probe
+clean, and readiness details were `not_configured`, `timeout`, `unavailable`, or
+`unpriced` only. The env file lives outside the build context and is gitignored; the probe
 sends the token as a header and never prints it.
 
 ---
