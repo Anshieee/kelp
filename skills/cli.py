@@ -32,12 +32,13 @@ from .loader import (
     PluginPackageError,
     _write_package_entries,
     default_plugin_root,
+    find_pinned_plugin,
     inspect_plugin_package,
     read_plugin_lock,
     write_plugin_lock,
 )
 
-__all__ = ["install", "list_plugins", "main", "uninstall"]
+__all__ = ["install", "install_registered", "list_plugins", "main", "uninstall"]
 
 
 def _resolve_root(root: str | Path | None) -> Path:
@@ -89,11 +90,23 @@ def install(
     *,
     root: str | Path | None = None,
     force: bool = False,
+    expected_digest: str | None = None,
+    expected_version: str | None = None,
 ) -> dict[str, Any]:
     """Validate, stage, atomically swap, and pin one directory or zip package."""
 
     root_path = _resolve_root(root)
     inspected = inspect_plugin_package(package)
+    if expected_digest is not None and inspected.digest != expected_digest:
+        raise PluginPackageError(
+            f"plugin package changed after approval: expected digest {expected_digest}, "
+            f"got {inspected.digest}"
+        )
+    if expected_version is not None and inspected.version != expected_version:
+        raise PluginPackageError(
+            f"plugin package version changed after approval: expected {expected_version!r}, "
+            f"got {inspected.version!r}"
+        )
     builtins = _builtin_names()
     if inspected.name in builtins:
         raise PluginPackageError(
@@ -180,6 +193,31 @@ def install(
         "path": str(destination),
         "root": str(root_path),
     }
+
+
+def install_registered(
+    name: str,
+    *,
+    root: str | Path | None = None,
+    store: str | Path | None = None,
+    expected_digest: str | None = None,
+    expected_version: str | None = None,
+) -> dict[str, Any]:
+    """Install a matching, pinned package from the local skill store."""
+
+    package = find_pinned_plugin(name, store)
+    if package is None:
+        raise PluginPackageError(f"no digest-pinned package for {name!r} in the local skill store")
+    if expected_digest is not None and package.digest != expected_digest:
+        raise PluginPackageError("plugin digest changed after approval")
+    if expected_version is not None and package.version != expected_version:
+        raise PluginPackageError("plugin version changed after approval")
+    return install(
+        package.source,
+        root=root,
+        expected_digest=expected_digest,
+        expected_version=expected_version,
+    )
 
 
 def _installed_packages(root_path: Path) -> list[Path]:

@@ -28,10 +28,13 @@ from skills.loader import (
     PLUGIN_ALLOW_UNPINNED_ENV,
     PLUGIN_LOCK_FILENAME,
     PLUGIN_MAX_ENTRIES,
+    PLUGIN_STORE_ENV,
     PluginPackageError,
+    find_pinned_plugin,
     inspect_plugin_package,
     write_plugin_lock,
 )
+from kernel import RegistryToolExecutor, ToolCall
 
 BUILTIN_ROOT = Path(__file__).resolve().parents[1] / "skills" / "builtin"
 HANDLER_SOURCE = '''\
@@ -713,3 +716,53 @@ def test_violation_type_used_for_boot_errors(tmp_path: Path) -> None:
     with pytest.raises(SkillManifestError) as info:
         _load(plugin_root)
     assert all(isinstance(violation, Violation) for violation in info.value.violations)
+
+
+def test_registry_executor_offers_approved_install_for_pinned_local_plugin(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    store = tmp_path / "skill-store"
+    source = _write_plugin(tmp_path / "source" / "echo")
+    pinned = cli.install(source, root=store)
+    monkeypatch.setenv(PLUGIN_STORE_ENV, str(store))
+    assert find_pinned_plugin("plugins.echo") is not None
+
+    registry = _load(tmp_path / "installed")
+    requests: list[Any] = []
+
+    async def approve(request: Any) -> bool:
+        requests.append(request)
+        return True
+
+    executor = RegistryToolExecutor(registry, approval=approve)
+    result = asyncio.run(executor.execute(ToolCall("install-1", "plugins.echo", {"text": "hi"})))
+
+    assert result["ok"] is True
+    assert result["output"] == {"echo": "hi", "chars": 2}
+    assert len(requests) == 1
+    assert requests[0].tool == "skill.install"
+    assert requests[0].arguments == {
+        "skill": "plugins.echo",
+        "version": "0.1.0",
+        "digest": pinned["digest"],
+    }
+    assert "plugins.echo" in executor._registry
+
+
+def test_registry_executor_does_not_install_when_installation_is_denied(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    store = tmp_path / "skill-store"
+    cli.install(_write_plugin(tmp_path / "source" / "echo"), root=store)
+    monkeypatch.setenv(PLUGIN_STORE_ENV, str(store))
+    plugin_root = tmp_path / "installed"
+    executor = RegistryToolExecutor(_load(plugin_root), approval=lambda _request: _deny())
+
+    result = asyncio.run(executor.execute(ToolCall("install-2", "plugins.echo", {"text": "hi"})))
+
+    assert result["error"]["code"] == "approval_denied"
+    assert not plugin_root.exists()
+
+
+async def _deny() -> bool:
+    return False
