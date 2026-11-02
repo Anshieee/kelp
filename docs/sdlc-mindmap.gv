@@ -2,6 +2,10 @@
 // One central node, one idea per branch, plain words.
 // Render: dot -Tsvg docs/sdlc-mindmap.gv -o docs/sdlc-mindmap.svg
 //         dot -Tpng docs/sdlc-mindmap.gv -o docs/sdlc-mindmap.png
+// (The 2 November 2026 refresh was rendered with the same Graphviz engine
+// compiled to WebAssembly (@viz-js/viz) because no system `dot` was
+// available on the rendering machine; the PNG is the SVG rasterized with
+// resvg. Layout is the Graphviz dot layout either way.)
 // Colours: white background, small muted fills per branch, black text.
 // Meaning is carried by words, never by colour alone. No emojis.
 // Status words: DONE, COMPLETE, IN PROGRESS, TO COME, LATER.
@@ -22,7 +26,7 @@ digraph sdlc {
   center [label="Kelp assistant\nlive Oct 30" shape="doubleoctagon" style="filled,bold" fontsize="20" penwidth="2.5" width="2.3" height="1.2" fillcolor="white" URL="#top" tooltip="Private assistant you talk to from a dashboard. Target live Oct 30."];
 
   // Main branches
-  m0   [label="M0 Foundation\nIN PROGRESS" shape="box" style="filled,bold,rounded" fontsize="15" penwidth="2" fillcolor="#D6E6F7" URL="#m0" tooltip="Stage 0: shared code, docs, checks, risk list. Checks are live; the development setup and threat model are still open."];
+  m0   [label="M0 Foundation\nCOMPLETE" shape="box" style="filled,bold,rounded" fontsize="15" penwidth="2" fillcolor="#D6E6F7" URL="#m0" tooltip="Stage 0: shared code, docs, checks, risk list. Checks, development setup, and threat model are all done."];
   m1   [label="M1 Prototype\nCOMPLETE" shape="box" style="filled,bold,rounded" fontsize="15" penwidth="2" fillcolor="#D9EDD7" URL="#m1" tooltip="Stage 1: ask, answer, approve, pay, demo. Every work item done."];
   m2   [label="M2 Polished MVP\nCOMPLETE" shape="box" style="filled,bold,rounded" fontsize="15" penwidth="2" fillcolor="#FCEFC7" URL="#m2" tooltip="Stage 2: survives ordinary use. Serve entry, health checks, restart recovery, real document search, observability, repeatable quality measurements, and the deploy assets and runbook are done."];
   m3   [label="M3 Hardening\nCOMPLETE" shape="box" style="filled,bold,rounded" fontsize="15" penwidth="2" fillcolor="#F0DCC8" URL="#m3" tooltip="Stage 3: privacy and cost promises hold. Abuse resistance, spend ceilings, invoke-time policy, retention, owner sign-in, and the written privacy review are all done."];
@@ -43,7 +47,7 @@ digraph sdlc {
   // M0 Foundation leaves (soft blue family)
   m0_repo   [label="Repo and docs in place\nDONE" fillcolor="#EBF3FC" URL="#m0" tooltip="Shared code copy plus docs live. Finished."];
   m0_checks [label="Auto checks live\nDONE" fillcolor="#EBF3FC" URL="#m0" tooltip="Secret scan, lint, type check, tests, and a dependency audit run on every push. Finished."];
-  m0_risks  [label="Risk list written\nTO COME" fillcolor="#EBF3FC" URL="#m0" tooltip="Written list of what could go wrong. Not started."];
+  m0_risks  [label="Risk list written\nDONE" fillcolor="#EBF3FC" URL="#m0" tooltip="Written list of what could go wrong: docs/THREAT_MODEL.md. Finished."];
   m0 -> m0_repo;
   m0 -> m0_checks;
   m0 -> m0_risks;
@@ -181,6 +185,22 @@ digraph sdlc {
   m4 -> k26;
   m4 -> k27;
   m4 -> k28;
+
+  // KEL-29 gap sweep (soft mint family): the six honest gaps M1-M4 left open
+  k29 [label="KEL-29 Gap sweep\nCOMPLETE" shape="box" style="filled,bold,rounded" fontsize="15" penwidth="2" fillcolor="#DDEBE8" URL="#kel-29" tooltip="Six small fixes and papers closing the honest gaps M1 to M4 left open. Every task merged and reviewed on 2 November 2026."];
+  center -> k29;
+  k29_threat [label="Threat model written\nDONE" fillcolor="#EAF3F0" URL="#kel-29" tooltip="Trust boundaries, what reaches the model, what stays server-side: docs/THREAT_MODEL.md. Merged and reviewed."];
+  k29_sched [label="Scheduler counts atomic\nDONE" fillcolor="#EAF3F0" URL="#kel-27" tooltip="Failure, skip, and pause counters update under the tick lock; a 12-thread test proves no increment is lost. Merged and reviewed."];
+  k29_audit [label="Device audit rows\nDONE" fillcolor="#EAF3F0" URL="#kel-24" tooltip="Sign-in, revoke, and mass revoke each leave one content-free audit row with a hash prefix only. Merged and reviewed."];
+  k29_share [label="Share leak list tested\nDONE" fillcolor="#EAF3F0" URL="#kel-28" tooltip="Every forbidden snapshot field enumerated in one deny-list and tested absent by an exhaustive walk. Merged and reviewed."];
+  k29_sign [label="Plugin signing spike\nDONE" fillcolor="#EAF3F0" URL="#kel-25" tooltip="Ed25519 attestation prototype over the digest pin plus the spike paper; enforcement is a named follow-up. Merged and reviewed."];
+  k29_provider [label="Model swap recipe\nDONE" fillcolor="#EAF3F0" URL="#kel-18" tooltip="Provider swap runbook: env switches, pricing table, evals, rollback. Merged and reviewed."];
+  k29 -> k29_threat;
+  k29 -> k29_sched;
+  k29 -> k29_audit;
+  k29 -> k29_share;
+  k29 -> k29_sign;
+  k29 -> k29_provider;
 
   // Surfaces leaves (soft teal family)
   s_dash [label="Dashboard chat now" fillcolor="#E6F4F1" URL="#surfaces" tooltip="Main screen in the browser. Built first."];
