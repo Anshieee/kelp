@@ -1,7 +1,8 @@
 # Deploy the KELP assistant
 
-- **Status:** implemented, merged into `main` at `7addf56`, 30 October 2026
-- **Branch:** `main` (head `7addf56`)
+- **Status:** implemented; the deploy slice merged at `7addf56` on 30 October
+  2026, and current `main` is `f7ed9d1` on 2 November 2026
+- **Branch:** `main` (head `f7ed9d1`; deploy slice `7addf56`)
 - **Scope:** one container image, one Compose service, one systemd wrapper, one
   health probe, one `/data` volume. No application code changed.
 - **Tests:** `tests/test_deploy_healthcheck.py` (25 cases) and
@@ -77,6 +78,31 @@ service is a thin client of Token Factory, so a 2 vCPU / 8 GB VM is enough
   python3 -c "import secrets; print(secrets.token_urlsafe(32))"
   ```
 
+### 2.1 Put the checkout at `/opt/kelp`
+
+`/opt/kelp` is both the Compose project directory and the build host checkout,
+so clone `main` there before section 4:
+
+```bash
+sudo mkdir -p /opt/kelp
+sudo chown "$USER":"$USER" /opt/kelp
+git clone https://github.com/Anshieee/kelp.git /opt/kelp
+cd /opt/kelp
+git switch main
+```
+
+The repository is public, so the clone needs no GitHub credentials. If the
+directory already holds a checkout, use it and run `git fetch origin` before
+building.
+
+### 2.2 Docker permissions and the VM firewall
+
+The examples call `docker` and `docker compose` without `sudo`; either add the
+operator to the `docker` group once (`sudo usermod -aG docker "$USER"`, then log
+out and back in) or prefix every Docker command with `sudo`. Create the VM with
+a public IPv4 address and a security group that allows inbound `22`, `80`, and
+`443`; nothing else needs to be reachable from the internet.
+
 The examples assume:
 
 | Path | Meaning |
@@ -137,9 +163,15 @@ no default: the process refuses to start without them (`missing_api_key` or
 | `KELP_RATE_LIMIT_UPLOAD_RPM` / `_BURST` | no | `60` / `20` | no | Attachment uploads per client |
 | `KELP_RATE_LIMIT_READ_RPM` / `_BURST` | no | `600` / `200` | no | Read calls per client |
 | `KELP_RATE_LIMIT_ADMIN_RPM` / `_BURST` | no | `1200` / `300` | no | Metrics and readiness per client; keep it above the probe rate |
+| `KELP_RATE_LIMIT_SHARE_RPM` / `_BURST` | no | `30` / `10` | no | Anonymous share reads per link; keyed on the hashed link token |
+| `KELP_RATE_LIMIT_SHARE_GLOBAL_RPM` / `_BURST` | no | `600` / `200` | no | Process-wide ceiling for anonymous share reads |
 | `KELP_RATE_LIMIT_IDLE_SECONDS` | no | `300` | no | Idle-out before a limiter key starts with a full bucket again |
+| `KELP_RATE_LIMIT_MAX_KEYS` | no | `4096` | no | Bound on distinct limiter keys kept in memory |
 | `KELP_MAX_CONCURRENT_TURNS` | no | `4` | no | Global cap on turns running at once; `0` disables |
 | `KELP_SCHEDULER_ENABLED` | no | `1` | no | Run the cron ticker that starts proactive turns; `0` keeps schedules stored but idle |
+| `KELP_SCHEDULER_TICK_SECONDS` | no | `30` | no | Ticker interval for checking due schedules |
+| `KELP_SCHEDULER_GRACE_SECONDS` | no | `3600` | no | How late a due schedule may start before it is recorded as a skip |
+| `KELP_SCHEDULER_MAX_TASKS` | no | `200` | no | Maximum task files the scheduler holds; over the cap is refused |
 | `KELP_PROACTIVE_MAX_CONCURRENT` | no | `1` | no | Proactive turns allowed in flight at once; over the cap is a recorded skip, never a queue |
 | `KELP_PROACTIVE_MAX_RUNS_PER_HOUR` | no | `5` | no | Proactive run starts per rolling hour; over the cap is a recorded skip |
 | `KELP_PROACTIVE_FAILURE_LIMIT` | no | `3` | no | Consecutive failed proactive turns before that schedule is parked `disabled`; a clean turn resets the count |
@@ -173,7 +205,10 @@ $EDITOR deploy/kelp.env          # set NEBIUS_API_KEY and KELP_AUTH_TOKEN
 
 `deploy/kelp.env` is gitignored and excluded from the build context. Never put
 these values in `docker-compose.yml`, the `Dockerfile`, a shell history line, or
-a ticket.
+a ticket. Create the file before the first Compose command: `docker compose
+config -q` validates the whole project, including the existence of the
+`env_file`, so it fails on a checkout where `deploy/kelp.env` does not exist
+yet.
 
 ### 3.1 Deployment variables: `/opt/kelp/.env`
 
@@ -1085,10 +1120,10 @@ sends the token as a header and never prints it.
   depends on the backup, not a down-migration.
 - **No remote state.** SQLite is a local file by design; do not put it on NFS.
 - **Nothing was deployed.** All timings above were measured locally on 30
-  October 2026 against `main`, image `kelp:7addf56`, and a disposable
-  `kelp-data` volume; the volume, network, and containers were removed
-  afterwards. The tag `kelp:7addf56` corresponds to the commit pinned in §1; a
-  fresh build from another checkout must use its own new tag.
+  October 2026 against then-`main` `7addf56`, image `kelp:7addf56`, and a
+  disposable `kelp-data` volume; the volume, network, and containers were
+  removed afterwards. That tag is the deploy slice named in §1; a fresh build
+  from the current checkout must use its own new tag, as §4 describes.
 
 ---
 
