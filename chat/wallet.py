@@ -68,6 +68,13 @@ class WalletAPI:
     def handle(self, request: Request) -> Response:
         try:
             self._authorize(request)
+            if not self.wallet.configured:
+                return _error(
+                    503,
+                    "wallet_not_configured",
+                    "The wallet isn't connected yet.",
+                    user_fixable=False,
+                )
             path = unquote(urlsplit(request.path).path)
             segments = [segment for segment in path.split("/") if segment]
             if (
@@ -82,7 +89,7 @@ class WalletAPI:
         except WalletNotConfigured:
             return _error(
                 503,
-                "not_configured",
+                "wallet_not_configured",
                 "The wallet isn't connected yet.",
                 user_fixable=False,
             )
