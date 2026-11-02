@@ -1022,13 +1022,16 @@ def test_revoke_requires_the_full_public_id(tmp_path: Path) -> None:
     public_id = hash_token(first["token"])[:16]
 
     before = store.share_list(thread_id)
-    for bad in (
+    bad_ids = [
         public_id[:8],
-        public_id.upper(),
         hash_token(first["token"]),
         "zzzzzzzzzzzzzzzz",
         public_id + "0",
-    ):
+    ]
+    if public_id.upper() != public_id:
+        bad_ids.append(public_id.upper())
+
+    for bad in bad_ids:
         response = call(api, "DELETE", f"/api/threads/{thread_id}/shares/{bad}")
         assert response.status in (404, 405), bad
     assert store.share_list(thread_id) == before
