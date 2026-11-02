@@ -704,7 +704,7 @@ def test_invalid_plugin_manifest_reports_pointer(tmp_path: Path) -> None:
 def test_plugin_root_missing_is_not_an_error(tmp_path: Path) -> None:
     registry = _load(tmp_path / "no-plugins-here")
     assert "plugins.echo" not in registry.tools()
-    assert len(registry.tools()) == 4
+    assert len(registry.tools()) == 5
 
 
 def test_violation_type_used_for_boot_errors(tmp_path: Path) -> None:

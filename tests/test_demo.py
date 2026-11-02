@@ -135,11 +135,12 @@ def test_fixture_manifests_keep_the_real_contract(tmp_path: Path) -> None:
     assert set(registry.names()) == {
         "docs.answer",
         "github.read",
+        "github.write",
         "schedule.create",
         "web.search",
     }
     manifests = sorted((tmp_path / "skills").glob("*/manifest.json"))
-    assert len(manifests) == 4
+    assert len(manifests) == 5
     for manifest in manifests:
         fixture = json.loads(manifest.read_text())
         builtin = json.loads(

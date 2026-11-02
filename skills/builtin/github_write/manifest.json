@@ -1,0 +1,97 @@
+{
+  "manifest_version": "1.0",
+  "name": "github.write",
+  "version": "0.1.0",
+  "description": "Create a GitHub branch, commit file additions or updates, and open a pull request after explicit human approval.",
+  "triggers": [
+    {
+      "kind": "model",
+      "description": "Use when the user explicitly requests a repository change as a pull request.",
+      "examples": ["Open a pull request with these file changes"]
+    }
+  ],
+  "tools": ["github.write"],
+  "input_schema": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "type": "object",
+    "additionalProperties": false,
+    "required": ["repo", "base", "branch", "title", "body", "files"],
+    "properties": {
+      "repo": {
+        "type": "string",
+        "format": "kelp-repo",
+        "pattern": "^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$"
+      },
+      "base": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 200,
+        "pattern": "^[A-Za-z0-9._/-]+$"
+      },
+      "branch": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 200,
+        "pattern": "^[A-Za-z0-9._/-]+$"
+      },
+      "title": {"type": "string", "minLength": 1, "maxLength": 256},
+      "body": {"type": "string", "maxLength": 20000},
+      "files": {
+        "type": "array",
+        "minItems": 1,
+        "maxItems": 20,
+        "items": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["path", "content"],
+          "properties": {
+            "path": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 400,
+              "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.(?:/|$))(?!.*\\\\)[^\\u0000-\\u001f]+$"
+            },
+            "content": {"type": "string", "maxLength": 262144}
+          }
+        }
+      }
+    }
+  },
+  "output_schema": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": ["repo", "branch", "commit_sha", "pull_request"],
+    "properties": {
+      "repo": {"type": "string"},
+      "branch": {"type": "string"},
+      "commit_sha": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+      "pull_request": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["number", "url", "state"],
+        "properties": {
+          "number": {"type": "integer", "minimum": 1},
+          "url": {"type": "string", "pattern": "^https://github\\.com/"},
+          "state": {"const": "open"}
+        }
+      }
+    }
+  },
+  "permissions": {
+    "effects": ["write", "network"],
+    "scopes": {
+      "paths": [],
+      "hosts": ["api.github.com"],
+      "repos": ["Anshieee/kelp"]
+    },
+    "requires_approval": true,
+    "secrets": ["GITHUB_TOKEN"]
+  },
+  "entry": {
+    "module": "skills.builtin.github_write.handler",
+    "callable": "run"
+  },
+  "timeout_ms": 60000,
+  "idempotent": false,
+  "cost_class": "free"
+}

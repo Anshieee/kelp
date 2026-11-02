@@ -558,6 +558,7 @@ def test_builtin_skills_load() -> None:
     assert registry.names() == (
         "docs.answer",
         "github.read",
+        "github.write",
         "schedule.create",
         "web.search",
     )
@@ -576,6 +577,8 @@ def test_builtin_network_skills_are_allowlisted() -> None:
     assert registry.get("web.search").scopes["hosts"] == ("api.tavily.com",)
     assert registry.get("github.read").scopes["hosts"] == ("api.github.com",)
     assert registry.get("github.read").scopes["repos"] == ("Anshieee/kelp",)
+    assert registry.get("github.write").scopes["hosts"] == ("api.github.com",)
+    assert registry.get("github.write").scopes["repos"] == ("Anshieee/kelp",)
 
 
 def test_builtin_stubs_return_not_implemented() -> None:

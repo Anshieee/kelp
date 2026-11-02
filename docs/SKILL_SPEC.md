@@ -3,7 +3,7 @@
 - **Status:** Accepted, v1.0 — 2026-10-28
 - **Issue:** KEL-5 / P0-4 (milestone M1 — Prototype)
 - **Normative language:** MUST / MUST NOT / SHOULD per RFC 2119
-- **Reference implementation:** `skills/` (loader, meta-schema, four prototype manifests)
+- **Reference implementation:** `skills/` (loader, meta-schema, five prototype manifests)
 - **Contract tests:** `tests/test_skill_loader.py` (`python -m pytest`)
 
 This is the contract between the kernel agent loop (P0-1), the approval gate (P0-3), and every
@@ -26,19 +26,19 @@ In scope for v1.0:
 - input/output JSON-Schema validation;
 - declared capabilities (`effects`, scopes, secrets) consumed by P0-3;
 - a typed error envelope returned for every invocation;
-- the four prototype skills: `web.search`, `github.read`, `docs.answer`, `schedule.create`.
+- the five prototype skills: `web.search`, `github.read`, `github.write`, `docs.answer`, `schedule.create`.
 
 Out of scope (explicitly deferred):
 
 | Deferred | Tracked by |
 |---|---|
 | Third-party skill signing, trusted publishing, remote registries | M4 (packages + digest pinning landed in KEL-25, §15.1) |
-| GitHub write operations (comment, label, merge, push) | post-prototype, needs its own approval policy |
+| GitHub write operations beyond approved branch/commit/PR creation (comment, label, merge) | deferred; each needs its own input contract and approval review |
 | Shell/`execute` capability | M3 (sandboxing); v1.0 rejects it outright |
 | Multi-tool manifests | v1.1 if needed (see §5) |
 | Approval UI, policy engine, audit log | P0-3 |
 | Streaming, token/turn budgets, usage accounting | P0-1 |
-| Real handler bodies for the four skills | this slice ships stubs (§11) |
+| Real handler bodies for the other prototype skills | this slice ships stubs (§11) |
 
 ---
 
@@ -69,6 +69,7 @@ skills/
   builtin/
     web_search/manifest.json + handler.py
     github_read/…
+    github_write/…
     docs_answer/…
     schedule_create/…
 ```
@@ -497,6 +498,7 @@ SkillManifestError: 2 invalid skill manifest(s) under /app/skills/builtin
 |---|---|---|---|---|---|---|---|
 | `web.search` | read, network | no | hosts: `api.tavily.com` | 15 s | yes | metered | `TAVILY_API_KEY` |
 | `github.read` | read, network | no | hosts: `api.github.com`; repos: `Anshieee/kelp` | 20 s | yes | free | `GITHUB_TOKEN` |
+| `github.write` | write, network | **yes** | hosts: `api.github.com`; repos: `Anshieee/kelp` | 60 s | **no** | free | `GITHUB_TOKEN` |
 | `docs.answer` | read | no | paths: `${WORKSPACE}/var/artifacts/**` | 30 s | yes | metered | — |
 | `schedule.create` | write | **yes** | paths: `${WORKSPACE}/var/scheduler/**` | 5 s | **no** | free | — |
 
@@ -521,6 +523,17 @@ Read-only GitHub access, discriminated by `kind`:
 GET-only. No comments, labels, merges, or pushes. The repo allowlist is per-deployment; widening
 it is a manifest change and a policy review, not a code change. `GITHUB_TOKEN` is read through
 `context.secret` and never logged.
+
+### 12.2.1 `github.write`
+
+Creates a branch, commits one or more UTF-8 file additions/updates, and opens a pull request.
+Input names the exact repository, base and branch, PR title/body, and bounded file list; the
+handler uses GitHub's Git Data and Pull Requests REST endpoints. The only network host is
+`api.github.com`, and the built-in repository scope is `Anshieee/kelp`. The manifest requires
+approval before the handler runs. `GITHUB_TOKEN` is read through `context.secret`, never logged,
+and excluded from outputs and errors. It does not delete files, merge PRs, comment, or change
+labels. Since branch creation and subsequent Git API calls are not transactional, a failed
+operation can leave a branch or commit without a pull request.
 
 ### 12.3 `docs.answer`
 
@@ -598,7 +611,7 @@ workspace; it is not a second retention row, and production rows are the rotated
 - **Runtime tests:** success, unknown skill, bad args, unknown arg, non-object args, approval
   required / denied / hook failure / approved execution, timeout, handler exception, invalid
   output, non-object output, secret scrubbing, context redaction.
-- **Built-ins:** all four load, network skills are allowlisted, the three read-only skills
+- **Built-ins:** all five load, network skills are allowlisted, the three read-only skills
   declare no `write`, and stubs return `not_implemented` (including argument validation before
   the stub).
 - Every new skill PR MUST include its contract tests. CI wiring is a separate M0 task.
@@ -693,8 +706,8 @@ was written). Keep that count in sync with §16 when cases are added.
 |---|---|
 | Meta-schema + fail-fast loader + registry | done (`skills/loader.py`, `skills/manifest.schema.json`) |
 | Typed envelopes, timeout, approval hook, secret scrubbing | done |
-| Four prototype manifests | done, loader-valid |
-| Four handlers | **stubs** raising `not_implemented`; real bodies land with P0-1/P0-3 and the M1 demo |
+| Five prototype manifests | done, loader-valid |
+| Handlers | `github.write` implemented; other four are **stubs** raising `not_implemented` |
 | Kernel integration (tool list, mid-stream calls) | P0-1 |
 | Policy engine, approval UI, audit log | P0-3 |
 | Contract tests | done (60 tests, offline) |
