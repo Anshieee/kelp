@@ -31,6 +31,21 @@
         "skipTaskbar": true,
         "resizable": false,
         "visible": true
+      },
+      {
+        "label": "overlay",
+        "url": "overlay.html",
+        "title": "Kelp",
+        "width": 640,
+        "height": 88,
+        "decorations": false,
+        "transparent": true,
+        "alwaysOnTop": true,
+        "skipTaskbar": true,
+        "resizable": false,
+        "visible": false,
+        "center": true,
+        "focus": true
       }
     ],
     "security": {

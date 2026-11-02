@@ -1,0 +1,16 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "Default capability for the Kelp windows: show/hide/focus for the panel, plus the global shortcut.",
+  "windows": ["main", "pet", "overlay"],
+  "permissions": [
+    "core:default",
+    "core:window:allow-show",
+    "core:window:allow-hide",
+    "core:window:allow-set-focus",
+    "core:window:allow-is-visible",
+    "core:window:allow-set-size",
+    "core:window:allow-center",
+    "global-shortcut:default"
+  ]
+}
