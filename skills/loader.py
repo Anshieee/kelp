@@ -59,10 +59,13 @@ __all__ = [
     "PLUGIN_MAX_BYTES",
     "PLUGIN_MAX_ENTRIES",
     "PLUGIN_ROOT_ENV",
+    "PLUGIN_STORE_ENV",
     "PluginPackage",
     "PluginPackageError",
     "SkillRegistry",
     "default_plugin_root",
+    "default_plugin_store",
+    "find_pinned_plugin",
     "inspect_plugin_package",
     "load_registry",
     "materialize_plugin_package",
@@ -80,12 +83,14 @@ _META_SCHEMA_PATH = Path(__file__).resolve().parent / "manifest.schema.json"
 
 # -- installed plugin packages (KEL-25 / M4-D) ------------------------------
 PLUGIN_ROOT_ENV = "KELP_PLUGIN_ROOT"
+PLUGIN_STORE_ENV = "KELP_PLUGIN_STORE"
 PLUGIN_ALLOW_UNPINNED_ENV = "KELP_PLUGINS_ALLOW_UNPINNED"
 PLUGIN_LOCK_FILENAME = "plugins.lock.json"
 PLUGIN_LOCK_VERSION = 1
 PLUGIN_MAX_BYTES = 8 * 1024 * 1024
 PLUGIN_MAX_ENTRIES = 4096
 DEFAULT_PLUGIN_ROOT = Path(__file__).resolve().parents[1] / "var" / "plugins"
+DEFAULT_PLUGIN_STORE = Path(__file__).resolve().parents[1] / "var" / "skill-store"
 _PLUGIN_IGNORED_DIRS = frozenset({"__pycache__"})
 _PLUGIN_IGNORED_SUFFIXES = (".pyc", ".pyo")
 _MEMBER_CHARS_RE = re.compile(r"^[A-Za-z0-9._-]+$")
@@ -230,6 +235,45 @@ def default_plugin_root(environ: Mapping[str, str] | None = None) -> Path:
     env = os.environ if environ is None else environ
     raw = str(env.get(PLUGIN_ROOT_ENV, "")).strip()
     return Path(raw).expanduser() if raw else DEFAULT_PLUGIN_ROOT
+
+
+def default_plugin_store(environ: Mapping[str, str] | None = None) -> Path:
+    """Return the local, digest-pinned skill package store."""
+
+    env = os.environ if environ is None else environ
+    raw = str(env.get(PLUGIN_STORE_ENV, "")).strip()
+    return Path(raw).expanduser() if raw else DEFAULT_PLUGIN_STORE
+
+
+def find_pinned_plugin(
+    tool: str, root: str | Path | None = None
+) -> PluginPackage | None:
+    """Find one validated, digest-pinned package in the local skill store.
+
+    Invalid or unpinned entries are ignored: discovery never turns an unknown
+    model tool into permission to execute arbitrary package code.
+    """
+
+    store = Path(root) if root is not None else default_plugin_store()
+    if not store.is_dir():
+        return None
+    pins = read_plugin_lock(store)
+    for candidate in sorted(store.iterdir(), key=lambda item: item.name):
+        if candidate.name.startswith((".", "_")):
+            continue
+        try:
+            package = inspect_plugin_package(candidate)
+        except (PluginPackageError, OSError):
+            continue
+        pin = pins.get(package.name)
+        if (
+            package.name == tool
+            and pin is not None
+            and pin["digest"] == package.digest
+            and pin["version"] == package.version
+        ):
+            return package
+    return None
 
 
 def package_digest(entries: Iterable[tuple[str, int, bytes]]) -> str:
@@ -1203,6 +1247,16 @@ class SkillRegistry:
 
     def __len__(self) -> int:
         return len(self._skills)
+
+    def reload(self) -> "SkillRegistry":
+        """Build a fresh validated snapshot after an approved plugin install."""
+
+        return type(self).load(
+            self.root,
+            policy=self._policy,
+            audit=self._audit,
+            plugin_root=self.plugin_root,
+        )
 
     # -- runtime -----------------------------------------------------------
 
