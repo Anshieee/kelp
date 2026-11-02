@@ -6,6 +6,7 @@ worker-only delivery path, consumed transactionally before returning plaintext.
 """
 from __future__ import annotations
 
+import base64
 import hashlib
 import hmac
 import json
@@ -112,12 +113,16 @@ class CredentialBroker:
             CREATE TABLE IF NOT EXISTS meta (id INTEGER PRIMARY KEY, check_value BLOB NOT NULL);
             CREATE TABLE IF NOT EXISTS requests (
                 id TEXT PRIMARY KEY, session TEXT NOT NULL, origin TEXT NOT NULL,
-                binding TEXT NOT NULL, spec TEXT NOT NULL, submission TEXT NOT NULL, state TEXT NOT NULL,
+                binding TEXT NOT NULL, device TEXT NOT NULL DEFAULT '', spec TEXT NOT NULL, submission TEXT NOT NULL, state TEXT NOT NULL,
                 created REAL NOT NULL, expires REAL NOT NULL, payload BLOB, result TEXT NOT NULL DEFAULT '');
             CREATE TABLE IF NOT EXISTS vault (
                 id TEXT PRIMARY KEY, origin TEXT NOT NULL, spec TEXT NOT NULL,
                 created REAL NOT NULL, payload BLOB NOT NULL);
         ''')
+        columns = {row['name'] for row in self._db.execute('PRAGMA table_info(requests)')}
+        if 'device' not in columns:
+            self._db.execute("ALTER TABLE requests ADD COLUMN device TEXT NOT NULL DEFAULT ''")
+        self._db.execute("UPDATE requests SET device=? WHERE device=''", (self._device_id,))
         try:
             row = self._db.execute('SELECT check_value FROM meta WHERE id=1').fetchone()
             if row:
@@ -137,6 +142,47 @@ class CredentialBroker:
 
     def worker_authorized(self, token: str) -> bool:
         return hmac.compare_digest(hashlib.sha256(token.encode()).digest(), self._worker_digest)
+
+    @property
+    def _device_id(self) -> str:
+        """Stable server-derived identity for the configured trusted worker."""
+        return self._worker_digest.hex()
+
+    def issue_worker_token(self, ident: str) -> str:
+        """Issue a request-only bearer token expiring with its credential request."""
+        with self._transaction():
+            row = self._row(ident)
+            payload = json.dumps({'v': 1, 'id': ident, 'device': row['device'],
+                                  'target': row['origin'], 'binding': row['binding'],
+                                  'session': row['session'],
+                                  'exp': int(row['expires']), 'scope': ['get', 'claim', 'finish']},
+                                 sort_keys=True, separators=(',', ':')).encode()
+        encoded = base64.urlsafe_b64encode(payload).rstrip(b'=').decode()
+        signature = hmac.new(self._worker_digest, encoded.encode(), hashlib.sha256).digest()
+        return encoded + '.' + base64.urlsafe_b64encode(signature).rstrip(b'=').decode()
+
+    def worker_token_scope(self, token: str, ident: str, operation: str) -> bool:
+        """Verify an unforgeable, unexpired token scoped to one request/device."""
+        try:
+            encoded, signature_text = token.split('.', 1)
+            supplied = base64.urlsafe_b64decode(signature_text + '=' * (-len(signature_text) % 4))
+            expected = hmac.new(self._worker_digest, encoded.encode(), hashlib.sha256).digest()
+            if not hmac.compare_digest(supplied, expected):
+                return False
+            raw = base64.urlsafe_b64decode(encoded + '=' * (-len(encoded) % 4))
+            claims = json.loads(raw)
+            with self._lock:
+                row = self._db.execute('SELECT * FROM requests WHERE id=?', (ident,)).fetchone()
+            return (row is not None and claims.get('v') == 1 and claims.get('id') == ident
+                    and claims.get('device') == row['device'] == self._device_id
+                    and claims.get('target') == row['origin']
+                    and claims.get('binding') == row['binding']
+                    and claims.get('session') == row['session']
+                    and operation in claims.get('scope', [])
+                    and type(claims.get('exp')) is int
+                    and claims['exp'] == int(row['expires']) and claims['exp'] > self._clock())
+        except (ValueError, TypeError, AttributeError, json.JSONDecodeError):
+            return False
 
     @contextmanager
     def _transaction(self) -> Iterator[None]:
@@ -196,8 +242,8 @@ class CredentialBroker:
             if (self._db.execute("SELECT COUNT(*) FROM requests WHERE state IN ('pending','submitted','claimed','completed')").fetchone()[0] >= 128
                     or self._db.execute('SELECT COUNT(*) FROM requests').fetchone()[0] >= 4096):
                 fail('credential_capacity', 429)
-            self._db.execute('INSERT INTO requests VALUES (?,?,?,?,?,?,?,?,?,?,?)',
-                             (ident, data['session_id'], site, data['binding'], json.dumps(spec), json.dumps(submission), 'pending', now, now + 600, None, ''))
+            self._db.execute('INSERT INTO requests (id,session,origin,binding,device,spec,submission,state,created,expires,payload,result) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)',
+                             (ident, data['session_id'], site, data['binding'], self._device_id, json.dumps(spec), json.dumps(submission), 'pending', now, now + 600, None, ''))
             result = self._public(self._row(ident), worker=True)
         self._event('requested', ident)
         return result
@@ -211,6 +257,9 @@ class CredentialBroker:
             return self._public(self._row(ident), worker=worker)
 
     def _context(self, prefix: str, row: sqlite3.Row, spec: list[Any]) -> str:
+        if prefix == 'request':
+            return json.dumps([prefix, row['id'], row['origin'], row['binding'],
+                               row['session'], row['device'], spec], separators=(',', ':'))
         return json.dumps([prefix, row['id'], row['origin'], spec], separators=(',', ':'))
 
     def _seal(self, context: str, values: dict[str, str]) -> bytes:

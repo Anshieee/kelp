@@ -161,6 +161,7 @@ class CredentialWorker:
     async def request(self, session: PrivateBrowserSession, fields: list[dict[str, str]],
                       submit: str | None = None) -> dict[str, Any]:
         result = await self.call('POST', data=await session.begin(fields, submit))
+        self._token = result['worker_token']
         return result['request']
 
     async def deliver(self, session: PrivateBrowserSession, request_id: str) -> dict[str, Any]:

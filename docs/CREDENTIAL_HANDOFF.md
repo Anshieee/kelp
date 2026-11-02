@@ -49,8 +49,17 @@ nonstandard ports. A worker token must differ from the owner's root token.
 server refuses to unlock an existing vault with a different key.
 
 The worker receives only `KELP_BROWSER_WORKER_TOKEN`, not the vault key, owner
-token, or model-provider key. This first version supports one trusted worker
-identity and the repository's existing single-owner account, not tenant isolation.
+token, or model-provider key. This bootstrap credential authenticates the one
+configured trusted worker identity and may only register a request. Registration
+returns a signed worker token scoped to that request's `get`, `claim`, and
+`finish` operations and bound to its request ID, target, session, form fingerprint,
+and authenticated device. It expires with the request (at most ten minutes) and cannot
+be used for another request, owner routes, or a different operation. The server
+derives device identity from the configured bootstrap-token digest; the worker
+cannot select or overwrite it in the request body. This first version supports
+one trusted worker identity and the repository's existing single-owner account,
+not tenant isolation. The per-request token is a bearer credential: keep it in
+worker memory only, do not log it, and discard it when the request ends.
 Terminate TLS before exposing the server to an app or worker over a network.
 Both APIs return `Cache-Control: no-store`; the existing cookie CSRF rules
 protect owner mutations. Worker endpoints accept only their explicit bearer
@@ -101,7 +110,11 @@ The Playwright adapter produces the register body from the actual page:
 `session_id`, `origin`, a SHA-256 `binding`, `fields` (ID, kind, display label,
 CSS selector), and `submission` (enabled flag and observed button label).
 The fingerprint covers document time origin, page URL, form action/method and
-field metadata. Every field and the optional submit button must be unique,
+field metadata. The server independently binds the encrypted payload to the
+request ID, canonical target origin, browser session ID, authenticated worker
+device identity, form fingerprint and field roles. A claim must match the request,
+session, current target and current form; no caller-provided device ID is trusted.
+Every field and the optional submit button must be unique,
 visible, enabled, in the same top-level form; submissions must be HTTPS POST
 to the page's own origin. Cross-origin frames and non-form login widgets are
 not supported yet. This guard cannot detect every hostile same-page script.
@@ -155,8 +168,9 @@ session private or close it, rather than silently attach with an unguarded page.
 
 The new `credentials.db` sits beside `chat.db`, mode `0600`, with private
 journaling and secure-delete enabled. Payload encryption is authenticated and
-bound to the record ID, origin and field roles. A copied ciphertext from another
-request/credential cannot be used under a different record. Plain values are
+bound to the request ID, target origin, browser session, authenticated worker
+device, current form fingerprint and field roles. A copied ciphertext from
+another request or a changed binding cannot be used. Plain values are
 never stored in chat, request logs, audit rows or model usage records. Audit rows
 hold only handoff IDs and fixed outcomes. Python/browser process memory cannot
 be reliably zeroized; clearing references is not a zeroization guarantee.
