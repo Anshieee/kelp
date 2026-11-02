@@ -66,7 +66,10 @@ def main() -> int:
         result = subprocess.run(pip_audit_command(requirements), check=False)
 
     if result.returncode != 0:
-        print("audit: a known vulnerability affects a declared dependency", file=sys.stderr)
+        print(
+            "audit: the dependency audit failed, see the output above for the advisory",
+            file=sys.stderr,
+        )
     return result.returncode
 
 

@@ -42,8 +42,9 @@ jobs:
       - name: Install
         run: |
           pip install -U pip
-          # Pinned: the auditor and its advisory matching must not change
-          # underneath a merge. Removing a pin is a deliberate gate change.
+          # Pinned: the auditor code must not change underneath a merge.
+          # Advisory data is fetched fresh on purpose, so a newly published
+          # advisory is meant to turn this job red.
           pip install pip-audit==2.10.1
       - name: Audit
         # The dependencies audited are the ones pyproject.toml declares, so

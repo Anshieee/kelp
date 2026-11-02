@@ -18,6 +18,7 @@ from __future__ import annotations
 import sys
 import tomllib
 from pathlib import Path
+from types import SimpleNamespace
 
 from tools import audit_deps
 
@@ -49,6 +50,27 @@ def test_auditor_runs_in_this_interpreter_against_the_rendered_file() -> None:
     assert command[1:3] == ["-m", "pip_audit"]
     assert command[command.index("--requirement") + 1] == "/tmp/kelp-requirements.txt"
     assert "--progress-spinner" in command
+
+
+def test_main_audits_the_manifest_and_propagates_a_failure(monkeypatch) -> None:
+    commands: list[list[str]] = []
+    specs: list[str] = []
+
+    def fake_run(command, check):
+        commands.append(command)
+        requirements_path = command[command.index("--requirement") + 1]
+        specs.append(Path(requirements_path).read_text(encoding="utf-8"))
+        return SimpleNamespace(returncode=3)
+
+    monkeypatch.setattr(audit_deps.subprocess, "run", fake_run)
+    assert audit_deps.main() == 3
+    assert commands and "pip_audit" in commands[0]
+    assert specs == [audit_deps.requirements_text(_project_dependencies())]
+
+
+def test_main_fails_closed_without_dependencies(monkeypatch) -> None:
+    monkeypatch.setattr(audit_deps, "declared_dependencies", lambda: [])
+    assert audit_deps.main() == 1
 
 
 def test_make_audit_target_runs_the_shared_module() -> None:

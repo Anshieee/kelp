@@ -12,7 +12,7 @@ site embeds a copy of the SVG directly in the page, so every box there can be cl
 and these two files must be updated together.
 
 What this snapshot rests on: `main` is at `f7ed9d1`, and the dependency-audit branch takes the
-suite to **1053 tests, all passing**, with the repository public. KEL-5 through KEL-10 are merged,
+suite to **1055 tests, all passing**, with the repository public. KEL-5 through KEL-10 are merged,
 reviewed, and done; KEL-11, KEL-12, KEL-13, KEL-14, KEL-15, and KEL-16 are merged and reviewed too,
 and close M2. KEL-17, KEL-18, KEL-20, KEL-21, KEL-19, and
 KEL-22 then carried M3 to completion and are merged and reviewed: abuse resistance, spend ceilings,
@@ -1384,7 +1384,7 @@ explicit revoke routes are the only kill switch. And a revoke cannot recall a co
   - `kel-28` — merged at `dc50925`; branch head `98ded52`
 - Change history: https://github.com/Anshieee/kelp/commits/main
 - Pull requests: https://github.com/Anshieee/kelp/pulls
-- Tests: 1053 pass (`python -m pytest`); `make demo` plays all six beats, `make eval` passes offline
+- Tests: 1055 pass (`python -m pytest`); `make demo` plays all six beats, `make eval` passes offline
   with the network blocked, and `make audit` finds no known vulnerability in a declared dependency
 
 ### Linear
