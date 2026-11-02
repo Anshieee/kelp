@@ -202,6 +202,12 @@ def test_owner_and_worker_routes_are_separate_and_no_response_echoes_values(api)
     assert api.body_limit_for('/api/credential-worker')[0] == 16384
 
 
+@pytest.mark.parametrize('route', ['credential-requests', 'credential-worker'])
+def test_credential_body_limit_requires_api_prefix(api, route):
+    assert api.body_limit_for(f'/api/{route}') == (16_384, 413, 'credential_body_too_large')
+    assert api.body_limit_for(f'/alias/{route}') == api.body_limit_for('/alias/unknown')
+
+
 def test_cookie_mutations_keep_existing_csrf_gate(api):
     session, csrf, _record = api.sessions.create(label='test browser')
     ident = api.credentials.create(descriptor())['id']
