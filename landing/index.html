@@ -350,13 +350,30 @@
               height="405"
               aria-hidden="true"
             ></canvas>
-            <span class="e-play" aria-hidden="true"
-              ><svg><use href="#play" /></svg
-            ></span>
+            <video
+              class="e-video-player"
+              controls
+              playsinline
+              preload="none"
+              hidden
+            >
+              <source
+                src="media/kelp-concept-film-narrated.mp4"
+                type="video/mp4"
+              />
+              Your browser can’t play this video.
+            </video>
+            <button
+              class="e-play"
+              type="button"
+              aria-label="Play the Kelp concept film"
+            >
+              <svg aria-hidden="true"><use href="#play" /></svg>
+            </button>
           </div>
           <figcaption>
             <strong>Kelp in action.</strong>
-            <span>Demo video coming soon.</span>
+            <span>A two-minute look at Kelp · narrated</span>
           </figcaption>
         </figure>
         <!-- app.js still binds the retired prompt preview by id and has no

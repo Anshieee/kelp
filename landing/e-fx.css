@@ -109,12 +109,42 @@
   place-items: center;
   width: 76px;
   height: 76px;
+  padding: 0;
   transform: translate(-50%, -50%);
   border: 1px solid rgba(255, 255, 255, 0.9);
   border-radius: 9999px;
   background: rgba(255, 255, 255, 0.78);
   box-shadow: 0 10px 34px rgba(69, 67, 63, 0.12);
   color: var(--strong);
+  cursor: pointer;
+  -webkit-appearance: none;
+  appearance: none;
+}
+
+.e-play:focus-visible {
+  outline: 2px solid var(--strong);
+  outline-offset: 3px;
+}
+
+/* The film itself: hidden until the play button asks for it, then it fills
+   the frame. `preload="none"` keeps the 16 MB file off the wire until then. */
+.e-video-player {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  border-radius: inherit;
+  background: #050506;
+  object-fit: contain;
+}
+
+.e-video-player[hidden] {
+  display: none;
+}
+
+.e-video-frame.is-playing .e-video-poster,
+.e-video-frame.is-playing .e-play {
+  display: none;
 }
 
 .e-play svg {

@@ -795,10 +795,39 @@
     start();
   }
 
+  /* ---------------------------------------------------------------------
+     “Kelp in action” film.
+     The frame shows the dithered poster and a play button; the video stays
+     hidden and unloaded (`preload="none"`) until the button is pressed. Then
+     the poster and button step aside and the native controls take over, so
+     the narrated audio starts on the reader's own action, never on scroll or
+     on load.
+     --------------------------------------------------------------------- */
+  function initVideo() {
+    const frame = document.querySelector(".e-video-frame");
+    if (!frame) return;
+    const button = frame.querySelector(".e-play");
+    const video = frame.querySelector(".e-video-player");
+    if (!button || !video) return;
+
+    button.addEventListener("click", () => {
+      frame.classList.add("is-playing");
+      video.hidden = false;
+      const started = video.play();
+      if (started && typeof started.catch === "function") {
+        started.catch(() => {
+          /* Autoplay refusal or a decode error: the native controls remain. */
+        });
+      }
+      video.focus({ preventScroll: true });
+    });
+  }
+
   /* ------------------------------------------------------------------- */
 
   initExamples();
   initPhoneSpin();
+  initVideo();
   initOrb();
 
   idle(paintAllDithers);
