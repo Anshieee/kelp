@@ -34,6 +34,7 @@ from .loader import (
     default_plugin_root,
     find_pinned_plugin,
     inspect_plugin_package,
+    plugin_review_warnings,
     read_plugin_lock,
     write_plugin_lock,
 )
@@ -92,11 +93,19 @@ def install(
     force: bool = False,
     expected_digest: str | None = None,
     expected_version: str | None = None,
+    allow_flagged_imports: bool = False,
 ) -> dict[str, Any]:
     """Validate, stage, atomically swap, and pin one directory or zip package."""
 
     root_path = _resolve_root(root)
     inspected = inspect_plugin_package(package)
+    warnings = plugin_review_warnings(inspected)
+    flagged = [warning for warning in warnings if warning.startswith("flagged import:")]
+    if flagged and not allow_flagged_imports:
+        raise PluginPackageError(
+            "package contains flagged imports; review and explicitly enable them: "
+            + "; ".join(flagged)
+        )
     if expected_digest is not None and inspected.digest != expected_digest:
         raise PluginPackageError(
             f"plugin package changed after approval: expected digest {expected_digest}, "
@@ -202,6 +211,7 @@ def install_registered(
     store: str | Path | None = None,
     expected_digest: str | None = None,
     expected_version: str | None = None,
+    allow_flagged_imports: bool = False,
 ) -> dict[str, Any]:
     """Install a matching, pinned package from the local skill store."""
 
@@ -217,6 +227,7 @@ def install_registered(
         root=root,
         expected_digest=expected_digest,
         expected_version=expected_version,
+        allow_flagged_imports=allow_flagged_imports,
     )
 
 
@@ -322,6 +333,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     install_parser = subcommands.add_parser("install", help="validate, copy, and pin a package")
     install_parser.add_argument("package")
     install_parser.add_argument("--force", action="store_true", help="replace an existing install")
+    install_parser.add_argument("--yes", action="store_true", help="approve the displayed package review")
+    install_parser.add_argument(
+        "--enable-flagged-imports", action="store_true",
+        help="explicitly allow statically flagged imports after reviewing the package",
+    )
     install_parser.add_argument("--root", default=None, help="plugin root (default: KELP_PLUGIN_ROOT or var/plugins)")
 
     uninstall_parser = subcommands.add_parser("uninstall", help="remove a package and its pin")
@@ -335,7 +351,36 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = parser.parse_args(argv)
     try:
         if args.command == "install":
-            result = install(args.package, root=args.root, force=args.force)
+            reviewed = inspect_plugin_package(args.package)
+            warnings = plugin_review_warnings(reviewed)
+            print(f"source: {reviewed.source}")
+            print(f"package: {reviewed.name} {reviewed.version}")
+            print(f"digest: {reviewed.digest}")
+            print("warnings:")
+            for warning in warnings:
+                print(f"  - {warning}")
+            if not warnings:
+                print("  - none")
+            flagged = [warning for warning in warnings if warning.startswith("flagged import:")]
+            if flagged and not args.enable_flagged_imports:
+                raise PluginPackageError(
+                    "flagged imports require --enable-flagged-imports after review"
+                )
+            if not args.yes:
+                answer = input(f"Install reviewed digest {reviewed.digest}? [y/N] ").strip().lower()
+                if answer not in {"y", "yes"}:
+                    print("installation cancelled", file=sys.stderr)
+                    return 1
+            else:
+                print(f"approved reviewed digest {reviewed.digest}")
+            result = install(
+                reviewed.source,
+                root=args.root,
+                force=args.force,
+                expected_digest=reviewed.digest,
+                expected_version=reviewed.version,
+                allow_flagged_imports=args.enable_flagged_imports,
+            )
             print(
                 f"installed {result['name']} {result['version']} "
                 f"{result['digest']} -> {result['path']}"
