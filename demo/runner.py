@@ -231,7 +231,6 @@ class Demo:
             ("kill, restart, resume", self._beat_resume),
         )
         started = time.monotonic()
-        failure: DemoError | None = None
         try:
             for number, (name, step) in enumerate(steps, start=1):
                 beat = Beat(number=number, name=name)
@@ -250,7 +249,6 @@ class Demo:
             self._write_report(elapsed)
             return self.beats
         except DemoError as exc:
-            failure = exc
             self._write_report(time.monotonic() - started, failure=exc)
             raise
         finally:

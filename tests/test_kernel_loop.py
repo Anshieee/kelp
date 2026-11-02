@@ -19,7 +19,6 @@ from kernel import (
     RegistryToolExecutor,
     TurnBudget,
 )
-from kernel import events
 from kernel.provider import (
     ChatRequest,
     ProviderFailure,
