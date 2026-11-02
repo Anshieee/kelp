@@ -73,9 +73,12 @@ jobs:
       - name: Collect failed check context
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          EVENT_NAME: ${{ github.event_name }}
           REPOSITORY: ${{ github.repository }}
           PR_SHA: ${{ steps.pr.outputs.sha }}
           RUN_ID: ${{ github.event.workflow_run.id }}
+          RUN_HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
         run: |
           set -euo pipefail
           context_file="$RUNNER_TEMP/failed-check-context.txt"
@@ -90,12 +93,60 @@ jobs:
               --status failure --json databaseId --jq '.[0].databaseId // empty' 2>/dev/null || true)
           fi
 
-          if [[ -n "$run_id" ]]; then
+          if [[ -n "$run_id" && "$EVENT_NAME" == workflow_run && "$RUN_HEAD_SHA" != "$PR_SHA" ]]; then
+            echo "Workflow run head SHA does not match the resolved pull request head; skipping stale check context." >&2
+          elif [[ -n "$run_id" ]]; then
             gh run view "$run_id" --json jobs \
               --jq '.jobs[] | select(.conclusion == "failure") | .name' \
               > "$names_file" 2>/dev/null || true
             gh run view "$run_id" --log-failed > "$logs_file" 2>/dev/null || true
           fi
+
+          redacted_logs_file="$RUNNER_TEMP/failed-check-logs-redacted.txt"
+          python3 - "$logs_file" "$redacted_logs_file" <<'PY'
+          import base64
+          import os
+          import re
+          import sys
+          from urllib.parse import quote, quote_plus
+
+          source, destination = sys.argv[1:]
+          with open(source, encoding="utf-8", errors="replace") as stream:
+              text = stream.read()
+
+          secrets = [os.environ.get(name, "") for name in ("GH_TOKEN", "OPENROUTER_API_KEY")]
+          variants = set()
+          for secret in filter(None, secrets):
+              encoded = {
+                  secret,
+                  quote(secret, safe=""),
+                  quote_plus(secret, safe=""),
+                  base64.b64encode(secret.encode()).decode(),
+                  base64.urlsafe_b64encode(secret.encode()).decode().rstrip("="),
+                  secret.encode().hex(),
+              }
+              for value in encoded:
+                  if len(value) >= 8:
+                      variants.add(value)
+                      # Logs sometimes contain only a truncated prefix or suffix.
+                      variants.update(value[:size] for size in range(8, len(value)))
+                      variants.update(value[-size:] for size in range(8, len(value)))
+
+          for value in sorted(variants, key=len, reverse=True):
+              text = text.replace(value, "[REDACTED]")
+
+          patterns = (
+              (r"(?i)(\bBearer\s+)[A-Za-z0-9._~+/=-]{6,}", r"\1[REDACTED]"),
+              (r"(?i)((?:api[_-]?key|access[_-]?key|private[_-]?key|secret|token|password|credential|authorization)[A-Za-z0-9_-]*\s*(?:=|:|%3[dD])\s*)(?:\"[^\"\r\n]*\"|'[^'\r\n]*'|[^\s,;&]+)", r"\1[REDACTED]"),
+              (r"\b(?:gh[pousr]_[A-Za-z0-9_]{8,}|github_pat_[A-Za-z0-9_]{8,}|sk-(?:or-v1-)?[A-Za-z0-9_-]{8,})\b", "[REDACTED]"),
+              (r"\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\b", "[REDACTED]"),
+          )
+          for pattern, replacement in patterns:
+              text = re.sub(pattern, replacement, text)
+
+          with open(destination, "w", encoding="utf-8") as stream:
+              stream.write(text)
+          PY
 
           {
             printf 'Failing check names:\n'
@@ -105,8 +156,8 @@ jobs:
               printf 'Unavailable\n'
             fi
             printf '\nFailure log excerpt (up to 12000 bytes):\n'
-            if [[ -s "$logs_file" ]]; then
-              tail -c 12000 "$logs_file"
+            if [[ -s "$redacted_logs_file" ]]; then
+              tail -c 12000 "$redacted_logs_file"
             else
               printf 'Unavailable\n'
             fi
