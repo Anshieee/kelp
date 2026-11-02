@@ -42,12 +42,13 @@ __all__ = [
 
 MAX_SUMMARY_CHARS = 120
 MAX_ARGUMENT_BYTES = 4096
+MAX_APPROVAL_FILES = 20
 MAX_SOURCES = 8
 SWEEP_ITEM_LIMIT = 5
 _SNIPPET_CHARS = 240
 
 APPROVAL_RATIONALE_SUFFIX = (
-    "Nothing has run yet. This approval expires in 10 minutes and works once."
+    "Nothing has run yet. This approval works once."
 )
 
 #: Whether this build can execute an approved command (KEL-22 decision).
@@ -77,6 +78,7 @@ TOOL_LABELS: dict[str, str] = {
     "web.search": "Web search",
     "docs.answer": "Document answer",
     "github.read": "GitHub",
+    "github.write": "Open GitHub pull request",
     "schedule.create": "Schedule task",
     "shell.exec": "Run command",
 }
@@ -488,28 +490,75 @@ def artifact_card(meta: Mapping[str, Any], *, base: str = "/api/artifacts") -> d
 # -- approvals -------------------------------------------------------------
 
 
+def _approval_amounts(
+    arguments: Mapping[str, Any] | None, secrets: Sequence[str]
+) -> list[str]:
+    """Render declared monetary bounds without copying arbitrary arguments."""
+    result: list[str] = []
+    for key in ("amount", "amount_usd", "max_amount", "max_amount_usd", "limit_usd"):
+        value = (arguments or {}).get(key)
+        if isinstance(value, (int, float)) and not isinstance(value, bool):
+            result.append(f"{key}={_scrub(str(value), secrets)}")
+    return result
+
+
 def approval_rationale(
     effects: Sequence[str],
     *,
     scopes: Mapping[str, Any] | None = None,
     command: Sequence[str] | None = None,
+    tool: str = "",
+    expires_at: str | None = None,
+    amounts: Sequence[str] = (),
+    truncated: bool = False,
 ) -> str:
+    # Adapted from OpenMausBot's PendingApproval/ApprovalCard plain-language
+    # pending-card pattern (milind-soni/OpenMausBot, Apache-2.0); modified for
+    # Kelp's server-derived, single-use approval payloads.
     effect_set = {str(effect) for effect in effects}
     clauses: list[str] = []
-    if "write" in effect_set:
+    clauses.append(f"Requested tool: {tool or 'unspecified'}.")
+    effect_words = {
+        "read": "read access",
+        "write": "write changes",
+        "network": "network access",
+        "execute": "command execution",
+    }
+    plain_effects = [effect_words.get(effect, effect) for effect in sorted(effect_set)]
+    clauses.append(
+        "Requested effects: "
+        + (", ".join(plain_effects) if plain_effects else "none declared")
+        + "."
+    )
+    scope_values = scopes or {}
+    for key, label in (("hosts", "Hosts"), ("paths", "Paths"), ("repos", "Repositories")):
+        values = [str(value) for value in scope_values.get(key, ()) or ()]
+        clauses.append(f"{label}: {', '.join(values) if values else 'none declared'}.")
+    clauses.append(
+        f"Monetary amount: {', '.join(amounts) if amounts else 'none declared'}."
+    )
+    clauses.append(
+        f"Expiry: {expires_at or 'not specified'}; this approval works once."
+    )
+    if "execute" in effect_set and not EXEC_AVAILABLE:
+        clauses.append(EXEC_UNAVAILABLE_CLAUSE)
+    if tool == "github.write":
+        clauses.append(
+            "After you approve, the repository action is to create a branch, commit the files "
+            "summarized below, and open a pull request."
+        )
+    elif "write" in effect_set:
         clauses.append("The assistant wants to change something in your workspace.")
-    if "execute" in effect_set:
-        if EXEC_AVAILABLE:
-            clauses.append(
-                "The assistant wants to run a command on this machine. It runs once."
-            )
-        else:
-            clauses.append(EXEC_UNAVAILABLE_CLAUSE)
-    hosts = list((scopes or {}).get("hosts") or [])
-    if not hosts and command and effect_set & {"execute", "network"}:
-        hosts = []
-    if "network" in effect_set and hosts:
-        clauses.append(f"The assistant wants to send data to {hosts[0]}.")
+    if "network" in effect_set and (scope_values.get("hosts") or ()):
+        clauses.append(
+            "The assistant wants to send data to "
+            + ", ".join(str(host) for host in scope_values.get("hosts", ()))
+            + "."
+        )
+    elif "execute" in effect_set and EXEC_AVAILABLE:
+        clauses.append("The assistant wants to run the requested command on this machine.")
+    if truncated:
+        clauses.append("Some request details are truncated; see the card's truncation markers.")
     if not clauses:
         clauses.append("The assistant needs your permission for this step.")
     return " ".join(clauses + [APPROVAL_RATIONALE_SUFFIX])
@@ -563,6 +612,34 @@ def approval_card(
     if command_list:
         summary_args = {"command": command_list}
     summary = summarize_arguments(tool, summary_args)
+    cleaned_arguments = redact_arguments(arguments, secrets=secret_values)
+    file_summary: dict[str, Any] | None = None
+    if tool == "github.write":
+        raw_files = (arguments or {}).get("files")
+        files = raw_files if isinstance(raw_files, (list, tuple)) else []
+        visible_files: list[dict[str, Any]] = []
+        for item in files[:MAX_APPROVAL_FILES]:
+            if not isinstance(item, Mapping):
+                continue
+            path = item.get("path")
+            content = item.get("content")
+            if not isinstance(path, str):
+                continue
+            size_bytes = len(content.encode("utf-8")) if isinstance(content, str) else None
+            visible_files.append(
+                {
+                    "path": _scrub(path, secret_values),
+                    "size_bytes": size_bytes,
+                }
+            )
+        file_summary = {
+            "files": visible_files,
+            # The arguments pane is intentionally all-or-nothing at 4 KB. Be
+            # explicit that this bounded metadata summary is not the full
+            # request whenever that payload (or the file list) was truncated.
+            "truncated": cleaned_arguments == {"truncated": True}
+            or len(files) > MAX_APPROVAL_FILES,
+        }
     safe_scopes = {
         "paths": _scrub(list((scopes or {}).get("paths") or []), secret_values),
         "hosts": _scrub(list((scopes or {}).get("hosts") or []), secret_values),
@@ -580,14 +657,22 @@ def approval_card(
         "skill": skill or tool,
         "title": title or f"Use {tool_label(tool)}",
         "rationale": approval_rationale(
-            effects, scopes=safe_scopes, command=command_list
+            effects,
+            scopes=safe_scopes,
+            command=command_list,
+            tool=tool,
+            expires_at=expires,
+            amounts=_approval_amounts(arguments, secret_values),
+            truncated=cleaned_arguments == {"truncated": True}
+            or (file_summary is not None and file_summary["truncated"]),
         ),
         "summary": summary,
         "effects": [str(effect) for effect in effects],
         "blast_radius": _scrub([str(item) for item in blast_radius], secret_values),
         "scopes": safe_scopes,
         "command": command_list,
-        "arguments": redact_arguments(arguments, secrets=secret_values),
+        "arguments": cleaned_arguments,
+        **({"file_summary": file_summary} if file_summary is not None else {}),
         "arguments_digest": arguments_digest,
         "requested_at": requested,
         "expires_at": expires,

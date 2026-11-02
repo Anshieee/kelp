@@ -245,6 +245,88 @@ def test_approval_card_shape_uses_argv_and_no_cost() -> None:
     assert card["status"] == "pending"
 
 
+def test_approval_card_rationale_names_exact_effect_scope_amount_and_expiry() -> None:
+    card = approval_card(
+        approval_id="apr_scoped",
+        source="openshell",
+        thread_id="ses_1",
+        turn_id="turn_1",
+        call_id="call_1",
+        tool="billing.charge",
+        effects=("network", "write"),
+        arguments={"amount_usd": 12.5, "payload": "x" * 5000},
+        scopes={
+            "hosts": ["payments.example"],
+            "paths": ["/v1/charge"],
+            "repos": ["acme/billing"],
+        },
+        requested_at="2026-10-29T09:00:00+00:00",
+        expires_at="2026-10-29T09:03:00+00:00",
+    )
+
+    rationale = card["rationale"]
+    assert "Requested tool: billing.charge." in rationale
+    assert "network access, write changes" in rationale
+    assert "Hosts: payments.example." in rationale
+    assert "Paths: /v1/charge." in rationale
+    assert "Repositories: acme/billing." in rationale
+    assert "Monetary amount: amount_usd=12.5." in rationale
+    assert "Expiry: 2026-10-29T09:03:00+00:00" in rationale
+    assert "Some request details are truncated" in rationale
+    assert card["arguments"] == {"truncated": True}
+
+
+def test_github_write_approval_summarizes_bounded_files_when_arguments_redact() -> None:
+    files = [
+        {"path": f"src/file-{index}.txt", "content": "x" * 10_000}
+        for index in range(20)
+    ]
+    card = approval_card(
+        approval_id="apr_github_write",
+        source="skill",
+        thread_id="ses_1",
+        turn_id="turn_1",
+        call_id="call_1",
+        tool="github.write",
+        arguments={"repo": "Anshieee/kelp", "files": files},
+        scopes={"repos": ["Anshieee/kelp"]},
+    )
+
+    assert card["arguments"] == {"truncated": True}
+    assert card["file_summary"] == {
+        "files": [
+            {"path": f"src/file-{index}.txt", "size_bytes": 10_000}
+            for index in range(20)
+        ],
+        "truncated": True,
+    }
+    assert "files summarized below" in card["rationale"]
+
+
+def test_github_write_file_summary_marks_omitted_files() -> None:
+    card = approval_card(
+        approval_id="apr_github_many_files",
+        source="skill",
+        thread_id="ses_1",
+        turn_id=None,
+        call_id=None,
+        tool="github.write",
+        arguments={
+            "files": [
+                {"path": f"file-{index}.txt", "content": "ok"}
+                for index in range(21)
+            ]
+        },
+    )
+
+    assert len(card["file_summary"]["files"]) == 20
+    assert card["file_summary"]["files"][0] == {
+        "path": "file-0.txt",
+        "size_bytes": 2,
+    }
+    assert card["file_summary"]["truncated"] is True
+
+
 def test_approval_card_scrubs_secret_values_from_argv_and_arguments() -> None:
     secret = "sk-live-abc123secret"
     card = approval_card(

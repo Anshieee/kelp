@@ -23,6 +23,7 @@ HANDLERS: dict[str, str] = {
     "web.search": "demo.handlers.web_search",
     "docs.answer": "demo.handlers.docs_answer",
     "github.read": "demo.handlers.github_read",
+    "github.write": "demo.handlers.github_write",
     "schedule.create": "demo.handlers.schedule_create",
 }
 

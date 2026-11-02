@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import atexit
+import ast
 import hashlib
 import importlib
 import importlib.util
@@ -59,14 +60,18 @@ __all__ = [
     "PLUGIN_MAX_BYTES",
     "PLUGIN_MAX_ENTRIES",
     "PLUGIN_ROOT_ENV",
+    "PLUGIN_STORE_ENV",
     "PluginPackage",
     "PluginPackageError",
     "SkillRegistry",
     "default_plugin_root",
+    "default_plugin_store",
+    "find_pinned_plugin",
     "inspect_plugin_package",
     "load_registry",
     "materialize_plugin_package",
     "package_digest",
+    "plugin_review_warnings",
     "read_plugin_lock",
     "write_plugin_lock",
 ]
@@ -80,12 +85,14 @@ _META_SCHEMA_PATH = Path(__file__).resolve().parent / "manifest.schema.json"
 
 # -- installed plugin packages (KEL-25 / M4-D) ------------------------------
 PLUGIN_ROOT_ENV = "KELP_PLUGIN_ROOT"
+PLUGIN_STORE_ENV = "KELP_PLUGIN_STORE"
 PLUGIN_ALLOW_UNPINNED_ENV = "KELP_PLUGINS_ALLOW_UNPINNED"
 PLUGIN_LOCK_FILENAME = "plugins.lock.json"
 PLUGIN_LOCK_VERSION = 1
 PLUGIN_MAX_BYTES = 8 * 1024 * 1024
 PLUGIN_MAX_ENTRIES = 4096
 DEFAULT_PLUGIN_ROOT = Path(__file__).resolve().parents[1] / "var" / "plugins"
+DEFAULT_PLUGIN_STORE = Path(__file__).resolve().parents[1] / "var" / "skill-store"
 _PLUGIN_IGNORED_DIRS = frozenset({"__pycache__"})
 _PLUGIN_IGNORED_SUFFIXES = (".pyc", ".pyo")
 _MEMBER_CHARS_RE = re.compile(r"^[A-Za-z0-9._-]+$")
@@ -230,6 +237,45 @@ def default_plugin_root(environ: Mapping[str, str] | None = None) -> Path:
     env = os.environ if environ is None else environ
     raw = str(env.get(PLUGIN_ROOT_ENV, "")).strip()
     return Path(raw).expanduser() if raw else DEFAULT_PLUGIN_ROOT
+
+
+def default_plugin_store(environ: Mapping[str, str] | None = None) -> Path:
+    """Return the local, digest-pinned skill package store."""
+
+    env = os.environ if environ is None else environ
+    raw = str(env.get(PLUGIN_STORE_ENV, "")).strip()
+    return Path(raw).expanduser() if raw else DEFAULT_PLUGIN_STORE
+
+
+def find_pinned_plugin(
+    tool: str, root: str | Path | None = None
+) -> PluginPackage | None:
+    """Find one validated, digest-pinned package in the local skill store.
+
+    Invalid or unpinned entries are ignored: discovery never turns an unknown
+    model tool into permission to execute arbitrary package code.
+    """
+
+    store = Path(root) if root is not None else default_plugin_store()
+    if not store.is_dir():
+        return None
+    pins = read_plugin_lock(store)
+    for candidate in sorted(store.iterdir(), key=lambda item: item.name):
+        if candidate.name.startswith((".", "_")):
+            continue
+        try:
+            package = inspect_plugin_package(candidate)
+        except (PluginPackageError, OSError):
+            continue
+        pin = pins.get(package.name)
+        if (
+            package.name == tool
+            and pin is not None
+            and pin["digest"] == package.digest
+            and pin["version"] == package.version
+        ):
+            return package
+    return None
 
 
 def package_digest(entries: Iterable[tuple[str, int, bytes]]) -> str:
@@ -483,6 +529,106 @@ def inspect_plugin_package(path: str | Path) -> PluginPackage:
         manifest=manifest,
         entries=tuple(entries),
     )
+
+
+# Review flow inspired by OpenMausBot's Apache-2.0 skill-import review pattern;
+# this native Kelp implementation does not copy their source.
+def plugin_review_warnings(package: PluginPackage) -> tuple[str, ...]:
+    """Return review warnings derived only from the digest-covered package image.
+
+    The imports below can open network connections, execute other programs, or
+    load code dynamically. They are not automatically forbidden, but must be
+    explicitly enabled by the operator after seeing this review.
+
+    """
+
+    flagged = {
+        "builtins.__import__", "ctypes", "importlib", "multiprocessing", "os",
+        "requests", "socket", "subprocess", "urllib", "httpx", "http.client",
+    }
+    imports: set[str] = set()
+    limitations: set[str] = {
+        "static import review covers import statements and recognized dynamic-import calls; "
+        "computed or indirect callables may not be resolved"
+    }
+    for relpath, _mode, content in package.entries:
+        if not relpath.endswith(".py"):
+            continue
+        try:
+            tree = ast.parse(content.decode("utf-8"), filename=relpath)
+        except (UnicodeDecodeError, SyntaxError):
+            return (f"could not statically inspect imports in {relpath}",)
+        aliases: dict[str, str] = {}
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                for alias in node.names:
+                    imports.add(alias.name)
+                    aliases[alias.asname or alias.name.split(".")[0]] = alias.name
+            elif isinstance(node, ast.ImportFrom) and node.module:
+                imports.add(node.module)
+                if node.module == "builtins" and any(
+                    alias.name == "__import__" for alias in node.names
+                ):
+                    for alias in node.names:
+                        if alias.name == "__import__":
+                            aliases[alias.asname or alias.name] = "builtins.__import__"
+                elif node.module == "importlib":
+                    for alias in node.names:
+                        if alias.name == "import_module":
+                            aliases[alias.asname or alias.name] = "importlib.import_module"
+
+        def resolve(node: ast.AST) -> str | None:
+            if isinstance(node, ast.Name):
+                if node.id == "__import__":
+                    return "builtins.__import__"
+                return aliases.get(node.id)
+            if isinstance(node, ast.Attribute):
+                parent = resolve(node.value)
+                if parent:
+                    return f"{parent}.{node.attr}"
+                if isinstance(node.value, ast.Name) and node.value.id in {"builtins", "importlib"}:
+                    return f"{node.value.id}.{node.attr}"
+            if (
+                isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Name)
+                and node.func.id == "getattr"
+                and len(node.args) >= 2
+                and isinstance(node.args[1], ast.Constant)
+                and isinstance(node.args[1].value, str)
+            ):
+                parent = resolve(node.args[0])
+                if parent:
+                    return f"{parent}.{node.args[1].value}"
+            return None
+
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Assign):
+                target = resolve(node.value)
+                if target:
+                    for assigned in node.targets:
+                        if isinstance(assigned, ast.Name):
+                            aliases[assigned.id] = target
+            elif isinstance(node, ast.Call):
+                target = resolve(node.func)
+                if target in {"builtins.__import__", "importlib.import_module"}:
+                    imports.add(target)
+                    module_arg = node.args[0] if node.args else None
+                    if isinstance(module_arg, ast.Constant) and isinstance(module_arg.value, str):
+                        imports.add(module_arg.value)
+                    else:
+                        limitations.add(
+                            "dynamic import target is computed; manually review code not resolved by static analysis"
+                        )
+    flagged_imports = {
+        name for name in imports
+        if name in flagged or any(name.startswith(item + ".") for item in flagged)
+    }
+    warnings = [f"flagged import: {name}" for name in sorted(flagged_imports)]
+    warnings.extend(f"review limitation: {message}" for message in sorted(limitations))
+    effects = package.manifest.get("permissions", {}).get("effects", [])
+    for effect in sorted(set(effects) - {"read"}):
+        warnings.append(f"declared effect: {effect}")
+    return tuple(warnings)
 
 
 def _write_package_entries(
@@ -1203,6 +1349,16 @@ class SkillRegistry:
 
     def __len__(self) -> int:
         return len(self._skills)
+
+    def reload(self) -> "SkillRegistry":
+        """Build a fresh validated snapshot after an approved plugin install."""
+
+        return type(self).load(
+            self.root,
+            policy=self._policy,
+            audit=self._audit,
+            plugin_root=self.plugin_root,
+        )
 
     # -- runtime -----------------------------------------------------------
 
