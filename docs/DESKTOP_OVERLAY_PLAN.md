@@ -16,25 +16,28 @@
 Two windows, one shell.
 
 **Command panel** (`overlay.html`, label `overlay`) — a transparent, frameless,
-always-on-top window. It is parked **beside the orb**, never centred: right of
-it by default, flipped to the left when the orb sits near the screen edge, and
-clamped to the monitor work area. Summoned by clicking the orb or with
-`CommandOrControl+Shift+Space`; both run the same Rust toggle.
+always-on-top window. It always opens to the **left of the orb** with the bottom
+edges aligned, so growing upward never pushes it off screen; it is clamped to
+the monitor work area and only falls back to the right side if the left is out
+of room. Summoned by clicking the orb or with `CommandOrControl+Shift+Space`;
+both run the same Rust toggle.
 
-- *Compact* (400×76): fully transparent window holding one white input pill —
+- *Compact* (400×76): a fully transparent window holding one white input pill —
   field, mic, screen, expand, send. No panel, no avatar: the orb is the avatar.
 - *Expanded* (400×440): the **same width** and same pill at the top, with a
   white conversation surface beneath it and a chevron to collapse.
 
 The expand button does double duty: compact → expanded, and expanded → open the
-full app and hide the panel. Clicking anywhere else hides the window entirely
-(debounced focus-loss), as does Escape from the compact state. Sending appends a
-canned reply so the interaction reads correctly; nothing leaves the process.
+full app and hide the panel. Clicking anywhere outside hides the window entirely;
+Rust decides, so a click on the orb reaches its own toggle instead of being
+double-handled. Sending appends a canned reply so the interaction reads
+correctly; nothing leaves the process.
 
-**Pet** (`pet.html`, label `pet`) — the avatar. 148×148, transparent, no shadow,
-no drag region, and only the disc takes pointer events, so the orb looks and
-behaves like a floating object rather than a window. A click toggles the panel;
-the full app is reached from inside the panel.
+**Pet** (`pet.html`, label `pet`) — the avatar, parked at the bottom right of the
+primary monitor. 96×96, transparent, no shadow, no drag region, and only the
+disc takes pointer events, so the orb looks and behaves like a floating object
+rather than a window. A click toggles the panel; the full app is reached from
+inside the panel.
 
 **Main window** (`index.html`, label `main`) — a ChatGPT-shaped shell:
 

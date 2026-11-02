@@ -1,9 +1,9 @@
 //! Kelp desktop shell: main window, frameless pet, and the summonable panel.
 //!
-//! The panel is a separate window so the orb stays clickable whether or not it
-//! is open. It is positioned beside the pet every time it is summoned, sized to
-//! the compact bar, and flipped to the other side when the pet sits near a
-//! screen edge. Clicking the pet or the global shortcut runs the same toggle.
+//! The pet is the avatar: it lives at the bottom right of the primary monitor
+//! and carries no window chrome. The panel opens to its **left**, bottom edges
+//! aligned, so growing it upward never pushes it off screen. Clicking the pet
+//! or the global shortcut runs the same toggle.
 //!
 //! No chat logic lives here. Unsigned dev builds only: no updater keys, no
 //! signing step. No telemetry.
@@ -18,10 +18,13 @@ const OVERLAY_SHORTCUT: &str = "CommandOrControl+Shift+Space";
 const PANEL_WIDTH: f64 = 400.0;
 /// Compact bar height in logical pixels. Expanded height is driven from JS.
 const PANEL_COMPACT_HEIGHT: f64 = 76.0;
+/// Pet window side in logical pixels: a small floating orb, not a panel.
+const PET_SIZE: f64 = 96.0;
 
-/// Park the panel next to the orb: to its right by default, to its left when
-/// there is no room, always inside the pet's monitor work area.
-fn place_beside_pet(app: &tauri::AppHandle, window: &tauri::WebviewWindow) {
+/// Park the panel to the left of the orb with the bottom edges aligned, inside
+/// the pet's monitor. Falls back to the right side only when the left is out of
+/// room (a pet parked against the left edge).
+fn place_beside_pet(app: &tauri::AppHandle, window: &tauri::WebviewWindow, width: f64, height: f64) {
     let Some(pet) = app.get_webview_window("pet") else {
         return;
     };
@@ -33,11 +36,11 @@ fn place_beside_pet(app: &tauri::AppHandle, window: &tauri::WebviewWindow) {
         return;
     };
 
-    let panel_w = (PANEL_WIDTH * scale).round() as i32;
-    let panel_h = (PANEL_COMPACT_HEIGHT * scale).round() as i32;
+    let panel_w = (width * scale).round() as i32;
+    let panel_h = (height * scale).round() as i32;
     let gap = (12.0 * scale).round() as i32;
 
-    let bounds = pet
+    let (min_x, min_y, max_x, max_y) = pet
         .current_monitor()
         .ok()
         .flatten()
@@ -52,22 +55,26 @@ fn place_beside_pet(app: &tauri::AppHandle, window: &tauri::WebviewWindow) {
             )
         })
         .unwrap_or((0, 0, i32::MAX, i32::MAX));
-    let (min_x, min_y, max_x, max_y) = bounds;
 
-    let mut x = pet_pos.x + pet_size.width as i32 + gap;
+    // Default: to the left of the orb.
+    let mut x = pet_pos.x - panel_w - gap;
+    if x < min_x + 8 {
+        x = pet_pos.x + pet_size.width as i32 + gap;
+    }
     if x + panel_w > max_x - 8 {
-        x = pet_pos.x - panel_w - gap;
+        x = max_x - panel_w - 8;
     }
     if x < min_x + 8 {
         x = min_x + 8;
     }
 
-    let mut y = pet_pos.y;
-    if y + panel_h > max_y - 8 {
-        y = max_y - panel_h - 8;
-    }
+    // Bottom edges aligned: the panel grows upward as it expands.
+    let mut y = pet_pos.y + pet_size.height as i32 - panel_h;
     if y < min_y + 8 {
         y = min_y + 8;
+    }
+    if y + panel_h > max_y - 8 {
+        y = max_y - panel_h - 8;
     }
 
     let _ = window.set_position(PhysicalPosition::new(x, y));
@@ -79,7 +86,7 @@ fn show_panel(app: &tauri::AppHandle) {
         return;
     };
     let _ = window.set_size(LogicalSize::new(PANEL_WIDTH, PANEL_COMPACT_HEIGHT));
-    place_beside_pet(app, &window);
+    place_beside_pet(app, &window, PANEL_WIDTH, PANEL_COMPACT_HEIGHT);
     let _ = window.show();
     let _ = window.set_focus();
 }
@@ -102,6 +109,69 @@ fn toggle_overlay(app: tauri::AppHandle) {
     toggle_panel(&app);
 }
 
+/// Resize and immediately re-park, so expanding keeps the bottom edge stable
+/// instead of growing down past the screen.
+#[tauri::command]
+fn resize_overlay(app: tauri::AppHandle, width: f64, height: f64) {
+    let Some(window) = app.get_webview_window("overlay") else {
+        return;
+    };
+    let _ = window.set_size(LogicalSize::new(width, height));
+    place_beside_pet(&app, &window, width, height);
+}
+
+/// Hide the panel when focus leaves it — unless the orb or the main window took
+/// focus. Those two are part of the app, and the orb runs its own toggle; hiding
+/// here first would make that toggle re-show the panel instead of closing it.
+fn watch_overlay_blur(app: &tauri::AppHandle) {
+    let Some(overlay) = app.get_webview_window("overlay") else {
+        return;
+    };
+    let handle = app.clone();
+    overlay.on_window_event(move |event| {
+        if !matches!(event, tauri::WindowEvent::Focused(false)) {
+            return;
+        }
+        let app = handle.clone();
+        std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(140));
+            let ours = ["pet", "main"].iter().any(|label| {
+                app.get_webview_window(label)
+                    .and_then(|w| w.is_focused().ok())
+                    .unwrap_or(false)
+            });
+            if ours {
+                return;
+            }
+            if let Some(window) = app.get_webview_window("overlay") {
+                let _ = window.hide();
+            }
+        });
+    });
+}
+
+/// Park the orb at the bottom right of the primary monitor.
+fn place_pet(app: &tauri::AppHandle) {
+    let Some(pet) = app.get_webview_window("pet") else {
+        return;
+    };
+    let Ok(Some(monitor)) = pet.primary_monitor() else {
+        return;
+    };
+    // Pin the size too: some platforms pad a frameless window past the
+    // configured width, leaving an invisible strip beside the orb.
+    let _ = pet.set_size(LogicalSize::new(PET_SIZE, PET_SIZE));
+    let scale = monitor.scale_factor();
+    let origin = monitor.position();
+    let size = monitor.size();
+    let pet_px = (PET_SIZE * scale).round() as i32;
+    let margin_x = (24.0 * scale).round() as i32;
+    let margin_y = (96.0 * scale).round() as i32;
+    let x = origin.x + size.width as i32 - pet_px - margin_x;
+    let y = origin.y + size.height as i32 - pet_px - margin_y;
+    let _ = pet.set_position(PhysicalPosition::new(x, y));
+}
+
 fn main() {
     tauri::Builder::default()
         .plugin(tauri_plugin_store::Builder::default().build())
@@ -115,9 +185,11 @@ fn main() {
                 })
                 .build(),
         )
-        .invoke_handler(tauri::generate_handler![toggle_overlay])
+        .invoke_handler(tauri::generate_handler![toggle_overlay, resize_overlay])
         .setup(|app| {
             app.global_shortcut().register(OVERLAY_SHORTCUT)?;
+            place_pet(app.handle());
+            watch_overlay_blur(app.handle());
 
             // Desk pet rides on all workspaces (macOS). Elsewhere the
             // always-on-top frameless window is the whole story.

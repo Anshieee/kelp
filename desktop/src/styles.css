@@ -24,8 +24,8 @@ li { padding: 6px 4px; border-bottom: 1px solid #f0ece3; display: flex; justify-
 /* Pet overlay + orb fallback face */
 /* No drag region: the orb has to take clicks. Only the disc and its eyes take
    pointer events, so the transparent corners of the square do nothing. */
-.pet-window { width: 148px; height: 148px; pointer-events: none; }
-[data-orb] { position: relative; width: 148px; height: 148px; pointer-events: none; }
+.pet-window { width: 96px; height: 96px; pointer-events: none; }
+[data-orb] { position: relative; width: 96px; height: 96px; pointer-events: none; }
 .pet-svg { pointer-events: none; }
 .pet-disc, .pet-eye { pointer-events: auto; cursor: pointer; }
 .e-orb-canvas { position: absolute; inset: 0; width: 100%; height: 100%; opacity: 0; }
@@ -48,7 +48,7 @@ li { padding: 6px 4px; border-bottom: 1px solid #f0ece3; display: flex; justify-
 
 /* SVG desk pet (pet.svg, inlined in pet.html). State tints mirror the
    website orb flavours; blink matches the 6.4s website cadence. */
-.pet-svg { width: 148px; height: 148px; display: block; }
+.pet-svg { width: 96px; height: 96px; display: block; }
 .pet-disc { fill: #92d2a5; }
 .pet-spec { fill: #fbf9f5; opacity: 0.85; }
 .pet-eye { fill: #101614; }

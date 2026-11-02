@@ -4,6 +4,11 @@
 export const isTauri = (): boolean =>
   typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
 
+async function call<T>(command: string, args?: Record<string, unknown>) {
+  const { invoke } = await import("@tauri-apps/api/core");
+  return invoke<T>(command, args);
+}
+
 export async function hideOverlay(): Promise<void> {
   if (!isTauri()) return;
   const { getCurrentWindow } = await import("@tauri-apps/api/window");
@@ -21,40 +26,34 @@ export async function openFullApp(): Promise<void> {
   await hideOverlay();
 }
 
+/**
+ * Resize and re-park in one step. Rust owns the placement so the panel keeps
+ * its bottom edge on the orb while it grows upward.
+ */
 export async function resizeOverlay(
   width: number,
   height: number,
 ): Promise<void> {
   if (!isTauri()) return;
-  const { getCurrentWindow } = await import("@tauri-apps/api/window");
-  const { LogicalSize } = await import("@tauri-apps/api/dpi");
-  await getCurrentWindow().setSize(new LogicalSize(width, height));
+  await call("resize_overlay", { width, height });
 }
 
 /**
- * Run `onBlur` a beat after the window loses focus, unless it comes back
- * first. The grace period is what stops a click on the orb from hiding and
- * instantly re-showing the panel.
+ * Subscribe to focus changes. Hiding on focus loss is Rust's job — it can ask
+ * whether the orb took focus, which removes the race between "blur hides the
+ * panel" and "the orb's click re-shows it".
  */
-export function onFocusLost(onBlur: () => void, graceMs = 160): () => void {
+export function onOverlayFocus(
+  handler: (focused: boolean) => void,
+): () => void {
   if (!isTauri()) return () => {};
-  let timer: ReturnType<typeof setTimeout> | undefined;
   let disposed = false;
   let unlisten: (() => void) | undefined;
 
   void (async () => {
     const { getCurrentWindow } = await import("@tauri-apps/api/window");
     const stop = await getCurrentWindow().onFocusChanged(({ payload }) => {
-      if (disposed) return;
-      if (payload) {
-        if (timer) clearTimeout(timer);
-        timer = undefined;
-        return;
-      }
-      timer = setTimeout(() => {
-        timer = undefined;
-        onBlur();
-      }, graceMs);
+      if (!disposed) handler(payload);
     });
     if (disposed) stop();
     else unlisten = stop;
@@ -62,7 +61,6 @@ export function onFocusLost(onBlur: () => void, graceMs = 160): () => void {
 
   return () => {
     disposed = true;
-    if (timer) clearTimeout(timer);
     unlisten?.();
   };
 }

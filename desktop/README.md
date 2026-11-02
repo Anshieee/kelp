@@ -8,15 +8,16 @@ replies. Persistence and server wiring are owned by the backend track.
   history sidebar grouped by day, conversation column, composer. Fixture
   conversations; sends append to React state only.
 - **Command panel** (`src/overlay.html`, `src/OverlayPanel.tsx`): transparent,
-  frameless, always-on-top, and parked beside the orb (flipped left near a
-  screen edge). Compact it is just a white input pill, 400 wide; expanded it
-  keeps that width and adds a white conversation surface below. Summoned by
-  clicking the orb or `CommandOrControl+Shift+Space`. The expand button opens
-  the full app once already expanded; clicking anywhere else hides the panel.
+  frameless, always-on-top, opening to the **left of the orb** with bottom edges
+  aligned. Compact it is just a white input pill, 400 wide; expanded it keeps
+  that width and adds a white conversation surface below. Summoned by clicking
+  the orb or `CommandOrControl+Shift+Space`. The expand button opens the full
+  app once already expanded; clicking outside hides the panel.
   The screen button is inert: it opens an explainer, and no capture code exists.
-- **Pet overlay** (`src/pet.html`, `src/pet.js`, `src/orb.js`): the avatar —
-  always-on-top, frameless, no shadow and no drag region, so only the disc
-  takes clicks. Tapping it toggles the panel. Vanilla on purpose — no React.
+- **Pet overlay** (`src/pet.html`, `src/pet.js`, `src/orb.js`): the avatar, at
+  the bottom right of the primary monitor — always-on-top, frameless, 96×96, no
+  shadow and no drag region, so only the disc takes clicks. Tapping it toggles
+  the panel. Vanilla on purpose — no React.
 - **Server URL** is one constant (`src/config.js`) pointing at the Kelp host.
   No runtime switcher, no per-environment list. `src/api.js` stays as the
   server contract fixture for whoever wires the client up.

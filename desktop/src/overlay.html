@@ -5,12 +5,19 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Kelp</title>
     <style>
+      /* The window is transparent: only the cards inside it are painted. */
+      *,
+      *::before,
+      *::after {
+        box-sizing: border-box;
+      }
       html,
       body,
       #root {
         height: 100%;
         margin: 0;
-        background: transparent;
+        padding: 0;
+        background: transparent !important;
         overflow: hidden;
       }
     </style>

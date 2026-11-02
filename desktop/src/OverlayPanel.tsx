@@ -11,7 +11,6 @@ import {
   InputBase,
   Paper,
   Stack,
-  Tooltip,
   Typography,
 } from "@mui/material";
 import ArrowUpwardRoundedIcon from "@mui/icons-material/ArrowUpwardRounded";
@@ -22,7 +21,7 @@ import OpenInNewRoundedIcon from "@mui/icons-material/OpenInNewRounded";
 import ScreenshotMonitorRoundedIcon from "@mui/icons-material/ScreenshotMonitorRounded";
 
 import { cannedReply } from "./mock";
-import { hideOverlay, onFocusLost, openFullApp, resizeOverlay } from "./tauri";
+import { hideOverlay, onOverlayFocus, openFullApp, resizeOverlay } from "./tauri";
 import type { ChatMessage } from "./types";
 
 // The window is exactly this wide in both states; only the height changes.
@@ -44,12 +43,13 @@ export default function OverlayPanel() {
     inputRef.current?.focus();
   }, []);
 
-  // Outside click: the panel goes away entirely, not back to the bar.
+  // Being summoned always resets to the compact bar: Rust has already resized
+  // the window, so the React state has to follow. Hiding is Rust's job — it can
+  // tell whether the orb took focus, which avoids the hide/re-show race.
   useEffect(
     () =>
-      onFocusLost(() => {
-        setExpanded(false);
-        void hideOverlay();
+      onOverlayFocus((focused) => {
+        if (focused) setExpanded(false);
       }),
     [],
   );
@@ -134,29 +134,33 @@ export default function OverlayPanel() {
           placeholder="Ask Kelp…"
           sx={{ flex: 1, fontSize: 15, px: 1.5 }}
         />
-        <Tooltip title="Screen access — not wired yet">
-          <IconButton size="small" onClick={() => setScreenNote(true)}>
-            <ScreenshotMonitorRoundedIcon fontSize="small" />
-          </IconButton>
-        </Tooltip>
-        <Tooltip title="Voice — not wired yet">
-          <IconButton size="small">
-            <MicRoundedIcon fontSize="small" />
-          </IconButton>
-        </Tooltip>
-        <Tooltip title={expanded ? "Open the full app" : "Expand"}>
-          <IconButton
-            size="small"
-            onClick={expand}
-            aria-label={expanded ? "Open the full app" : "Expand"}
-          >
-            {expanded ? (
-              <OpenInNewRoundedIcon fontSize="small" />
-            ) : (
-              <OpenInFullRoundedIcon fontSize="small" />
-            )}
-          </IconButton>
-        </Tooltip>
+        <IconButton
+          size="small"
+          title="Screen access — not wired yet"
+          aria-label="Screen access — not wired yet"
+          onClick={() => setScreenNote(true)}
+        >
+          <ScreenshotMonitorRoundedIcon fontSize="small" />
+        </IconButton>
+        <IconButton
+          size="small"
+          title="Voice — not wired yet"
+          aria-label="Voice — not wired yet"
+        >
+          <MicRoundedIcon fontSize="small" />
+        </IconButton>
+        <IconButton
+          size="small"
+          title={expanded ? "Open the full app" : "Expand"}
+          onClick={expand}
+          aria-label={expanded ? "Open the full app" : "Expand"}
+        >
+          {expanded ? (
+            <OpenInNewRoundedIcon fontSize="small" />
+          ) : (
+            <OpenInFullRoundedIcon fontSize="small" />
+          )}
+        </IconButton>
         <IconButton
           size="small"
           aria-label="Send"
@@ -202,11 +206,14 @@ export default function OverlayPanel() {
             >
               Kelp
             </Typography>
-            <Tooltip title="Collapse">
-              <IconButton size="small" onClick={collapse} aria-label="Collapse">
-                <KeyboardArrowDownRoundedIcon fontSize="small" />
-              </IconButton>
-            </Tooltip>
+            <IconButton
+              size="small"
+              onClick={collapse}
+              title="Collapse"
+              aria-label="Collapse"
+            >
+              <KeyboardArrowDownRoundedIcon fontSize="small" />
+            </IconButton>
           </Stack>
 
           <Box sx={{ flex: 1, minHeight: 0, overflowY: "auto", px: 2, py: 1.5 }}>
