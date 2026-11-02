@@ -10,7 +10,7 @@
 
 #![cfg_attr(all(not(debug_assertions), target_os = "windows"), windows_subsystem = "windows")]
 
-use tauri::{LogicalSize, Manager, PhysicalPosition};
+use tauri::{LogicalSize, Manager, PhysicalPosition, WebviewUrl, WebviewWindowBuilder};
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
 
 const OVERLAY_SHORTCUT: &str = "CommandOrControl+Shift+Space";
@@ -120,6 +120,23 @@ fn resize_overlay(app: tauri::AppHandle, width: f64, height: f64) {
     place_beside_pet(&app, &window, width, height);
 }
 
+/// Bring the full app forward. Rebuilds the window if it was ever destroyed, so
+/// "Open full app" can never silently do nothing.
+#[tauri::command]
+fn open_main(app: tauri::AppHandle) {
+    if let Some(window) = app.get_webview_window("main") {
+        let _ = window.unminimize();
+        let _ = window.show();
+        let _ = window.set_focus();
+        return;
+    }
+    let _ = WebviewWindowBuilder::new(&app, "main", WebviewUrl::App("index.html".into()))
+        .title("Kelp")
+        .inner_size(1120.0, 760.0)
+        .min_inner_size(880.0, 600.0)
+        .build();
+}
+
 /// Hide the panel when focus leaves it — unless the orb or the main window took
 /// focus. Those two are part of the app, and the orb runs its own toggle; hiding
 /// here first would make that toggle re-show the panel instead of closing it.
@@ -172,6 +189,21 @@ fn place_pet(app: &tauri::AppHandle) {
     let _ = pet.set_position(PhysicalPosition::new(x, y));
 }
 
+/// Closing the main window hides it instead of destroying it: the orb and the
+/// panel stay live, and "Open full app" is always a show, never a rebuild.
+fn keep_main_alive(app: &tauri::AppHandle) {
+    let Some(main) = app.get_webview_window("main") else {
+        return;
+    };
+    let window = main.clone();
+    main.on_window_event(move |event| {
+        if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+            api.prevent_close();
+            let _ = window.hide();
+        }
+    });
+}
+
 fn main() {
     tauri::Builder::default()
         .plugin(tauri_plugin_store::Builder::default().build())
@@ -185,11 +217,16 @@ fn main() {
                 })
                 .build(),
         )
-        .invoke_handler(tauri::generate_handler![toggle_overlay, resize_overlay])
+        .invoke_handler(tauri::generate_handler![
+            toggle_overlay,
+            resize_overlay,
+            open_main
+        ])
         .setup(|app| {
             app.global_shortcut().register(OVERLAY_SHORTCUT)?;
             place_pet(app.handle());
             watch_overlay_blur(app.handle());
+            keep_main_alive(app.handle());
 
             // Desk pet rides on all workspaces (macOS). Elsewhere the
             // always-on-top frameless window is the whole story.

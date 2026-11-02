@@ -6,7 +6,9 @@ replies. Persistence and server wiring are owned by the backend track.
 
 - **Main window** (`src/index.html`, `src/App.tsx`): a ChatGPT-shaped shell —
   history sidebar grouped by day, conversation column, composer. Fixture
-  conversations; sends append to React state only.
+  conversations; sends append to React state only. Closing it hides it rather
+  than destroying it, so the orb and panel stay live and "Open full app" always
+  brings it back.
 - **Command panel** (`src/overlay.html`, `src/OverlayPanel.tsx`): transparent,
   frameless, always-on-top, opening to the **left of the orb** with bottom edges
   aligned. Compact it is just a white input pill, 400 wide; expanded it keeps

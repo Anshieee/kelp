@@ -17,12 +17,7 @@ export async function hideOverlay(): Promise<void> {
 
 export async function openFullApp(): Promise<void> {
   if (!isTauri()) return;
-  const { WebviewWindow } = await import("@tauri-apps/api/webviewWindow");
-  const main = await WebviewWindow.getByLabel("main");
-  if (main) {
-    await main.show();
-    await main.setFocus();
-  }
+  await call("open_main");
   await hideOverlay();
 }
 
