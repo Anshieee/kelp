@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import atexit
+import ast
 import hashlib
 import importlib
 import importlib.util
@@ -70,6 +71,7 @@ __all__ = [
     "load_registry",
     "materialize_plugin_package",
     "package_digest",
+    "plugin_review_warnings",
     "read_plugin_lock",
     "write_plugin_lock",
 ]
@@ -527,6 +529,48 @@ def inspect_plugin_package(path: str | Path) -> PluginPackage:
         manifest=manifest,
         entries=tuple(entries),
     )
+
+
+# Review flow inspired by OpenMausBot's Apache-2.0 skill-import review pattern;
+# this native Kelp implementation does not copy their source.
+def plugin_review_warnings(package: PluginPackage) -> tuple[str, ...]:
+    """Return review warnings derived only from the digest-covered package image.
+
+    The imports below can open network connections, execute other programs, or
+    load code dynamically. They are not automatically forbidden, but must be
+    explicitly enabled by the operator after seeing this review.
+
+    """
+
+    flagged = {
+        "builtins.__import__", "ctypes", "importlib", "multiprocessing", "os",
+        "requests", "socket", "subprocess", "urllib", "httpx", "http.client",
+    }
+    imports: set[str] = set()
+    for relpath, _mode, content in package.entries:
+        if not relpath.endswith(".py"):
+            continue
+        try:
+            tree = ast.parse(content.decode("utf-8"), filename=relpath)
+        except (UnicodeDecodeError, SyntaxError):
+            return (f"could not statically inspect imports in {relpath}",)
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                imports.update(alias.name for alias in node.names)
+            elif isinstance(node, ast.ImportFrom) and node.module:
+                imports.add(node.module)
+            elif isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
+                if node.func.id == "__import__":
+                    imports.add("builtins.__import__")
+    flagged_imports = {
+        name for name in imports
+        if name in flagged or any(name.startswith(item + ".") for item in flagged)
+    }
+    warnings = [f"flagged import: {name}" for name in sorted(flagged_imports)]
+    effects = package.manifest.get("permissions", {}).get("effects", [])
+    for effect in sorted(set(effects) - {"read"}):
+        warnings.append(f"declared effect: {effect}")
+    return tuple(warnings)
 
 
 def _write_package_entries(
