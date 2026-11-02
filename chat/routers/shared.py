@@ -9,7 +9,7 @@ from urllib.parse import unquote, urlsplit
 
 from ..errors import ChatError
 from ..logging import log
-from ..store import SHARE_ID_LENGTH, ChatStore, scrub_artifact_handles
+from ..store import SHARE_ID_LENGTH, ChatStore
 from ..stream import format_comment, format_event
 from ._util import (
     _RATE_LIMITED_FALLBACK_RETRY,
@@ -39,19 +39,6 @@ _SHARE_HEADERS = {
         "frame-ancestors 'none'; base-uri 'none'; form-action 'none'"
     ),
 }
-#: A snapshot block keeps only these display fields. Anything else - an
-#: artifact handle, a storage path, a content hash, an approval argv - is
-#: dropped structurally rather than filtered by a query someone must remember.
-_SHARE_SOURCE_KEYS = (
-    "kind",
-    "title",
-    "url",
-    "snippet",
-    "locator",
-    "published_at",
-    "status",
-    "tool",
-)
 
 
 def _share_hash(token: str) -> str:
@@ -101,75 +88,9 @@ def _share_json_response(status: int, payload: Mapping[str, Any]) -> "Response":
     return response
 
 
-def _share_source(source: Any) -> dict[str, Any]:
-    if not isinstance(source, Mapping):
-        return {}
-    return {
-        key: source[key]
-        for key in _SHARE_SOURCE_KEYS
-        if source.get(key) is not None
-    }
-
-
-def _share_block(block: Any) -> dict[str, Any]:
-    """Allow-list one block; every unlisted shape becomes ``unknown``."""
-
-    if not isinstance(block, Mapping):
-        return {"type": "unknown"}
-    kind = block.get("type")
-    if kind == "text":
-        return {"type": "text", "text": str(block.get("text") or "")}
-    if kind == "attachment":
-        attachment = block.get("attachment")
-        attachment = attachment if isinstance(attachment, Mapping) else {}
-        return {
-            "type": "attachment",
-            "attachment": {
-                key: attachment[key]
-                for key in ("name", "kind", "mime", "size_bytes", "status")
-                if attachment.get(key) is not None
-            },
-        }
-    if kind == "tool_call":
-        return {
-            "type": "tool_call",
-            "tool": block.get("tool"),
-            "label": block.get("label"),
-            "summary": block.get("summary"),
-            "status": block.get("status"),
-            "duration_ms": block.get("duration_ms"),
-            "effects": list(block.get("effects") or []),
-        }
-    return {"type": "unknown"}
-
-
-def _share_message(message: Mapping[str, Any]) -> dict[str, Any]:
-    return {
-        "role": message.get("role"),
-        "status": message.get("status"),
-        "created_at": message.get("created_at"),
-        "blocks": [_share_block(block) for block in message.get("blocks") or []],
-        "sources": [
-            _share_source(source) for source in message.get("sources") or []
-        ],
-    }
-
-
-def _scrub_projection(value: Any) -> Any:
-    """Replace every artifact handle anywhere in the share projection.
-
-    Runs over the finished dict rather than at each field, so a block shape
-    added later cannot forget it. Keys are never rewritten: they are fixed
-    names, not user content.
-    """
-
-    if isinstance(value, str):
-        return scrub_artifact_handles(value)
-    if isinstance(value, Mapping):
-        return {key: _scrub_projection(item) for key, item in value.items()}
-    if isinstance(value, (list, tuple)):
-        return [_scrub_projection(item) for item in value]
-    return value
+# The share snapshot projection (allow-lists, forbidden-field deny-list, and
+# the free-text handle scrub) lives in ``chat.cards`` as ``share_snapshot`` so
+# every consumer of the share surface shares one builder.
 
 
 # -- public share reads ----------------------------------------------------
@@ -396,7 +317,5 @@ __all__ = [
     "_is_share_request",
     "_share_hash",
     "_share_json_response",
-    "_share_message",
     "_shared",
-    "_scrub_projection",
 ]

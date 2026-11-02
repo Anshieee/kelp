@@ -23,6 +23,8 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Callable, Iterator, Mapping, Sequence
 
+from openshell.audit import AuditLog
+
 __all__ = [
     "APPROVAL_TRANSITIONS",
     "ChatStore",
@@ -268,10 +270,12 @@ class ChatStore:
         path: str | Path,
         *,
         now: Callable[[], datetime] | None = None,
+        audit: AuditLog | None = None,
     ):
         self.path = Path(path)
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self._now = now or (lambda: datetime.now(timezone.utc))
+        self._audit = audit
         self._lock = threading.RLock()
         self._depth = 0
         self._conn = sqlite3.connect(
@@ -286,6 +290,23 @@ class ChatStore:
             os.chmod(self.path, 0o600)
         except OSError:  # pragma: no cover - platform dependent
             pass
+
+    # -- audit (KEL-29) ------------------------------------------------------
+
+    def _record_audit(self, event: str, **fields: Any) -> None:
+        """Audit without ever failing a store call, mirroring the service.
+
+        Rows are content-free by construction: fixed labels plus a hash
+        prefix or a count. The raw session id, the device label, and any
+        cookie value are never passed here.
+        """
+
+        if self._audit is None:
+            return
+        try:
+            self._audit.record(event, **fields)
+        except Exception:  # noqa: BLE001 - a full disk must not fail a revoke
+            return
 
     # -- lifecycle ---------------------------------------------------------
 
@@ -1027,6 +1048,12 @@ class ChatStore:
                 "revoked_at = NULL",
                 (id_hash, label, created_at, last_seen, expires_at),
             )
+        self._record_audit(
+            "session_minted",
+            actor="owner",
+            outcome="created",
+            extra={"credential": "session", "id_short": id_hash[:8]},
+        )
 
     def session_get(self, id_hash: str, *, now: float) -> dict[str, Any] | None:
         """Return a live, unrevoked session row, or ``None``."""
@@ -1061,14 +1088,30 @@ class ChatStore:
                 "WHERE id_hash = ? AND revoked_at IS NULL",
                 (revoked_at, id_hash),
             )
-            return cursor.rowcount > 0
+            revoked = cursor.rowcount > 0
+        if revoked:
+            self._record_audit(
+                "session_revoked",
+                actor="owner",
+                outcome="revoked",
+                extra={"credential": "session", "id_short": id_hash[:8]},
+            )
+        return revoked
 
     def session_revoke_all(self, *, revoked_at: float) -> int:
         with self.transaction():
-            return self._conn.execute(
+            count = self._conn.execute(
                 "UPDATE sessions SET revoked_at = ? WHERE revoked_at IS NULL",
                 (revoked_at,),
             ).rowcount
+        if count > 0:
+            self._record_audit(
+                "sessions_revoked",
+                actor="owner",
+                outcome="revoked",
+                extra={"credential": "session", "count": count},
+            )
+        return count
 
     def session_list(self, *, now: float) -> list[dict[str, Any]]:
         """Live sessions, most recently seen first. No label is ever logged."""

@@ -1,9 +1,34 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
 [project]
 name = "kelp-assistant"
 version = "0.0.0"
 description = "Always-On Private Assistant: local-first agent kernel, skill contracts, dashboard"
 requires-python = ">=3.11"
 dependencies = ["jsonschema>=4.20,<5", "httpx>=0.27,<1"]
+
+# One command sets up a development environment: `pip install -e ".[dev]"`.
+# The three pins match .github/workflows/ci.yml exactly, so a local run gates
+# with the same tool versions the CI gate uses. Bump them together.
+[project.optional-dependencies]
+dev = ["pytest==9.2.0", "ruff==0.17.3", "mypy==2.4.1"]
+
+[tool.setuptools.packages.find]
+# Explicit include list: the repo root also holds non-package directories
+# (deploy/ is a standalone stdlib script, netlify/ is static, tests/ and
+# docs/ are not shipped), and flat-layout auto-discovery refuses to guess
+# across multiple top-level packages.
+include = [
+  "chat*",
+  "kernel*",
+  "skills*",
+  "openshell*",
+  "payments*",
+  "evals*",
+  "demo*",
+]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
