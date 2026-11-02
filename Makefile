@@ -1,7 +1,7 @@
 DEMO_STATE ?= var/demo
 EVAL_ARGS ?=
 
-.PHONY: demo serve check-serve test eval clean-demo
+.PHONY: demo serve check-serve test audit eval clean-demo
 
 demo:
 	python -m demo --state "$(DEMO_STATE)"
@@ -17,6 +17,13 @@ check-serve:
 
 test:
 	python -m pytest
+
+# Dependency audit: the runtime dependencies declared in pyproject.toml,
+# checked against published advisories. Needs network and the auditor:
+# `pip install pip-audit==2.10.1`. A match fails the command; an empty
+# dependency list fails too.
+audit:
+	python -m tools.audit_deps
 
 # Offline eval is deterministic, network-blocked, and under 60s. Pass
 # EVAL_ARGS="--live" for the labelled, opt-in provider run.
