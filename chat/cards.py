@@ -77,6 +77,7 @@ TOOL_LABELS: dict[str, str] = {
     "web.search": "Web search",
     "docs.answer": "Document answer",
     "github.read": "GitHub",
+    "github.write": "Open GitHub pull request",
     "schedule.create": "Schedule task",
     "shell.exec": "Run command",
 }
@@ -493,10 +494,18 @@ def approval_rationale(
     *,
     scopes: Mapping[str, Any] | None = None,
     command: Sequence[str] | None = None,
+    tool: str = "",
 ) -> str:
     effect_set = {str(effect) for effect in effects}
     clauses: list[str] = []
-    if "write" in effect_set:
+    if tool == "github.write":
+        repos = list((scopes or {}).get("repos") or [])
+        repo = str(repos[0]) if repos else "the approved repository"
+        clauses.append(
+            "After you approve, the assistant will create a branch, commit the "
+            f"listed files, and open a pull request in {repo}."
+        )
+    elif "write" in effect_set:
         clauses.append("The assistant wants to change something in your workspace.")
     if "execute" in effect_set:
         if EXEC_AVAILABLE:
@@ -580,7 +589,7 @@ def approval_card(
         "skill": skill or tool,
         "title": title or f"Use {tool_label(tool)}",
         "rationale": approval_rationale(
-            effects, scopes=safe_scopes, command=command_list
+            effects, scopes=safe_scopes, command=command_list, tool=tool
         ),
         "summary": summary,
         "effects": [str(effect) for effect in effects],
