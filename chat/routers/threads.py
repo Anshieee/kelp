@@ -6,6 +6,7 @@ import json
 import secrets
 from typing import TYPE_CHECKING, Any, Callable, Iterator, Mapping
 
+from .. import cards
 from ..errors import ChatError
 from ..store import ThreadGoneError
 from . import stream as stream_routes
@@ -19,9 +20,7 @@ from ._util import (
 from .body import _json_body
 from .shared import (
     _SHARE_ID_LENGTH,
-    _scrub_projection,
     _share_hash,
-    _share_message,
 )
 
 if TYPE_CHECKING:
@@ -269,23 +268,12 @@ def _build_share_snapshot(
     pending = api.service.store.list_approvals(
         thread_id=thread_id, status="pending", limit=200
     )
-    snapshot = {
-        "version": 1,
-        "title": str(thread.get("title") or "Shared chat"),
-        "message_count": len(messages),
-        "messages": [_share_message(message) for message in messages],
-        "omitted": {"approvals": len(pending)},
-        "viewer": "anonymous-share",
-        "read_only": True,
-    }
-    # The allow-list drops handles structurally, but a handle can also be
-    # typed into text, a tool summary, or a citation. Scrub free text with the
-    # same pattern the orphan sweep uses before the size check, so the cap is
-    # measured on what is actually stored.
-    snapshot = _scrub_projection(snapshot)
-    # The store stamps two timestamps into the frozen copy, so leave a small
-    # margin rather than accepting a snapshot that grows past the cap on
-    # insert.
+    # The allow-list projection and the free-text handle scrub live in
+    # ``chat.cards`` so every consumer of the share surface shares one
+    # builder. The store stamps two timestamps into the frozen copy, so
+    # leave a small margin rather than accepting a snapshot that grows past
+    # the cap on insert.
+    snapshot = cards.share_snapshot(thread, messages, len(pending))
     size = len(
         json.dumps(snapshot, default=str, separators=(",", ":")).encode("utf-8")
     )

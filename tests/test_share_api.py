@@ -28,6 +28,7 @@ import pytest
 
 from chat import ChatAPI, ChatService, ChatStore, Request
 from chat.api import RateLimiter, _route_label
+from chat.cards import SHARE_DROPPED_FIELDS, share_snapshot
 from chat.retention import RetentionMaintenance, RetentionPolicy
 from chat.store import ThreadGoneError
 from openshell.audit import AuditLog
@@ -484,6 +485,122 @@ def test_snapshot_counts_pending_approvals_without_their_payload(
     snapshot = payload(call(api, "GET", f"/api/shared/{token}", auth=False))["share"]
     assert snapshot["omitted"]["approvals"] == 1
     assert "argv-leak" not in json.dumps(snapshot)
+
+
+# -- KEL-29: the projection lives in chat.cards ----------------------------
+
+
+def _all_stored_messages(store: ChatStore, thread_id: str) -> list[dict[str, Any]]:
+    """Every stored message, oldest first (the snapshot's own input)."""
+
+    messages: list[dict[str, Any]] = []
+    before: str | None = None
+    while True:
+        batch, has_more = store.list_messages(thread_id, limit=100, before=before)
+        messages = list(batch) + messages
+        if not has_more or not batch:
+            return messages
+        before = batch[0]["id"]
+
+
+def test_snapshot_drops_every_forbidden_field(tmp_path: Path) -> None:
+    """KEL-29: walk the whole snapshot; no forbidden key or handle survives."""
+
+    api, _service, store, _clock = make_api(tmp_path)
+    thread_id = make_thread(api)
+    seed_messages(store, thread_id)
+    seed_pending_approval(store, thread_id)
+    # A superseded message: its ``superseded_by`` pointer is owner-only.
+    superseded = store.create_message(
+        thread_id=thread_id,
+        turn_id="turn_seed_1",
+        role="assistant",
+        status="complete",
+        blocks=[{"type": "text", "text": "draft answer"}],
+        message_id="msg_seed_superseded",
+    )
+    store.update_message(
+        superseded["id"],
+        status="superseded",
+        superseded_by="msg_seed_assistant",
+    )
+
+    thread = store.get_thread(thread_id)
+    messages = _all_stored_messages(store, thread_id)
+    pending = store.list_approvals(thread_id=thread_id, status="pending", limit=200)
+    snapshot = share_snapshot(thread, messages, len(pending))
+
+    # The fixture is rich enough to be worth walking: the raw messages carry
+    # forbidden keys and the projection keeps real display shapes.
+    raw = json.dumps(messages)
+    for forbidden in ("superseded_by", "call_id", "approval_id", "handle"):
+        assert forbidden in raw
+    blocks = [
+        block for message in snapshot["messages"] for block in message["blocks"]
+    ]
+    assert any(block["type"] == "text" for block in blocks)
+    assert any(block["type"] == "attachment" for block in blocks)
+    assert any(block["type"] == "tool_call" for block in blocks)
+    assert any(
+        source.get("locator") == "page 2"
+        for message in snapshot["messages"]
+        for source in message["sources"]
+    )
+
+    # 1. No structured key anywhere equals a forbidden field name.
+    # 2. No artifact handle string survives in any value.
+    def walk(value: Any) -> None:
+        if isinstance(value, Mapping):
+            for key, item in value.items():
+                assert key not in SHARE_DROPPED_FIELDS, key
+                walk(item)
+        elif isinstance(value, (list, tuple)):
+            for item in value:
+                walk(item)
+        elif isinstance(value, str):
+            assert "artifact:" not in value, value
+
+    walk(snapshot)
+
+    # 3. Pending approvals are counted, and no approval payload appears.
+    assert snapshot["omitted"] == {"approvals": 1}
+    encoded = json.dumps(snapshot)
+    for leak in ("argv-leak", "appr_secret", "rm", "-rf"):
+        assert leak not in encoded
+
+
+def test_api_snapshot_matches_cards_share_snapshot(tmp_path: Path) -> None:
+    """KEL-29: the route delegates faithfully to ``cards.share_snapshot``."""
+
+    api, _service, store, _clock = make_api(tmp_path)
+    thread_id = make_thread(api)
+    seed_messages(store, thread_id)
+    seed_pending_approval(store, thread_id)
+    token = create_share(api, thread_id)["token"]
+
+    expected = share_snapshot(
+        store.get_thread(thread_id),
+        _all_stored_messages(store, thread_id),
+        len(store.list_approvals(thread_id=thread_id, status="pending", limit=200)),
+    )
+    # The frozen snapshot the route serves is exactly the builder's output
+    # plus the two timestamps the store stamps into the frozen copy.
+    record = store.share_get(hash_token(token))
+    assert record is not None
+    assert record["snapshot"] == {
+        **expected,
+        "created_at": record["created_at"],
+        "expires_at": record["expires_at"],
+    }
+
+    # The GET response is that snapshot plus the share row's public id.
+    route = payload(call(api, "GET", f"/api/shared/{token}", auth=False))["share"]
+    assert route == {
+        **expected,
+        "created_at": record["created_at"],
+        "expires_at": record["expires_at"],
+        "id": hash_token(token)[:16],
+    }
 
 
 def test_oversized_snapshot_is_refused_not_truncated(tmp_path: Path) -> None:
