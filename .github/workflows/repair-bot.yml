@@ -93,8 +93,8 @@ jobs:
               --status failure --json databaseId --jq '.[0].databaseId // empty' 2>/dev/null || true)
           fi
 
-          if [[ -n "$run_id" && "$EVENT_NAME" == workflow_run && "$RUN_HEAD_SHA" != "$PR_SHA" ]]; then
-            echo "Workflow run head SHA does not match the resolved pull request head; skipping stale check context." >&2
+          if [[ -n "$run_id" && "$EVENT_NAME" == workflow_run && ( -z "$RUN_HEAD_SHA" || -z "$PR_SHA" || "$RUN_HEAD_SHA" != "$PR_SHA" ) ]]; then
+            echo "Workflow run head SHA is missing or does not match the resolved pull request head; skipping stale check context." >&2
           elif [[ -n "$run_id" ]]; then
             gh run view "$run_id" --json jobs \
               --jq '.jobs[] | select(.conclusion == "failure") | .name' \
@@ -137,12 +137,26 @@ jobs:
 
           patterns = (
               (r"(?i)(\bBearer\s+)[A-Za-z0-9._~+/=-]{6,}", r"\1[REDACTED]"),
-              (r"(?i)((?:api[_-]?key|access[_-]?key|private[_-]?key|secret|token|password|credential|authorization)[A-Za-z0-9_-]*\s*(?:=|:|%3[dD])\s*)(?:\"[^\"\r\n]*\"|'[^'\r\n]*'|[^\s,;&]+)", r"\1[REDACTED]"),
+              (r"(?i)((?:api[_-]?key|access[_-]?key|private[_-]?key|key|secret|token|password|credential|authorization)[A-Za-z0-9_-]*\s*(?:=|:|%3[dD])\s*)(?:\"[^\"\r\n]*\"|'[^'\r\n]*'|[^\s,;&]+)", r"\1[REDACTED]"),
               (r"\b(?:gh[pousr]_[A-Za-z0-9_]{8,}|github_pat_[A-Za-z0-9_]{8,}|sk-(?:or-v1-)?[A-Za-z0-9_-]{8,})\b", "[REDACTED]"),
               (r"\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\b", "[REDACTED]"),
           )
           for pattern, replacement in patterns:
               text = re.sub(pattern, replacement, text)
+
+          # Smoke-test generic KEY assignments as well as representative
+          # existing redaction cases before writing the log excerpt.
+          smoke_cases = (
+              ("KEY=secretvalue123456", "KEY=[REDACTED]"),
+              ("API_KEY=secretvalue123456", "API_KEY=[REDACTED]"),
+              ("Bearer secretvalue123456", "Bearer [REDACTED]"),
+          )
+          for sample, expected in smoke_cases:
+              redacted = sample
+              for pattern, replacement in patterns:
+                  redacted = re.sub(pattern, replacement, redacted)
+              if redacted != expected:
+                  raise SystemExit(f"Log-redaction smoke test failed for {sample.split('=', 1)[0]} assignment")
 
           with open(destination, "w", encoding="utf-8") as stream:
               stream.write(text)
