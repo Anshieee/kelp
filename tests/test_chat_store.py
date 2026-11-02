@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 import threading
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from chat.store import ChatStore
+from openshell.audit import AuditLog
 
 
 class Clock:
@@ -357,5 +360,76 @@ def test_thread_cursor_pagination(tmp_path: Path) -> None:
         assert {thread["id"] for thread in first + second} == {
             thread["id"] for thread in store.list_threads(limit=10)[0]
         }
+    finally:
+        store.close()
+
+
+def test_session_lifecycle_writes_content_free_audit_rows(tmp_path: Path) -> None:
+    """KEL-29: mint, revoke, and mass-revoke each leave one audit row.
+
+    Rows carry the actor and the hash prefix only: the raw session id, the
+    device label, and any cookie value must never reach the audit trail.
+    """
+
+    clock = Clock()
+    audit = AuditLog(tmp_path / "audit.jsonl")
+    store = ChatStore(tmp_path / "chat.db", now=clock, audit=audit)
+    id_hash = hashlib.sha256(b"raw-session-id").hexdigest()
+    label = "Owner's secret laptop"
+    try:
+        store.session_insert(
+            id_hash, label, created_at=1.0, last_seen=1.0, expires_at=2.0
+        )
+        minted = audit.entries(event="session_minted")
+        assert len(minted) == 1
+        entry = minted[0]
+        assert entry["actor"] == "owner"
+        assert entry["outcome"] == "created"
+        assert entry["extra"] == {
+            "credential": "session",
+            "id_short": id_hash[:8],
+        }
+        rendered = json.dumps(entry)
+        assert id_hash not in rendered
+        assert label not in rendered
+        assert "label" not in entry["extra"]
+
+        assert store.session_revoke(id_hash, revoked_at=3.0) is True
+        revoked = audit.entries(event="session_revoked")
+        assert len(revoked) == 1
+        assert revoked[0]["actor"] == "owner"
+        assert revoked[0]["outcome"] == "revoked"
+        assert revoked[0]["extra"]["id_short"] == id_hash[:8]
+        assert label not in json.dumps(revoked[0])
+
+        # Revoking twice is idempotent and writes no second row.
+        assert store.session_revoke(id_hash, revoked_at=4.0) is False
+        assert len(audit.entries(event="session_revoked")) == 1
+
+        other = hashlib.sha256(b"second-device").hexdigest()
+        store.session_insert(
+            other, "Phone", created_at=5.0, last_seen=5.0, expires_at=6.0
+        )
+        count = store.session_revoke_all(revoked_at=7.0)
+        assert count == 1
+        aggregate = audit.entries(event="sessions_revoked")
+        assert len(aggregate) == 1
+        assert aggregate[0]["actor"] == "owner"
+        assert aggregate[0]["outcome"] == "revoked"
+        assert aggregate[0]["extra"] == {"credential": "session", "count": 1}
+        assert "id_short" not in aggregate[0]["extra"]
+    finally:
+        store.close()
+
+
+def test_session_lifecycle_without_an_audit_sink_still_works(tmp_path: Path) -> None:
+    store, _clock = make_store(tmp_path)
+    try:
+        id_hash = hashlib.sha256(b"raw-session-id").hexdigest()
+        store.session_insert(
+            id_hash, "Laptop", created_at=1.0, last_seen=1.0, expires_at=2.0
+        )
+        assert store.session_revoke(id_hash, revoked_at=3.0) is True
+        assert store.session_revoke_all(revoked_at=4.0) == 0
     finally:
         store.close()
