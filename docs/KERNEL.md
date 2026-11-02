@@ -17,10 +17,17 @@ anything; the dashboard, Telegram, and CLI are adapters.
 
 | Setting | Env var | Default |
 |---|---|---|
-| Base URL | `NEBIUS_TOKEN_FACTORY_BASE_URL` (legacy `NEBIUS_BASE_URL`) | `https://api.tokenfactory.nebius.com/v1` |
-| API key (server-only) | `NEBIUS_API_KEY` | — |
+| Provider | `KELP_PROVIDER` | `nebius` (`openrouter` selects OpenRouter) |
+| Base URL | `KELP_PROVIDER_BASE_URL`; else `NEBIUS_TOKEN_FACTORY_BASE_URL` (legacy `NEBIUS_BASE_URL`) for Nebius | `https://api.tokenfactory.nebius.com/v1` |
+| API key (server-only) | `NEBIUS_API_KEY` (Nebius) / `OPENROUTER_API_KEY` (OpenRouter) | — |
 | Primary model | `KELP_PRIMARY_MODEL` | `nvidia/Nemotron-3_5-Super-VL` |
 | Background model | `KELP_BACKGROUND_MODEL` | `nvidia/Nemotron-3_5-Lightning` |
+
+Both providers are OpenAI-compatible, so only the endpoint, the credential env
+var, and the default models differ. The provider-neutral `KELP_PROVIDER_BASE_URL`
+wins for either; the Nebius-specific envs apply only to Nebius, so a leftover
+`NEBIUS_*` value cannot silently override another provider. An unknown
+`KELP_PROVIDER` is a startup error (`invalid_config`), not a fall back.
 
 `Super VL` is the default conversational model because the product reads
 documents and screenshots. `Lightning` is the cheap **background** model for

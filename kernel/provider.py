@@ -1,4 +1,8 @@
-"""Streaming client for Nebius Token Factory (OpenAI-compatible chat completions).
+"""Streaming client for an OpenAI-compatible chat completions API.
+
+The endpoint is whatever ``KernelConfig`` selects — Nebius Token Factory by
+default, OpenRouter when ``KELP_PROVIDER=openrouter``. Nothing in this module is
+provider-specific beyond the base URL and key the config already resolved.
 
 Design rules:
 
@@ -107,20 +111,22 @@ def classify_status(status: int) -> tuple[str, bool]:
 
 
 _FAILURE_MESSAGES = {
-    "provider_auth": "Token Factory rejected the API key (HTTP {status}).",
-    "provider_model_not_found": "Token Factory does not expose this model (HTTP 404).",
-    "provider_timeout": "Token Factory timed out (HTTP {status}).",
-    "provider_rate_limited": "Token Factory rate-limited the request (HTTP 429); retry after a pause.",
-    "provider_unavailable": "Token Factory is unavailable (HTTP {status}); retry is safe.",
-    "provider_rejected": "Token Factory rejected the request (HTTP {status}).",
-    "provider_error": "Token Factory returned an unexpected status (HTTP {status}).",
+    "provider_auth": "{provider} rejected the API key (HTTP {status}).",
+    "provider_model_not_found": "{provider} does not expose this model (HTTP 404).",
+    "provider_timeout": "{provider} timed out (HTTP {status}).",
+    "provider_rate_limited": "{provider} rate-limited the request (HTTP 429); retry after a pause.",
+    "provider_unavailable": "{provider} is unavailable (HTTP {status}); retry is safe.",
+    "provider_rejected": "{provider} rejected the request (HTTP {status}).",
+    "provider_error": "{provider} returned an unexpected status (HTTP {status}).",
 }
 
 
-def _status_failure(status: int) -> ProviderFailure:
+def _status_failure(status: int, provider: str) -> ProviderFailure:
     code, retryable = classify_status(status)
-    message = _FAILURE_MESSAGES.get(code, "Token Factory request failed (HTTP {status}).")
-    return ProviderFailure(code, message.format(status=status), retryable, status)
+    message = _FAILURE_MESSAGES.get(code, "{provider} request failed (HTTP {status}).")
+    return ProviderFailure(
+        code, message.format(provider=provider, status=status), retryable, status
+    )
 
 
 async def _iter_sse_data(lines: AsyncIterator[str]) -> AsyncIterator[str]:
@@ -315,10 +321,13 @@ class TokenFactoryClient:
         if not self._config.api_key:
             yield ProviderFailure(
                 "missing_api_key",
-                "Nebius Token Factory API key is not configured (set NEBIUS_API_KEY).",
+                "The model provider API key is not configured "
+                f"(set {self._config.api_key_env}).",
                 retryable=False,
             )
             return
+
+        provider = self._config.provider_label
 
         headers = {
             "Authorization": f"Bearer {self._config.api_key}",
@@ -354,7 +363,7 @@ class TokenFactoryClient:
             ) as response:
                 if response.status_code >= 400:
                     outcome = "provider_error"
-                    yield _status_failure(response.status_code)
+                    yield _status_failure(response.status_code, provider)
                     return
 
                 state = _StreamState()
@@ -370,7 +379,7 @@ class TokenFactoryClient:
                         outcome = "provider_protocol_error"
                         yield ProviderFailure(
                             "provider_protocol_error",
-                            "Token Factory sent a malformed streaming chunk.",
+                            f"{provider} sent a malformed streaming chunk.",
                             retryable=True,
                         )
                         return
@@ -378,7 +387,7 @@ class TokenFactoryClient:
                         outcome = "provider_protocol_error"
                         yield ProviderFailure(
                             "provider_protocol_error",
-                            "Token Factory sent a non-object streaming chunk.",
+                            f"{provider} sent a non-object streaming chunk.",
                             retryable=True,
                         )
                         return
@@ -396,14 +405,14 @@ class TokenFactoryClient:
             outcome = "timeout"
             yield ProviderFailure(
                 "provider_timeout",
-                "Token Factory did not respond within the configured timeout.",
+                f"{provider} did not respond within the configured timeout.",
                 retryable=True,
             )
         except httpx.HTTPError as exc:
             outcome = "unreachable"
             yield ProviderFailure(
                 "provider_unreachable",
-                f"Could not reach Token Factory ({type(exc).__name__}).",
+                f"Could not reach {provider} ({type(exc).__name__}).",
                 retryable=True,
             )
         finally:

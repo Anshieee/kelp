@@ -56,6 +56,7 @@ EGRESS_EVENT = "egress"
 #: override is a real recipient even when this repo did not choose it.
 RECIPIENTS: Mapping[str, tuple[str, ...]] = {
     "tokenfactory": ("api.tokenfactory.nebius.com",),
+    "openrouter": ("openrouter.ai",),
     "tavily": ("api.tavily.com",),
     "github": ("api.github.com",),
     "stripe": ("api.stripe.com",),

@@ -227,11 +227,16 @@ class ServerConfig:
     def from_env(cls, env: Mapping[str, str] | None = None) -> "ServerConfig":
         source = os.environ if env is None else env
 
-        api_key = _text(source, "NEBIUS_API_KEY")
-        if not api_key:
+        # The provider decides which env var holds the key, so resolve the
+        # kernel config first and let it name its own credential.
+        try:
+            kernel = KernelConfig.from_env(source)
+        except ValueError as exc:
+            raise ConfigError("invalid_config", str(exc)) from None
+        if not kernel.api_key:
             raise ConfigError(
                 "missing_api_key",
-                "NEBIUS_API_KEY is required; the server will not start without it.",
+                f"{kernel.api_key_env} is required; the server will not start without it.",
             )
 
         auth_token = _text(source, AUTH_TOKEN_ENV)
@@ -248,7 +253,6 @@ class ServerConfig:
             raise ConfigError("invalid_config", f"{HOST_ENV} must be a hostname or IP.")
 
         port = _parse_port(_text(source, PORT_ENV))
-        kernel = KernelConfig.from_env(source)
         try:
             spend_caps = SpendCaps.from_env(source)
         except ValueError as exc:
@@ -496,7 +500,10 @@ def _service_secrets(
             if isinstance(value, str) and value:
                 values[name] = value
     if config.kernel.api_key:
-        values["NEBIUS_API_KEY"] = config.kernel.api_key
+        # Named by the resolved provider, so the scrubber's source list reads
+        # the env var that actually holds the key (OPENROUTER_API_KEY when that
+        # provider is selected), not always the Nebius one.
+        values[config.kernel.api_key_env] = config.kernel.api_key
     values["KELP_AUTH_TOKEN"] = config.auth_token
     # The per-device CSRF half is an HMAC under a key derived from this value,
     # so an operator echoing the environment must not leak it into a log or
