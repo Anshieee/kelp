@@ -302,23 +302,12 @@
     scrollTriggers = [];
   }
   startMotion();
-  const motionButton = document.getElementById("motion-toggle");
-  let manuallyPaused = false;
   function updateMotion() {
-    const paused = reducedMotion.matches || manuallyPaused;
+    const paused = reducedMotion.matches;
     document.body.classList.toggle("motion-paused", paused);
-    motionButton.setAttribute("aria-pressed", String(paused));
-    motionButton.innerHTML = paused
-      ? 'Motion paused <span aria-hidden="true">▷</span>'
-      : 'Pause motion <span aria-hidden="true">Ⅱ</span>';
-    motionButton.disabled = reducedMotion.matches;
     if (paused) clearMotion();
     setFieldPaused(paused);
   }
-  motionButton.addEventListener("click", () => {
-    manuallyPaused = !manuallyPaused;
-    updateMotion();
-  });
   reducedMotion.addEventListener("change", updateMotion);
   updateMotion();
 
@@ -332,7 +321,7 @@
     dialog.scrollTop = 0;
     // Animate without GSAP transform measurement: reparenting a native dialog
     // during measurement removes it from the browser's modal top layer.
-    if (!reducedMotion.matches && !manuallyPaused)
+    if (!reducedMotion.matches)
       dialog.animate(
         [
           { opacity: 0, transform: "translateY(20px)" },
@@ -343,7 +332,7 @@
   }
   function closeDialog(dialog) {
     if (!dialog?.open) return;
-    if (!reducedMotion.matches && !manuallyPaused) {
+    if (!reducedMotion.matches) {
       const animation = dialog.animate(
         [
           { opacity: 1, transform: "translateY(0)" },

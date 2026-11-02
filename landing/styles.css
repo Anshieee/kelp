@@ -529,50 +529,6 @@ svg {
   line-height: 1.2;
   margin-bottom: 10px;
 }
-.marquee-wrap {
-  position: relative;
-  padding: 28px 0 52px;
-  overflow: hidden;
-}
-.marquee {
-  background: var(--butter);
-  border-top: 1px solid rgba(69, 67, 63, 0.08);
-  border-bottom: 1px solid rgba(69, 67, 63, 0.08);
-  transform: rotate(-2deg) scale(1.03);
-  padding: 23px 0;
-  white-space: nowrap;
-  overflow: hidden;
-}
-.marquee-track {
-  display: flex;
-  width: max-content;
-  animation: marquee 36s linear infinite;
-}
-.marquee-track > span {
-  font-family: var(--serif);
-  font-size: 58px;
-  letter-spacing: -0.03em;
-  line-height: 1.2;
-}
-.marquee b {
-  font-family: var(--sans);
-  font-size: 45px;
-  font-weight: 400;
-  display: inline-block;
-  margin: 0 35px;
-  vertical-align: middle;
-}
-.motion-toggle {
-  display: flex;
-  position: relative;
-  margin: 19px 5.2% 0 auto;
-  min-height: 44px;
-  padding: 8px 16px;
-  background: var(--canvas);
-  border: 1px solid var(--line);
-  font-size: 12px;
-  gap: 14px;
-}
 .possibilities {
   padding-top: 90px;
   padding-bottom: 115px;
@@ -1192,11 +1148,6 @@ dialog::backdrop {
     background-position: 100% 50%;
   }
 }
-@keyframes marquee {
-  to {
-    transform: translateX(-50%);
-  }
-}
 .motion-paused * {
   animation-play-state: paused !important;
 }
@@ -1648,25 +1599,6 @@ dialog::backdrop {
   }
   .preview-response strong {
     font-size: 28px;
-  }
-  .marquee-wrap {
-    padding-top: 25px;
-    padding-bottom: 20px;
-  }
-  .marquee {
-    padding: 20px 0;
-    transform: rotate(-3deg) scale(1.05);
-  }
-  .marquee-track > span {
-    font-size: 42px;
-  }
-  .marquee b {
-    font-size: 29px;
-    margin: 0 20px;
-  }
-  .motion-toggle {
-    margin-right: 22px;
-    font-size: 11px;
   }
   .possibilities {
     padding-top: 70px;
