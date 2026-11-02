@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import {
   Box,
   Button,
+  CircularProgress,
   Dialog,
   DialogActions,
   DialogContent,
@@ -19,25 +20,27 @@ import MicRoundedIcon from "@mui/icons-material/MicRounded";
 import OpenInFullRoundedIcon from "@mui/icons-material/OpenInFullRounded";
 import OpenInNewRoundedIcon from "@mui/icons-material/OpenInNewRounded";
 import ScreenshotMonitorRoundedIcon from "@mui/icons-material/ScreenshotMonitorRounded";
+import StopRoundedIcon from "@mui/icons-material/StopRounded";
 
-import { cannedReply } from "./mock";
+import { MessageBody } from "./Blocks";
+import { type Message } from "./bridge";
+import { useChat } from "./useChat";
 import { hideOverlay, onOverlayFocus, openFullApp, resizeOverlay } from "./tauri";
-import type { ChatMessage } from "./types";
 
 // The window is exactly this wide in both states; only the height changes.
 const WIDTH = 400;
 const COMPACT = { width: WIDTH, height: 76 };
 const EXPANDED = { width: WIDTH, height: 440 };
 
-let nextId = 0;
-const uid = () => `overlay-${++nextId}`;
-
 export default function OverlayPanel() {
+  const chat = useChat();
   const [expanded, setExpanded] = useState(false);
   const [draft, setDraft] = useState("");
-  const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [screenNote, setScreenNote] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
+  const resumed = useRef(false);
+
+  const ready = chat.phase === "ready";
 
   useEffect(() => {
     inputRef.current?.focus();
@@ -45,14 +48,28 @@ export default function OverlayPanel() {
 
   // Being summoned always resets to the compact bar: Rust has already resized
   // the window, so the React state has to follow. Hiding is Rust's job — it can
-  // tell whether the orb took focus, which avoids the hide/re-show race.
+  // tell whether the orb took focus, which avoids the hide/re-show race. The
+  // summon also re-checks the session, so a sign-in done in the full app lands
+  // here without restarting the overlay.
   useEffect(
     () =>
       onOverlayFocus((focused) => {
-        if (focused) setExpanded(false);
+        if (!focused) return;
+        setExpanded(false);
+        void chat.startSession();
       }),
-    [],
+    [chat.startSession],
   );
+
+  // Continue the most recent conversation so history is there when the panel
+  // opens. A brand-new thread is only created once the user actually sends.
+  useEffect(() => {
+    if (!ready || resumed.current) return;
+    const latest = chat.threads[0];
+    if (!latest) return;
+    resumed.current = true;
+    void chat.openThread(latest.id);
+  }, [ready, chat.threads, chat.openThread]);
 
   function collapse() {
     setExpanded(false);
@@ -85,17 +102,16 @@ export default function OverlayPanel() {
     void resizeOverlay(EXPANDED.width, EXPANDED.height);
   }
 
-  function send() {
+  async function send() {
     const trimmed = draft.trim();
-    if (!trimmed) return;
+    if (!trimmed || !ready) return;
     if (!expanded) expand();
-    setMessages((current) => [
-      ...current,
-      { id: uid(), role: "user", text: trimmed },
-      { id: uid(), role: "assistant", text: cannedReply(trimmed) },
-    ]);
     setDraft("");
+    if (!chat.activeId) await chat.newChat();
+    await chat.send(trimmed);
   }
+
+  const canSend = ready && Boolean(draft.trim()) && !chat.busy;
 
   return (
     <Box
@@ -128,10 +144,11 @@ export default function OverlayPanel() {
           onKeyDown={(event) => {
             if (event.key === "Enter" && !event.shiftKey) {
               event.preventDefault();
-              send();
+              if (canSend) void send();
             }
           }}
-          placeholder="Ask Kelp…"
+          placeholder={ready ? "Ask Kelp…" : "Sign in from the full app"}
+          disabled={!ready}
           sx={{ flex: 1, fontSize: 15, px: 1.5 }}
         />
         <IconButton
@@ -161,20 +178,31 @@ export default function OverlayPanel() {
             <OpenInFullRoundedIcon fontSize="small" />
           )}
         </IconButton>
-        <IconButton
-          size="small"
-          aria-label="Send"
-          onClick={send}
-          disabled={!draft.trim()}
-          sx={{
-            background: "primary.main",
-            color: "primary.contrastText",
-            "&:hover": { background: "primary.dark" },
-            "&.Mui-disabled": { background: "rgba(25,24,23,0.08)" },
-          }}
-        >
-          <ArrowUpwardRoundedIcon fontSize="small" />
-        </IconButton>
+        {chat.busy ? (
+          <IconButton
+            size="small"
+            aria-label="Stop"
+            onClick={() => void chat.stop()}
+            sx={{ background: "rgba(25,24,23,0.08)" }}
+          >
+            <StopRoundedIcon fontSize="small" />
+          </IconButton>
+        ) : (
+          <IconButton
+            size="small"
+            aria-label="Send"
+            onClick={() => void send()}
+            disabled={!canSend}
+            sx={{
+              background: "primary.main",
+              color: "primary.contrastText",
+              "&:hover": { background: "primary.dark" },
+              "&.Mui-disabled": { background: "rgba(25,24,23,0.08)" },
+            }}
+          >
+            <ArrowUpwardRoundedIcon fontSize="small" />
+          </IconButton>
+        )}
       </Paper>
 
       {expanded && (
@@ -216,37 +244,37 @@ export default function OverlayPanel() {
             </IconButton>
           </Stack>
 
-          <Box sx={{ flex: 1, minHeight: 0, overflowY: "auto", px: 2, py: 1.5 }}>
-            {messages.length === 0 ? (
+          {!ready ? (
+            <Stack sx={{ flex: 1, p: 2 }} spacing={1.5} justifyContent="center">
               <Typography variant="body2" color="text.secondary">
-                Type to chat. Replies are canned in this preview.
+                {chat.phase === "loading"
+                  ? "Connecting to the Kelp server…"
+                  : chat.failure?.message ?? "Sign in from the full app to chat here."}
               </Typography>
-            ) : (
-              <Stack spacing={1.5}>
-                {messages.map((message) => (
-                  <Box
-                    key={message.id}
-                    sx={{
-                      alignSelf:
-                        message.role === "user" ? "flex-end" : "flex-start",
-                      maxWidth: "84%",
-                      px: 1.5,
-                      py: 1,
-                      borderRadius: 3,
-                      background:
-                        message.role === "user"
-                          ? "rgba(214,232,216,0.8)"
-                          : "transparent",
-                    }}
-                  >
-                    <Typography variant="body2" sx={{ whiteSpace: "pre-wrap" }}>
-                      {message.text}
-                    </Typography>
-                  </Box>
-                ))}
-              </Stack>
-            )}
-          </Box>
+              <Button
+                size="small"
+                variant="contained"
+                startIcon={<OpenInNewRoundedIcon />}
+                onClick={() => void openFullApp()}
+              >
+                Open full app
+              </Button>
+            </Stack>
+          ) : (
+            <Box sx={{ flex: 1, minHeight: 0, overflowY: "auto", px: 2, py: 1.5 }}>
+              {chat.messages.length === 0 ? (
+                <Typography variant="body2" color="text.secondary">
+                  Ask anything — I'll pick it up from wherever we left off.
+                </Typography>
+              ) : (
+                <Stack spacing={1.5}>
+                  {chat.messages.map((message) => (
+                    <MessageBubble key={message.id} message={message} onDecide={chat.decide} />
+                  ))}
+                </Stack>
+              )}
+            </Box>
+          )}
 
           <Stack
             direction="row"
@@ -276,6 +304,42 @@ export default function OverlayPanel() {
           <Button onClick={() => setScreenNote(false)}>Got it</Button>
         </DialogActions>
       </Dialog>
+    </Box>
+  );
+}
+
+function MessageBubble({
+  message,
+  onDecide,
+}: {
+  message: Message;
+  onDecide: (id: string, decision: "approve" | "deny") => void;
+}) {
+  const mine = message.role === "user";
+  const renderable =
+    message.blocks.some((block) => (block.type === "text" ? Boolean(block.text) : true)) ||
+    (message.sources?.length ?? 0) > 0;
+  return (
+    <Box
+      sx={{
+        alignSelf: mine ? "flex-end" : "flex-start",
+        maxWidth: "84%",
+        px: 1.5,
+        py: 1,
+        borderRadius: 3,
+        background: mine ? "rgba(214,232,216,0.8)" : "transparent",
+      }}
+    >
+      {renderable ? (
+        <MessageBody message={message} onDecide={onDecide} />
+      ) : (
+        <Stack direction="row" spacing={0.5} alignItems="center">
+          <CircularProgress size={12} />
+          <Typography variant="caption" color="text.secondary">
+            thinking…
+          </Typography>
+        </Stack>
+      )}
     </Box>
   );
 }

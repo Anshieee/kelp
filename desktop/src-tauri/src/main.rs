@@ -10,6 +10,8 @@
 
 #![cfg_attr(all(not(debug_assertions), target_os = "windows"), windows_subsystem = "windows")]
 
+mod bridge;
+
 use tauri::{Emitter, LogicalSize, Manager, PhysicalPosition, WebviewUrl, WebviewWindowBuilder};
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
 
@@ -270,6 +272,7 @@ fn spawn_gaze_emitter(app: tauri::AppHandle) {
 
 fn main() {
     tauri::Builder::default()
+        .manage(bridge::Bridge::new())
         .plugin(tauri_plugin_store::Builder::default().build())
         .plugin(tauri_plugin_stronghold::Builder::new(|salt| salt.as_bytes().to_vec()).build())
         .plugin(
@@ -284,7 +287,13 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             toggle_overlay,
             resize_overlay,
-            open_main
+            open_main,
+            bridge::bridge_server_url,
+            bridge::bridge_sign_in,
+            bridge::bridge_sign_out,
+            bridge::bridge_api,
+            bridge::bridge_open_stream,
+            bridge::bridge_close_stream
         ])
         .setup(|app| {
             app.global_shortcut().register(OVERLAY_SHORTCUT)?;

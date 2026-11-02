@@ -1,9 +1,16 @@
 import { useMemo, useState } from "react";
 import {
+  Alert,
   Avatar,
   Box,
   Button,
   Chip,
+  CircularProgress,
+  Dialog,
+  DialogActions,
+  DialogContent,
+  DialogContentText,
+  DialogTitle,
   Divider,
   Drawer,
   IconButton,
@@ -13,6 +20,7 @@ import {
   ListItemText,
   ListSubheader,
   Stack,
+  TextField,
   Tooltip,
   Typography,
 } from "@mui/material";
@@ -21,13 +29,16 @@ import ArrowUpwardRoundedIcon from "@mui/icons-material/ArrowUpwardRounded";
 import AttachFileRoundedIcon from "@mui/icons-material/AttachFileRounded";
 import MicRoundedIcon from "@mui/icons-material/MicRounded";
 import MoreHorizRoundedIcon from "@mui/icons-material/MoreHorizRounded";
+import ReplayRoundedIcon from "@mui/icons-material/ReplayRounded";
 import ScreenshotMonitorRoundedIcon from "@mui/icons-material/ScreenshotMonitorRounded";
 import SearchRoundedIcon from "@mui/icons-material/SearchRounded";
 import SettingsRoundedIcon from "@mui/icons-material/SettingsRounded";
 import SmartToyRoundedIcon from "@mui/icons-material/SmartToyRounded";
+import StopRoundedIcon from "@mui/icons-material/StopRounded";
 
-import { cannedReply, conversations as seed, groupConversations } from "./mock";
-import type { ChatMessage, Conversation } from "./types";
+import { MessageBody } from "./Blocks";
+import { type Message, type Thread } from "./bridge";
+import { useChat } from "./useChat";
 
 const DRAWER_WIDTH = 280;
 
@@ -38,59 +49,46 @@ const SUGGESTIONS = [
   "Plan my week around three deadlines",
 ];
 
-let nextId = 0;
-const uid = (prefix: string) => `${prefix}-${++nextId}`;
+const DAY = 86_400_000;
+
+function groupByDay(threads: Thread[]) {
+  const startOfToday = new Date();
+  startOfToday.setHours(0, 0, 0, 0);
+  const buckets = new Map<string, Thread[]>();
+  for (const thread of threads) {
+    const updated = new Date(thread.updated_at).getTime();
+    const age = startOfToday.getTime() - updated;
+    const label =
+      updated >= startOfToday.getTime()
+        ? "Today"
+        : age < DAY
+          ? "Yesterday"
+          : age < 7 * DAY
+            ? "Previous 7 days"
+            : "Older";
+    const bucket = buckets.get(label) ?? [];
+    bucket.push(thread);
+    buckets.set(label, bucket);
+  }
+  return ["Today", "Yesterday", "Previous 7 days", "Older"]
+    .filter((label) => buckets.has(label))
+    .map((label) => ({ label, threads: buckets.get(label)! }));
+}
 
 export default function App() {
-  const [items, setItems] = useState<Conversation[]>(seed);
-  const [activeId, setActiveId] = useState<string>(seed[0]?.id ?? "");
+  const chat = useChat();
   const [draft, setDraft] = useState("");
+  const [bearer, setBearer] = useState("");
+  const [askSignIn, setAskSignIn] = useState(false);
 
-  const groups = useMemo(() => groupConversations(items), [items]);
-  const active = items.find((item) => item.id === activeId) ?? items[0];
+  const groups = useMemo(() => groupByDay(chat.threads), [chat.threads]);
 
-  function patchActive(messages: ChatMessage[], title?: string) {
-    setItems((current) =>
-      current.map((item) =>
-        item.id === active?.id
-          ? {
-              ...item,
-              title: title ?? item.title,
-              updatedAt: new Date().toISOString(),
-              messages,
-            }
-          : item,
-      ),
-    );
-  }
-
-  function send(text: string = draft) {
-    const trimmed = text.trim();
-    if (!trimmed || !active) return;
-    const asked: ChatMessage = { id: uid("m"), role: "user", text: trimmed };
-    const answered: ChatMessage = {
-      id: uid("m"),
-      role: "assistant",
-      text: cannedReply(trimmed),
-    };
-    patchActive(
-      [...active.messages, asked, answered],
-      active.title === "New chat" ? trimmed.slice(0, 48) : undefined,
-    );
+  const submit = () => {
+    void chat.send(draft);
     setDraft("");
-  }
+  };
 
-  function newChat() {
-    const created: Conversation = {
-      id: uid("c"),
-      title: "New chat",
-      updatedAt: new Date().toISOString(),
-      messages: [],
-    };
-    setItems((current) => [created, ...current]);
-    setActiveId(created.id);
-    setDraft("");
-  }
+  const canSend = Boolean(chat.activeId) && Boolean(draft.trim()) && !chat.busy;
 
   return (
     <Box sx={{ display: "flex", height: "100%" }}>
@@ -119,7 +117,8 @@ export default function App() {
           <Button
             fullWidth
             startIcon={<AddRoundedIcon />}
-            onClick={newChat}
+            onClick={() => void chat.newChat()}
+            disabled={chat.phase !== "ready"}
             sx={{ justifyContent: "flex-start", color: "text.primary" }}
           >
             New chat
@@ -127,40 +126,62 @@ export default function App() {
         </Box>
 
         <Box sx={{ flex: 1, overflowY: "auto", px: 1 }}>
-          {groups.map((group) => (
-            <List
-              key={group.label}
-              dense
-              subheader={
-                <ListSubheader
-                  disableSticky
-                  sx={{ background: "transparent", fontSize: 11, fontWeight: 600, letterSpacing: "0.06em", textTransform: "uppercase", color: "text.secondary" }}
-                >
-                  {group.label}
-                </ListSubheader>
-              }
-            >
-              {group.conversations.map((conversation) => (
-                <ListItemButton
-                  key={conversation.id}
-                  selected={conversation.id === active?.id}
-                  onClick={() => setActiveId(conversation.id)}
-                  sx={{ borderRadius: 2, mb: 0.25 }}
-                >
-                  <ListItemText
-                    primary={conversation.title}
-                    primaryTypographyProps={{ noWrap: true, fontSize: 14 }}
-                  />
-                </ListItemButton>
-              ))}
-            </List>
-          ))}
+          {chat.phase === "loading" ? (
+            <Stack sx={{ alignItems: "center", pt: 3 }}>
+              <CircularProgress size={20} />
+            </Stack>
+          ) : groups.length === 0 ? (
+            <Typography variant="body2" color="text.secondary" sx={{ px: 1.5, pt: 1 }}>
+              No conversations yet.
+            </Typography>
+          ) : (
+            groups.map((group) => (
+              <List
+                key={group.label}
+                dense
+                subheader={
+                  <ListSubheader
+                    disableSticky
+                    sx={{
+                      background: "transparent",
+                      fontSize: 11,
+                      fontWeight: 600,
+                      letterSpacing: "0.06em",
+                      textTransform: "uppercase",
+                      color: "text.secondary",
+                    }}
+                  >
+                    {group.label}
+                  </ListSubheader>
+                }
+              >
+                {group.threads.map((thread) => (
+                  <ListItemButton
+                    key={thread.id}
+                    selected={thread.id === chat.activeId}
+                    onClick={() => void chat.openThread(thread.id)}
+                    sx={{ borderRadius: 2, mb: 0.25 }}
+                  >
+                    <ListItemText
+                      primary={thread.title || "Untitled"}
+                      primaryTypographyProps={{ noWrap: true, fontSize: 14 }}
+                    />
+                  </ListItemButton>
+                ))}
+              </List>
+            ))
+          )}
         </Box>
 
         <Divider />
         <Box sx={{ p: 1.5 }}>
-          <Button fullWidth startIcon={<SettingsRoundedIcon />} sx={{ justifyContent: "flex-start", color: "text.secondary" }}>
-            Settings
+          <Button
+            fullWidth
+            startIcon={<SettingsRoundedIcon />}
+            onClick={() => void chat.signOut()}
+            sx={{ justifyContent: "flex-start", color: "text.secondary" }}
+          >
+            Sign out
           </Button>
         </Box>
       </Drawer>
@@ -173,7 +194,10 @@ export default function App() {
           sx={{ px: 3, py: 1.5, borderBottom: "1px solid rgba(25,24,23,0.08)" }}
         >
           <Typography variant="subtitle1" noWrap sx={{ flex: 1, fontWeight: 600 }}>
-            {active?.title ?? "New chat"}
+            {chat.activeThread?.title ?? "New chat"}
+          </Typography>
+          <Typography variant="caption" color="text.secondary">
+            {chat.streamState === "open" ? "live" : chat.streamState}
           </Typography>
           <Tooltip title="Search">
             <IconButton size="small">
@@ -187,11 +211,30 @@ export default function App() {
           </Tooltip>
         </Stack>
 
+        {chat.failure && (
+          <Alert
+            severity="error"
+            sx={{ mx: 3, mt: 2 }}
+            action={
+              <Stack direction="row" spacing={1}>
+                <Button color="inherit" size="small" onClick={() => void chat.refreshThreads()}>
+                  Retry
+                </Button>
+                <Button color="inherit" size="small" onClick={() => setAskSignIn(true)}>
+                  Sign in
+                </Button>
+              </Stack>
+            }
+          >
+            {chat.failure.message}
+          </Alert>
+        )}
+
         <Box sx={{ flex: 1, overflowY: "auto", px: 3, py: 3 }}>
-          {active && active.messages.length > 0 ? (
+          {chat.messages.length > 0 ? (
             <Stack spacing={2.5} sx={{ maxWidth: 760, mx: "auto" }}>
-              {active.messages.map((message) => (
-                <Message key={message.id} message={message} />
+              {chat.messages.map((message) => (
+                <MessageRow key={message.id} message={message} onDecide={chat.decide} />
               ))}
             </Stack>
           ) : (
@@ -199,13 +242,23 @@ export default function App() {
               <Typography variant="h4" align="center">
                 What can I help with?
               </Typography>
-              <Stack direction="row" useFlexGap flexWrap="wrap" justifyContent="center" spacing={1} sx={{ maxWidth: 620 }}>
+              <Stack
+                direction="row"
+                useFlexGap
+                flexWrap="wrap"
+                justifyContent="center"
+                spacing={1}
+                sx={{ maxWidth: 620 }}
+              >
                 {SUGGESTIONS.map((suggestion) => (
                   <Chip
                     key={suggestion}
                     label={suggestion}
-                    onClick={() => send(suggestion)}
                     variant="outlined"
+                    disabled={!chat.activeId || chat.busy}
+                    onClick={() => {
+                      setDraft(suggestion);
+                    }}
                   />
                 ))}
               </Stack>
@@ -229,7 +282,7 @@ export default function App() {
             }}
           >
             <Tooltip title="Attach a file">
-              <IconButton size="small">
+              <IconButton size="small" disabled>
                 <AttachFileRoundedIcon fontSize="small" />
               </IconButton>
             </Tooltip>
@@ -239,10 +292,11 @@ export default function App() {
               onKeyDown={(event) => {
                 if (event.key === "Enter" && !event.shiftKey) {
                   event.preventDefault();
-                  send();
+                  if (canSend) submit();
                 }
               }}
-              placeholder="Ask Kelp…"
+              placeholder={chat.activeId ? "Ask Kelp…" : "Start a new chat first"}
+              disabled={!chat.activeId}
               multiline
               maxRows={6}
               sx={{ flex: 1, py: 0.75 }}
@@ -257,27 +311,107 @@ export default function App() {
                 <MicRoundedIcon fontSize="small" />
               </IconButton>
             </Tooltip>
-            <IconButton
-              size="small"
-              onClick={() => send()}
-              disabled={!draft.trim()}
-              aria-label="Send"
-              sx={{ background: "primary.main", color: "primary.contrastText", "&:hover": { background: "primary.dark" }, "&.Mui-disabled": { background: "rgba(25,24,23,0.08)" } }}
-            >
-              <ArrowUpwardRoundedIcon fontSize="small" />
-            </IconButton>
+            {chat.busy ? (
+              <IconButton
+                size="small"
+                aria-label="Stop"
+                onClick={() => void chat.stop()}
+                sx={{ background: "rgba(25,24,23,0.08)" }}
+              >
+                <StopRoundedIcon fontSize="small" />
+              </IconButton>
+            ) : (
+              <IconButton
+                size="small"
+                aria-label="Send"
+                onClick={submit}
+                disabled={!canSend}
+                sx={{
+                  background: "primary.main",
+                  color: "primary.contrastText",
+                  "&:hover": { background: "primary.dark" },
+                  "&.Mui-disabled": { background: "rgba(25,24,23,0.08)" },
+                }}
+              >
+                <ArrowUpwardRoundedIcon fontSize="small" />
+              </IconButton>
+            )}
           </Stack>
+
+          {chat.turnStatus &&
+            ["error", "stopped", "interrupted"].includes(chat.turnStatus) && (
+              <Stack direction="row" justifyContent="center" sx={{ mt: 1 }}>
+                <Button size="small" startIcon={<ReplayRoundedIcon />} onClick={() => void chat.retry()}>
+                  Try again
+                </Button>
+              </Stack>
+            )}
+
           <Typography variant="caption" align="center" display="block" sx={{ mt: 1, color: "text.secondary" }}>
-            Preview build — replies are canned and nothing is stored.
+            Connected to the Kelp server through the desktop bridge.
           </Typography>
         </Box>
       </Box>
+
+      <Dialog open={chat.phase === "signed-out" || askSignIn} fullWidth maxWidth="xs">
+        <DialogTitle>Sign in</DialogTitle>
+        <DialogContent>
+          <DialogContentText sx={{ mb: 2 }}>
+            Paste the owner bearer once. It is exchanged for a session; the
+            bridge holds the cookies, not the page.
+          </DialogContentText>
+          <TextField
+            autoFocus
+            fullWidth
+            type="password"
+            label="Kelp owner bearer"
+            value={bearer}
+            onChange={(event) => setBearer(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === "Enter" && bearer.trim()) {
+                setAskSignIn(false);
+                void chat.signIn(bearer.trim());
+                setBearer("");
+              }
+            }}
+          />
+          {chat.failure && chat.phase === "signed-out" && (
+            <Alert severity="error" sx={{ mt: 2 }}>
+              {chat.failure.message}
+            </Alert>
+          )}
+        </DialogContent>
+        <DialogActions>
+          <Button
+            variant="contained"
+            disabled={!bearer.trim()}
+            onClick={() => {
+              setAskSignIn(false);
+              void chat.signIn(bearer.trim());
+              setBearer("");
+            }}
+          >
+            Sign in
+          </Button>
+        </DialogActions>
+      </Dialog>
     </Box>
   );
 }
 
-function Message({ message }: { message: ChatMessage }) {
+function MessageRow({
+  message,
+  onDecide,
+}: {
+  message: Message;
+  onDecide: (id: string, decision: "approve" | "deny") => void;
+}) {
   const mine = message.role === "user";
+  // A message can carry only tool, approval, or artifact blocks — no text — so
+  // "thinking…" is only right when there is genuinely nothing to render yet.
+  const renderable =
+    message.blocks.some((block) => (block.type === "text" ? Boolean(block.text) : true)) ||
+    (message.sources?.length ?? 0) > 0;
   return (
     <Stack direction={mine ? "row-reverse" : "row"} spacing={1.5} alignItems="flex-start">
       <Avatar
@@ -299,9 +433,16 @@ function Message({ message }: { message: ChatMessage }) {
           background: mine ? "rgba(214,232,216,0.7)" : "transparent",
         }}
       >
-        <Typography variant="body1" sx={{ whiteSpace: "pre-wrap" }}>
-          {message.text}
-        </Typography>
+        {renderable ? (
+          <MessageBody message={message} onDecide={onDecide} />
+        ) : (
+          <Stack direction="row" spacing={0.5} alignItems="center">
+            <CircularProgress size={12} />
+            <Typography variant="caption" color="text.secondary">
+              thinking…
+            </Typography>
+          </Stack>
+        )}
       </Box>
     </Stack>
   );
