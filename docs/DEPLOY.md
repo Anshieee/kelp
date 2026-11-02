@@ -1022,7 +1022,7 @@ this gets expensive.
 | `(health: starting)` for the first minute | Normal: 40 s `start_period` plus a 30 s interval | Wait, then re-read `docker inspect --format '{{.State.Health.Status}}' kelp-kelp-1` |
 | Healthy, but `readyz` 503 `provider=timeout` | Egress blocked, DNS broken, or key rejected | Probe the provider from the same network with the key in a 0600 header file (`-H @file`, §12.2), not on the command line |
 | `readyz` 503 `store=unavailable` | `/data` not writable by 10001 | Recreate the volume/dir with owner `10001:10001` |
-| `readyz` 503 `unpriced_models=unpriced` | A usage record this month has no known price, so the spend total is incomplete | Add the model to the pricing table, or set `KELP_SPEND_UNKNOWN_PRICE_MODE=count_as` with `KELP_SPEND_UNKNOWN_PRICE_USD` (§13.2). The check clears when the next month starts or the records rotate out |
+| `readyz` 503 `unpriced_models=unpriced` | A usage record finished this month has no known price, so the spend total is incomplete | Add the model to `DEFAULT_PRICING` in `kernel/config.py` (see `docs/KERNEL.md`). `KELP_SPEND_UNKNOWN_PRICE_MODE=count_as` keeps turns running, but this check stays false until the record leaves the month window or rotates out |
 | `401 unauthorized` on `/api/*` | Token mismatch, or the proxy strips `Authorization` | Send `Authorization: Bearer …`; check the proxy passes request headers untouched |
 | `403 csrf_failed` on a browser mutation | `Origin` and `Host` disagree behind the proxy | Forward the original `Host`; or set `KELP_CSRF_TOKEN` and send `X-CSRF-Token` |
 | Upload fails `413` | Proxy limit below the 20 MiB app cap | Raise `client_max_body_size` / Caddy `max_size` to ~24 MB |
