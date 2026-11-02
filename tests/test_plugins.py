@@ -210,12 +210,145 @@ def test_cli_main_install_and_uninstall(tmp_path: Path, capsys: pytest.CaptureFi
     source = _write_plugin(tmp_path / "src" / "echo")
     plugin_root = tmp_path / "plugins"
 
-    assert cli.main(["install", str(source), "--root", str(plugin_root)]) == 0
+    assert cli.main(["install", str(source), "--root", str(plugin_root), "--yes"]) == 0
     output = capsys.readouterr().out
+    assert str(source) in output
+    assert "warnings:" in output
+    assert "review limitation: static import review covers" in output
     assert "installed plugins.echo 0.1.0 sha256:" in output
 
     assert cli.main(["uninstall", "plugins.echo", "--root", str(plugin_root)]) == 0
     assert "uninstalled plugins.echo" in capsys.readouterr().out
+    assert not (plugin_root / "plugins.echo").exists()
+
+
+def test_install_requires_reviewed_digest_and_rejects_changed_bytes(tmp_path: Path) -> None:
+    source = _write_plugin(tmp_path / "source" / "echo")
+    reviewed = inspect_plugin_package(source)
+    (source / "handler.py").write_text(HANDLER_SOURCE + "# changed\n", encoding="utf-8")
+
+    with pytest.raises(PluginPackageError, match="changed after approval"):
+        cli.install(source, root=tmp_path / "plugins", expected_digest=reviewed.digest)
+    assert not (tmp_path / "plugins" / "plugins.echo").exists()
+
+
+def test_flagged_imports_require_explicit_enablement(tmp_path: Path) -> None:
+    source = _write_plugin(
+        tmp_path / "source" / "echo",
+        handler_source="import subprocess\n" + HANDLER_SOURCE,
+    )
+    plugin_root = tmp_path / "plugins"
+    package = inspect_plugin_package(source)
+
+    with pytest.raises(PluginPackageError, match="flagged imports"):
+        cli.install(source, root=plugin_root)
+    assert not plugin_root.exists()
+
+    installed = cli.install(
+        source,
+        root=plugin_root,
+        expected_digest=package.digest,
+        allow_flagged_imports=True,
+    )
+    assert installed["digest"] == package.digest
+
+
+def test_aliased_dunder_import_requires_explicit_enablement(tmp_path: Path) -> None:
+    source = _write_plugin(
+        tmp_path / "source" / "echo",
+        handler_source=(
+            "from builtins import __import__ as imp\n"
+            "imp('subprocess')\n"
+            + HANDLER_SOURCE
+        ),
+    )
+    package = inspect_plugin_package(source)
+    warnings = cli.plugin_review_warnings(package)
+
+    assert "flagged import: builtins.__import__" in warnings
+    assert "flagged import: subprocess" in warnings
+    with pytest.raises(PluginPackageError, match="flagged imports"):
+        cli.install(source, root=tmp_path / "plugins")
+    installed = cli.install(
+        source,
+        root=tmp_path / "plugins",
+        expected_digest=package.digest,
+        allow_flagged_imports=True,
+    )
+    assert installed["digest"] == package.digest
+
+
+@pytest.mark.parametrize(
+    "handler_source",
+    [
+        "import importlib as il\nil.import_module('subprocess')\n" + HANDLER_SOURCE,
+        "from importlib import import_module as load\nload('subprocess')\n" + HANDLER_SOURCE,
+        "import builtins as bi\ngetattr(bi, '__import__')('subprocess')\n" + HANDLER_SOURCE,
+    ],
+)
+def test_dynamic_import_alias_forms_are_flagged(
+    tmp_path: Path, handler_source: str
+) -> None:
+    source = _write_plugin(tmp_path / "source" / "echo", handler_source=handler_source)
+    warnings = cli.plugin_review_warnings(inspect_plugin_package(source))
+
+    assert any(warning.startswith("flagged import:") for warning in warnings)
+    with pytest.raises(PluginPackageError, match="flagged imports"):
+        cli.install(source, root=tmp_path / "plugins")
+
+
+def test_computed_dynamic_import_is_disclosed_in_review(tmp_path: Path) -> None:
+    source = _write_plugin(
+        tmp_path / "source" / "echo",
+        handler_source=(
+            "import importlib\n"
+            "module_name = get_module_name()\n"
+            "importlib.import_module(module_name)\n"
+            + HANDLER_SOURCE
+        ),
+    )
+
+    warnings = cli.plugin_review_warnings(inspect_plugin_package(source))
+
+    assert any(warning.startswith("review limitation:") for warning in warnings)
+    with pytest.raises(PluginPackageError, match="flagged imports"):
+        cli.install(source, root=tmp_path / "plugins")
+
+
+def test_cli_displays_review_and_requires_exact_digest_approval(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    source = _write_plugin(
+        tmp_path / "source" / "echo",
+        handler_source="import subprocess\n" + HANDLER_SOURCE,
+    )
+    plugin_root = tmp_path / "plugins"
+    assert cli.main([
+        "install", str(source), "--root", str(plugin_root), "--enable-flagged-imports", "--yes"
+    ]) == 0
+    output = capsys.readouterr().out
+    package = inspect_plugin_package(source)
+    assert str(source) in output
+    assert package.digest in output
+    assert "flagged import: subprocess" in output
+    assert f"approved reviewed digest {package.digest}" in output
+    assert (plugin_root / "plugins.echo").is_dir()
+
+
+def test_cli_changed_bytes_after_review_are_not_installed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    source = _write_plugin(tmp_path / "source" / "echo")
+    plugin_root = tmp_path / "plugins"
+
+    def change_then_approve(_prompt: str) -> str:
+        (source / "handler.py").write_text(HANDLER_SOURCE + "# changed\n", encoding="utf-8")
+        return "yes"
+
+    monkeypatch.setattr("builtins.input", change_then_approve)
+    assert cli.main(["install", str(source), "--root", str(plugin_root)]) == 2
+    captured = capsys.readouterr()
+    assert "changed after approval" in captured.err
     assert not (plugin_root / "plugins.echo").exists()
 
 
@@ -678,6 +811,10 @@ def test_cli_main_reports_oserror_without_traceback(
         raise OSError("read-only file system")
 
     monkeypatch.setattr(cli, "install", fail_install)
+    def fail_inspect(_path: Any) -> Any:
+        raise OSError("read-only file system")
+
+    monkeypatch.setattr(cli, "inspect_plugin_package", fail_inspect)
     assert cli.main(["install", "whatever", "--root", str(tmp_path / "plugins")]) == 2
     captured = capsys.readouterr()
     assert captured.out == ""
@@ -745,8 +882,51 @@ def test_registry_executor_offers_approved_install_for_pinned_local_plugin(
         "skill": "plugins.echo",
         "version": "0.1.0",
         "digest": pinned["digest"],
+        "source": str(store / "plugins.echo"),
+        "warnings": [
+            "review limitation: static import review covers import statements and recognized "
+            "dynamic-import calls; computed or indirect callables may not be resolved"
+        ],
+        "enable_flagged_imports": False,
     }
     assert "plugins.echo" in executor._registry
+
+
+def test_registry_executor_reasks_when_pinned_package_changes_during_approval(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    store = tmp_path / "skill-store"
+    cli.install(_write_plugin(tmp_path / "source" / "echo"), root=store)
+    monkeypatch.setenv(PLUGIN_STORE_ENV, str(store))
+    plugin_root = tmp_path / "installed"
+    requests: list[Any] = []
+
+    async def approve(request: Any) -> bool:
+        requests.append(request)
+        if len(requests) == 1:
+            installed = store / "plugins.echo"
+            (installed / "handler.py").write_text(HANDLER_SOURCE + "# replacement\n", encoding="utf-8")
+            changed = inspect_plugin_package(installed)
+            write_plugin_lock(
+                store,
+                {
+                    changed.name: {
+                        "name": changed.name,
+                        "version": changed.version,
+                        "digest": changed.digest,
+                    }
+                },
+            )
+        return True
+
+    executor = RegistryToolExecutor(_load(plugin_root), approval=approve)
+    result = asyncio.run(executor.execute(ToolCall("install-changed", "plugins.echo", {"text": "hi"})))
+
+    assert result["ok"] is True
+    assert len(requests) == 2
+    assert requests[0].arguments["digest"] != requests[1].arguments["digest"]
+    assert requests[0].argument_hash != requests[1].argument_hash
+    assert requests[1].arguments["source"] == str(store / "plugins.echo")
 
 
 def test_registry_executor_does_not_install_when_installation_is_denied(
