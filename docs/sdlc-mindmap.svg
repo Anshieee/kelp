@@ -455,7 +455,7 @@
 <!-- k17 -->
 <g id="node50" class="node">
 <title>k17</title>
-<g id="a_node50"><a xlink:href="#kel-17" xlink:title="Five limiter classes, a body ceiling checked before the read, and two concurrency caps. Merged and reviewed.">
+<g id="a_node50"><a xlink:href="#kel-17" xlink:title="Five limiter classes, a body ceiling checked before the read, two concurrency caps, and a refusal counter per class. Merged and reviewed.">
 <path fill="#f0dcc8" stroke="black" stroke-width="2" d="M729.07,-1940.49C729.07,-1940.49 611.82,-1940.49 611.82,-1940.49 605.82,-1940.49 599.82,-1934.49 599.82,-1928.49 599.82,-1928.49 599.82,-1911.49 599.82,-1911.49 599.82,-1905.49 605.82,-1899.49 611.82,-1899.49 611.82,-1899.49 729.07,-1899.49 729.07,-1899.49 735.07,-1899.49 741.07,-1905.49 741.07,-1911.49 741.07,-1911.49 741.07,-1928.49 741.07,-1928.49 741.07,-1934.49 735.07,-1940.49 729.07,-1940.49"/>
 <text xml:space="preserve" text-anchor="middle" x="670.44" y="-1924.14" font-family="Helvetica,sans-Serif" font-size="13.00">KEL&#45;17 Abuse caps</text>
 <text xml:space="preserve" text-anchor="middle" x="670.44" y="-1907.64" font-family="Helvetica,sans-Serif" font-size="13.00">DONE</text>
@@ -560,7 +560,7 @@
 <!-- m3_rate -->
 <g id="node57" class="node">
 <title>m3_rate</title>
-<g id="a_node57"><a xlink:href="#kel-17" xlink:title="Five limiter classes, a body ceiling read before the body, and two concurrency caps. Merged and reviewed.">
+<g id="a_node57"><a xlink:href="#kel-17" xlink:title="Five limiter classes, a body ceiling read before the body, two concurrency caps, and a refusal counter per class. Merged and reviewed.">
 <ellipse fill="#faeee2" stroke="black" cx="670.44" cy="-1432.99" rx="111.02" ry="28.99"/>
 <text xml:space="preserve" text-anchor="middle" x="670.44" y="-1437.14" font-family="Helvetica,sans-Serif" font-size="13.00">Traffic and body caps</text>
 <text xml:space="preserve" text-anchor="middle" x="670.44" y="-1420.64" font-family="Helvetica,sans-Serif" font-size="13.00">DONE</text>

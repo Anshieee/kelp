@@ -1455,7 +1455,10 @@ class ChatAPI:
             return self._route(request, segments[1:])
         except _AuthLocked as exc:
             return _rate_limited_response(
-                exc.retry_after, class_name="auth", reason="locked"
+                exc.retry_after,
+                class_name="auth",
+                reason="locked",
+                metrics=self.metrics,
             )
         except ChatError as exc:
             return _json_response(exc.status, exc.to_body())

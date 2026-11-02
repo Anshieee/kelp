@@ -223,14 +223,20 @@ def _limit_share(api: "ChatAPI", token: str) -> "Response | None":
         )
         if not allowed:
             response = _rate_limited_response(
-                retry_after, class_name="share", reason="rate"
+                retry_after,
+                class_name="share",
+                reason="rate",
+                metrics=api.metrics,
             )
             _apply_share_headers(response)
             return response
         allowed, retry_after = api.limiter.consume("share_global", "global")
         if not allowed:
             response = _rate_limited_response(
-                retry_after, class_name="share_global", reason="global"
+                retry_after,
+                class_name="share_global",
+                reason="global",
+                metrics=api.metrics,
             )
             _apply_share_headers(response)
             return response
@@ -240,6 +246,7 @@ def _limit_share(api: "ChatAPI", token: str) -> "Response | None":
             _RATE_LIMITED_FALLBACK_RETRY,
             class_name="share",
             reason="limiter_error",
+            metrics=api.metrics,
         )
         _apply_share_headers(response)
         return response
@@ -292,6 +299,7 @@ def _share_stream(
             class_name="share_streams",
             reason="stream_capacity",
             limit=api._share_stream_slots.limit,
+            metrics=api.metrics,
         )
         _apply_share_headers(response)
         return response

@@ -1487,7 +1487,7 @@
           <!-- k17 -->
           <g id="node50" class="node">
           <title>k17</title>
-          <g id="a_node50"><a xlink:href="#kel-17" xlink:title="Five limiter classes, a body ceiling checked before the read, and two concurrency caps. Merged and reviewed.">
+          <g id="a_node50"><a xlink:href="#kel-17" xlink:title="Five limiter classes, a body ceiling checked before the read, two concurrency caps, and a refusal counter per class. Merged and reviewed.">
           <path fill="#f0dcc8" stroke="black" stroke-width="2" d="M729.07,-1940.49C729.07,-1940.49 611.82,-1940.49 611.82,-1940.49 605.82,-1940.49 599.82,-1934.49 599.82,-1928.49 599.82,-1928.49 599.82,-1911.49 599.82,-1911.49 599.82,-1905.49 605.82,-1899.49 611.82,-1899.49 611.82,-1899.49 729.07,-1899.49 729.07,-1899.49 735.07,-1899.49 741.07,-1905.49 741.07,-1911.49 741.07,-1911.49 741.07,-1928.49 741.07,-1928.49 741.07,-1934.49 735.07,-1940.49 729.07,-1940.49"/>
           <text xml:space="preserve" text-anchor="middle" x="670.44" y="-1924.14" font-family="Helvetica,sans-Serif" font-size="13.00">KEL&#45;17 Abuse caps</text>
           <text xml:space="preserve" text-anchor="middle" x="670.44" y="-1907.64" font-family="Helvetica,sans-Serif" font-size="13.00">DONE</text>
@@ -1592,7 +1592,7 @@
           <!-- m3_rate -->
           <g id="node57" class="node">
           <title>m3_rate</title>
-          <g id="a_node57"><a xlink:href="#kel-17" xlink:title="Five limiter classes, a body ceiling read before the body, and two concurrency caps. Merged and reviewed.">
+          <g id="a_node57"><a xlink:href="#kel-17" xlink:title="Five limiter classes, a body ceiling read before the body, two concurrency caps, and a refusal counter per class. Merged and reviewed.">
           <ellipse fill="#faeee2" stroke="black" cx="670.44" cy="-1432.99" rx="111.02" ry="28.99"/>
           <text xml:space="preserve" text-anchor="middle" x="670.44" y="-1437.14" font-family="Helvetica,sans-Serif" font-size="13.00">Traffic and body caps</text>
           <text xml:space="preserve" text-anchor="middle" x="670.44" y="-1420.64" font-family="Helvetica,sans-Serif" font-size="13.00">DONE</text>
@@ -3531,18 +3531,21 @@
                 returns it when the retry finalizes, or immediately if the call raises or the cap
                 refuses it; and the adapter refuses a request carrying both
                 <code>Content-Length</code> and <code>Transfer-Encoding</code> instead of picking
-                one. Three honest gaps. The issue asks for <code>503</code> when the concurrency
+                one. Two honest gaps. The issue asks for <code>503</code> when the concurrency
                 queue is full; what ships is <code>429 rate_limited</code> with
                 <code>details.reason</code> of <code>turn_capacity</code> and a
                 <code>Retry-After</code>, so there is one "come back later" shape instead of two.
-                The issue asks for counters <code>rate_limited_total</code> and
-                <code>rejected_body_too_large_total</code>; what ships on
-                <code>/metrics</code> is <code>kelp_limiter_in_use</code>,
-                <code>kelp_limiter_capacity</code>, and <code>kelp_limiter_saturation</code> per
-                class, so current pressure is visible but the count of refusals over time is not.
-                And a body over the ceiling on a JSON route reports <code>400 invalid_request</code>,
-                matching the existing JSON body path, while only uploads report the named
-                <code>413 upload_too_large</code>. Limiting is per process, which is the single-node
+                And a body over the ceiling on a JSON route reports
+                <code>400 invalid_request</code>, matching the existing JSON body path, while only
+                uploads report the named <code>413 upload_too_large</code>. The issue also asks for
+                counters <code>rate_limited_total</code> and
+                <code>rejected_body_too_large_total</code>.
+                <code>kelp_rate_limit_refusals_total{class}</code> now ships (added 2 November
+                2026): one increment for every 429, labelled by the limiter class that refused,
+                next to the <code>kelp_limiter_in_use</code>, <code>kelp_limiter_capacity</code>,
+                and <code>kelp_limiter_saturation</code> pressure gauges.
+                <code>rejected_body_too_large_total</code> is still not a separate series; the typed
+                error names the refusal instead. Limiting is per process, which is the single-node
                 design the issue scoped.
               </p>
             </div>

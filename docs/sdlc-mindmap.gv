@@ -141,7 +141,7 @@ digraph sdlc {
   m2 -> m2_deploy;
 
   // M3 work items (KEL-17 onwards; soft peach family)
-  k17 [label="KEL-17 Abuse caps\nDONE" shape="box" style="filled,bold,rounded" fillcolor="#F0DCC8" URL="#kel-17" tooltip="Five limiter classes, a body ceiling checked before the read, and two concurrency caps. Merged and reviewed."];
+  k17 [label="KEL-17 Abuse caps\nDONE" shape="box" style="filled,bold,rounded" fillcolor="#F0DCC8" URL="#kel-17" tooltip="Five limiter classes, a body ceiling checked before the read, two concurrency caps, and a refusal counter per class. Merged and reviewed."];
   k18 [label="KEL-18 Spend ceilings\nDONE" shape="box" style="filled,bold,rounded" fillcolor="#F0DCC8" URL="#kel-18" tooltip="Day and month dollar caps computed from persisted usage, one warning at 80%, a hard stop at 100%. Merged and reviewed."];
   k20 [label="KEL-20 Skill policy\nDONE" shape="box" style="filled,bold,rounded" fillcolor="#F0DCC8" URL="#kel-20" tooltip="Every skill call is checked against its declared effects, paths, hosts, and repos, and a deny is final. Merged and reviewed."];
   k21 [label="KEL-21 Retention\nDONE" shape="box" style="filled,bold,rounded" fillcolor="#F0DCC8" URL="#kel-21" tooltip="Hard delete, orphan sweep, space reclaimed, and a written clock per data class. Merged and reviewed."];
@@ -156,7 +156,7 @@ digraph sdlc {
 
   // M3 leaves (soft peach family)
   m3_who  [label="Who sees what\nDONE" fillcolor="#FAEEE2" URL="#kel-19" tooltip="Sign-in gates every route, keys stay server-side, and a wrong credential is counted and locked out. Merged and reviewed."];
-  m3_rate [label="Traffic and body caps\nDONE" fillcolor="#FAEEE2" URL="#kel-17" tooltip="Five limiter classes, a body ceiling read before the body, and two concurrency caps. Merged and reviewed."];
+  m3_rate [label="Traffic and body caps\nDONE" fillcolor="#FAEEE2" URL="#kel-17" tooltip="Five limiter classes, a body ceiling read before the body, two concurrency caps, and a refusal counter per class. Merged and reviewed."];
   m3_policy [label="Checked at every call\nDONE" fillcolor="#FAEEE2" URL="#kel-20" tooltip="Declared effects and scopes are enforced when a skill runs, not just described. Merged and reviewed."];
   m3_retain [label="Retention rule\nDONE" fillcolor="#FAEEE2" URL="#kel-21" tooltip="What you delete is gone, and every data class has a stated clock. Merged and reviewed."];
   m3_cost [label="Spend ceilings\nDONE" fillcolor="#FAEEE2" URL="#kel-18" tooltip="Day and month dollar ceilings from persisted usage, one warning at 80%, a hard stop at 100%. Merged and reviewed."];

@@ -195,13 +195,19 @@ def _limit(
             api.limiter.forget_class("auth", _client_address(request))
             if not allowed:
                 return _rate_limited_response(
-                    retry_after, class_name=route, reason="rate"
+                    retry_after,
+                    class_name=route,
+                    reason="rate",
+                    metrics=api.metrics,
                 )
             return None
         allowed, retry_after = api.limiter.consume("auth", _client_address(request))
         if not allowed:
             return _rate_limited_response(
-                retry_after, class_name="auth", reason="failed_auth"
+                retry_after,
+                class_name="auth",
+                reason="failed_auth",
+                metrics=api.metrics,
             )
         return None
     except Exception:  # noqa: BLE001 - observability/limits never break traffic

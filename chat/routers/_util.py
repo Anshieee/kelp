@@ -20,6 +20,7 @@ from ..errors import ChatError
 
 if TYPE_CHECKING:
     from ..api import Response
+    from ..metrics import Metrics
 
 # -- request shapes --------------------------------------------------------
 
@@ -152,12 +153,18 @@ def _rate_limited_response(
     class_name: str,
     reason: str,
     limit: int | None = None,
+    metrics: "Metrics | None" = None,
 ) -> "Response":
     """Build the one 429 shape: ``rate_limited`` plus a usable Retry-After.
 
     The status is always 429 and the body is always the ordinary error
     envelope, so the client's existing rate-limited state renders it without a
     special case.
+
+    This is the only place a 429 is built, so it is also the only place the
+    refusal counter is incremented: one call means exactly one refusal for the
+    limiter class named in the error details. Counting is best effort - a
+    broken registry must not turn a refusal into a 500.
     """
 
     try:
@@ -170,6 +177,11 @@ def _rate_limited_response(
     details: dict[str, Any] = {"class": class_name, "reason": reason}
     if limit is not None:
         details["limit"] = max(0, int(limit))
+    if metrics is not None:
+        try:
+            metrics.inc_rate_limit_refusal(class_name)
+        except Exception:  # noqa: BLE001 - observability never breaks a refusal
+            pass
     error = ChatError(
         "rate_limited",
         status=429,
@@ -182,13 +194,19 @@ def _rate_limited_response(
 
 
 def _busy_response(
-    *, class_name: str, reason: str, limit: int, retry_after: float = 1.0
+    *,
+    class_name: str,
+    reason: str,
+    limit: int,
+    retry_after: float = 1.0,
+    metrics: "Metrics | None" = None,
 ) -> "Response":
     return _rate_limited_response(
         retry_after,
         class_name=class_name,
         reason=reason,
         limit=limit,
+        metrics=metrics,
     )
 
 

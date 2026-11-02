@@ -29,6 +29,7 @@ def _stream(
             class_name="streams",
             reason="stream_capacity",
             limit=api._stream_slots.limit,
+            metrics=api.metrics,
         )
     try:
         after = _after_param(request)
