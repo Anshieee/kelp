@@ -652,6 +652,13 @@
   color: var(--body);
 }
 
+/* Scroll-linked 3D handset (g-phone.js): canvas takes the CSS shell's box. */
+.g-phone-canvas {
+  width: min(268px, 64vw);
+  aspect-ratio: 9 / 18.5;
+  display: block;
+}
+
 @media (max-width: 991px) {
   .e-handwritten {
     display: block;
@@ -705,6 +712,10 @@
     width: min(232px, 62vw);
     padding: 10px;
     border-radius: 46px;
+  }
+
+  .g-phone-canvas {
+    width: min(232px, 62vw);
   }
 
   .phone-screen {
