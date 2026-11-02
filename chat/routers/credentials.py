@@ -20,14 +20,23 @@ def credentials(api: ChatAPI, request: Request, rest: list[str], *, worker: bool
     if worker:
         # Cookies and owner tokens never authorize a browser worker.
         token = request.header('authorization') or ''
-        valid = token.startswith('Bearer ') and broker.worker_authorized(token[7:])
+        bearer = token[7:] if token.startswith('Bearer ') else ''
+        root = bool(bearer) and broker.worker_authorized(bearer)
+        operation = 'create' if not rest and method == 'POST' else (
+            'get' if len(rest) == 1 and method == 'GET' else
+            rest[1] if len(rest) == 2 and method == 'POST' else '')
+        valid = root if operation == 'create' else (
+            operation in {'get', 'claim', 'finish'} and bool(rest)
+            and broker.worker_token_scope(bearer, rest[0], operation))
         allowed, retry = api.limiter.consume('read' if valid else 'auth', 'credential-worker')
         if not allowed:
             return _rate_limited_response(retry, class_name='auth', reason='rate', metrics=api.metrics)
         if not valid or request.header('origin'):
             raise ChatError('unauthorized', status=401)
         if not rest and method == 'POST':
-            return _json_response(201, {'ok': True, 'request': broker.create(_json_body(api, request, limit=MAX_BODY))})
+            created = broker.create(_json_body(api, request, limit=MAX_BODY))
+            return _json_response(201, {'ok': True, 'request': created,
+                                        'worker_token': broker.issue_worker_token(created['id'])})
         if len(rest) == 1 and method == 'GET':
             return _json_response(200, {'ok': True, 'request': broker.get(rest[0], worker=True)})
         if len(rest) == 2 and method == 'POST':

@@ -144,6 +144,25 @@ def test_ciphertext_cannot_be_swapped_between_requests(broker):
         broker.claim(second['id'], second['binding'], second['session_id'], second['origin'])
 
 
+def test_ciphertext_is_bound_to_request_target_device_and_form(broker):
+    r = submit(broker)
+    broker._db.execute('UPDATE requests SET binding=? WHERE id=?', ('b' * 64, r['id']))
+    with pytest.raises(ChatError) as error:
+        broker.claim(r['id'], 'b' * 64, r['session_id'], r['origin'])
+    assert error.value.code == 'credential_vault_locked'
+
+
+def test_worker_tokens_are_request_scoped_and_expire(broker):
+    first = broker.create(descriptor())
+    second = broker.create(descriptor())
+    token = broker.issue_worker_token(first['id'])
+    assert broker.worker_token_scope(token, first['id'], 'get')
+    assert not broker.worker_token_scope(token, second['id'], 'get')
+    assert not broker.worker_token_scope(token, first['id'], 'delete')
+    broker._clock = lambda: first['expires_at']
+    assert not broker.worker_token_scope(token, first['id'], 'get')
+
+
 @pytest.mark.parametrize('site', ['http://login.example.test', 'https://user:pass@login.example.test',
                                  'https://login.example.test/path', 'https://login.example.test?token=foo',
                                  'https://login.example.test:444', 'file:///secret', 'https://localhost'])
@@ -188,18 +207,33 @@ def test_owner_and_worker_routes_are_separate_and_no_response_echoes_values(api)
     status, created = call(api, 'POST', '/api/credential-worker', descriptor(), token=WORKER)
     assert status == 201
     ident = created['request']['id']
+    worker_token = created['worker_token']
+    assert call(api, 'GET', f'/api/credential-worker/{ident}', token=WORKER)[0] == 401
+    assert call(api, 'GET', f'/api/credential-worker/{ident}', token=worker_token)[0] == 200
     status, public = call(api, 'POST', f'/api/credential-requests/{ident}/submit', {'values': {'password': VALUE}})
     assert status == 200 and VALUE not in json.dumps(public)
     assert 'selector' not in json.dumps(call(api, 'GET', '/api/credential-requests')[1])
     assert call(api, 'POST', f'/api/credential-requests/{ident}/submit', {'values': {'password': VALUE}})[0] == 409
-    assert call(api, 'GET', f'/api/credential-worker/{ident}/claim', token=WORKER)[0] == 404
+    assert call(api, 'GET', f'/api/credential-worker/{ident}/claim', token=WORKER)[0] == 401
     status, delivery = call(api, 'POST', f'/api/credential-worker/{ident}/claim',
-                            {k: descriptor()[k] for k in ('session_id','binding','origin')}, token=WORKER)
+                            {k: descriptor()[k] for k in ('session_id','binding','origin')}, token=worker_token)
     assert status == 200 and delivery['values']['password'] == VALUE
     assert call(api, 'GET', '/api/credential-requests/vault', token=WORKER)[0] == 401
-    assert call(api, 'POST', f'/api/credential-worker/{ident}/finish', {'outcome': 'filled'}, token=WORKER)[0] == 200
+    assert call(api, 'POST', f'/api/credential-worker/{ident}/finish', {'outcome': 'filled'}, token=worker_token)[0] == 200
     assert call(api, 'POST', f'/api/credential-requests/{ident}/release', {})[0] == 200
     assert api.body_limit_for('/api/credential-worker')[0] == 16384
+
+
+def test_worker_registration_authenticates_device_instead_of_accepting_claim(api):
+    forged = {**descriptor(), 'device': 'caller-selected-device'}
+    assert call(api, 'POST', '/api/credential-worker', forged, token=WORKER)[0] == 400
+    status, created = call(api, 'POST', '/api/credential-worker', descriptor(), token=WORKER)
+    assert status == 201
+    token = created['worker_token']
+    ident = created['request']['id']
+    assert call(api, 'GET', f'/api/credential-worker/{ident}', token=token + 'x')[0] == 401
+    assert call(api, 'GET', '/api/credential-worker/not-this-request', token=token)[0] == 401
+    assert 'device' not in json.dumps(created['request'])
 
 
 @pytest.mark.parametrize('route', ['credential-requests', 'credential-worker'])
@@ -250,7 +284,8 @@ class FakePage:
 async def bridge_roundtrip(api, *, mutate=False):
     def transport(req):
         status, body = call(api, req.method, req.url.path,
-                            json.loads(req.content) if req.content else None, token=WORKER)
+                            json.loads(req.content) if req.content else None,
+                            token=req.headers['Authorization'][7:])
         return httpx.Response(status, json=body)
     async with httpx.AsyncClient(transport=httpx.MockTransport(transport)) as http:
         worker = CredentialWorker('https://kelp.example.test', WORKER, client=http)
@@ -311,7 +346,7 @@ def test_worker_cannot_release_the_owner_observation_lock(api):
     r = submit(api.credentials)
     api.credentials.claim(r['id'], r['binding'], r['session_id'], r['origin'])
     api.credentials.finish(r['id'], 'filled')
-    assert call(api, 'POST', f"/api/credential-worker/{r['id']}/release", {}, token=WORKER)[0] == 404
+    assert call(api, 'POST', f"/api/credential-worker/{r['id']}/release", {}, token=WORKER)[0] == 401
 
 
 def test_pending_payload_survives_restart_encrypted(tmp_path):
