@@ -1,6 +1,6 @@
 # SDLC mind map — Always-On Private Assistant
 
-Snapshot: 2 November 2026
+Snapshot: 3 November 2026
 Program target: **30 October 2026** for M0 through M4
 Tracker site: [`netlify/index.html`](../netlify/index.html)
 
@@ -11,8 +11,8 @@ that goes with it is [`sdlc-mindmap.svg`](sdlc-mindmap.svg), with a PNG fallback
 site embeds a copy of the SVG directly in the page, so every box there can be clicked; that copy
 and these two files must be updated together.
 
-What this snapshot rests on: `main` is at `f17661b` (the wallet-mount merge), and the suite
-collects **1106 tests: 1102 pass and 4 skip**. The repository is public. KEL-5 through KEL-10 are merged,
+What this snapshot rests on: `main` is at `5e2123b` (PR #36, the approval-routing fix), and the suite
+collects **1121 tests: 1117 pass and 4 skip**. The repository is public. KEL-5 through KEL-10 are merged,
 reviewed, and done; KEL-11, KEL-12, KEL-13, KEL-14, KEL-15, and KEL-16 are merged and reviewed too,
 and close M2. KEL-17, KEL-18, KEL-20, KEL-21, KEL-19, and
 KEL-22 then carried M3 to completion and are merged and reviewed: abuse resistance, spend ceilings,
@@ -141,10 +141,12 @@ snapshot date.
 **LATER** on the last M4 leaf means outside this round; KEL-23, KEL-24, KEL-25, and KEL-26 are DONE,
 KEL-27 and KEL-28 are both DONE, so no work item is left open.
 
-## Recent integration merges — 2 November 2026
+## Recent integration merges — 2–3 November 2026
 
-Three follow-up merges landed after the KEL-29 gap sweep. They finish the credential, reliability,
-and server-wiring work without changing the milestone or KEL-5–KEL-29 status:
+Five follow-up merges landed after the KEL-29 gap sweep. They finish the credential, reliability,
+server-wiring, local skill-store, and approval-routing work without changing the milestone or
+KEL-5–KEL-29 status. PRs #35 and #36 were merged on 2 November; the tracker snapshot was refreshed
+on 3 November:
 
 1. **Private browser credential handoff and encrypted vault** — PR #20 merged as `33e6d9a`.
    `chat/credential_browser.py` and `chat/credentials.py` implement the browser handoff and encrypted
@@ -154,8 +156,16 @@ and server-wiring work without changing the milestone or KEL-5–KEL-29 status:
    assertion, removing an order-dependent test failure without changing application behavior.
 3. **Wallet and Checkout server mount** — merged as `f17661b`. The wallet and Checkout routes are
    mounted in the server app, with route-level coverage in `tests/test_payment_server_routes.py`.
-   The final main test run reports 1102 passed and 4 skipped; `pytest --collect-only -q` confirms
-   1106 collected tests.
+   The main suite at that merge collected 1106 tests: 1102 passed and 4 skipped.
+4. **Approval-gated local skill-store install** — PR [#35](https://github.com/Anshieee/kelp/pull/35)
+   merged as [`d6a5424`](https://github.com/Anshieee/kelp/commit/d6a5424). It adds digest-pinned
+   local skill-store discovery and an approval-gated install path. The suite then collected 1113
+   tests: 1109 passed and 4 skipped. All required CI checks passed: pytest, Ruff, mypy, secret scan,
+   and dependency audit.
+5. **Approval summaries and stop-race fix** — PR [#36](https://github.com/Anshieee/kelp/pull/36)
+   merged as [`5e2123b`](https://github.com/Anshieee/kelp/commit/5e2123b). It fixes approval file
+   summaries and adds coverage for the stop race. The current suite collects 1121 tests: 1117 passed
+   and 4 skipped. All required CI checks passed: pytest, Ruff, mypy, secret scan, and dependency audit.
 
 ## The map
 
@@ -171,7 +181,7 @@ The same map in words, in case the image does not load:
 - **Surfaces** — where you talk to the assistant: dashboard first, Telegram next, WhatsApp and voice memos later.
 - **Money** — saved cards through Stripe and hosted Checkout through Razorpay, both merged and closed out; an in-app balance later.
 - **Design** — the screen plan is written, and so is the chat spec. The chat surface code is merged; the drawing file and the browser screen are next.
-- **Integration** — private credential handoff and encrypted vault (PR #20), the deterministic share-ID test fix (PR #25), and wallet/Checkout server mounting (`f17661b`) are merged. Main collects 1106 tests: 1102 pass and 4 skip.
+- **Integration** — private credential handoff and encrypted vault (PR #20), the deterministic share-ID test fix (PR #25), wallet/Checkout server mounting (`f17661b`), skill-store install (PR #35, `d6a5424`), and approval-routing fix (PR #36, `5e2123b`) are merged. All required CI checks passed for PRs #35 and #36. Main collects 1121 tests: 1117 pass and 4 skip.
 
 On the tracker site ([`netlify/index.html`](../netlify/index.html)) the same SVG is embedded
 inside the page rather than loaded as a picture. Each box is a link: activating it opens the
