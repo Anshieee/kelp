@@ -1072,8 +1072,8 @@ check code (`provider=timeout`), and whether the file exists — not its content
 
 On the verification run: image env clean, layer history clean, container logs
 clean, and readiness details were `not_configured`, `timeout`, `unavailable`, or
-`unpriced` only. The env file lives outside the build context and is gitignored; the probe
-sends the token as a header and never prints it.
+`unpriced` only. The env file lives outside the build context and is gitignored;
+the probe sends the token as a header and never prints it.
 
 ---
 
