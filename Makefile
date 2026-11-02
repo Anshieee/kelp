@@ -1,7 +1,7 @@
 DEMO_STATE ?= var/demo
 EVAL_ARGS ?=
 
-.PHONY: demo serve check-serve test audit eval clean-demo
+.PHONY: demo serve check-serve test audit eval clean-demo phone
 
 demo:
 	python -m demo --state "$(DEMO_STATE)"
@@ -32,3 +32,9 @@ eval:
 
 clean-demo:
 	rm -rf "$(DEMO_STATE)"
+
+# Build the phone web app (PWA) into phone/dist/, which the server mounts at
+# /phone/. Requires node/npm on the build host; the committed dist/ means the
+# mount works without this step until the next app change.
+phone:
+	cd phone && npm ci && npm run build
