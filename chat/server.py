@@ -50,6 +50,7 @@ from .api import (
     SessionStore,
     make_server,
 )
+from .checkout import CheckoutAPI
 from .artifacts import ArtifactRegistry
 from .logging import configure_logging, log
 from .metrics import LoggedUsageStore, Metrics
@@ -68,6 +69,10 @@ from .scheduler import (
 from .credentials import CredentialBroker, validate_env as validate_credential_env
 from .service import ChatService
 from .store import ChatStore
+from .wallet import WalletAPI
+from payments.razorpay_checkout import RazorpayCheckout
+from payments.razorpay_gateway import RazorpayWallet
+from payments.wallet import WalletLedger
 
 __all__ = [
     "Application",
@@ -419,6 +424,9 @@ class Application:
     audit: AuditLog
     lock: DatabaseLock
     recovery: RecoveryReport
+    wallet_api: WalletAPI | None = field(default=None, repr=False)
+    checkout_api: CheckoutAPI | None = field(default=None, repr=False)
+    wallet_ledger: WalletLedger | None = field(default=None, repr=False)
     provider: Any | None = None
     owns_provider: bool = False
     maintenance: RetentionMaintenance | None = field(default=None, repr=False)
@@ -450,6 +458,20 @@ class Application:
                     self.api.runner.run(aclose(), timeout=5.0)
                 except Exception:  # noqa: BLE001 - shutdown must not mask exit
                     pass
+        payment_wallets = (
+            self.wallet_api.wallet if self.wallet_api is not None else None,
+            self.checkout_api.checkout.wallet if self.checkout_api is not None else None,
+        )
+        for payment_wallet in payment_wallets:
+            gateway = getattr(payment_wallet, "_gateway", None)
+            close = getattr(gateway, "close", None)
+            if callable(close):
+                try:
+                    close()
+                except Exception:  # noqa: BLE001 - shutdown must not mask exit
+                    pass
+        if self.wallet_ledger is not None:
+            self.wallet_ledger.close()
         try:
             self.api.close()
         finally:
@@ -520,6 +542,17 @@ def _service_secrets(
         values[SESSION_SECRET_ENV] = session_secret.strip()
     if config.csrf_token:
         values["KELP_CSRF_TOKEN"] = config.csrf_token
+    # Payment credentials are never included in request metadata, but keeping
+    # them in the shared scrubber protects accidental log/audit/metric values.
+    for name in (
+        "STRIPE_SECRET_KEY",
+        "RAZORPAY_KEY_ID",
+        "RAZORPAY_KEY_SECRET",
+        "RAZORPAY_WEBHOOK_SECRET",
+    ):
+        value = environ.get(name)
+        if isinstance(value, str) and value:
+            values[name] = value
     return values
 
 
@@ -543,6 +576,7 @@ def build_app(
     scheduler: SchedulerRuntime | None = None
     proactive: ProactiveRunner | None = None
     credential_broker: CredentialBroker | None = None
+    wallet_ledger: WalletLedger | None = None
     owns_provider = provider is None
     runtime_provider = provider
     try:
@@ -635,9 +669,22 @@ def build_app(
                 [x.strip() for x in source["KELP_BROWSER_ALLOWED_ORIGINS"].split(",")],
                 audit=audit,
             )
+        # Wallet and hosted Checkout share one durable ledger. Razorpay's
+        # transport stays lazy inside RazorpayWallet and is never constructed
+        # unless both server-side keys are present and a payment call is made.
+        wallet_ledger = WalletLedger(
+            config.db_path.parent / "wallet" / "wallet.db"
+        )
+        wallet = RazorpayWallet.from_env(source, ledger=wallet_ledger)
+        wallet_api = WalletAPI(wallet)
+        checkout_api = CheckoutAPI(
+            RazorpayCheckout.from_env(source, ledger=wallet_ledger)
+        )
         api = ChatAPI(
             service,
             credentials=credential_broker,
+            wallet_api=wallet_api,
+            checkout_api=checkout_api,
             auth_token=config.auth_token,
             csrf_token=config.csrf_token,
             health=HealthProbe.from_service(service, audit=audit),
@@ -691,6 +738,9 @@ def build_app(
             audit=audit,
             lock=lock,
             recovery=recovery,
+            wallet_api=wallet_api,
+            checkout_api=checkout_api,
+            wallet_ledger=wallet_ledger,
             provider=runtime_provider,
             owns_provider=owns_provider,
             maintenance=maintenance,
@@ -700,6 +750,8 @@ def build_app(
     except BaseException:
         if credential_broker is not None:
             credential_broker.close()
+        if wallet_ledger is not None:
+            wallet_ledger.close()
         if scheduler is not None:
             scheduler.stop()
         if proactive is not None:

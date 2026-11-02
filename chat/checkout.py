@@ -74,16 +74,30 @@ class CheckoutAPI:
                 raise WalletError("not_found")
             rest = segments[3:]
             if self._is_webhook(request, rest):
+                if not self.checkout.wallet.configured:
+                    return _error(
+                        503,
+                        "wallet_not_configured",
+                        "Checkout isn't connected yet.",
+                        user_fixable=False,
+                    )
                 return self._webhook(request)
 
             self._authorize(request)
+            if not self.checkout.wallet.configured:
+                return _error(
+                    503,
+                    "wallet_not_configured",
+                    "Checkout isn't connected yet.",
+                    user_fixable=False,
+                )
             return self._route(request, request.method.upper(), rest)
         except WalletError as exc:
             return _json_response(exc.status, exc.to_body())
         except WalletNotConfigured:
             return _error(
                 503,
-                "not_configured",
+                "wallet_not_configured",
                 "Checkout isn't connected yet.",
                 user_fixable=False,
             )
