@@ -6,7 +6,7 @@ this review is the last checkpoint before work gets a frontend.
 
 | Slice | Branch | Head | What it adds |
 |---|---|---|---|
-| KEL-6 | `kel-6` | `4c72afc` | Streaming Token Factory client + agent loop + usage accounting |
+| KEL-6 | `kel-6` | `4c72afc` | Streaming provider client + agent loop + usage accounting |
 | KEL-7 | `kel-7` | `ef6ea9f` | OpenShell policy, 10-minute single-use approvals, gated exec, audit log, Stripe placeholder |
 
 Both branches branch off `main` at `eae9027` (payments decision docs), so the two
@@ -22,9 +22,9 @@ in either order without conflicts.
 This is the piece that actually talks to the AI model. Today the repo has skills
 (what tools exist, from KEL-5) but nothing that calls a model. KEL-6 adds:
 
-- **A connection to Nebius Token Factory** — the hosted endpoint that runs the
-  Nvidia Nemotron models. It streams: words arrive piece by piece instead of
-  after a long pause, which is what makes the final chat feel fast.
+- **A connection to the model provider** — an OpenAI-compatible hosted endpoint
+  that runs the Nvidia Nemotron models. It streams: words arrive piece by piece
+  instead of after a long pause, which is what makes the final chat feel fast.
 - **One "turn" logic.** You send one message; the loop sends it to the model,
   and if the model decides to use a tool (search the web, read a file), it runs
   that tool, hands the result back, and lets the model continue — repeating
@@ -78,9 +78,9 @@ Diff vs `main`: +2,024 lines, 12 files. No existing file is modified except
 
 | File | Contents |
 |---|---|
-| `kernel/provider.py` | `TokenFactoryClient`: OpenAI-compatible `POST /chat/completions` with `stream: true`, `stream_options.include_usage: true`; tool deltas assembled into `ToolCallReady` with parsed arguments; redirects disabled; HTTP statuses mapped to typed errors with a retryable flag; error bodies never echoed into events. Built on `httpx.AsyncClient` (new dependency). |
+| `kernel/provider.py` | `ProviderClient`: OpenAI-compatible `POST /chat/completions` with `stream: true`, `stream_options.include_usage: true`; tool deltas assembled into `ToolCallReady` with parsed arguments; redirects disabled; HTTP statuses mapped to typed errors with a retryable flag; error bodies never echoed into events. Built on `httpx.AsyncClient` (new dependency). |
 | `kernel/loop.py` | `AgentLoop.run_turn()` — the state machine. Emits typed events: `turn_started`, `token_delta`, `tool_call_started/finished`, `usage_updated`, `error`, `turn_finished` (all JSON-serializable with `to_dict()`). Tool execution is fully delegated to the injected executor (`RegistryToolExecutor` from the KEL-5 registry), so validation, approval hook, timeout, and error envelopes are unchanged. No exception crosses `run_turn`. |
-| `kernel/config.py` | `KernelConfig.from_env()`: `NEBIUS_API_KEY`, `NEBIUS_TOKEN_FACTORY_BASE_URL` (legacy `NEBIUS_BASE_URL` accepted), `KELP_PRIMARY_MODEL` (default `nvidia/Nemotron-3_5-Super-VL`), `KELP_BACKGROUND_MODEL` (`Nemotron-3_5-Lightning` for background roles only). `DEFAULT_PRICING` holds USD-per-1M list prices; unknown models get `cost_known: false` instead of an invented price. |
+| `kernel/config.py` | `KernelConfig.from_env()`: `KELP_PROVIDER_API_KEY`, `KELP_PROVIDER_BASE_URL` (required, no default), `KELP_PRIMARY_MODEL` (default `nvidia/nemotron-3.5-super-vl`), `KELP_BACKGROUND_MODEL` (`nvidia/nemotron-3.5-lightning` for background roles only). `DEFAULT_PRICING` holds the two default models' published list prices; unknown models get `cost_known: false` instead of an invented price. |
 | `kernel/usage.py` | `UsageRecord` + `JsonlUsageStore`: one record per turn, appended with `fsync`, file created `0600`. Contains counts and identifiers only — no prompts, responses, or secrets. A broken or missing store flags `usage_persisted: false`; accounting never kills a turn. |
 | `kernel/events.py` | The typed event definitions shared by provider and loop. |
 | `.env.example` | Env-var template, keys only, no values; `.env` and `var/` are gitignored. |
@@ -159,7 +159,7 @@ grep -rn "shell=True" openshell/                                       # must re
 ### 3.2 GitHub compare pages
 
 Open the compare view `main...kel-6` and `main...kel-7` on the repo
-(https://github.com/Anshieee/nebius-nvidia/compare/main...kel-6 and
+(https://github.com/Anshieee/kelp/compare/main...kel-6 and
 `...kel-7`). Suggested reading order:
 
 1. **Files changed tab.** Confirm the two diffs touch disjoint directories
@@ -214,7 +214,7 @@ Open the compare view `main...kel-6` and `main...kel-7` on the repo
 | Killing the provider mid-stream yields a visible error, session usable | `test_kernel_provider.py`: mid-stream `MockTransport` failures; `loop.py` guarantees no exception escapes `run_turn` |
 | Step/token budget enforced and logged | `test_kernel_loop.py`: `max_steps` / `max_output_tokens` / `max_tool_calls` / `max_wall_seconds` exhaustion -> `turn_budget_exceeded` -> `turn_finished(reason="budget")` |
 | Unit tests for the loop state machine | Both test files, fully offline (`httpx.MockTransport`) |
-| One integration test against a recorded fixture | **Not in this slice, intentionally.** The fixture needs a live Token Factory key. `docs/KERNEL.md` section 4 names this as deferred. Verify the issue is opened/tracked (KEL-8 tip or follow-up) before approval; do not block the merge, but confirm the decision is on record. |
+| One integration test against a recorded fixture | **Not in this slice, intentionally.** The fixture needs a live provider key. `docs/KERNEL.md` section 4 names this as deferred. Verify the issue is opened/tracked (KEL-8 tip or follow-up) before approval; do not block the merge, but confirm the decision is on record. |
 
 Also verify: usage record structure matches `docs/KERNEL.md` section 3 sample
 (input, output, total, estimated cost, `cost_known`, `usage_reported`,
@@ -238,7 +238,7 @@ Also verify: usage record structure matches `docs/KERNEL.md` section 3 sample
 Block if any of these shows up:
 
 - Secrets or audit usage files are committed, or `var/` is not gitignored on both branches.
-- Provider or audit code logs tokens, prompts, error bodies, secret values, or `Authorization`/`NEBIUS_API_KEY` anywhere.
+- Provider or audit code logs tokens, prompts, error bodies, secret values, or `Authorization`/`KELP_PROVIDER_API_KEY` anywhere.
 - OpenShell: `shell=True` or any string-command path; an approval that is not single-use and 10-minute-bounded; policy not re-checked at execution time.
 - Budget exhaustion kills the process or the session instead of the turn; a missing or broken usage store raises instead of flagging `usage_persisted: false`.
 - The `httpx` dependency is missing or pinned loosely (<0.27 or >=1).
@@ -246,7 +246,7 @@ Block if any of these shows up:
 Do not block for:
 
 - No chat surface, no approval UI, no recorded-fixture integration test, no real Stripe calls — those are KEL-8, KEL-10, and live-key follow-ups.
-- Default pricing values being hardcoded — the doc says to bump them when Token Factory prices change; that is future maintenance, not a defect.
+- Pricing being unset by default — the endpoint is operator-chosen, so prices are configured per deployment rather than hardcoded; that is design, not a defect.
 
 ## 6. Verdict
 

@@ -1,4 +1,4 @@
-"""Tests for the Token Factory streaming client (KEL-6)."""
+"""Tests for the OpenAI-compatible streaming provider client (KEL-6)."""
 
 from __future__ import annotations
 
@@ -15,13 +15,14 @@ from kernel.provider import (
     ProviderFailure,
     StreamEnd,
     TextDelta,
-    TokenFactoryClient,
+    ProviderClient,
     ToolCallReady,
     UsageReport,
     classify_status,
 )
 
 API_KEY = "test-key-not-a-real-secret"
+BASE_URL = "https://provider.example.test/v1"
 
 
 def sse(*chunks: Any, done: bool = True) -> str:
@@ -31,23 +32,23 @@ def sse(*chunks: Any, done: bool = True) -> str:
     return body + "\n\n"
 
 
-def client_with(handler: Any) -> TokenFactoryClient:
-    config = KernelConfig(api_key=API_KEY)
+def client_with(handler: Any) -> ProviderClient:
+    config = KernelConfig(api_key=API_KEY, base_url=BASE_URL)
     transport = httpx.MockTransport(handler)
     http = httpx.AsyncClient(transport=transport)
-    return TokenFactoryClient(config, client=http)
+    return ProviderClient(config, client=http)
 
 
 def request() -> ChatRequest:
     return ChatRequest(
-        model="nvidia/Nemotron-3_5-Super-VL",
+        model="nvidia/nemotron-3.5-super-vl",
         messages=[{"role": "user", "content": "hello"}],
         tools=[{"type": "function", "function": {"name": "web.search", "parameters": {}}}],
         max_tokens=256,
     )
 
 
-def drain(client: TokenFactoryClient) -> list[Any]:
+def drain(client: ProviderClient) -> list[Any]:
     async def run() -> list[Any]:
         async with client:
             return [event async for event in client.stream(request())]
@@ -107,7 +108,7 @@ def test_tool_call_deltas_are_assembled() -> None:
                         {
                             "delta": {
                                 "tool_calls": [
-                                    {"index": 0, "function": {"arguments": 'ery": "nebius"}'}}
+                                    {"index": 0, "function": {"arguments": 'ery": "gpu"}'}}
                                 ]
                             }
                         }
@@ -122,7 +123,7 @@ def test_tool_call_deltas_are_assembled() -> None:
     assert len(calls) == 1
     assert calls[0].call_id == "call_1"
     assert calls[0].name == "web.search"
-    assert calls[0].arguments == {"query": "nebius"}
+    assert calls[0].arguments == {"query": "gpu"}
     assert events[-1] == StreamEnd("tool_calls")
 
 
@@ -130,12 +131,48 @@ def test_missing_api_key_is_a_typed_event() -> None:
     def handler(req: httpx.Request) -> httpx.Response:  # pragma: no cover - must not run
         raise AssertionError("no request should be made without a key")
 
-    client = TokenFactoryClient(KernelConfig(api_key=None), client=httpx.AsyncClient(transport=httpx.MockTransport(handler)))
+    client = ProviderClient(
+        KernelConfig(api_key=None, base_url=BASE_URL),
+        client=httpx.AsyncClient(transport=httpx.MockTransport(handler)),
+    )
     events = drain(client)
     assert len(events) == 1
     assert isinstance(events[0], ProviderFailure)
     assert events[0].code == "missing_api_key"
     assert events[0].retryable is False
+
+
+def test_missing_base_url_is_a_typed_event() -> None:
+    """No default host: an unset endpoint must never inherit one."""
+
+    def handler(req: httpx.Request) -> httpx.Response:  # pragma: no cover - must not run
+        raise AssertionError("no request should be made without a base URL")
+
+    client = ProviderClient(
+        KernelConfig(api_key=API_KEY, base_url=None),
+        client=httpx.AsyncClient(transport=httpx.MockTransport(handler)),
+    )
+    events = drain(client)
+    assert len(events) == 1
+    assert isinstance(events[0], ProviderFailure)
+    assert events[0].code == "missing_base_url"
+    assert events[0].retryable is False
+    assert "KELP_PROVIDER_BASE_URL" in events[0].message
+
+
+def test_config_reads_the_provider_environment_and_has_no_default_host() -> None:
+    config = KernelConfig.from_env(
+        {"KELP_PROVIDER_BASE_URL": "https://openrouter.ai/api/v1/",
+         "KELP_PROVIDER_API_KEY": API_KEY}
+    )
+    assert config.base_url == "https://openrouter.ai/api/v1"
+    assert config.api_key == API_KEY
+    assert config.base_url_configured is True
+
+    blank = KernelConfig.from_env({"KELP_PROVIDER_BASE_URL": "   "})
+    assert blank.base_url is None
+    assert blank.base_url_configured is False
+
 
 
 @pytest.mark.parametrize(

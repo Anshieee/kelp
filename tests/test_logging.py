@@ -260,8 +260,8 @@ def test_server_entrypoint_applies_kelp_log_level(tmp_path: Any) -> None:
             yield  # pragma: no cover - async generator
 
     env = {
-        "NEBIUS_API_KEY": "test-api-key-1234567890",
-        "NEBIUS_TOKEN_FACTORY_BASE_URL": "http://127.0.0.1:9/v1",
+        "KELP_PROVIDER_API_KEY": "test-api-key-1234567890",
+        "KELP_PROVIDER_BASE_URL": "http://127.0.0.1:9/v1",
         "KELP_AUTH_TOKEN": "owner-token-1234567890",
         "KELP_DB_PATH": str(tmp_path / "db" / "chat.db"),
         "KELP_ARTIFACT_DIR": str(tmp_path / "artifacts"),

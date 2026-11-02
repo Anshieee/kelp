@@ -100,7 +100,7 @@ A complete example (`web.search`, abbreviated schemas):
     {
       "kind": "model",
       "description": "Use when the user asks about recent events or external facts.",
-      "examples": ["What is the latest Nebius GPU pricing?"]
+      "examples": ["What is the latest GPU cloud pricing?"]
     }
   ],
   "tools": ["web.search"],
@@ -235,7 +235,7 @@ Cross-field rules enforced by the loader:
 |---|---|---|
 | `paths` | `${WORKSPACE}/…` glob; no `..`, no `\` | `${WORKSPACE}/var/artifacts/**` |
 | `hosts` | lowercase DNS or leading `*.` wildcard; no scheme/port/path/IP | `api.github.com`, `*.example.com` |
-| `repos` | `owner/name` or `*` | `Anshieee/nebius-nvidia` |
+| `repos` | `owner/name` or `*` | `Anshieee/kelp` |
 
 Scopes are **declared capability** and are enforced on every invocation (KEL-20). The loader
 builds an `InvocationPolicy` from the manifest, resolves `${WORKSPACE}`, and checks the concrete
@@ -496,7 +496,7 @@ SkillManifestError: 2 invalid skill manifest(s) under /app/skills/builtin
 | Skill | Effects | Approval | Scope | Timeout | Idempotent | Cost | Secrets |
 |---|---|---|---|---|---|---|---|
 | `web.search` | read, network | no | hosts: `api.tavily.com` | 15 s | yes | metered | `TAVILY_API_KEY` |
-| `github.read` | read, network | no | hosts: `api.github.com`; repos: `Anshieee/nebius-nvidia` | 20 s | yes | free | `GITHUB_TOKEN` |
+| `github.read` | read, network | no | hosts: `api.github.com`; repos: `Anshieee/kelp` | 20 s | yes | free | `GITHUB_TOKEN` |
 | `docs.answer` | read | no | paths: `${WORKSPACE}/var/artifacts/**` | 30 s | yes | metered | — |
 | `schedule.create` | write | **yes** | paths: `${WORKSPACE}/var/scheduler/**` | 5 s | **no** | free | — |
 

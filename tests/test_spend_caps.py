@@ -20,6 +20,7 @@ import pytest
 from chat import ChatAPI, ChatService, ChatStore, Request
 from chat.errors import ChatError
 from chat.metrics import Metrics
+from kernel import config as kernel_config
 from kernel.usage import (
     SPEND_CAP_DAY_ENV,
     SPEND_CAP_MONTH_ENV,
@@ -319,6 +320,15 @@ def test_bad_cap_configuration_fails_closed(env: dict[str, str]) -> None:
 # -- the turn path ---------------------------------------------------------
 
 
+@pytest.fixture
+def priced_model(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Prices are operator-configured, not shipped; set one for dollar-cap tests."""
+
+    monkeypatch.setitem(
+        kernel_config.DEFAULT_PRICING, MODEL, kernel_config.ModelPricing(0.30, 0.90)
+    )
+
+
 def make_capped_service(
     tmp_path: Path,
     caps: SpendCaps,
@@ -434,7 +444,9 @@ def test_count_as_mode_admits_then_refuses_when_counted_spend_reaches_the_cap(
     assert len(usage.records()) == 1
 
 
-def test_warning_is_logged_and_gauge_published_once(tmp_path: Path) -> None:
+def test_warning_is_logged_and_gauge_published_once(
+    tmp_path: Path, priced_model: None
+) -> None:
     service, _, _, _, audit, metrics = make_capped_service(
         tmp_path,
         SpendCaps(day_usd=1.0),
@@ -543,7 +555,7 @@ def get_metrics_body(api: ChatAPI) -> dict[str, float]:
 
 
 def test_metrics_scrape_after_one_turn_shows_spend_without_a_second_send(
-    tmp_path: Path,
+    tmp_path: Path, priced_model: None
 ) -> None:
     service, _, provider, _, _, metrics = make_capped_service(
         tmp_path, SpendCaps(day_usd=1.0), []

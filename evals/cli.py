@@ -35,7 +35,7 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--live",
         action="store_true",
-        help="use the real Nebius Token Factory provider; requires NEBIUS_API_KEY",
+        help="use the real model provider; requires KELP_PROVIDER_BASE_URL and KELP_PROVIDER_API_KEY",
     )
     parser.add_argument(
         "--repeat",
@@ -102,9 +102,14 @@ def main(argv: Sequence[str] | None = None) -> int:
             error_rate=_percent(metrics.get("error_rate")),
         )
     )
+    cost = (
+        f"${metrics.get('cost_usd_total')}"
+        if metrics.get("cost_known", True)
+        else "unknown (no price configured)"
+    )
     print(
         f"p50={metrics.get('p50_latency_ms')}ms p95={metrics.get('p95_latency_ms')}ms "
-        f"tokens={metrics.get('tokens_total')} cost=${metrics.get('cost_usd_total')} "
+        f"tokens={metrics.get('tokens_total')} cost={cost} "
         f"deterministic={'yes' if metrics.get('deterministic') else 'no'}"
     )
     violations = report["thresholds"].get("violations") or []

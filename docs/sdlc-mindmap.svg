@@ -350,7 +350,7 @@
 <!-- k16 -->
 <g id="node43" class="node">
 <title>k16</title>
-<g id="a_node43"><a xlink:href="#kel-16" xlink:title="One image, one Compose file, one systemd unit, and a runbook a stranger can follow. Merged and reviewed; proven locally, not yet run on Nebius.">
+<g id="a_node43"><a xlink:href="#kel-16" xlink:title="One image, one Compose file, one systemd unit, and a runbook a stranger can follow. Merged and reviewed; proven locally, not yet run on a hosted VM.">
 <path fill="#fcefc7" stroke="black" stroke-width="2" d="M714.07,-2503.49C714.07,-2503.49 626.82,-2503.49 626.82,-2503.49 620.82,-2503.49 614.82,-2497.49 614.82,-2491.49 614.82,-2491.49 614.82,-2474.49 614.82,-2474.49 614.82,-2468.49 620.82,-2462.49 626.82,-2462.49 626.82,-2462.49 714.07,-2462.49 714.07,-2462.49 720.07,-2462.49 726.07,-2468.49 726.07,-2474.49 726.07,-2474.49 726.07,-2491.49 726.07,-2491.49 726.07,-2497.49 720.07,-2503.49 714.07,-2503.49"/>
 <text xml:space="preserve" text-anchor="middle" x="670.44" y="-2487.14" font-family="Helvetica,sans-Serif" font-size="13.00">KEL&#45;16 Deploy</text>
 <text xml:space="preserve" text-anchor="middle" x="670.44" y="-2470.64" font-family="Helvetica,sans-Serif" font-size="13.00">DONE</text>
@@ -440,7 +440,7 @@
 <!-- m2_deploy -->
 <g id="node49" class="node">
 <title>m2_deploy</title>
-<g id="a_node49"><a xlink:href="#m2" xlink:title="Image, Compose file, systemd unit, health probe, and a runbook that a stranger can follow. Proven locally on 30 October; the Nebius host run is the next step.">
+<g id="a_node49"><a xlink:href="#m2" xlink:title="Image, Compose file, systemd unit, health probe, and a runbook that a stranger can follow. Proven locally on 30 October; the hosted VM run is the next step.">
 <ellipse fill="#fff8e1" stroke="black" cx="670.44" cy="-1993.99" rx="127.99" ry="28.99"/>
 <text xml:space="preserve" text-anchor="middle" x="670.44" y="-1998.14" font-family="Helvetica,sans-Serif" font-size="13.00">One image, one runbook</text>
 <text xml:space="preserve" text-anchor="middle" x="670.44" y="-1981.64" font-family="Helvetica,sans-Serif" font-size="13.00">DONE</text>

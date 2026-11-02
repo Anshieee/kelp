@@ -45,7 +45,7 @@ def test_offline_suite_passes_is_deterministic_and_writes_both_reports(
     assert "# KEL-15 eval report — offline" in markdown
     # The fake sentinel is configured as a secret; it must not reach the report.
     assert "eval-sentinel-1234" not in payload
-    assert "NEBIUS_API_KEY" not in payload
+    assert "KELP_PROVIDER_API_KEY" not in payload
 
 
 def test_second_run_compares_against_the_first(tmp_path: Path) -> None:
@@ -95,23 +95,31 @@ def test_threshold_violation_exits_non_zero(tmp_path: Path) -> None:
     )
 
 
-def test_live_mode_requires_the_nebius_key(
+def test_live_mode_requires_the_provider_key(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.delenv("NEBIUS_API_KEY", raising=False)
+    monkeypatch.setenv("KELP_PROVIDER_BASE_URL", "https://openrouter.ai/api/v1")
+    monkeypatch.delenv("KELP_PROVIDER_API_KEY", raising=False)
     with pytest.raises(LiveModeError) as info:
         run_suite(out_dir=tmp_path / "evals", live=True)
-    assert "NEBIUS_API_KEY" in str(info.value)
+    assert "KELP_PROVIDER_API_KEY" in str(info.value)
+
+    # A key without an endpoint is also refused: there is no default host.
+    monkeypatch.setenv("KELP_PROVIDER_API_KEY", "test-key")
+    monkeypatch.delenv("KELP_PROVIDER_BASE_URL", raising=False)
+    with pytest.raises(LiveModeError) as info:
+        run_suite(out_dir=tmp_path / "evals", live=True)
+    assert "KELP_PROVIDER_BASE_URL" in str(info.value)
 
 
 def test_cli_live_without_key_exits_two_and_prints_no_secret(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    monkeypatch.delenv("NEBIUS_API_KEY", raising=False)
+    monkeypatch.delenv("KELP_PROVIDER_API_KEY", raising=False)
     code = main(["--live", "--out", str(tmp_path / "evals")])
     captured = capsys.readouterr()
     assert code == 2
-    assert "NEBIUS_API_KEY" in captured.err
+    assert "KELP_PROVIDER_API_KEY" in captured.err
     assert "eval-sentinel-1234" not in captured.out + captured.err
 
 

@@ -75,7 +75,7 @@ def test_tool_call_opens_a_card_and_text_continues_after_it(tmp_path: Path) -> N
             "tool": "web.search",
             "duration_ms": 1,
             "output": {
-                "query": "Nebius GPU pricing",
+                "query": "GPU cloud pricing",
                 "backend": "stub",
                 "results": [
                     {"title": "A", "url": "https://a.example/1", "snippet": "one"},
@@ -85,7 +85,7 @@ def test_tool_call_opens_a_card_and_text_continues_after_it(tmp_path: Path) -> N
         }
 
     scripts = [
-        tool_script("web.search", {"query": "Nebius GPU pricing"}),
+        tool_script("web.search", {"query": "GPU cloud pricing"}),
         text_script("Found two."),
     ]
     service, store, _provider = make_service(
@@ -101,7 +101,7 @@ def test_tool_call_opens_a_card_and_text_continues_after_it(tmp_path: Path) -> N
             card = blocks[0]
             assert card["tool"] == "web.search"
             assert card["label"] == "Web search"
-            assert card["summary"] == "Nebius GPU pricing"
+            assert card["summary"] == "GPU cloud pricing"
             assert card["status"] == "done"
             assert card["detail"]["result_summary"] == "2 results"
             assert blocks[1]["text"] == "Found two."
@@ -677,7 +677,7 @@ def test_stop_preserves_partial_text_and_closes_the_turn(tmp_path: Path) -> None
     service = ChatService(
         store=store,
         provider=_SlowProvider(),
-        model="nvidia/Nemotron-3_5-Super-VL",
+        model="nvidia/nemotron-3.5-super-vl",
     )
     try:
         thread = service.create_thread()
@@ -1078,7 +1078,7 @@ def test_bound_artifact_is_invisible_without_its_thread(tmp_path: Path) -> None:
 def test_delete_stops_the_turn_and_hides_approvals_and_artifacts(tmp_path: Path) -> None:
     store = ChatStore(tmp_path / "chat.db")
     service = ChatService(
-        store=store, provider=_SlowProvider(), model="nvidia/Nemotron-3_5-Super-VL"
+        store=store, provider=_SlowProvider(), model="nvidia/nemotron-3.5-super-vl"
     )
     try:
         thread = service.create_thread()

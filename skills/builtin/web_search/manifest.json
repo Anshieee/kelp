@@ -8,7 +8,7 @@
       "kind": "model",
       "description": "Use when the user asks about recent events, external facts, or anything that needs a current public source.",
       "examples": [
-        "What is the latest Nebius GPU pricing?",
+        "What is the latest GPU cloud pricing?",
         "Find the release notes for Postgres 17"
       ]
     }

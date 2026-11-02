@@ -16,7 +16,7 @@ from kernel.provider import (
     UsageReport,
 )
 
-MODEL = "nvidia/Nemotron-3_5-Super-VL"
+MODEL = "nvidia/nemotron-3.5-super-vl"
 
 
 class StubProvider:

@@ -32,7 +32,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
-from kernel import JsonlUsageStore, KernelConfig, TokenFactoryClient
+from kernel import JsonlUsageStore, KernelConfig, ProviderClient
+from kernel.config import API_KEY_ENV, BASE_URL_ENV
 from kernel.usage import SpendCaps, SpendGuard
 from openshell.approvals import ApprovalStore
 from openshell.audit import AuditLog, SecretScrubber
@@ -227,11 +228,19 @@ class ServerConfig:
     def from_env(cls, env: Mapping[str, str] | None = None) -> "ServerConfig":
         source = os.environ if env is None else env
 
-        api_key = _text(source, "NEBIUS_API_KEY")
+        api_key = _text(source, API_KEY_ENV)
         if not api_key:
             raise ConfigError(
                 "missing_api_key",
-                "NEBIUS_API_KEY is required; the server will not start without it.",
+                f"{API_KEY_ENV} is required; the server will not start without it.",
+            )
+
+        base_url = _text(source, BASE_URL_ENV)
+        if not base_url:
+            raise ConfigError(
+                "missing_base_url",
+                f"{BASE_URL_ENV} is required; the server will not start without "
+                "a model provider endpoint.",
             )
 
         auth_token = _text(source, AUTH_TOKEN_ENV)
@@ -496,7 +505,7 @@ def _service_secrets(
             if isinstance(value, str) and value:
                 values[name] = value
     if config.kernel.api_key:
-        values["NEBIUS_API_KEY"] = config.kernel.api_key
+        values["KELP_PROVIDER_API_KEY"] = config.kernel.api_key
     values["KELP_AUTH_TOKEN"] = config.auth_token
     # The per-device CSRF half is an HMAC under a key derived from this value,
     # so an operator echoing the environment must not leak it into a log or
@@ -548,8 +557,8 @@ def build_app(
         # client and every skill's egress client.
         egress = EgressLedger(audit)
         if runtime_provider is None:
-            runtime_provider = TokenFactoryClient(config.kernel)
-            # Attach after construction on purpose: ``TokenFactoryClient(config)``
+            runtime_provider = ProviderClient(config.kernel)
+            # Attach after construction on purpose: ``ProviderClient(config)``
             # stays a one-argument call, which the serve harness relies on.
             try:
                 runtime_provider.ledger = egress

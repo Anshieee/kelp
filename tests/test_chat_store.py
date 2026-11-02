@@ -32,12 +32,12 @@ def test_thread_crud_and_soft_delete(tmp_path: Path) -> None:
         assert thread["title_source"] == "auto"
         assert thread["active_turn_id"] is None
 
-        renamed = store.rename_thread(thread["id"], "Nebius GPU pricing")
-        assert renamed["title"] == "Nebius GPU pricing"
+        renamed = store.rename_thread(thread["id"], "GPU cloud pricing")
+        assert renamed["title"] == "GPU cloud pricing"
         assert renamed["title_source"] == "user"
 
         assert store.set_auto_title(thread["id"], "ignored") is False
-        assert store.get_thread(thread["id"])["title"] == "Nebius GPU pricing"
+        assert store.get_thread(thread["id"])["title"] == "GPU cloud pricing"
 
         assert store.soft_delete_thread(thread["id"]) is True
         assert store.get_thread(thread["id"]) is None

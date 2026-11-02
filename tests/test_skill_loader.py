@@ -296,7 +296,7 @@ def test_path_scope_must_be_workspace_relative(tmp_path: Path) -> None:
 
 def test_repo_scope_format(tmp_path: Path) -> None:
     manifest = golden()
-    manifest["permissions"]["scopes"]["repos"] = ["nebius-nvidia"]
+    manifest["permissions"]["scopes"]["repos"] = ["kelp"]
     expect_violation(tmp_path, manifest, "/permissions/scopes/repos/0")
 
 
@@ -575,12 +575,12 @@ def test_builtin_network_skills_are_allowlisted() -> None:
     registry = SkillRegistry.load(BUILTIN_ROOT)
     assert registry.get("web.search").scopes["hosts"] == ("api.tavily.com",)
     assert registry.get("github.read").scopes["hosts"] == ("api.github.com",)
-    assert registry.get("github.read").scopes["repos"] == ("Anshieee/nebius-nvidia",)
+    assert registry.get("github.read").scopes["repos"] == ("Anshieee/kelp",)
 
 
 def test_builtin_stubs_return_not_implemented() -> None:
     registry = SkillRegistry.load(BUILTIN_ROOT)
-    result = invoke(registry, "web.search", {"query": "nebius gpu"})
+    result = invoke(registry, "web.search", {"query": "gpu cluster"})
     assert result["error"]["code"] == "not_implemented"
     assert result["error"]["retryable"] is False
 

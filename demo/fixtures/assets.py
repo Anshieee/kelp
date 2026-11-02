@@ -41,7 +41,7 @@ def github() -> dict[str, Any]:
 
 
 def pdf_bytes() -> bytes:
-    return _read_bytes("nebius-overview.pdf")
+    return _read_bytes("gpu-cloud-overview.pdf")
 
 
 def csv_bytes() -> bytes:

@@ -212,9 +212,9 @@ def test_timeout_kills_the_process(tmp_path: Path) -> None:
 
 
 def test_secret_env_is_not_forwarded_or_logged(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("NEBIUS_API_KEY", SECRET)
+    monkeypatch.setenv("KELP_PROVIDER_API_KEY", SECRET)
     gate, audit, _workspace = make_gate(tmp_path)
-    code = "import os; print(os.environ.get('NEBIUS_API_KEY', 'absent'))"
+    code = "import os; print(os.environ.get('KELP_PROVIDER_API_KEY', 'absent'))"
     request = gate.request([sys.executable, "-c", code], turn_id="t1")
     gate.approve(request.id, turn_id="t1")
 
@@ -226,7 +226,7 @@ def test_secret_env_is_not_forwarded_or_logged(tmp_path: Path, monkeypatch: pyte
 
 
 def test_secret_in_output_is_scrubbed(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("NEBIUS_API_KEY", SECRET)
+    monkeypatch.setenv("KELP_PROVIDER_API_KEY", SECRET)
     gate, audit, _workspace = make_gate(tmp_path)
     code = f"print({SECRET!r})"
     request = gate.request([sys.executable, "-c", code], turn_id="t1")

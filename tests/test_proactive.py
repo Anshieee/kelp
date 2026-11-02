@@ -673,8 +673,8 @@ raise SystemExit(3)
 
 def _server_env(root: Path) -> dict[str, str]:
     return {
-        "NEBIUS_API_KEY": "test-api-key-never-printed-12345",
-        "NEBIUS_TOKEN_FACTORY_BASE_URL": "http://127.0.0.1:9/v1",
+        "KELP_PROVIDER_API_KEY": "test-api-key-never-printed-12345",
+        "KELP_PROVIDER_BASE_URL": "http://127.0.0.1:9/v1",
         "KELP_AUTH_TOKEN": "owner-token-1234567890",
         "KELP_DB_PATH": str(root / "db" / "chat.db"),
         "KELP_ARTIFACT_DIR": str(root / "artifacts"),
