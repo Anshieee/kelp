@@ -1,7 +1,8 @@
 # Deploy the KELP assistant
 
-- **Status:** implemented, merged into `main` at `7addf56`, 30 October 2026
-- **Branch:** `main` (head `7addf56`)
+- **Status:** implemented; the deploy slice merged at `7addf56` on 30 October
+  2026, and current `main` is `f7ed9d1` on 2 November 2026
+- **Branch:** `main` (head `f7ed9d1`; deploy slice `7addf56`)
 - **Scope:** one container image, one Compose service, one systemd wrapper, one
   health probe, one `/data` volume. No application code changed.
 - **Tests:** `tests/test_deploy_healthcheck.py` (25 cases) and
@@ -79,6 +80,31 @@ enough (measured idle footprint: ~50 MiB RSS, ~2% CPU).
   python3 -c "import secrets; print(secrets.token_urlsafe(32))"
   ```
 
+### 2.1 Put the checkout at `/opt/kelp`
+
+`/opt/kelp` is both the Compose project directory and the build host checkout,
+so clone `main` there before section 4:
+
+```bash
+sudo mkdir -p /opt/kelp
+sudo chown "$USER":"$USER" /opt/kelp
+git clone https://github.com/Anshieee/kelp.git /opt/kelp
+cd /opt/kelp
+git switch main
+```
+
+The repository is public, so the clone needs no GitHub credentials. If the
+directory already holds a checkout, use it and run `git fetch origin` before
+building.
+
+### 2.2 Docker permissions and the VM firewall
+
+The examples call `docker` and `docker compose` without `sudo`; either add the
+operator to the `docker` group once (`sudo usermod -aG docker "$USER"`, then log
+out and back in) or prefix every Docker command with `sudo`. Create the VM with
+a public IPv4 address and a security group that allows inbound `22`, `80`, and
+`443`; nothing else needs to be reachable from the internet.
+
 The examples assume:
 
 | Path | Meaning |
@@ -139,9 +165,15 @@ baked into the image; the process refuses to start without all three, exit `2`.
 | `KELP_RATE_LIMIT_UPLOAD_RPM` / `_BURST` | no | `60` / `20` | no | Attachment uploads per client |
 | `KELP_RATE_LIMIT_READ_RPM` / `_BURST` | no | `600` / `200` | no | Read calls per client |
 | `KELP_RATE_LIMIT_ADMIN_RPM` / `_BURST` | no | `1200` / `300` | no | Metrics and readiness per client; keep it above the probe rate |
+| `KELP_RATE_LIMIT_SHARE_RPM` / `_BURST` | no | `30` / `10` | no | Anonymous share reads per link; keyed on the hashed link token |
+| `KELP_RATE_LIMIT_SHARE_GLOBAL_RPM` / `_BURST` | no | `600` / `200` | no | Process-wide ceiling for anonymous share reads |
 | `KELP_RATE_LIMIT_IDLE_SECONDS` | no | `300` | no | Idle-out before a limiter key starts with a full bucket again |
+| `KELP_RATE_LIMIT_MAX_KEYS` | no | `4096` | no | Bound on distinct limiter keys kept in memory |
 | `KELP_MAX_CONCURRENT_TURNS` | no | `4` | no | Global cap on turns running at once; `0` disables |
 | `KELP_SCHEDULER_ENABLED` | no | `1` | no | Run the cron ticker that starts proactive turns; `0` keeps schedules stored but idle |
+| `KELP_SCHEDULER_TICK_SECONDS` | no | `30` | no | Ticker interval for checking due schedules |
+| `KELP_SCHEDULER_GRACE_SECONDS` | no | `3600` | no | How late a due schedule may start before it is recorded as a skip |
+| `KELP_SCHEDULER_MAX_TASKS` | no | `200` | no | Maximum task files the scheduler holds; over the cap is refused |
 | `KELP_PROACTIVE_MAX_CONCURRENT` | no | `1` | no | Proactive turns allowed in flight at once; over the cap is a recorded skip, never a queue |
 | `KELP_PROACTIVE_MAX_RUNS_PER_HOUR` | no | `5` | no | Proactive run starts per rolling hour; over the cap is a recorded skip |
 | `KELP_PROACTIVE_FAILURE_LIMIT` | no | `3` | no | Consecutive failed proactive turns before that schedule is parked `disabled`; a clean turn resets the count |
@@ -175,7 +207,10 @@ $EDITOR deploy/kelp.env          # set the provider URL/key and KELP_AUTH_TOKEN
 
 `deploy/kelp.env` is gitignored and excluded from the build context. Never put
 these values in `docker-compose.yml`, the `Dockerfile`, a shell history line, or
-a ticket.
+a ticket. Create the file before the first Compose command: `docker compose
+config -q` validates the whole project, including the existence of the
+`env_file`, so it fails on a checkout where `deploy/kelp.env` does not exist
+yet.
 
 ### 3.1 Deployment variables: `/opt/kelp/.env`
 
@@ -437,10 +472,11 @@ Notes:
 | `GET /api/health` | same token | Legacy alias, byte-compatible `{"ok":true}` |
 
 Readiness checks: `store` (SQLite write lock), `artifacts` (throwaway file),
-`audit` and `usage` (zero-byte append), `registry` (skill manifests loaded),
-`provider` (`GET {base_url}/models`, 2 s timeout, cached 30 s). A check reports
-only `not_configured`, `timeout`, or `unavailable` — never a path, a value, or
-an exception message.
+`audit` and `usage` (zero-byte append), `unpriced_models` (usage records finished
+this month with no known price; the payload carries the count only), `registry`
+(skill manifests loaded), `provider` (`GET {base_url}/models`, 2 s timeout,
+cached 30 s). A check reports only `not_configured`, `timeout`, `unavailable`, or
+`unpriced`, never a path, a value, a model id, or an exception message.
 
 ```bash
 # liveness, unauthenticated, local
@@ -922,7 +958,7 @@ if the VM is also the checkout you tested; otherwise record the numbers from the
 build host next to the commit, and treat the VM as proven by §12.1 and §12.2.
 
 Measured on the verification host: **68 passed in 0.74 s** for the
-retrieval/answer suites and **1048 passed** for the full suite on the current
+retrieval/answer suites and **1066 passed** for the full suite on the current
 `main`. Record this number next to the commit in the release note; a drop means
 the deploy is not the code you tested.
 
@@ -1018,6 +1054,7 @@ this gets expensive.
 | `(health: starting)` for the first minute | Normal: 40 s `start_period` plus a 30 s interval | Wait, then re-read `docker inspect --format '{{.State.Health.Status}}' kelp-kelp-1` |
 | Healthy, but `readyz` 503 `provider=timeout` | Egress blocked, DNS broken, or key rejected | Probe the provider from the same network with the key in a 0600 header file (`-H @file`, §12.2), not on the command line |
 | `readyz` 503 `store=unavailable` | `/data` not writable by 10001 | Recreate the volume/dir with owner `10001:10001` |
+| `readyz` 503 `unpriced_models=unpriced` | A usage record finished this month has no known price, so the spend total is incomplete | Add the model to `DEFAULT_PRICING` in `kernel/config.py` (see `docs/KERNEL.md`). `KELP_SPEND_UNKNOWN_PRICE_MODE=count_as` keeps turns running, but this check stays false until the record leaves the month window or rotates out |
 | `401 unauthorized` on `/api/*` | Token mismatch, or the proxy strips `Authorization` | Send `Authorization: Bearer …`; check the proxy passes request headers untouched |
 | `403 csrf_failed` on a browser mutation | `Origin` and `Host` disagree behind the proxy | Forward the original `Host`; or set `KELP_CSRF_TOKEN` and send `X-CSRF-Token` |
 | Upload fails `413` | Proxy limit below the 20 MiB app cap | Raise `client_max_body_size` / Caddy `max_size` to ~24 MB |
@@ -1066,9 +1103,9 @@ environment, and `KELP_AUTH_TOKEN` / `KELP_PROVIDER_API_KEY` are in it in clear 
 check code (`provider=timeout`), and whether the file exists — not its contents.
 
 On the verification run: image env clean, layer history clean, container logs
-clean, and readiness details were `not_configured`, `timeout`, or `unavailable`
-only. The env file lives outside the build context and is gitignored; the probe
-sends the token as a header and never prints it.
+clean, and readiness details were `not_configured`, `timeout`, `unavailable`, or
+`unpriced` only. The env file lives outside the build context and is gitignored;
+the probe sends the token as a header and never prints it.
 
 ---
 
@@ -1082,10 +1119,10 @@ sends the token as a header and never prints it.
   depends on the backup, not a down-migration.
 - **No remote state.** SQLite is a local file by design; do not put it on NFS.
 - **Nothing was deployed.** All timings above were measured locally on 30
-  October 2026 against `main`, image `kelp:7addf56`, and a disposable
-  `kelp-data` volume; the volume, network, and containers were removed
-  afterwards. The tag `kelp:7addf56` corresponds to the commit pinned in §1; a
-  fresh build from another checkout must use its own new tag.
+  October 2026 against then-`main` `7addf56`, image `kelp:7addf56`, and a
+  disposable `kelp-data` volume; the volume, network, and containers were
+  removed afterwards. That tag is the deploy slice named in §1; a fresh build
+  from the current checkout must use its own new tag, as §4 describes.
 
 ---
 
@@ -1111,7 +1148,7 @@ sends the token as a header and never prints it.
 | Backup | tar of `/data` into a host backup dir | archive with numeric owners | 1 s |
 | Restore | fresh volume + `tar --numeric-owner` | 2 threads / 2 turns, uid 10001 | < 1 s |
 | Offline eval | `pytest tests/test_docs_answer*.py` | 68 passed | 0.74 s |
-| Full suite | `python -m pytest` | 1048 passed on `main` | — |
+| Full suite | `python -m pytest` | 1066 passed on `main` | — |
 | Asset tests | `pytest tests/test_deploy_assets.py` | 40 passed | 0.12 s |
 | Probe tests | `pytest tests/test_deploy_healthcheck.py` | 25 passed | 4.08 s |
 | Live checkout receipt | test-mode order `order_TtyLUT5JHr4pdK`, ₹1 (100 paise) netbanking payment `pay_TtyOkNxvfHSKFS` captured; confirm → HTTP 200 `idempotent=false` with receipt `pi_rzpTtyOkNxvfHSKFS`; replay idempotent; ledger shows one paid proposal + one provider payment | verified | 2026-10-30 |

@@ -1327,7 +1327,7 @@ not part of the UI contract and are never called by the client.
 
 All three live under the `/api` prefix, like every other route in this spec.
 `/api/healthz` is the only unauthenticated route. It touches no state and never reports
-component detail: a `200` means the HTTP loop is serving. `/api/readyz` runs six checks
+component detail: a `200` means the HTTP loop is serving. `/api/readyz` runs seven checks
 and returns `503` when any of them fails; there is no non-critical check, so every check
 is critical to readiness. The body still enumerates every check so an operator can see
 which component is degraded.
@@ -1340,12 +1340,13 @@ which component is degraded.
   "commit": "abc1234",
   "uptime_seconds": 412.73,
   "checks": {
-    "store":     { "ok": true },
-    "artifacts": { "ok": true },
-    "audit":     { "ok": true },
-    "usage":     { "ok": true },
-    "provider":  { "ok": true, "cached": false, "age_seconds": 0.0 },
-    "registry":  { "ok": true }
+    "store":           { "ok": true },
+    "artifacts":       { "ok": true },
+    "audit":           { "ok": true },
+    "usage":           { "ok": true },
+    "unpriced_models": { "ok": true, "count": 0 },
+    "provider":        { "ok": true, "cached": false, "age_seconds": 0.0 },
+    "registry":        { "ok": true }
   }
 }
 ```
@@ -1358,6 +1359,7 @@ which component is degraded.
 | `artifacts` | a throwaway file can be created and removed under the artifact root |
 | `audit` | the audit file opens for append (`O_APPEND`); nothing is written |
 | `usage` | the usage JSONL opens for append; nothing is written |
+| `unpriced_models` | no usage record finished this calendar month (UTC) has `cost_known` false; the payload carries only that count |
 | `provider` | the upstream answers `GET /models` with a 2xx, or a provider-supplied probe passes |
 | `registry` | the loaded skill registry can enumerate its names |
 
@@ -1365,11 +1367,13 @@ A check that is not configured for the deployment (`audit` on a bare `ChatAPI`, 
 provider with no upstream) reports `{ "ok": true, "detail": "not_configured" }` so a
 test double or embedded use does not turn every scrape into a false alarm.
 
-Failure detail is a stable code only — `unavailable`, `timeout`, or `not_configured`.
-Bodies never contain tokens, API keys, filesystem paths, or exception text. `version`
-and `commit` come from `KELP_VERSION` and `KELP_GIT_COMMIT` (falling back to the
-installed package version and `"unknown"`); a source checkout is not touched at request
-time.
+Failure detail is a stable code only: `unavailable`, `timeout`, `unpriced`, or
+`not_configured`. When `unpriced_models` fails it reports
+`{ "ok": false, "detail": "unpriced", "count": N }`; the count is the number of records,
+never a model id, a price, or a path. Bodies never contain tokens, API keys, filesystem
+paths, or exception text. `version` and `commit` come from `KELP_VERSION` and
+`KELP_GIT_COMMIT` (falling back to the installed package version and `"unknown"`); a
+source checkout is not touched at request time.
 
 The provider probe is cached for at most 30 s (`cached` and `age_seconds` say whether
 the current answer is reused), so a one-second scrape loop cannot hammer the upstream.

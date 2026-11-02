@@ -1147,7 +1147,7 @@ def test_missing_provider_is_a_typed_error(tmp_path: Path) -> None:
         thread = service.create_thread()
 
         async def scenario() -> None:
-            payload = await send_and_wait(service, thread["id"], "hi")
+            await send_and_wait(service, thread["id"], "hi")
             events = store.events_after(thread["id"])
             error = next(event for event in events if event["type"] == "error")
             assert error["code"] == "missing_api_key"

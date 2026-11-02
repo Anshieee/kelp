@@ -18,6 +18,7 @@ from typing import Any, Mapping
 
 from chat import ChatService, ChatStore
 from chat.api import (
+    AuthFailureTracker,
     ChatAPI,
     RateLimiter,
     Request,
@@ -25,6 +26,7 @@ from chat.api import (
     TokenBucket,
     make_server,
 )
+from chat.metrics import Metrics
 from kernel import TurnBudget
 from kernel.provider import ProviderFailure, TextDelta
 
@@ -57,6 +59,8 @@ def make_api(
     max_upload: int = 20 * 1024 * 1024,
     max_concurrent_turns: int = 4,
     max_streams_per_owner: int = 3,
+    metrics: Metrics | None = None,
+    auth_failures: AuthFailureTracker | None = None,
 ) -> tuple[ChatAPI, ChatService, ChatStore]:
     store = ChatStore(tmp_path / "chat.db")
     service = ChatService(
@@ -72,6 +76,8 @@ def make_api(
         max_concurrent_turns=max_concurrent_turns,
         max_streams_per_owner=max_streams_per_owner,
         limiter=limiter,
+        metrics=metrics,
+        auth_failures=auth_failures,
     )
     api.stream_idle = 0.05
     return api, service, store
@@ -603,6 +609,108 @@ def test_metrics_exposes_limiter_saturation_gauges(tmp_path: Path) -> None:
     finally:
         api._turn_slots.release()
         api._stream_slots.release("owner:test")
+        api.close()
+        store.close()
+
+
+# -- refusal counters -------------------------------------------------------
+
+
+def test_each_429_increments_the_matching_class_counter_once(
+    tmp_path: Path,
+) -> None:
+    clock = FakeClock()
+    limiter = RateLimiter({**_GENEROUS, "chat": (60.0, 1.0)}, clock=clock)
+    metrics = Metrics()
+    api, _service, store = make_api(tmp_path, limiter=limiter, metrics=metrics)
+    try:
+        assert call(api, "POST", "/api/threads", {}).status == 201
+
+        first = call(api, "POST", "/api/threads", {})
+        assert first.status == 429
+        assert metrics.rate_limit_refusals.value(**{"class": "chat"}) == 1
+
+        # The counter tracks refusals over time, not a single aggregate.
+        clock.advance(1.01)
+        assert call(api, "POST", "/api/threads", {}).status == 201
+        second = call(api, "POST", "/api/threads", {})
+        assert second.status == 429
+        assert metrics.rate_limit_refusals.value(**{"class": "chat"}) == 2
+
+        text = call(api, "GET", "/api/metrics").body.decode()
+        assert (
+            "# HELP kelp_rate_limit_refusals_total "
+            "Rate-limit refusals by limiter class."
+        ) in text
+        assert "# TYPE kelp_rate_limit_refusals_total counter" in text
+        assert 'kelp_rate_limit_refusals_total{class="chat"} 2' in text
+    finally:
+        api.close()
+        store.close()
+
+
+def test_auth_lockout_refusals_are_counted_under_auth(tmp_path: Path) -> None:
+    metrics = Metrics()
+    api, _service, store = make_api(
+        tmp_path,
+        limiter=RateLimiter({**_GENEROUS}, clock=FakeClock()),
+        metrics=metrics,
+        auth_failures=AuthFailureTracker(attempts=3, lockout_seconds=60.0),
+    )
+    try:
+        bad = {"authorization": "Bearer wrong"}
+        assert call(api, "GET", "/api/threads", headers=bad).status == 401
+        assert call(api, "GET", "/api/threads", headers=bad).status == 401
+
+        locked = call(api, "GET", "/api/threads", headers=bad)
+        assert locked.status == 429
+        assert payload(locked)["error"]["details"]["class"] == "auth"
+        assert metrics.rate_limit_refusals.value(**{"class": "auth"}) == 1
+
+        # Every lockout answer is its own refusal.
+        still_locked = call(api, "GET", "/api/threads", headers=bad)
+        assert still_locked.status == 429
+        assert metrics.rate_limit_refusals.value(**{"class": "auth"}) == 2
+    finally:
+        api.close()
+        store.close()
+
+
+def test_capacity_refusals_are_counted_under_the_busy_class(
+    tmp_path: Path,
+) -> None:
+    metrics = Metrics()
+    api, _service, store = make_api(
+        tmp_path,
+        metrics=metrics,
+        max_concurrent_turns=1,
+        max_streams_per_owner=1,
+    )
+    try:
+        thread_row = thread(api)
+
+        assert api._turn_slots.acquire() is True
+        busy_turn = call(
+            api,
+            "POST",
+            f"/api/threads/{thread_row['id']}/turns",
+            {"client_turn_id": "ct-count-turns", "text": "hello"},
+        )
+        assert busy_turn.status == 429
+        assert payload(busy_turn)["error"]["details"]["class"] == "turns"
+        assert metrics.rate_limit_refusals.value(**{"class": "turns"}) == 1
+        api._turn_slots.release()
+
+        path = f"/api/threads/{thread_row['id']}/stream"
+        opened = call(api, "GET", path)
+        assert opened.status == 200
+        busy_stream = call(api, "GET", path)
+        assert busy_stream.status == 429
+        assert payload(busy_stream)["error"]["details"]["class"] == "streams"
+        assert metrics.rate_limit_refusals.value(**{"class": "streams"}) == 1
+        assert opened.stream is not None
+        opened.stream.close()
+    finally:
         api.close()
         store.close()
 

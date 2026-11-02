@@ -26,6 +26,10 @@ The M3-C spend guardrail adds, all labelled ``window`` (``day``/``month``):
 * ``spend_cap_warnings_total`` — counter, once-per-window 80% warnings
 * ``spend_cap_blocked_total`` — counter, turns refused by the guardrail
 
+The KEL-17 gap fix adds:
+
+* ``kelp_rate_limit_refusals_total`` — counter, refusals by limiter ``class``
+
 Label values are scrubbed with the OpenShell :class:`SecretScrubber`, so a
 secret that somehow reaches a label (a model id built from a key, a tool name)
 is rendered as ``[redacted]`` rather than exposed. Cards stay bounded because
@@ -303,6 +307,11 @@ class Metrics:
         self.recoveries = Counter(
             "recoveries_total", "Turns and approvals settled by boot recovery."
         )
+        self.rate_limit_refusals = Counter(
+            "kelp_rate_limit_refusals_total",
+            "Rate-limit refusals by limiter class.",
+            ("class",),
+        )
         self.spend_used = Gauge(
             "spend_used_usd", "Counted spend inside the spend window.",
             ("window",),
@@ -345,6 +354,7 @@ class Metrics:
             self.approval_wait,
             self.sse_reconnects,
             self.recoveries,
+            self.rate_limit_refusals,
             self.spend_used,
             self.spend_cap,
             self.spend_ratio,
@@ -393,6 +403,17 @@ class Metrics:
 
     def add_recoveries(self, amount: int = 1) -> None:
         self.recoveries.inc(float(amount))
+
+    def inc_rate_limit_refusal(self, class_name: str) -> None:
+        """Count one refusal against the limiter class that produced it.
+
+        The class is scrubbed like every other label, so a value that somehow
+        carried a secret renders as ``[redacted]`` instead of escaping the
+        exposition.
+        """
+
+        labels = self._labels(**{"class": class_name})
+        self.rate_limit_refusals.inc(**labels)
 
     def observe_spend(
         self,

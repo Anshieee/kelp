@@ -166,6 +166,7 @@ def test_every_named_series_is_exposed_with_exact_increments() -> None:
         "approval_wait_seconds",
         "sse_reconnects_total",
         "recoveries_total",
+        "kelp_rate_limit_refusals_total",
     ):
         assert f"# TYPE {name} " in rendered
 

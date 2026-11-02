@@ -22,7 +22,7 @@ digraph sdlc {
   center [label="Kelp assistant\nlive Oct 30" shape="doubleoctagon" style="filled,bold" fontsize="20" penwidth="2.5" width="2.3" height="1.2" fillcolor="white" URL="#top" tooltip="Private assistant you talk to from a dashboard. Target live Oct 30."];
 
   // Main branches
-  m0   [label="M0 Foundation\nIN PROGRESS" shape="box" style="filled,bold,rounded" fontsize="15" penwidth="2" fillcolor="#D6E6F7" URL="#m0" tooltip="Stage 0: shared code, docs, checks, risk list. In progress."];
+  m0   [label="M0 Foundation\nIN PROGRESS" shape="box" style="filled,bold,rounded" fontsize="15" penwidth="2" fillcolor="#D6E6F7" URL="#m0" tooltip="Stage 0: shared code, docs, checks, risk list. Checks are live; the development setup and threat model are still open."];
   m1   [label="M1 Prototype\nCOMPLETE" shape="box" style="filled,bold,rounded" fontsize="15" penwidth="2" fillcolor="#D9EDD7" URL="#m1" tooltip="Stage 1: ask, answer, approve, pay, demo. Every work item done."];
   m2   [label="M2 Polished MVP\nCOMPLETE" shape="box" style="filled,bold,rounded" fontsize="15" penwidth="2" fillcolor="#FCEFC7" URL="#m2" tooltip="Stage 2: survives ordinary use. Serve entry, health checks, restart recovery, real document search, observability, repeatable quality measurements, and the deploy assets and runbook are done."];
   m3   [label="M3 Hardening\nCOMPLETE" shape="box" style="filled,bold,rounded" fontsize="15" penwidth="2" fillcolor="#F0DCC8" URL="#m3" tooltip="Stage 3: privacy and cost promises hold. Abuse resistance, spend ceilings, invoke-time policy, retention, owner sign-in, and the written privacy review are all done."];
@@ -42,7 +42,7 @@ digraph sdlc {
 
   // M0 Foundation leaves (soft blue family)
   m0_repo   [label="Repo and docs in place\nDONE" fillcolor="#EBF3FC" URL="#m0" tooltip="Shared code copy plus docs live. Finished."];
-  m0_checks [label="Auto checks open\nTO COME" fillcolor="#EBF3FC" URL="#m0" tooltip="Tests that run on every change. Not started."];
+  m0_checks [label="Auto checks live\nDONE" fillcolor="#EBF3FC" URL="#m0" tooltip="Secret scan, lint, type check, tests, and a dependency audit run on every push. Finished."];
   m0_risks  [label="Risk list written\nTO COME" fillcolor="#EBF3FC" URL="#m0" tooltip="Written list of what could go wrong. Not started."];
   m0 -> m0_repo;
   m0 -> m0_checks;
@@ -141,7 +141,7 @@ digraph sdlc {
   m2 -> m2_deploy;
 
   // M3 work items (KEL-17 onwards; soft peach family)
-  k17 [label="KEL-17 Abuse caps\nDONE" shape="box" style="filled,bold,rounded" fillcolor="#F0DCC8" URL="#kel-17" tooltip="Five limiter classes, a body ceiling checked before the read, and two concurrency caps. Merged and reviewed."];
+  k17 [label="KEL-17 Abuse caps\nDONE" shape="box" style="filled,bold,rounded" fillcolor="#F0DCC8" URL="#kel-17" tooltip="Five limiter classes, a body ceiling checked before the read, two concurrency caps, and a refusal counter per class. Merged and reviewed."];
   k18 [label="KEL-18 Spend ceilings\nDONE" shape="box" style="filled,bold,rounded" fillcolor="#F0DCC8" URL="#kel-18" tooltip="Day and month dollar caps computed from persisted usage, one warning at 80%, a hard stop at 100%. Merged and reviewed."];
   k20 [label="KEL-20 Skill policy\nDONE" shape="box" style="filled,bold,rounded" fillcolor="#F0DCC8" URL="#kel-20" tooltip="Every skill call is checked against its declared effects, paths, hosts, and repos, and a deny is final. Merged and reviewed."];
   k21 [label="KEL-21 Retention\nDONE" shape="box" style="filled,bold,rounded" fillcolor="#F0DCC8" URL="#kel-21" tooltip="Hard delete, orphan sweep, space reclaimed, and a written clock per data class. Merged and reviewed."];
@@ -156,7 +156,7 @@ digraph sdlc {
 
   // M3 leaves (soft peach family)
   m3_who  [label="Who sees what\nDONE" fillcolor="#FAEEE2" URL="#kel-19" tooltip="Sign-in gates every route, keys stay server-side, and a wrong credential is counted and locked out. Merged and reviewed."];
-  m3_rate [label="Traffic and body caps\nDONE" fillcolor="#FAEEE2" URL="#kel-17" tooltip="Five limiter classes, a body ceiling read before the body, and two concurrency caps. Merged and reviewed."];
+  m3_rate [label="Traffic and body caps\nDONE" fillcolor="#FAEEE2" URL="#kel-17" tooltip="Five limiter classes, a body ceiling read before the body, two concurrency caps, and a refusal counter per class. Merged and reviewed."];
   m3_policy [label="Checked at every call\nDONE" fillcolor="#FAEEE2" URL="#kel-20" tooltip="Declared effects and scopes are enforced when a skill runs, not just described. Merged and reviewed."];
   m3_retain [label="Retention rule\nDONE" fillcolor="#FAEEE2" URL="#kel-21" tooltip="What you delete is gone, and every data class has a stated clock. Merged and reviewed."];
   m3_cost [label="Spend ceilings\nDONE" fillcolor="#FAEEE2" URL="#kel-18" tooltip="Day and month dollar ceilings from persisted usage, one warning at 80%, a hard stop at 100%. Merged and reviewed."];

@@ -9,7 +9,6 @@ Auth is the single-owner minimum from §12: a bearer token or HttpOnly-style
 session cookie on every ``/api/*`` call, a CSRF token or same-origin check on
 mutations, and JSON ``401`` instead of a redirect.
 """
-
 from __future__ import annotations
 
 import asyncio
@@ -17,7 +16,6 @@ import base64
 import hashlib
 import hmac
 import inspect
-import json
 import math
 import os
 import re
@@ -27,7 +25,7 @@ import tempfile
 import threading
 import time
 from dataclasses import dataclass, field
-from email.utils import formatdate
+from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any, Callable, Iterator, Mapping
@@ -44,15 +42,41 @@ from .logging import (
     reset_request_id,
     set_request_id,
 )
-from .metrics import Metrics, PROMETHEUS_CONTENT_TYPE, get_metrics
-from .service import ChatService
-from .store import (
-    SHARE_ID_LENGTH,
-    ChatStore,
-    ThreadGoneError,
-    scrub_artifact_handles,
+from .metrics import Metrics, get_metrics
+from .routers import (
+    approvals as approval_routes,
+    artifacts as artifact_routes,
+    auth as auth_routes,
+    body as body_routes,
+    health as health_routes,
+    shared as share_routes,
+    threads as thread_routes,
+    turns as turn_routes,
 )
-from .stream import IDLE_SECONDS, format_comment, format_event, sse_frames
+from .routers._util import (
+    DEVICE_ID_SHORT_LENGTH,
+    DEVICE_ONLINE_SECONDS,
+    _DEFAULT_DEVICE_LABEL,
+    _DEVICE_ID_SHORT_RE,
+    _RATE_LIMITED_FALLBACK_RETRY,
+    _json_response,
+    _method_not_allowed_response,
+    _rate_limited_response,
+    _route_label,
+    _secret_hash,
+    scrub_device_label,
+)
+from .routers.auth import _AuthLocked
+from .routers.body import _BodyRejected, _body_rejection_response
+from .routers.shared import (
+    _SHARE_STREAM_TICK,
+    _apply_share_headers,
+    _is_share_path,
+    _is_share_request,
+)
+from .service import ChatService
+from .store import ChatStore
+from .stream import IDLE_SECONDS, sse_frames
 
 __all__ = [
     "AuthFailureTracker",
@@ -68,18 +92,12 @@ __all__ = [
     "serve",
 ]
 
-_THREAD_RE = re.compile(r"^[A-Za-z0-9:_-]{1,80}$")
-_CLIENT_TURN_RE = re.compile(r"^[A-Za-z0-9_-]{1,100}$")
-_MUTATING = frozenset({"POST", "PATCH", "DELETE", "PUT"})
-#: Methods the owner API actually routes. Anything else — HEAD, OPTIONS, PUT,
-#: TRACE — is a typed 405 at the API boundary instead of the stdlib's 501
+#: Methods the owner API actually routes. Anything else - HEAD, OPTIONS, PUT,
+#: TRACE - is a typed 405 at the API boundary instead of the stdlib's 501
 #: HTML page, so the wire answer is JSON and, on a share path, carries the
 #: share header set. HEAD is not aliased to GET: a stream response would have
 #: to open a real stream for a body the client will discard.
 _SUPPORTED_METHODS = frozenset({"GET", "POST", "PATCH", "DELETE"})
-_JSON_LIMIT = 1024 * 1024
-_DECISION_LIMIT = 1024
-_UPLOAD_OVERHEAD = 64 * 1024
 
 # -- rate limiting and concurrency (KEL-17 M3-A) ---------------------------
 #
@@ -123,8 +141,6 @@ _AUTH_IDLE_SECONDS = 300.0
 # server-side ``KELP_SESSION_SECRET``. The CSRF cookie is the readable half of
 # a per-session double-submit pair; the session cookie is HttpOnly and the pair
 # is never logged.
-SESSION_COOKIE = "session"
-CSRF_COOKIE = "csrf"
 SESSION_TTL_ENV = "KELP_SESSION_TTL_SECONDS"
 SESSION_MAX_ENV = "KELP_SESSION_MAX"
 SESSION_SECRET_ENV = "KELP_SESSION_SECRET"
@@ -135,31 +151,10 @@ AUTH_FAILURE_IDLE_ENV = "KELP_AUTH_FAILURE_IDLE_SECONDS"
 AUTH_FAILURE_MAX_KEYS_ENV = "KELP_AUTH_FAILURE_MAX_KEYS"
 _DEFAULT_SESSION_TTL_SECONDS = 30 * 24 * 60 * 60
 _DEFAULT_SESSION_MAX = 1024
-#: A device is "online" when its last authenticated request is this recent.
-#: Presence is derived from the ordinary session touch; there is no heartbeat.
-DEVICE_ONLINE_SECONDS = 60.0
-_DEVICE_LABEL_MAX = 40
-_DEFAULT_DEVICE_LABEL = "Unknown device"
-#: 48 bits of the hashed id: enough to be unique, useless for replaying a login.
-DEVICE_ID_SHORT_LENGTH = 12
-_DEVICE_ID_SHORT_RE = re.compile(r"^[0-9a-f]{6,64}$")
-#: Control, zero-width, and bidi characters are stripped from a device label
-#: before it is stored, so a label can never smuggle a log line or terminal
-#: escape into an operator view.
-_LABEL_STRIP_RE = re.compile(
-    "[\x00-\x1f\x7f-\x9f\u200b-\u200f\u202a-\u202e\u2060-\u2064\ufeff]"
-)
-_WHITESPACE_RE = re.compile(r"\s+")
 _DEFAULT_AUTH_LOCKOUT_ATTEMPTS = 10
 _DEFAULT_AUTH_LOCKOUT_SECONDS = 300.0
 _DEFAULT_AUTH_FAILURE_IDLE_SECONDS = 300.0
 _DEFAULT_AUTH_FAILURE_MAX_KEYS = 4096
-_EPOCH_COOKIE_DATE = "Thu, 01 Jan 1970 00:00:00 GMT"
-#: The app has exactly one owner, so every authenticated credential — the root
-#: bearer token and every session minted from it — maps to this one limiter
-#: key. Deriving the key from the credential would give each session its own
-#: bucket and let a second tab double the owner's allowance.
-OWNER_IDENTITY = "owner"
 _DEFAULT_MAX_CONCURRENT_TURNS = 4
 _DEFAULT_MAX_STREAMS_PER_OWNER = 3
 #: Share viewers are anonymous, so a share stream is capped process-wide rather
@@ -169,7 +164,6 @@ _DEFAULT_MAX_SHARE_STREAMS = 16
 _MAX_CONCURRENT_TURNS_ENV = "KELP_MAX_CONCURRENT_TURNS"
 _MAX_STREAMS_PER_OWNER_ENV = "KELP_MAX_STREAMS_PER_OWNER"
 _MAX_SHARE_STREAMS_ENV = "KELP_MAX_SHARE_STREAMS"
-_RATE_LIMITED_FALLBACK_RETRY = 60.0
 #: A readiness probe is cached so a slow upstream cannot slow every scrape.
 _PROVIDER_TTL_SECONDS = 30.0
 _PROVIDER_PROBE_TIMEOUT = 3.0
@@ -190,37 +184,6 @@ SHARE_MAX_SNAPSHOT_BYTES_ENV = "KELP_SHARE_MAX_SNAPSHOT_BYTES"
 _DEFAULT_SHARE_TTL_SECONDS = 7 * 24 * 60 * 60
 _DEFAULT_SHARE_MAX_TTL_SECONDS = 30 * 24 * 60 * 60
 _DEFAULT_SHARE_MAX_SNAPSHOT_BYTES = 4 * 1024 * 1024
-#: Public id of a link in the owner's listing is the hash prefix; the full
-#: hash is never needed to revoke one. The width is the store's constant, so
-#: the validator and the listing cannot drift.
-_SHARE_ID_LENGTH = SHARE_ID_LENGTH
-#: How often an open share stream re-checks its link. Revocation and purge
-#: close it within one tick (the KEL-24 rule, applied to a share stream).
-_SHARE_STREAM_TICK = 0.5
-_SHARE_HEADERS = {
-    "Cache-Control": "no-store",
-    "Referrer-Policy": "no-referrer",
-    "X-Robots-Tag": "noindex, nofollow",
-    "X-Content-Type-Options": "nosniff",
-    "Content-Security-Policy": (
-        "default-src 'none'; style-src 'unsafe-inline'; img-src 'self' data:; "
-        "frame-ancestors 'none'; base-uri 'none'; form-action 'none'"
-    ),
-}
-#: A snapshot block keeps only these display fields. Anything else — an
-#: artifact handle, a storage path, a content hash, an approval argv — is
-#: dropped structurally rather than filtered by a query someone must remember.
-_SHARE_SOURCE_KEYS = (
-    "kind",
-    "title",
-    "url",
-    "snippet",
-    "locator",
-    "published_at",
-    "status",
-    "tool",
-)
-
 
 @dataclass
 class Request:
@@ -365,6 +328,7 @@ class HealthProbe:
             "artifacts": self._guard(self._check_artifacts),
             "audit": self._guard(self._check_audit),
             "usage": self._guard(self._check_usage),
+            "unpriced_models": self._check_unpriced_models(),
             "provider": self._check_provider_cached(runner),
             "registry": self._guard(self._check_registry),
         }
@@ -450,6 +414,64 @@ class HealthProbe:
             raise _NotConfigured
         _append_probe(Path(path))
 
+    def _check_unpriced_models(self) -> dict[str, Any]:
+        """Report how many usage records in the active window have no price.
+
+        Additive to the ``usage`` check: that one proves the file is writable,
+        this one surfaces the state the spend guardrail also reports on
+        ``/api/metrics``. The payload is a bounded count only. It never carries
+        a model id, a price, a path, or exception text, so a probe body can be
+        logged or relayed without exposing usage detail.
+        """
+
+        try:
+            count = self._unpriced_count()
+        except _NotConfigured:
+            return {"ok": True, "detail": "not_configured"}
+        except TimeoutError:
+            return {"ok": False, "detail": "timeout"}
+        except Exception:  # noqa: BLE001 - the body must never carry the message
+            return {"ok": False, "detail": "unavailable"}
+        if count > 0:
+            return {"ok": False, "detail": "unpriced", "count": count}
+        return {"ok": True, "count": 0}
+
+    def _unpriced_count(self) -> int:
+        """Count ``cost_known`` false records finished in the current month.
+
+        The month is the widest active spend window, so a record that still
+        counts against the guardrail is also visible here. A torn or
+        unparseable timestamp cannot be placed in a window and is skipped, the
+        same way the spend guard treats it.
+        """
+
+        store = self.usage_store
+        if store is None:
+            raise _NotConfigured
+        source = getattr(store, "records", None)
+        if source is None:
+            raise _NotConfigured
+        rows = source() if callable(source) else source
+        window_start = _usage_month_start(datetime.now(timezone.utc))
+        count = 0
+        for row in rows or ():
+            data: Mapping[str, Any] | None = None
+            if isinstance(row, Mapping):
+                data = row
+            else:
+                to_dict = getattr(row, "to_dict", None)
+                if callable(to_dict):
+                    value = to_dict()
+                    if isinstance(value, Mapping):
+                        data = value
+            if data is None or data.get("cost_known") is not False:
+                continue
+            finished_at = _usage_timestamp(data.get("finished_at"))
+            if finished_at is None or finished_at < window_start:
+                continue
+            count += 1
+        return count
+
     def _check_registry(self) -> None:
         if self.registry is None:
             raise _NotConfigured
@@ -531,6 +553,33 @@ def _append_probe(path: Path) -> None:
     path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
     fd = os.open(path, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o600)
     os.close(fd)
+
+
+def _usage_month_start(now: datetime) -> datetime:
+    """Start of ``now``'s UTC month, the widest spend window in force."""
+
+    return datetime(now.year, now.month, 1, tzinfo=timezone.utc)
+
+
+def _usage_timestamp(value: Any) -> datetime | None:
+    """Parse a usage record's ``finished_at``; ``None`` when unusable.
+
+    Mirrors the spend guard's reading so a record that one considers in-window
+    is not silently out-of-window for the other. A naive stamp is UTC.
+    """
+
+    if not isinstance(value, str) or not value.strip():
+        return None
+    text = value.strip()
+    if text.endswith("Z"):
+        text = text[:-1] + "+00:00"
+    try:
+        parsed = datetime.fromisoformat(text)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
 
 
 async def _http_provider_probe(
@@ -627,111 +676,6 @@ def _request_id_for(request: Request) -> str:
     return new_request_id()
 
 
-_DYNAMIC_ROUTE_HEADS = frozenset(
-    {"threads", "turns", "approvals", "artifacts", "shared"}
-)
-_STATIC_ROUTE_HEADS = frozenset(
-    {"health", "healthz", "readyz", "metrics", "attachments"}
-)
-_ROUTE_ACTIONS = frozenset(
-    {
-        "stream",
-        "turns",
-        "stop",
-        "retry",
-        "decision",
-        "preview",
-        "content",
-    }
-)
-
-
-def _route_label(path: str) -> str:
-    """A bounded route label for metrics: ids are replaced, not recorded."""
-
-    try:
-        clean = unquote(urlsplit(path).path)
-    except ValueError:  # pragma: no cover - urlsplit rarely raises here
-        return "/api/other"
-    segments = [segment for segment in clean.split("/") if segment]
-    if not segments:
-        return "/"
-    if segments[0] != "api":
-        return "/other"
-    if len(segments) == 1:
-        return "/api"
-    head = segments[1]
-    if head in _STATIC_ROUTE_HEADS:
-        return f"/api/{head}" if len(segments) == 2 else "/api/other"
-    if head in _DYNAMIC_ROUTE_HEADS:
-        if len(segments) == 2:
-            return f"/api/{head}"
-        label = f"/api/{head}/{{id}}"
-        if len(segments) == 4 and segments[3] in _ROUTE_ACTIONS:
-            label = f"{label}/{segments[3]}"
-        elif len(segments) > 4:
-            return "/api/other"
-        return label
-    return "/api/other"
-
-
-def _gauge(value: float) -> str:
-    """Prometheus number formatting without importing the metrics internals."""
-
-    number = float(value)
-    if not math.isfinite(number):
-        number = 0.0
-    if number.is_integer():
-        return str(int(number))
-    return repr(round(number, 9))
-
-
-def _rate_limited_response(
-    retry_after: float,
-    *,
-    class_name: str,
-    reason: str,
-    limit: int | None = None,
-) -> Response:
-    """Build the one 429 shape: ``rate_limited`` plus a usable Retry-After.
-
-    The status is always 429 and the body is always the ordinary error
-    envelope, so the client's existing rate-limited state renders it without a
-    special case.
-    """
-
-    try:
-        seconds = float(retry_after)
-    except (TypeError, ValueError):
-        seconds = _RATE_LIMITED_FALLBACK_RETRY
-    if not math.isfinite(seconds) or seconds <= 0:
-        seconds = _RATE_LIMITED_FALLBACK_RETRY
-    header = str(max(1, int(math.ceil(seconds))))
-    details: dict[str, Any] = {"class": class_name, "reason": reason}
-    if limit is not None:
-        details["limit"] = max(0, int(limit))
-    error = ChatError(
-        "rate_limited",
-        status=429,
-        retryable=True,
-        details=details,
-    )
-    response = _json_response(429, error.to_body())
-    response.headers["Retry-After"] = header
-    return response
-
-
-def _body_rejection_response(rejected: "_BodyRejected") -> Response:
-    error = ChatError(
-        rejected.code,
-        status=rejected.status,
-        message=rejected.message,
-        retryable=False,
-        user_fixable=True,
-    )
-    return _json_response(rejected.status, error.to_body())
-
-
 def _env_number(
     source: Mapping[str, str], name: str, default: float, *, minimum: float = 0.0
 ) -> float:
@@ -759,70 +703,6 @@ def _env_enabled(raw: str | None, default: bool = True) -> bool:
     if raw is None:
         return default
     return str(raw).strip().lower() not in {"", "0", "false", "no", "off", "disabled"}
-
-
-def _client_address(request: Request) -> str:
-    """Best-effort peer identity for an unauthenticated caller.
-
-    The adapter records the socket peer in :attr:`Request.client`. Forwarded
-    headers are only a fallback for tests and embedded servers that do not, and
-    the first hop is taken: a proxy appends, it does not replace.
-    """
-
-    if request.client:
-        return str(request.client)[:64]
-    forwarded = request.header("x-forwarded-for")
-    if forwarded:
-        first = forwarded.split(",")[0].strip()
-        if first:
-            return first[:64]
-    for name in ("x-real-ip", "cf-connecting-ip"):
-        value = request.header(name)
-        if value and value.strip():
-            return value.strip()[:64]
-    return "unknown"
-
-
-def _presented_token(request: Request) -> str | None:
-    header = request.header("authorization") or ""
-    prefix = "Bearer "
-    if header.startswith(prefix) and header[len(prefix) :]:
-        return header[len(prefix) :]
-    session = _parse_cookies(request.header("cookie")).get("session")
-    return session or None
-
-
-def _client_identity(request: Request) -> str:
-    """A stable, non-secret limiter key for an unauthenticated caller.
-
-    Authorized traffic is keyed on the owner instead
-    (:meth:`ChatAPI._limiter_identity`), so this is the fallback for a
-    deployment with auth disabled. A presented token is hashed, never
-    retained: the map must not become a secondary store of the owner token.
-    """
-
-    token = _presented_token(request)
-    if token:
-        digest = hashlib.sha256(token.encode("utf-8", "surrogatepass")).hexdigest()
-        return f"owner:{digest[:24]}"
-    return f"client:{_client_address(request)}"
-
-
-def _classify_route(method: str, segments: list[str]) -> str:
-    """Map a route to its rate-limit class; unknown routes are cheap reads."""
-
-    parts = segments[1:] if segments and segments[0] == "api" else segments
-    if not parts:
-        return "read"
-    head = parts[0]
-    verb = method.upper()
-    if verb == "GET":
-        return "admin" if head in {"metrics", "readyz"} else "read"
-    if head == "attachments":
-        return "upload"
-    if head in {"threads", "turns", "approvals"}:
-        return "chat"
-    return "read"
 
 
 class TokenBucket:
@@ -1049,37 +929,6 @@ class _PerOwnerCapacity:
             return (max(self._used.values(), default=0), self.limit)
 
 
-class _Lease:
-    """Idempotent release for a stream slot, including a never-started stream."""
-
-    def __init__(self, release: Callable[[], None]):
-        self._release = release
-        self._released = False
-        self._lock = threading.Lock()
-
-    def release(self) -> None:
-        with self._lock:
-            if self._released:
-                return
-            self._released = True
-        try:
-            self._release()
-        except Exception:  # noqa: BLE001 - a lease must never raise
-            pass
-
-    def __del__(self) -> None:  # pragma: no cover - timing is interpreter-owned
-        try:
-            self.release()
-        except Exception:  # noqa: BLE001
-            pass
-
-
-def _secret_hash(value: str) -> str:
-    """One-way stable key for a credential or peer identity."""
-
-    return hashlib.sha256(value.encode("utf-8", "surrogatepass")).hexdigest()
-
-
 def _session_key(secret: str | bytes | None) -> bytes:
     """Normalise ``KELP_SESSION_SECRET`` into a fixed 32-byte HMAC key.
 
@@ -1092,37 +941,6 @@ def _session_key(secret: str | bytes | None) -> bytes:
         return secrets.token_bytes(32)
     raw = secret.encode("utf-8", "surrogatepass") if isinstance(secret, str) else bytes(secret)
     return hashlib.sha256(raw).digest()
-
-
-def scrub_device_label(value: Any) -> str:
-    """Return a safe 1-40 character device label.
-
-    Control, zero-width, and bidi characters are removed and whitespace is
-    collapsed. An absent or empty label becomes ``Unknown device``. A label
-    that is still too long raises :class:`ChatError`, so it cannot become a
-    storage or log hazard.
-    """
-
-    if value is None:
-        return _DEFAULT_DEVICE_LABEL
-    if not isinstance(value, str):
-        raise ChatError(
-            "invalid_request",
-            status=400,
-            message="device_label must be a string.",
-            user_fixable=True,
-        )
-    clean = _WHITESPACE_RE.sub(" ", _LABEL_STRIP_RE.sub("", value)).strip()
-    if not clean:
-        return _DEFAULT_DEVICE_LABEL
-    if len(clean) > _DEVICE_LABEL_MAX:
-        raise ChatError(
-            "invalid_request",
-            status=400,
-            message="device_label must be 1-40 characters.",
-            user_fixable=True,
-        )
-    return clean
 
 
 @dataclass
@@ -1534,115 +1352,6 @@ class AuthFailureTracker:
         with self._lock:
             return len(self._records)
 
-
-@dataclass(frozen=True)
-class _AuthResult:
-    ok: bool
-    via: str = "none"
-    session: _Session | None = None
-    session_id: str | None = field(default=None, repr=False)
-
-
-class _AuthLocked(Exception):
-    """Raised after too many failures; carries a usable ``Retry-After``."""
-
-    def __init__(self, retry_after: float):
-        self.retry_after = retry_after
-        super().__init__("authentication locked out")
-
-
-def _auth_failure_identity(request: Request) -> str:
-    """A hashed failure key: credential digest when presented, else peer digest.
-
-    The raw bearer token, cookie, and client address stay out of the tracker
-    and out of the ``auth_failed`` record. Hashing the peer too keeps the log
-    free of an address that could identify a person.
-    """
-
-    token = _presented_token(request)
-    seed = f"credential:{token}" if token else f"peer:{_client_address(request)}"
-    return _secret_hash(seed)[:32]
-
-
-def _cookie_header(
-    name: str,
-    value: str,
-    *,
-    ttl: float,
-    secure: bool,
-    http_only: bool,
-    now: float | None = None,
-) -> str:
-    """Build one RFC 6265 ``Set-Cookie`` value.
-
-    ``Max-Age`` is authoritative for modern clients; ``Expires`` keeps older
-    ones aligned. ``Secure`` is on by default and can be disabled only for a
-    loopback HTTP development run.
-    """
-
-    seconds = max(0, int(ttl))
-    moment = time.time() if now is None else now
-    expires = formatdate(moment + seconds, usegmt=True)
-    parts = [
-        f"{name}={value}",
-        "Path=/",
-        f"Max-Age={seconds}",
-        f"Expires={expires}",
-        "SameSite=Lax",
-    ]
-    if secure:
-        parts.append("Secure")
-    if http_only:
-        parts.append("HttpOnly")
-    return "; ".join(parts)
-
-
-def _clear_cookie_header(name: str, *, secure: bool, http_only: bool) -> str:
-    parts = [f"{name}=", "Path=/", "Max-Age=0", f"Expires={_EPOCH_COOKIE_DATE}", "SameSite=Lax"]
-    if secure:
-        parts.append("Secure")
-    if http_only:
-        parts.append("HttpOnly")
-    return "; ".join(parts)
-
-
-def _is_sign_in(request: Request) -> bool:
-    if request.method.upper() != "POST":
-        return False
-    try:
-        path = unquote(urlsplit(request.path).path)
-    except ValueError:  # pragma: no cover - urlsplit rarely raises here
-        return False
-    return [segment for segment in path.split("/") if segment] == [
-        "api",
-        "auth",
-        "session",
-    ]
-
-
-def _same_origin(request: Request) -> bool:
-    """True only for a browser origin that matches the request ``Host``.
-
-    A missing or unparsable ``Origin`` is not same-origin. The comparison is on
-    ``scheme://host:port``; a reverse proxy must preserve the incoming ``Host``
-    header for this to hold.
-    """
-
-    origin = request.header("origin")
-    if not origin:
-        return False
-    host = request.header("host") or ""
-    if not host:
-        return False
-    try:
-        parsed = urlsplit(origin)
-    except ValueError:
-        return False
-    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
-        return False
-    return hmac.compare_digest(parsed.netloc, host)
-
-
 class ChatAPI:
     def __init__(
         self,
@@ -1758,7 +1467,7 @@ class ChatAPI:
     def handle(self, request: Request) -> Response:
         """Dispatch one request, stamping the id and access metrics.
 
-        Every response — success, 4xx, 5xx, stream or JSON — carries
+        Every response - success, 4xx, 5xx, stream or JSON - carries
         ``X-Request-Id``. The id is either a validated caller value or a fresh
         opaque one, and is bound to the context so a turn, its tool calls, its
         audit entries, and its usage record all report the same value.
@@ -1803,7 +1512,7 @@ class ChatAPI:
         # hold a live owner session: sharing is a capability, not an identity.
         if not _is_share_request(request):
             try:
-                self._roll_session_cookie(request, response)
+                auth_routes._roll_session_cookie(self, request, response)
             except Exception:  # noqa: BLE001 - a cookie refresh never breaks a response
                 log("session_roll_failed", level="warning", status="error")
         return response
@@ -1817,23 +1526,26 @@ class ChatAPI:
             # owner's route classes, so every method (including a body-carrying
             # POST) is answered 405 without ever reaching ``_authorize``.
             if len(segments) >= 2 and segments[0] == "api" and segments[1] == "shared":
-                return self._shared(request, segments[2:])
+                return share_routes._shared(self, request, segments[2:])
             method = request.method.upper()
             if method not in _SUPPORTED_METHODS:
                 return _method_not_allowed_response("GET, POST, PATCH, DELETE")
             # Liveness is the one unauthenticated route: a supervisor must be
             # able to tell "process alive" from "owner token missing".
             if not self._is_public(request, segments):
-                limited = self._limit(request, segments)
+                limited = auth_routes._limit(self, request, segments)
                 if limited is not None:
                     return limited
-                self._authorize(request)
+                auth_routes._authorize(self, request)
             if len(segments) < 1 or segments[0] != "api":
                 raise ChatError("not_found", status=404, message="Unknown endpoint.")
             return self._route(request, segments[1:])
         except _AuthLocked as exc:
             return _rate_limited_response(
-                exc.retry_after, class_name="auth", reason="locked"
+                exc.retry_after,
+                class_name="auth",
+                reason="locked",
+                metrics=self.metrics,
             )
         except ChatError as exc:
             return _json_response(exc.status, exc.to_body())
@@ -1864,101 +1576,10 @@ class ChatAPI:
                 },
             )
 
-    def _limit(self, request: Request, segments: list[str]) -> Response | None:
-        """Charge the request's limiter class, or return a typed 429.
+    def body_limit_for(self, path: str) -> tuple[int, int, str]:
+        """Return ``(cap, status, code)`` for a request path."""
 
-        Unauthenticated calls are checked by the independent ``auth`` bucket,
-        keyed by peer address, before :meth:`_authorize` produces its 401. A
-        valid credential is never charged against that bucket. Any limiter
-        fault fails open: a broken bucket must not turn a request into a 500.
-        """
-
-        try:
-            if not self.limiter.enabled:
-                return None
-            if self._authorized_for(request):
-                route = _classify_route(request.method, segments)
-                allowed, retry_after = self.limiter.consume(
-                    route, self._limiter_identity(request)
-                )
-                # A successful login clears accumulated failure debt for this
-                # peer without touching the owner's route budget.
-                self.limiter.forget_class("auth", _client_address(request))
-                if not allowed:
-                    return _rate_limited_response(
-                        retry_after, class_name=route, reason="rate"
-                    )
-                return None
-            allowed, retry_after = self.limiter.consume(
-                "auth", _client_address(request)
-            )
-            if not allowed:
-                return _rate_limited_response(
-                    retry_after, class_name="auth", reason="failed_auth"
-                )
-            return None
-        except Exception:  # noqa: BLE001 - observability/limits never break traffic
-            log("rate_limit_error", level="warning", status="error")
-            return None
-
-    def _limiter_identity(self, request: Request) -> str:
-        """The limiter key for an already-authorized request.
-
-        This is a single-owner app, so the root bearer token and every session
-        cookie minted from it are the same principal: all of them share one
-        constant key, which is what makes the per-owner budget really per
-        owner. With auth disabled there is no owner to name, so the peer
-        address remains the key and distinct callers keep distinct buckets.
-        """
-
-        auth = self._authenticate(request)
-        if auth.ok and auth.via != "disabled":
-            return OWNER_IDENTITY
-        return _client_identity(request)
-
-    def _limiter_exposition(self) -> str:
-        """Prometheus gauges for the two concurrency caps, appended to /metrics."""
-
-        try:
-            return self._limiter_gauges()
-        except Exception:  # noqa: BLE001 - a scrape must never fail on a gauge
-            return ""
-
-    def _limiter_gauges(self) -> str:
-        turn_used, turn_limit = self._turn_slots.stats()
-        stream_used, stream_limit = self._stream_slots.stats()
-        share_used, share_limit = self._share_stream_slots.stats()
-        turn_ratio = turn_used / turn_limit if turn_limit > 0 else 0.0
-        stream_ratio = stream_used / stream_limit if stream_limit > 0 else 0.0
-        share_ratio = share_used / share_limit if share_limit > 0 else 0.0
-        lines = [
-            "# HELP kelp_limiter_in_use Slots currently held by a limiter.",
-            "# TYPE kelp_limiter_in_use gauge",
-            f'kelp_limiter_in_use{{class="turns"}} {_gauge(turn_used)}',
-            f'kelp_limiter_in_use{{class="streams"}} {_gauge(stream_used)}',
-            f'kelp_limiter_in_use{{class="share_streams"}} {_gauge(share_used)}',
-            "# HELP kelp_limiter_capacity Slot limit per class; streams are per owner.",
-            "# TYPE kelp_limiter_capacity gauge",
-            f'kelp_limiter_capacity{{class="turns"}} {_gauge(turn_limit)}',
-            f'kelp_limiter_capacity{{class="streams"}} {_gauge(stream_limit)}',
-            f'kelp_limiter_capacity{{class="share_streams"}} {_gauge(share_limit)}',
-            "# HELP kelp_limiter_saturation Fraction of a limiter's capacity in use.",
-            "# TYPE kelp_limiter_saturation gauge",
-            f'kelp_limiter_saturation{{class="turns"}} {_gauge(turn_ratio)}',
-            f'kelp_limiter_saturation{{class="streams"}} {_gauge(stream_ratio)}',
-            f'kelp_limiter_saturation{{class="share_streams"}} {_gauge(share_ratio)}',
-        ]
-        return "\n".join(lines) + "\n"
-
-    def _busy_response(
-        self, *, class_name: str, reason: str, limit: int, retry_after: float = 1.0
-    ) -> Response:
-        return _rate_limited_response(
-            retry_after,
-            class_name=class_name,
-            reason=reason,
-            limit=limit,
-        )
+        return body_routes.body_limit_for(self, path)
 
     def _route(self, request: Request, segments: list[str]) -> Response:
         if not segments:
@@ -1967,1384 +1588,37 @@ class ChatAPI:
         method = request.method.upper()
 
         if head == "auth":
-            return self._auth(request, method, segments[1:])
+            return auth_routes._auth(self, request, method, segments[1:])
         if head == "threads":
-            return self._threads(request, method, segments[1:])
+            return thread_routes._threads(
+                self, request, method, segments[1:], frames_fn=sse_frames
+            )
         if head == "turns":
-            return self._turns(request, method, segments[1:])
+            return turn_routes._turns(self, request, method, segments[1:])
         if head == "approvals":
-            return self._approvals(request, method, segments[1:])
+            return approval_routes._approvals(self, request, method, segments[1:])
         if head == "attachments":
             if len(segments) == 1 and method == "POST":
-                return self._upload(request)
+                return artifact_routes._upload(self, request)
             raise ChatError("not_found", status=404, message="Unknown endpoint.")
         if head == "artifacts":
-            return self._artifacts(request, method, segments[1:])
+            return artifact_routes._artifacts(self, request, method, segments[1:])
         if head == "health":
-            if len(segments) != 1 or method != "GET":
-                raise ChatError("not_found", status=404, message="Unknown endpoint.")
-            # Legacy alias kept byte-compatible for existing supervisors.
-            return _json_response(200, {"ok": True})
+            return health_routes._health(self, request, method, segments[1:])
         if head == "healthz":
-            if len(segments) != 1 or method != "GET":
-                raise ChatError("not_found", status=404, message="Unknown endpoint.")
-            return _json_response(200, self.health.liveness())
+            return health_routes._healthz(self, request, method, segments[1:])
         if head == "readyz":
-            if len(segments) != 1 or method != "GET":
-                raise ChatError("not_found", status=404, message="Unknown endpoint.")
-            payload, ready = self.health.readiness(runner=self.runner)
-            return _json_response(200 if ready else 503, payload)
+            return health_routes._readyz(self, request, method, segments[1:])
         if head == "metrics":
-            if len(segments) != 1 or method != "GET":
-                raise ChatError("not_found", status=404, message="Unknown endpoint.")
-            # Refresh the derived spend gauges from the persisted records before
-            # rendering, so a scrape is current even when no turn settled in this
-            # process (a restart, or a turn that ended in another worker). The
-            # refresh is best effort: a scrape must not fail because accounting
-            # is momentarily unreadable (KEL-18 review M1).
-            self.service.publish_spend_metrics()
-            # Reached only through ``handle``, which has already authorized it.
-            text = self.metrics.render() + self._limiter_exposition()
-            body = text.encode("utf-8")
-            return Response(
-                status=200,
-                headers={
-                    "Content-Type": PROMETHEUS_CONTENT_TYPE,
-                    "Content-Length": str(len(body)),
-                    "Cache-Control": "no-store",
-                },
-                body=body,
-            )
+            return health_routes._metrics(self, request, method, segments[1:])
         raise ChatError("not_found", status=404, message="Unknown endpoint.")
 
     @staticmethod
     def _is_public(request: Request, segments: list[str]) -> bool:
         return request.method.upper() == "GET" and segments == ["api", "healthz"]
 
-    # -- threads -----------------------------------------------------------
-
-    def _threads(self, request: Request, method: str, rest: list[str]) -> Response:
-        if not rest:
-            if method == "GET":
-                limit = _int_param(request, "limit", 50, 1, 100)
-                threads, cursor = self.service.list_threads(
-                    limit=limit, cursor=request.query_one("cursor")
-                )
-                return _json_response(
-                    200, {"ok": True, "threads": threads, "next_cursor": cursor}
-                )
-            if method == "POST":
-                body = self._json_body(request, optional=True)
-                title = body.get("title")
-                if title is not None and not isinstance(title, str):
-                    raise ChatError(
-                        "invalid_request",
-                        status=400,
-                        message="Title must be a string.",
-                        user_fixable=True,
-                        field="/title",
-                    )
-                thread = self.service.create_thread(title)
-                return _json_response(201, {"ok": True, "thread": thread})
-            raise ChatError("not_found", status=404, message="Unknown endpoint.")
-
-        thread_id = _segment(rest[0])
-        if len(rest) == 1:
-            if method == "GET":
-                limit = _int_param(request, "limit", 50, 1, 100)
-                snapshot = self.service.get_thread(
-                    thread_id,
-                    limit=limit,
-                    before=request.query_one("before"),
-                )
-                return _json_response(200, {"ok": True, **snapshot})
-            if method == "PATCH":
-                body = self._json_body(request)
-                title = body.get("title")
-                if not isinstance(title, str):
-                    raise ChatError(
-                        "invalid_request",
-                        status=400,
-                        message="Title must be a string.",
-                        user_fixable=True,
-                        field="/title",
-                    )
-                thread = self.service.rename_thread(thread_id, title)
-                return _json_response(200, {"ok": True, "thread": thread})
-            if method == "DELETE":
-                result = self.runner.run(self.service.delete_thread(thread_id))
-                return _json_response(200, result)
-            raise ChatError("not_found", status=404, message="Unknown endpoint.")
-
-        if rest[1] == "share" and len(rest) == 2 and method == "POST":
-            return self._create_share(request, thread_id)
-        if rest[1] == "shares":
-            return self._thread_shares(request, method, thread_id, rest[2:])
-        if rest[1] == "stream" and len(rest) == 2 and method == "GET":
-            return self._stream(request, thread_id)
-        if rest[1] == "turns" and len(rest) == 2 and method == "POST":
-            return self._send(request, thread_id)
-        raise ChatError("not_found", status=404, message="Unknown endpoint.")
-
-    # -- share links (KEL-28 M4-F) -----------------------------------------
-
-    def _create_share(self, request: Request, thread_id: str) -> Response:
-        """Materialise one read-only snapshot and return its token exactly once.
-
-        This is an ordinary owner mutation: ``_authorize`` already enforced the
-        bearer/session credential and the CSRF pair, and the ``chat`` class
-        charged the request before dispatch. A thread with a live turn is
-        refused because the snapshot would otherwise freeze a half-written
-        turn (the same rule the purge uses).
-        """
-
-        body = self._json_body(request, optional=True, limit=_DECISION_LIMIT)
-        raw_ttl = body.get("ttl_seconds")
-        ttl = self.share_ttl
-        if raw_ttl is not None:
-            if isinstance(raw_ttl, bool) or not isinstance(raw_ttl, (int, float)):
-                raise ChatError(
-                    "invalid_request",
-                    status=400,
-                    message="ttl_seconds must be a number.",
-                    user_fixable=True,
-                    field="/ttl_seconds",
-                )
-            ttl = min(max(60.0, float(raw_ttl)), self.share_max_ttl)
-        thread = self.service.store.get_thread(thread_id)
-        if thread is None:
-            raise ChatError("unknown_thread", status=404)
-        if thread.get("active_turn_id"):
-            raise ChatError(
-                "turn_in_progress",
-                status=409,
-                message="Wait for the turn to finish before sharing.",
-                details={"active_turn_id": thread["active_turn_id"]},
-            )
-        snapshot = self._build_share_snapshot(thread_id, thread)
-        token = secrets.token_urlsafe(32)
-        token_hash = _share_hash(token)
-        # Sweep on an owner write, never on the read path: an expired or
-        # orphaned row cannot grow the table without bound.
-        try:
-            self.service.store.share_sweep()
-        except Exception:  # noqa: BLE001 - maintenance never blocks a create
-            pass
-        try:
-            record = self.service.store.share_create(
-                token_hash=token_hash,
-                thread_id=thread_id,
-                snapshot=snapshot,
-                ttl_seconds=ttl,
-            )
-        except ThreadGoneError:
-            # The thread was purged between the read above and this insert (a
-            # concurrent delete, possibly another process). Nothing was
-            # written; answer the same 404 as an unknown thread.
-            raise ChatError("unknown_thread", status=404) from None
-        self._audit_share(
-            "share_created", actor="owner", token_hash=token_hash,
-            extra={"thread_id": thread_id},
-        )
-        return _json_response(
-            201,
-            {
-                "ok": True,
-                "share": {
-                    "id": token_hash[:_SHARE_ID_LENGTH],
-                    "token": token,
-                    "url": f"/api/shared/{token}",
-                    "stream_url": f"/api/shared/{token}/stream",
-                    "thread_id": thread_id,
-                    "created_at": record["created_at"],
-                    "expires_at": record["expires_at"],
-                    "message_count": snapshot["message_count"],
-                },
-            },
-        )
-
-    def _thread_shares(
-        self, request: Request, method: str, thread_id: str, rest: list[str]
-    ) -> Response:
-        """List or revoke this thread's links. The raw token is never returned."""
-
-        if self.service.store.get_thread(thread_id) is None:
-            raise ChatError("unknown_thread", status=404)
-        if not rest:
-            if method == "GET":
-                now = self.service.store.now_iso()
-                shares = [
-                    self._share_listing(record, now=now)
-                    for record in self.service.store.share_list(thread_id)
-                ]
-                return _json_response(200, {"ok": True, "shares": shares})
-            if method == "DELETE":
-                hashes = self.service.store.share_revoke_thread(thread_id)
-                for token_hash in hashes:
-                    self._audit_share(
-                        "share_revoked", actor="owner", token_hash=token_hash,
-                        extra={"thread_id": thread_id, "all": True},
-                    )
-                return _json_response(
-                    200, {"ok": True, "revoked": len(hashes)}
-                )
-            raise ChatError("not_found", status=404, message="Unknown endpoint.")
-        if len(rest) == 1 and method == "DELETE":
-            share_id = _segment(rest[0])
-            record = self.service.store.share_revoke_prefix(thread_id, share_id)
-            if record is None:
-                raise ChatError("unknown_share", status=404, message="Unknown share.")
-            self._audit_share(
-                "share_revoked", actor="owner", token_hash=record["token_hash"],
-                extra={"thread_id": thread_id},
-            )
-            return _json_response(
-                200,
-                {
-                    "ok": True,
-                    "revoked": 1,
-                    "share": {"id": record["token_hash"][:_SHARE_ID_LENGTH]},
-                },
-            )
-        raise ChatError("not_found", status=404, message="Unknown endpoint.")
-
-    def _share_listing(self, record: Mapping[str, Any], *, now: str) -> dict[str, Any]:
-        if record["revoked_at"]:
-            status = "revoked"
-        elif str(record["expires_at"]) <= now:
-            status = "expired"
-        else:
-            status = "active"
-        views = 0
-        try:
-            views = self.service.store.share_views_total(record["token_hash"])
-        except Exception:  # noqa: BLE001 - a listing never fails on a counter
-            views = 0
-        return {
-            "id": str(record["token_hash"])[:_SHARE_ID_LENGTH],
-            "status": status,
-            "created_at": record["created_at"],
-            "expires_at": record["expires_at"],
-            "revoked_at": record["revoked_at"],
-            "snapshot_bytes": record["snapshot_bytes"],
-            "views": views,
-        }
-
-    def _build_share_snapshot(
-        self, thread_id: str, thread: Mapping[str, Any]
-    ) -> dict[str, Any]:
-        """Project the settled thread once, dropping every owner-only field."""
-
-        messages = self._all_messages(thread_id)
-        pending = self.service.store.list_approvals(
-            thread_id=thread_id, status="pending", limit=200
-        )
-        snapshot = {
-            "version": 1,
-            "title": str(thread.get("title") or "Shared chat"),
-            "message_count": len(messages),
-            "messages": [_share_message(message) for message in messages],
-            "omitted": {"approvals": len(pending)},
-            "viewer": "anonymous-share",
-            "read_only": True,
-        }
-        # The allow-list drops handles structurally, but a handle can also be
-        # typed into text, a tool summary, or a citation. Scrub free text with
-        # the same pattern the orphan sweep uses before the size check, so the
-        # cap is measured on what is actually stored.
-        snapshot = _scrub_projection(snapshot)
-        # The store stamps two timestamps into the frozen copy, so leave a
-        # small margin rather than accepting a snapshot that grows past the cap
-        # on insert.
-        size = len(
-            json.dumps(snapshot, default=str, separators=(",", ":")).encode("utf-8")
-        )
-        if size + 512 > self.share_max_snapshot_bytes:
-            raise ChatError(
-                "share_too_large",
-                status=413,
-                message="This thread is too large to share.",
-                details={"limit_bytes": self.share_max_snapshot_bytes},
-            )
-        return snapshot
-
-    def _all_messages(self, thread_id: str) -> list[dict[str, Any]]:
-        collected: list[dict[str, Any]] = []
-        before: str | None = None
-        while True:
-            batch, has_more = self.service.store.list_messages(
-                thread_id, limit=100, before=before
-            )
-            collected = list(batch) + collected
-            if not has_more or not batch:
-                break
-            before = str(batch[0]["id"])
-        return collected
-
-    def _audit_share(
-        self,
-        event: str,
-        *,
-        actor: str,
-        token_hash: str,
-        extra: Mapping[str, Any] | None = None,
-    ) -> None:
-        """One audit record, carrying the hash and never the token."""
-
-        record = getattr(self.service, "_record_audit", None)
-        if record is None:
-            return
-        fields = {"token_hash": token_hash, **dict(extra or {})}
-        try:
-            record(event, actor=actor, extra=fields)
-        except Exception:  # noqa: BLE001 - accounting is not traffic
-            return
-
-    # -- public share reads ------------------------------------------------
-
-    def _shared(self, request: Request, rest: list[str]) -> Response:
-        """The unauthenticated GET-only share surface."""
-
-        if request.method.upper() != "GET":
-            response = self._share_error(
-                405,
-                "method_not_allowed",
-                "Share links are read-only.",
-            )
-            response.headers["Allow"] = "GET"
-            return response
-        if not rest:
-            return self._share_not_found()
-        token = rest[0]
-        if len(rest) > 1 and (len(rest) != 2 or rest[1] != "stream"):
-            return self._share_not_found()
-        limited = self._limit_share(token)
-        if limited is not None:
-            return limited
-        token_hash = _share_hash(token)
-        record = self.service.store.share_get(token_hash)
-        if record is None:
-            # Unknown, malformed, expired, revoked and purged all land here.
-            return self._share_not_found()
-        if len(rest) == 2:
-            # The stream path owns the view count so an open that is refused
-            # for capacity is not counted as a read.
-            return self._share_stream(request, record, token_hash)
-        self._record_share_view(token_hash)
-        return self._share_snapshot(record, token_hash)
-
-    def _limit_share(self, token: str) -> Response | None:
-        """Charge the per-token bucket and the global ceiling before lookup.
-
-        Unlike the owner classes this fails closed: a limiter fault refuses the
-        read instead of proceeding, because the share surface is the one place
-        where "try again unfettered" is the attack.
-        """
-
-        try:
-            if not self.limiter.enabled:
-                return None
-            allowed, retry_after = self.limiter.consume(
-                "share", f"sha256:{_share_hash(token)[:24]}"
-            )
-            if not allowed:
-                response = _rate_limited_response(
-                    retry_after, class_name="share", reason="rate"
-                )
-                _apply_share_headers(response)
-                return response
-            allowed, retry_after = self.limiter.consume("share_global", "global")
-            if not allowed:
-                response = _rate_limited_response(
-                    retry_after, class_name="share_global", reason="global"
-                )
-                _apply_share_headers(response)
-                return response
-            return None
-        except Exception:  # noqa: BLE001 - this class fails closed
-            response = _rate_limited_response(
-                _RATE_LIMITED_FALLBACK_RETRY,
-                class_name="share",
-                reason="limiter_error",
-            )
-            _apply_share_headers(response)
-            return response
-
-    def _record_share_view(self, token_hash: str) -> int:
-        """Aggregate one view for today and audit the first one of the day."""
-
-        try:
-            day = self.service.store.now_iso()[:10]
-            views = self.service.store.share_record_view(token_hash, day=day)
-        except Exception:  # noqa: BLE001 - a counter never breaks a read
-            log("share_view_error", level="warning", status="error")
-            return 0
-        if views == 1:
-            self._audit_share(
-                "share_viewed", actor="share", token_hash=token_hash,
-                extra={"day": day},
-            )
-        return views
-
-    def _share_snapshot(
-        self, record: Mapping[str, Any], token_hash: str
-    ) -> Response:
-        payload = dict(record["snapshot"])
-        payload["id"] = token_hash[:_SHARE_ID_LENGTH]
-        return _share_json_response(200, {"ok": True, "share": payload})
-
-    def _share_stream(
-        self,
-        request: Request,
-        record: Mapping[str, Any],
-        token_hash: str,
-    ) -> Response:
-        # A share stream is the cheapest open connection in the app, but it is
-        # still an open connection: a stranger with one leaked link must not be
-        # able to hold every stream slot in the process. The slot is process-
-        # wide because a share has no owner to key on.
-        if not self._share_stream_slots.acquire():
-            response = self._busy_response(
-                class_name="share_streams",
-                reason="stream_capacity",
-                limit=self._share_stream_slots.limit,
-            )
-            _apply_share_headers(response)
-            return response
-        try:
-            self._record_share_view(token_hash)
-            after = _share_after(request)
-            frames = self._share_frames(token_hash, record, after=after)
-        except BaseException:
-            self._share_stream_slots.release()
-            raise
-        return Response(
-            status=200,
-            headers={
-                **dict(_SHARE_HEADERS),
-                "Content-Type": "text/event-stream; charset=utf-8",
-                "X-Accel-Buffering": "no",
-                "Connection": "keep-alive",
-            },
-            stream=self._guarded_stream(
-                frames, lambda: self._share_stream_slots.release()
-            ),
-        )
-
-    def _share_frames(
-        self,
-        token_hash: str,
-        record: Mapping[str, Any],
-        *,
-        after: int = 0,
-    ) -> Iterator[str]:
-        """Replay the frozen snapshot, then tail its link until it dies.
-
-        The snapshot is immutable by design, so "tail" means keeping the
-        connection open with heartbeats while the link is live; no thread
-        event written after creation can reach a viewer. Every tick re-checks
-        the row, so revocation, expiry and purge close the stream within one
-        tick.
-        """
-
-        snapshot = record["snapshot"]
-        if after <= 0:
-            yield format_event(
-                {
-                    "seq": 0,
-                    "type": "snapshot",
-                    "ts": record["created_at"],
-                    "title": snapshot.get("title"),
-                    "created_at": record["created_at"],
-                    "expires_at": record["expires_at"],
-                    "message_count": int(snapshot.get("message_count") or 0),
-                }
-            )
-        for index, message in enumerate(snapshot.get("messages") or [], start=1):
-            if index <= after:
-                continue
-            yield format_event(
-                {
-                    "seq": index,
-                    "type": "message",
-                    "ts": message.get("created_at") or record["created_at"],
-                    "message": message,
-                }
-            )
-        started = time.monotonic()
-        last_beat = started
-        while True:
-            if not _share_alive(self.service.store, token_hash):
-                return
-            remaining = self.stream_idle - (time.monotonic() - started)
-            if remaining <= 0:
-                return
-            time.sleep(min(max(0.01, self.share_tick), remaining))
-            if not _share_alive(self.service.store, token_hash):
-                return
-            if time.monotonic() - last_beat >= 15.0:
-                yield format_comment()
-                last_beat = time.monotonic()
-
-    def _share_error(self, status: int, code: str, message: str) -> Response:
-        error = ChatError(code, status=status, message=message)
-        return _share_json_response(status, error.to_body())
-
-    def _share_not_found(self) -> Response:
-        """The one 404 builder; every failure mode goes through it unchanged."""
-
-        return self._share_error(404, "not_found", "Unknown share.")
-
-    def _stream(self, request: Request, thread_id: str) -> Response:
-        if self.service.store.get_thread(thread_id) is None:
-            raise ChatError("unknown_thread", status=404)
-        owner = self._limiter_identity(request)
-        if not self._stream_slots.acquire(owner):
-            return self._busy_response(
-                class_name="streams",
-                reason="stream_capacity",
-                limit=self._stream_slots.limit,
-            )
-        try:
-            after = _after_param(request)
-            if after > 0:
-                # A resume asks for a position it already had: the browser is
-                # reconnecting, not opening a fresh stream.
-                self.metrics.inc_sse_reconnect()
-            frames = sse_frames(
-                self.service.store,
-                self.service.bus,
-                thread_id,
-                after=after,
-                idle=self.stream_idle,
-                auth_check=lambda: self._authorized_for(request),
-                thread_check=lambda: (
-                    self.service.store.get_thread(thread_id) is not None
-                ),
-            )
-        except BaseException:
-            self._stream_slots.release(owner)
-            raise
-        return Response(
-            status=200,
-            headers={
-                "Content-Type": "text/event-stream; charset=utf-8",
-                "Cache-Control": "no-store",
-                "X-Accel-Buffering": "no",
-                "Connection": "keep-alive",
-            },
-            stream=self._lease_stream(frames, owner),
-        )
-
-    def _lease_stream(
-        self, frames: Iterator[str], owner: str
-    ) -> Iterator[str]:
-        """Release a stream slot on exhaustion, ``close()``, or GC.
-
-        A generator that was never started would not run its ``finally``, so
-        the lease object is also released when the generator is collected.
-        """
-
-        return self._guarded_stream(
-            frames, lambda: self._stream_slots.release(owner)
-        )
-
-    def _guarded_stream(
-        self, frames: Iterator[str], release: Callable[[], None]
-    ) -> Iterator[str]:
-        """Bind one idempotent release to the lifetime of a stream body."""
-
-        lease = _Lease(release)
-
-        def guarded() -> Iterator[str]:
-            try:
-                yield from frames
-            finally:
-                lease.release()
-
-        return guarded()
-
-    def _send(self, request: Request, thread_id: str) -> Response:
-        body = self._json_body(request)
-        client_turn_id = body.get("client_turn_id")
-        if not isinstance(client_turn_id, str) or not _CLIENT_TURN_RE.match(client_turn_id):
-            raise ChatError(
-                "invalid_request",
-                status=400,
-                message="client_turn_id is required for idempotent sends.",
-                user_fixable=True,
-                field="/client_turn_id",
-            )
-        text = body.get("text")
-        if not isinstance(text, str):
-            raise ChatError(
-                "invalid_message",
-                status=400,
-                message="A message needs text.",
-                user_fixable=True,
-                field="/text",
-            )
-        handles = body.get("attachment_handles") or []
-        if not isinstance(handles, list):
-            raise ChatError(
-                "invalid_message",
-                status=400,
-                message="attachment_handles must be a list.",
-                user_fixable=True,
-                field="/attachment_handles",
-            )
-        if not self._turn_slots.acquire():
-            return self._busy_response(
-                class_name="turns",
-                reason="turn_capacity",
-                limit=self._turn_slots.limit,
-            )
-        try:
-            payload, created = self.runner.run(
-                self.service.send(
-                    thread_id,
-                    text=text,
-                    client_turn_id=client_turn_id,
-                    attachment_handles=handles,
-                )
-            )
-        except BaseException:
-            # The turn never started, so its slot is returned immediately.
-            self._turn_slots.release()
-            raise
-        if created:
-            self._release_turn_slot_when_done(str(payload.get("turn_id", "")))
-        else:
-            # An idempotent replay owns no new work.
-            self._turn_slots.release()
-        return _json_response(202 if created else 200, {"ok": True, **payload})
-
-    def _release_turn_slot_when_done(self, turn_id: str) -> None:
-        """Return a turn slot when the background turn finalizes."""
-
-        async def waiter() -> None:
-            try:
-                await self.service.wait_for_turn(turn_id, timeout=None)
-            except BaseException:  # noqa: BLE001 - release is the contract
-                pass
-            finally:
-                self._turn_slots.release()
-
-        coro = waiter()
-        try:
-            self.runner.spawn(coro)
-        except Exception:  # noqa: BLE001 - a closed runner must not leak the slot
-            close = getattr(coro, "close", None)
-            if close is not None:
-                close()
-            self._turn_slots.release()
-
-    def _retry_turn(self, turn_id: str) -> Response:
-        """Accept a retry as new work, taking a turn slot exactly like a send.
-
-        A retry queues a fresh turn (§5.4), so it shares the global turn cap and
-        returns its slot the same way ``_send`` does: when the retried turn
-        finalizes, or immediately when the call fails.
-        """
-
-        if not self._turn_slots.acquire():
-            return self._busy_response(
-                class_name="turns",
-                reason="turn_capacity",
-                limit=self._turn_slots.limit,
-            )
-        try:
-            payload = self.runner.run(self.service.retry(turn_id))
-        except BaseException:
-            # The retried turn never started, so its slot is returned now.
-            self._turn_slots.release()
-            raise
-        self._release_turn_slot_when_done(str(payload.get("turn_id", "")))
-        return _json_response(202, {"ok": True, **payload})
-
-    # -- turns -------------------------------------------------------------
-
-    def _turns(self, request: Request, method: str, rest: list[str]) -> Response:
-        if len(rest) != 2 or method != "POST":
-            raise ChatError("not_found", status=404, message="Unknown endpoint.")
-        turn_id = _segment(rest[0])
-        if rest[1] == "stop":
-            payload = self.runner.run(self.service.stop(turn_id))
-            return _json_response(202, {"ok": True, **payload})
-        if rest[1] == "retry":
-            return self._retry_turn(turn_id)
-        raise ChatError("not_found", status=404, message="Unknown endpoint.")
-
-    # -- approvals ---------------------------------------------------------
-
-    def _approvals(self, request: Request, method: str, rest: list[str]) -> Response:
-        if not rest:
-            if method != "GET":
-                raise ChatError("not_found", status=404, message="Unknown endpoint.")
-            limit = _int_param(request, "limit", 50, 1, 200)
-            approvals = self.service.list_approvals(
-                status=request.query_one("status"),
-                thread_id=request.query_one("thread_id"),
-                limit=limit,
-            )
-            return _json_response(200, {"ok": True, "approvals": approvals})
-        approval_id = _segment(rest[0])
-        if len(rest) == 1:
-            if method != "GET":
-                raise ChatError("not_found", status=404, message="Unknown endpoint.")
-            return _json_response(
-                200, {"ok": True, "approval": self.service.get_approval(approval_id)}
-            )
-        if rest[1] != "decision" or len(rest) != 2 or method != "POST":
-            raise ChatError("not_found", status=404, message="Unknown endpoint.")
-        body = self._json_body(request, limit=_DECISION_LIMIT)
-        decision = body.get("decision")
-        note = body.get("note")
-        if note is not None and not isinstance(note, str):
-            raise ChatError(
-                "invalid_request",
-                status=400,
-                message="note must be a string.",
-                user_fixable=True,
-                field="/note",
-            )
-        result = self.service.decide(approval_id, decision, note)
-        return _json_response(200, result)
-
-    # -- artifacts ---------------------------------------------------------
-
-    def _upload(self, request: Request) -> Response:
-        if len(request.body) > self.max_upload + 64 * 1024:
-            raise ChatError("upload_too_large", status=413)
-        filename, data = _multipart_file(request)
-        meta = self.service.artifacts.save_upload(filename, data)
-        card = self.service.artifacts.card(meta["handle"])
-        return _json_response(201, {"ok": True, "artifact": card})
-
-    def _artifacts(self, request: Request, method: str, rest: list[str]) -> Response:
-        if method != "GET" or not rest:
-            raise ChatError("not_found", status=404, message="Unknown endpoint.")
-        handle = _segment(rest[0])
-        thread_id = request.query_one("thread_id")
-        if len(rest) == 1:
-            card = self.service.artifacts.card(handle, thread_id=thread_id)
-            return _json_response(200, {"ok": True, "artifact": card})
-        action = rest[1]
-        if len(rest) != 2:
-            raise ChatError("not_found", status=404, message="Unknown endpoint.")
-        if action == "preview":
-            rows = _int_param(request, "rows", 20, 1, 20)
-            preview = self.service.artifacts.preview(
-                handle, rows=rows, thread_id=thread_id
-            )
-            return _json_response(200, preview)
-        if action == "content":
-            result = self.service.artifacts.content(
-                handle,
-                thread_id=thread_id,
-                download=request.query_one("download") == "1",
-                range_header=request.header("range"),
-            )
-            return Response(status=result.status, headers=dict(result.headers), body=result.body)
-        raise ChatError("not_found", status=404, message="Unknown endpoint.")
-
-    # -- auth --------------------------------------------------------------
-
-    def _authorize(self, request: Request) -> None:
-        auth = self._authenticate(request)
-        if not auth.ok:
-            self._reject_auth(request)
-            raise ChatError("unauthorized", status=401)
-        if not _is_sign_in(request):
-            # A sign-in authenticates its own bearer separately, so the cookie
-            # that let the wrapper through must not erase the debt of the
-            # credential the request actually presented.
-            self.auth_failures.clear(_auth_failure_identity(request))
-        if request.method.upper() in _MUTATING and not self._csrf_ok(request, auth):
-            raise ChatError("csrf_failed", status=403)
-
-    def _reject_auth(self, request: Request) -> None:
-        """Count one rejection and emit exactly one ``auth_failed`` record.
-
-        The record carries a hashed identity, a reason code, and a count. It
-        never carries the presented bearer token, cookie value, or IP.
-        """
-
-        identity = _auth_failure_identity(request)
-        count, remaining = self.auth_failures.status(identity)
-        if remaining is not None:
-            log(
-                "auth_failed",
-                level="warning",
-                outcome="locked",
-                reason="lockout",
-                count=count,
-                status=429,
-                identity_hash=identity,
-            )
-            raise _AuthLocked(remaining)
-        count, remaining = self.auth_failures.record(identity)
-        if remaining is not None:
-            log(
-                "auth_failed",
-                level="warning",
-                outcome="locked",
-                reason="lockout",
-                count=count,
-                status=429,
-                identity_hash=identity,
-            )
-            raise _AuthLocked(remaining)
-        log(
-            "auth_failed",
-            level="warning",
-            outcome="rejected",
-            reason="bad_credentials",
-            count=count,
-            status=401,
-            identity_hash=identity,
-        )
-
-    def _authenticate(self, request: Request, *, fresh: bool = False) -> _AuthResult:
-        """Resolve and cache the credential for one request.
-
-        ``fresh`` forces a second store lookup, which the stream's auth check
-        uses so a revoke or expiry closes an open SSE connection. The cached
-        result keeps the limiter and dispatch from doing the same lookup twice.
-        """
-
-        cached = getattr(request, "_kelp_auth", None)
-        if cached is not None and not fresh:
-            return cached
-        result = self._authenticate_uncached(request)
-        request._kelp_auth = result  # type: ignore[attr-defined]
-        return result
-
-    def _authenticate_uncached(self, request: Request) -> _AuthResult:
-        if not self.auth_token:
-            return _AuthResult(True, "disabled")
-        if self._bearer_authorized(request):
-            return _AuthResult(True, "bearer")
-        session_id = _parse_cookies(request.header("cookie")).get(SESSION_COOKIE) or ""
-        if not session_id:
-            return _AuthResult(False)
-        record = self.sessions.lookup(session_id)
-        if record is None:
-            return _AuthResult(False)
-        return _AuthResult(True, "cookie", record, session_id)
-
-    def _authorized_for(self, request: Request) -> bool:
-        return self._authenticate(request, fresh=True).ok
-
-    def _bearer_authorized(self, request: Request) -> bool:
-        if not self.auth_token:
-            return False
-        header = request.header("authorization") or ""
-        prefix = "Bearer "
-        if not header.startswith(prefix):
-            return False
-        return hmac.compare_digest(header[len(prefix) :], self.auth_token)
-
-    def _csrf_ok(self, request: Request, auth: _AuthResult) -> bool:
-        """One mutation gate with different rules for ambient and explicit auth.
-
-        A cookie is ambient: the browser attaches it to a cross-site request,
-        so the cookie path requires a matching ``Origin`` **and** the
-        per-session double-submit pair (``csrf`` cookie plus
-        ``X-CSRF-Token``). An explicit bearer token is not ambient: it keeps
-        the existing static-token or same-origin check, and a bearer sign-in
-        needs neither because it already proves possession of the root token.
-        """
-
-        if request.method.upper() not in _MUTATING:
-            return True
-        if auth.via == "cookie":
-            if not _same_origin(request):
-                return False
-            header = request.header("x-csrf-token") or ""
-            cookie = _parse_cookies(request.header("cookie")).get(CSRF_COOKIE) or ""
-            if not header or not cookie or not hmac.compare_digest(header, cookie):
-                return False
-            return auth.session is not None and self.sessions.csrf_matches(
-                auth.session, header
-            )
-        if _is_sign_in(request) and auth.via == "bearer":
-            return True
-        if self.csrf_token:
-            supplied = request.header("x-csrf-token") or ""
-            return hmac.compare_digest(supplied, self.csrf_token)
-        if not request.header("origin"):
-            # Non-browser local calls with an explicit bearer token or with auth
-            # disabled: there is no ambient credential to protect.
-            return True
-        return _same_origin(request)
-
-    def _roll_session_cookie(self, request: Request, response: Response) -> None:
-        if not 200 <= response.status < 400:
-            return
-        auth = self._authenticate(request)
-        if auth.session is None or auth.session_id is None:
-            return
-        if any(
-            cookie.split(";", 1)[0].startswith(f"{SESSION_COOKIE}=")
-            for cookie in response.cookies
-        ):
-            return
-        updated = self.sessions.touch(auth.session)
-        if updated is None:
-            return
-        response.cookies.extend(
-            self._session_cookies(auth.session_id, self.sessions.csrf_token(updated))
-        )
-
-    def _session_cookies(self, session_id: str, csrf_token: str) -> list[str]:
-        ttl = self.sessions.ttl
-        now = self.sessions.now()
-        return [
-            _cookie_header(
-                SESSION_COOKIE,
-                session_id,
-                ttl=ttl,
-                secure=self.cookie_secure,
-                http_only=True,
-                now=now,
-            ),
-            _cookie_header(
-                CSRF_COOKIE,
-                csrf_token,
-                ttl=ttl,
-                secure=self.cookie_secure,
-                http_only=False,
-                now=now,
-            ),
-        ]
-
-    def _clear_auth_cookies(self) -> list[str]:
-        return [
-            _clear_cookie_header(
-                SESSION_COOKIE, secure=self.cookie_secure, http_only=True
-            ),
-            _clear_cookie_header(
-                CSRF_COOKIE, secure=self.cookie_secure, http_only=False
-            ),
-        ]
-
-    # -- auth routes -------------------------------------------------------
-
-    def _auth(self, request: Request, method: str, rest: list[str]) -> Response:
-        if len(rest) == 1 and rest[0] == "session":
-            if method == "POST":
-                return self._sign_in(request)
-            if method == "DELETE":
-                return self._revoke_current(request)
-        if len(rest) == 1 and rest[0] == "sessions" and method == "DELETE":
-            return self._revoke_all()
-        if len(rest) == 1 and rest[0] == "devices" and method == "GET":
-            return self._list_devices(request)
-        if len(rest) == 2 and rest[0] == "devices" and method == "DELETE":
-            return self._revoke_device(request, rest[1])
-        raise ChatError("not_found", status=404, message="Unknown endpoint.")
-
-    def _sign_in(self, request: Request) -> Response:
-        """Mint a session from the root bearer token.
-
-        Requiring the bearer here is the point: a cookie is never sufficient
-        to create another cookie, so a stolen session cannot extend itself
-        indefinitely or survive a root-token rotation by minting a replacement.
-        A wrong bearer is a rejected credential like any other: it is logged,
-        counted, and can lock the identity out, even when the request also
-        carries a session cookie that authorized the route.
-
-        An optional ``device_label`` names the device shown by
-        ``GET /api/auth/devices``. It is scrubbed to 1-40 characters and is
-        never written to a log or audit record.
-        """
-
-        if not self._bearer_authorized(request):
-            self._reject_auth(request)
-            raise ChatError("unauthorized", status=401)
-        body = self._json_body(request, optional=True, limit=_DECISION_LIMIT)
-        label = body.get("device_label")
-        session_id, csrf_token, record = self.sessions.create(label=label)
-        response = _json_response(
-            201,
-            {
-                "ok": True,
-                "session": {
-                    "expires_at": int(record.expires_at),
-                    "csrf_token": csrf_token,
-                    "device": {
-                        "id": record.id_hash[:DEVICE_ID_SHORT_LENGTH],
-                        "label": record.label,
-                    },
-                },
-            },
-        )
-        response.cookies.extend(self._session_cookies(session_id, csrf_token))
-        return response
-
-    def _list_devices(self, request: Request) -> Response:
-        auth = self._authenticate(request)
-        devices = self.sessions.devices(current_session_id=auth.session_id)
-        return _json_response(
-            200,
-            {
-                "ok": True,
-                "devices": devices,
-                "presence_seconds": int(DEVICE_ONLINE_SECONDS),
-            },
-        )
-
-    def _revoke_device(self, request: Request, id_short: str) -> Response:
-        """Revoke one device by its public short id.
-
-        The route is authenticated and, for a cookie caller, CSRF-checked like
-        every other mutation. Revoking the calling device clears its cookies;
-        revoking another device leaves the caller's session intact and closes
-        that device's open SSE stream on its next fresh auth check.
-        """
-
-        record = self.sessions.revoke_short(unquote(id_short))
-        if record is None:
-            raise ChatError("not_found", status=404, message="Unknown device.")
-        response = _json_response(
-            200,
-            {
-                "ok": True,
-                "revoked": 1,
-                "device": {"id": record.id_hash[:DEVICE_ID_SHORT_LENGTH]},
-            },
-        )
-        auth = self._authenticate(request)
-        if auth.session_id and _secret_hash(auth.session_id) == record.id_hash:
-            response.cookies.extend(self._clear_auth_cookies())
-        return response
-
-    def _revoke_current(self, request: Request) -> Response:
-        auth = self._authenticate(request)
-        if auth.session_id is None:
-            raise ChatError(
-                "invalid_request",
-                status=400,
-                message="A session cookie is required.",
-                user_fixable=True,
-            )
-        revoked = self.sessions.revoke(auth.session_id)
-        response = _json_response(200, {"ok": True, "revoked": 1 if revoked else 0})
-        response.cookies.extend(self._clear_auth_cookies())
-        return response
-
-    def _revoke_all(self) -> Response:
-        revoked = self.sessions.revoke_all()
-        response = _json_response(200, {"ok": True, "revoked": revoked})
-        response.cookies.extend(self._clear_auth_cookies())
-        return response
-
-    # -- body parsing ------------------------------------------------------
-
-    def body_limit_for(self, path: str) -> tuple[int, int, str]:
-        """Return ``(cap, status, code)`` for a request path.
-
-        The transport adapter uses this to reject a declared body before any
-        bytes are read. Uploads keep their richer ``413 upload_too_large``;
-        every other route reports ``400 invalid_request``, matching
-        :meth:`_json_body`.
-        """
-
-        try:
-            clean = unquote(urlsplit(path).path)
-            segments = [segment for segment in clean.split("/") if segment]
-        except ValueError:  # pragma: no cover - urlsplit rarely raises here
-            segments = []
-        if len(segments) >= 2 and segments[0] == "api" and segments[1] == "attachments":
-            return self.max_upload + _UPLOAD_OVERHEAD, 413, "upload_too_large"
-        return _JSON_LIMIT, 400, "invalid_request"
-
-    def _json_body(self, request: Request, *, optional: bool = False, limit: int = _JSON_LIMIT) -> dict[str, Any]:
-        if not request.body:
-            if optional:
-                return {}
-            raise ChatError(
-                "invalid_request",
-                status=400,
-                message="A JSON object is required.",
-                user_fixable=True,
-            )
-        if len(request.body) > limit:
-            raise ChatError(
-                "invalid_request",
-                status=400,
-                message="The request body is too large.",
-                user_fixable=True,
-            )
-        try:
-            body = json.loads(request.body.decode("utf-8"))
-        except (UnicodeDecodeError, json.JSONDecodeError):
-            raise ChatError(
-                "invalid_request",
-                status=400,
-                message="The request body is not valid JSON.",
-                user_fixable=True,
-            ) from None
-        if not isinstance(body, dict):
-            raise ChatError(
-                "invalid_request",
-                status=400,
-                message="The request body must be a JSON object.",
-                user_fixable=True,
-            )
-        return body
-
-
-def _json_response(status: int, payload: Mapping[str, Any]) -> Response:
-    body = json.dumps(payload, default=str, separators=(",", ":")).encode("utf-8")
-    return Response(
-        status=status,
-        headers={
-            "Content-Type": "application/json; charset=utf-8",
-            "Content-Length": str(len(body)),
-            "Cache-Control": "no-store",
-        },
-        body=body,
-    )
-
-
-def _method_not_allowed_response(allow: str) -> Response:
-    """The one 405 builder: a typed envelope plus the ``Allow`` it proves."""
-
-    error = ChatError(
-        "method_not_allowed",
-        status=405,
-        message="That method is not supported here.",
-    )
-    response = _json_response(405, error.to_body())
-    response.headers["Allow"] = allow
-    return response
-
-
-# -- share helpers (KEL-28) ------------------------------------------------
-
-
-def _share_hash(token: str) -> str:
-    """The only key a share is stored or looked up by."""
-
-    return hashlib.sha256(token.encode("utf-8", "surrogatepass")).hexdigest()
-
-
-def _is_share_path(path: str) -> bool:
-    """True for ``/api/shared/...``, from a raw path string or a Request path."""
-
-    try:
-        segments = [
-            segment for segment in unquote(urlsplit(path).path).split("/") if segment
-        ]
-    except ValueError:  # pragma: no cover - urlsplit rarely raises here
-        return False
-    return len(segments) >= 2 and segments[0] == "api" and segments[1] == "shared"
-
-
-def _is_share_request(request: Request) -> bool:
-    return _is_share_path(request.path)
-
-
-def _share_after(request: Request) -> int:
-    raw = request.header("last-event-id") or request.query_one("after") or "0"
-    try:
-        return max(0, int(raw))
-    except (TypeError, ValueError):
-        return 0
-
-
-def _share_alive(store: ChatStore, token_hash: str) -> bool:
-    try:
-        return store.share_get(token_hash) is not None
-    except Exception:  # noqa: BLE001 - a liveness check fails closed
-        return False
-
-
-def _apply_share_headers(response: Response) -> None:
-    response.headers.update(_SHARE_HEADERS)
-
-
-def _share_json_response(status: int, payload: Mapping[str, Any]) -> Response:
-    response = _json_response(status, payload)
-    _apply_share_headers(response)
-    return response
-
-
-def _share_source(source: Any) -> dict[str, Any]:
-    if not isinstance(source, Mapping):
-        return {}
-    return {
-        key: source[key]
-        for key in _SHARE_SOURCE_KEYS
-        if source.get(key) is not None
-    }
-
-
-def _share_block(block: Any) -> dict[str, Any]:
-    """Allow-list one block; every unlisted shape becomes ``unknown``."""
-
-    if not isinstance(block, Mapping):
-        return {"type": "unknown"}
-    kind = block.get("type")
-    if kind == "text":
-        return {"type": "text", "text": str(block.get("text") or "")}
-    if kind == "attachment":
-        attachment = block.get("attachment")
-        attachment = attachment if isinstance(attachment, Mapping) else {}
-        return {
-            "type": "attachment",
-            "attachment": {
-                key: attachment[key]
-                for key in ("name", "kind", "mime", "size_bytes", "status")
-                if attachment.get(key) is not None
-            },
-        }
-    if kind == "tool_call":
-        return {
-            "type": "tool_call",
-            "tool": block.get("tool"),
-            "label": block.get("label"),
-            "summary": block.get("summary"),
-            "status": block.get("status"),
-            "duration_ms": block.get("duration_ms"),
-            "effects": list(block.get("effects") or []),
-        }
-    return {"type": "unknown"}
-
-
-def _share_message(message: Mapping[str, Any]) -> dict[str, Any]:
-    return {
-        "role": message.get("role"),
-        "status": message.get("status"),
-        "created_at": message.get("created_at"),
-        "blocks": [_share_block(block) for block in message.get("blocks") or []],
-        "sources": [
-            _share_source(source) for source in message.get("sources") or []
-        ],
-    }
-
-
-def _scrub_projection(value: Any) -> Any:
-    """Replace every artifact handle anywhere in the share projection.
-
-    Runs over the finished dict rather than at each field, so a block shape
-    added later cannot forget it. Keys are never rewritten: they are fixed
-    names, not user content.
-    """
-
-    if isinstance(value, str):
-        return scrub_artifact_handles(value)
-    if isinstance(value, Mapping):
-        return {key: _scrub_projection(item) for key, item in value.items()}
-    if isinstance(value, (list, tuple)):
-        return [_scrub_projection(item) for item in value]
-    return value
-
-
-def _segment(value: str) -> str:
-    value = unquote(value)
-    if not _THREAD_RE.match(value) or value in {".", ".."}:
-        raise ChatError("not_found", status=404, message="Unknown endpoint.")
-    return value
-
-
-def _int_param(request: Request, name: str, default: int, low: int, high: int) -> int:
-    raw = request.query_one(name)
-    if raw is None or raw == "":
-        return default
-    try:
-        value = int(raw)
-    except ValueError:
-        raise ChatError(
-            "invalid_request",
-            status=400,
-            message=f"{name} must be an integer.",
-            user_fixable=True,
-        ) from None
-    return max(low, min(value, high))
-
-
-def _after_param(request: Request) -> int:
-    raw = request.header("last-event-id") or request.query_one("after") or "0"
-    try:
-        value = int(raw)
-    except ValueError:
-        raise ChatError(
-            "invalid_request",
-            status=400,
-            message="after must be a sequence number.",
-            user_fixable=True,
-        ) from None
-    return max(0, value)
-
-
-def _parse_cookies(value: str | None) -> dict[str, str]:
-    cookies: dict[str, str] = {}
-    for part in (value or "").split(";"):
-        if "=" in part:
-            name, _, raw = part.partition("=")
-            cookies[name.strip()] = raw.strip()
-    return cookies
-
-
-def _multipart_file(request: Request) -> tuple[str, bytes]:
-    content_type = request.header("content-type") or ""
-    if not content_type.lower().startswith("multipart/form-data"):
-        raise ChatError(
-            "invalid_request",
-            status=400,
-            message="Uploads must be multipart/form-data.",
-            user_fixable=True,
-        )
-    match = re.search(r'boundary="?([^";]+)"?', content_type)
-    if match is None:
-        raise ChatError(
-            "invalid_request",
-            status=400,
-            message="The multipart boundary is missing.",
-            user_fixable=True,
-        )
-    boundary = b"--" + match.group(1).encode("ascii", "ignore")
-    for chunk in request.body.split(boundary):
-        if not chunk or chunk.startswith(b"--"):
-            continue
-        chunk = chunk.lstrip(b"\r\n")
-        if chunk.endswith(b"\r\n"):
-            chunk = chunk[:-2]
-        head, separator, data = chunk.partition(b"\r\n\r\n")
-        if not separator:
-            continue
-        disposition = ""
-        for line in head.split(b"\r\n"):
-            name, _, value = line.partition(b":")
-            if name.strip().lower() == b"content-disposition":
-                disposition = value.decode("utf-8", "replace")
-        if 'name="file"' not in disposition:
-            continue
-        file_match = re.search(r'filename="([^"]*)"', disposition)
-        filename = file_match.group(1) if file_match else "upload"
-        return filename, data
-    raise ChatError(
-        "invalid_request",
-        status=400,
-        message="No file field in the upload.",
-        user_fixable=True,
-    )
-
 
 # -- stdlib adapter --------------------------------------------------------
-
-
-class _BodyRejected(Exception):
-    """A body that must be refused before it is read into memory."""
-
-    def __init__(self, status: int, code: str, message: str):
-        self.status = status
-        self.code = code
-        self.message = message
-        super().__init__(message)
 
 
 class _Handler(BaseHTTPRequestHandler):
