@@ -213,7 +213,8 @@ def test_cli_main_install_and_uninstall(tmp_path: Path, capsys: pytest.CaptureFi
     assert cli.main(["install", str(source), "--root", str(plugin_root), "--yes"]) == 0
     output = capsys.readouterr().out
     assert str(source) in output
-    assert "warnings:" in output and "  - none" in output
+    assert "warnings:" in output
+    assert "review limitation: static import review covers" in output
     assert "installed plugins.echo 0.1.0 sha256:" in output
 
     assert cli.main(["uninstall", "plugins.echo", "--root", str(plugin_root)]) == 0
@@ -250,6 +251,68 @@ def test_flagged_imports_require_explicit_enablement(tmp_path: Path) -> None:
         allow_flagged_imports=True,
     )
     assert installed["digest"] == package.digest
+
+
+def test_aliased_dunder_import_requires_explicit_enablement(tmp_path: Path) -> None:
+    source = _write_plugin(
+        tmp_path / "source" / "echo",
+        handler_source=(
+            "from builtins import __import__ as imp\n"
+            "imp('subprocess')\n"
+            + HANDLER_SOURCE
+        ),
+    )
+    package = inspect_plugin_package(source)
+    warnings = cli.plugin_review_warnings(package)
+
+    assert "flagged import: builtins.__import__" in warnings
+    assert "flagged import: subprocess" in warnings
+    with pytest.raises(PluginPackageError, match="flagged imports"):
+        cli.install(source, root=tmp_path / "plugins")
+    installed = cli.install(
+        source,
+        root=tmp_path / "plugins",
+        expected_digest=package.digest,
+        allow_flagged_imports=True,
+    )
+    assert installed["digest"] == package.digest
+
+
+@pytest.mark.parametrize(
+    "handler_source",
+    [
+        "import importlib as il\nil.import_module('subprocess')\n" + HANDLER_SOURCE,
+        "from importlib import import_module as load\nload('subprocess')\n" + HANDLER_SOURCE,
+        "import builtins as bi\ngetattr(bi, '__import__')('subprocess')\n" + HANDLER_SOURCE,
+    ],
+)
+def test_dynamic_import_alias_forms_are_flagged(
+    tmp_path: Path, handler_source: str
+) -> None:
+    source = _write_plugin(tmp_path / "source" / "echo", handler_source=handler_source)
+    warnings = cli.plugin_review_warnings(inspect_plugin_package(source))
+
+    assert any(warning.startswith("flagged import:") for warning in warnings)
+    with pytest.raises(PluginPackageError, match="flagged imports"):
+        cli.install(source, root=tmp_path / "plugins")
+
+
+def test_computed_dynamic_import_is_disclosed_in_review(tmp_path: Path) -> None:
+    source = _write_plugin(
+        tmp_path / "source" / "echo",
+        handler_source=(
+            "import importlib\n"
+            "module_name = get_module_name()\n"
+            "importlib.import_module(module_name)\n"
+            + HANDLER_SOURCE
+        ),
+    )
+
+    warnings = cli.plugin_review_warnings(inspect_plugin_package(source))
+
+    assert any(warning.startswith("review limitation:") for warning in warnings)
+    with pytest.raises(PluginPackageError, match="flagged imports"):
+        cli.install(source, root=tmp_path / "plugins")
 
 
 def test_cli_displays_review_and_requires_exact_digest_approval(
@@ -820,7 +883,10 @@ def test_registry_executor_offers_approved_install_for_pinned_local_plugin(
         "version": "0.1.0",
         "digest": pinned["digest"],
         "source": str(store / "plugins.echo"),
-        "warnings": [],
+        "warnings": [
+            "review limitation: static import review covers import statements and recognized "
+            "dynamic-import calls; computed or indirect callables may not be resolved"
+        ],
         "enable_flagged_imports": False,
     }
     assert "plugins.echo" in executor._registry

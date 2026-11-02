@@ -547,6 +547,10 @@ def plugin_review_warnings(package: PluginPackage) -> tuple[str, ...]:
         "requests", "socket", "subprocess", "urllib", "httpx", "http.client",
     }
     imports: set[str] = set()
+    limitations: set[str] = {
+        "static import review covers import statements and recognized dynamic-import calls; "
+        "computed or indirect callables may not be resolved"
+    }
     for relpath, _mode, content in package.entries:
         if not relpath.endswith(".py"):
             continue
@@ -554,19 +558,73 @@ def plugin_review_warnings(package: PluginPackage) -> tuple[str, ...]:
             tree = ast.parse(content.decode("utf-8"), filename=relpath)
         except (UnicodeDecodeError, SyntaxError):
             return (f"could not statically inspect imports in {relpath}",)
+        aliases: dict[str, str] = {}
         for node in ast.walk(tree):
             if isinstance(node, ast.Import):
-                imports.update(alias.name for alias in node.names)
+                for alias in node.names:
+                    imports.add(alias.name)
+                    aliases[alias.asname or alias.name.split(".")[0]] = alias.name
             elif isinstance(node, ast.ImportFrom) and node.module:
                 imports.add(node.module)
-            elif isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
-                if node.func.id == "__import__":
-                    imports.add("builtins.__import__")
+                if node.module == "builtins" and any(
+                    alias.name == "__import__" for alias in node.names
+                ):
+                    for alias in node.names:
+                        if alias.name == "__import__":
+                            aliases[alias.asname or alias.name] = "builtins.__import__"
+                elif node.module == "importlib":
+                    for alias in node.names:
+                        if alias.name == "import_module":
+                            aliases[alias.asname or alias.name] = "importlib.import_module"
+
+        def resolve(node: ast.AST) -> str | None:
+            if isinstance(node, ast.Name):
+                if node.id == "__import__":
+                    return "builtins.__import__"
+                return aliases.get(node.id)
+            if isinstance(node, ast.Attribute):
+                parent = resolve(node.value)
+                if parent:
+                    return f"{parent}.{node.attr}"
+                if isinstance(node.value, ast.Name) and node.value.id in {"builtins", "importlib"}:
+                    return f"{node.value.id}.{node.attr}"
+            if (
+                isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Name)
+                and node.func.id == "getattr"
+                and len(node.args) >= 2
+                and isinstance(node.args[1], ast.Constant)
+                and isinstance(node.args[1].value, str)
+            ):
+                parent = resolve(node.args[0])
+                if parent:
+                    return f"{parent}.{node.args[1].value}"
+            return None
+
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Assign):
+                target = resolve(node.value)
+                if target:
+                    for assigned in node.targets:
+                        if isinstance(assigned, ast.Name):
+                            aliases[assigned.id] = target
+            elif isinstance(node, ast.Call):
+                target = resolve(node.func)
+                if target in {"builtins.__import__", "importlib.import_module"}:
+                    imports.add(target)
+                    module_arg = node.args[0] if node.args else None
+                    if isinstance(module_arg, ast.Constant) and isinstance(module_arg.value, str):
+                        imports.add(module_arg.value)
+                    else:
+                        limitations.add(
+                            "dynamic import target is computed; manually review code not resolved by static analysis"
+                        )
     flagged_imports = {
         name for name in imports
         if name in flagged or any(name.startswith(item + ".") for item in flagged)
     }
     warnings = [f"flagged import: {name}" for name in sorted(flagged_imports)]
+    warnings.extend(f"review limitation: {message}" for message in sorted(limitations))
     effects = package.manifest.get("permissions", {}).get("effects", [])
     for effect in sorted(set(effects) - {"read"}):
         warnings.append(f"declared effect: {effect}")
