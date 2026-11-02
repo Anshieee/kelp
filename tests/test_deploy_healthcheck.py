@@ -166,6 +166,25 @@ def test_summarise_names_failing_checks_and_drops_unknown_detail() -> None:
     assert "/data" not in " ".join(failing)
 
 
+def test_summarise_renders_the_unpriced_check_by_its_stable_code() -> None:
+    ready, failing, version, commit = healthcheck.summarise(
+        {
+            "ok": False,
+            "status": "degraded",
+            "version": "0.1.0",
+            "commit": "abc1234",
+            "checks": {
+                "usage": {"ok": True},
+                "unpriced_models": {"ok": False, "detail": "unpriced", "count": 3},
+            },
+        }
+    )
+    assert ready is False
+    # The count is dropped and the code renders as a name, not as "unknown".
+    assert failing == ["unpriced_models=unpriced"]
+    assert (version, commit) == ("0.1.0", "abc1234")
+
+
 def test_summarise_never_returns_an_unbounded_version() -> None:
     _, _, version, commit = healthcheck.summarise(
         {"ok": True, "version": "v" * 200, "commit": "c" * 200}

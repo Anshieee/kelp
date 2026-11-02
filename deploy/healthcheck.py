@@ -42,7 +42,7 @@ FETCH_ERRORS = (urllib.error.URLError, http.client.HTTPException, OSError, Value
 #: Interface wildcards are not dialable; the probe talks to loopback instead.
 _WILDCARD_HOSTS = frozenset({"", "0.0.0.0", "::", "[::]", "*"})
 #: Detail codes HealthProbe emits today. Anything else is reported as unknown.
-_DETAIL_CODES = frozenset({"not_configured", "timeout", "unavailable"})
+_DETAIL_CODES = frozenset({"not_configured", "timeout", "unavailable", "unpriced"})
 _CHECK_NAME = re.compile(r"^[a-z][a-z0-9_]{0,24}$")
 _COMMIT = re.compile(r"^[0-9a-zA-Z._-]{1,40}$")
 

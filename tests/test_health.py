@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import time
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, Mapping
@@ -14,7 +15,7 @@ import pytest
 from chat import ArtifactRegistry, ChatAPI, ChatService, ChatStore, Request
 from chat.api import HealthProbe, _http_provider_probe
 from chat.server import ServerConfig, build_app
-from kernel.usage import JsonlUsageStore
+from kernel.usage import JsonlUsageStore, UsageRecord
 from openshell.audit import AuditLog
 
 from .chatkit import MODEL, StubProvider, text_script
@@ -24,7 +25,8 @@ TOKEN = "tok"
 COMMIT = "abc1234def5678"
 VERSION = "1.2.3"
 
-COMPONENTS = ("store", "artifacts", "audit", "usage", "provider", "registry")
+UNPRICED = "unpriced_models"
+COMPONENTS = ("store", "artifacts", "audit", "usage", UNPRICED, "provider", "registry")
 
 
 class FakeRegistry:
@@ -247,6 +249,12 @@ def _broken(component: str, stack: Stack, tmp_path: Path) -> HealthProbe:
         overrides["audit"] = SimpleNamespace(path=blocked_parent)
     elif component == "usage":
         overrides["usage_store"] = SimpleNamespace(path=blocked_parent)
+    elif component == "unpriced_models":
+
+        def unreadable() -> list[dict[str, Any]]:
+            raise OSError("usage records are not readable")
+
+        overrides["usage_store"] = SimpleNamespace(records=unreadable)
     elif component == "provider":
         overrides["provider_check"] = lambda: False
     elif component == "registry":
@@ -279,6 +287,78 @@ def test_readyz_recovers_after_a_degraded_component(stack: Stack, tmp_path: Path
     assert call(stack.api, "/api/readyz", auth=True).status == 503
     stack.api.health = healthy
     assert call(stack.api, "/api/readyz", auth=True).status == 200
+
+
+# -- unpriced models (KEL-18 gap) ------------------------------------------
+
+
+def _record_usage(
+    stack: Stack, *, cost: float | None, at: datetime, turn_id: str = "turn_1"
+) -> None:
+    stamp = at.isoformat()
+    stack.usage.record(
+        UsageRecord(
+            turn_id=turn_id,
+            session_id="thr_1",
+            model=MODEL,
+            input_tokens=10,
+            output_tokens=5,
+            total_tokens=15,
+            estimated_cost_usd=cost,
+            cost_known=cost is not None,
+            usage_reported=True,
+            steps=1,
+            tool_calls=0,
+            started_at=stamp,
+            finished_at=stamp,
+            duration_ms=10,
+            outcome="stop",
+        )
+    )
+
+
+def test_readyz_flags_unpriced_models_in_the_active_window(stack: Stack) -> None:
+    now = datetime.now(timezone.utc)
+    _record_usage(stack, cost=None, at=now, turn_id="turn_a")
+    _record_usage(stack, cost=None, at=now, turn_id="turn_b")
+
+    response = call(stack.api, "/api/readyz", auth=True)
+    assert response.status == 503
+    body = payload(response)
+    assert body["ok"] is False
+    assert body["status"] == "degraded"
+    assert body["checks"][UNPRICED] == {
+        "ok": False,
+        "detail": "unpriced",
+        "count": 2,
+    }
+
+    # Content-free: no model id, no price, no path, no record id.
+    text = response.body.decode("utf-8")
+    for forbidden in (MODEL, "turn_a", "usage.jsonl", str(stack.usage.path)):
+        assert forbidden not in text
+
+
+def test_readyz_unpriced_check_counts_only_the_current_month(stack: Stack) -> None:
+    now = datetime.now(timezone.utc)
+    _record_usage(stack, cost=0.25, at=now, turn_id="turn_priced")
+    _record_usage(
+        stack, cost=None, at=now - timedelta(days=40), turn_id="turn_old"
+    )
+
+    response = call(stack.api, "/api/readyz", auth=True)
+    assert response.status == 200
+    body = payload(response)
+    assert body["status"] == "ok"
+    assert body["checks"][UNPRICED] == {"ok": True, "count": 0}
+
+
+def test_readyz_unpriced_check_skips_a_deployment_without_usage(stack: Stack) -> None:
+    probe = stack.make_probe(usage_store=None)
+
+    body, ready = probe.readiness(runner=stack.api.runner)
+    assert ready is True
+    assert body["checks"][UNPRICED] == {"ok": True, "detail": "not_configured"}
 
 
 # -- provider cache --------------------------------------------------------

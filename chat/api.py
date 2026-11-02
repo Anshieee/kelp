@@ -25,6 +25,7 @@ import tempfile
 import threading
 import time
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any, Callable, Iterator, Mapping
@@ -327,6 +328,7 @@ class HealthProbe:
             "artifacts": self._guard(self._check_artifacts),
             "audit": self._guard(self._check_audit),
             "usage": self._guard(self._check_usage),
+            "unpriced_models": self._check_unpriced_models(),
             "provider": self._check_provider_cached(runner),
             "registry": self._guard(self._check_registry),
         }
@@ -412,6 +414,64 @@ class HealthProbe:
             raise _NotConfigured
         _append_probe(Path(path))
 
+    def _check_unpriced_models(self) -> dict[str, Any]:
+        """Report how many usage records in the active window have no price.
+
+        Additive to the ``usage`` check: that one proves the file is writable,
+        this one surfaces the state the spend guardrail also reports on
+        ``/api/metrics``. The payload is a bounded count only. It never carries
+        a model id, a price, a path, or exception text, so a probe body can be
+        logged or relayed without exposing usage detail.
+        """
+
+        try:
+            count = self._unpriced_count()
+        except _NotConfigured:
+            return {"ok": True, "detail": "not_configured"}
+        except TimeoutError:
+            return {"ok": False, "detail": "timeout"}
+        except Exception:  # noqa: BLE001 - the body must never carry the message
+            return {"ok": False, "detail": "unavailable"}
+        if count > 0:
+            return {"ok": False, "detail": "unpriced", "count": count}
+        return {"ok": True, "count": 0}
+
+    def _unpriced_count(self) -> int:
+        """Count ``cost_known`` false records finished in the current month.
+
+        The month is the widest active spend window, so a record that still
+        counts against the guardrail is also visible here. A torn or
+        unparseable timestamp cannot be placed in a window and is skipped, the
+        same way the spend guard treats it.
+        """
+
+        store = self.usage_store
+        if store is None:
+            raise _NotConfigured
+        source = getattr(store, "records", None)
+        if source is None:
+            raise _NotConfigured
+        rows = source() if callable(source) else source
+        window_start = _usage_month_start(datetime.now(timezone.utc))
+        count = 0
+        for row in rows or ():
+            data: Mapping[str, Any] | None = None
+            if isinstance(row, Mapping):
+                data = row
+            else:
+                to_dict = getattr(row, "to_dict", None)
+                if callable(to_dict):
+                    value = to_dict()
+                    if isinstance(value, Mapping):
+                        data = value
+            if data is None or data.get("cost_known") is not False:
+                continue
+            finished_at = _usage_timestamp(data.get("finished_at"))
+            if finished_at is None or finished_at < window_start:
+                continue
+            count += 1
+        return count
+
     def _check_registry(self) -> None:
         if self.registry is None:
             raise _NotConfigured
@@ -493,6 +553,33 @@ def _append_probe(path: Path) -> None:
     path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
     fd = os.open(path, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o600)
     os.close(fd)
+
+
+def _usage_month_start(now: datetime) -> datetime:
+    """Start of ``now``'s UTC month, the widest spend window in force."""
+
+    return datetime(now.year, now.month, 1, tzinfo=timezone.utc)
+
+
+def _usage_timestamp(value: Any) -> datetime | None:
+    """Parse a usage record's ``finished_at``; ``None`` when unusable.
+
+    Mirrors the spend guard's reading so a record that one considers in-window
+    is not silently out-of-window for the other. A naive stamp is UTC.
+    """
+
+    if not isinstance(value, str) or not value.strip():
+        return None
+    text = value.strip()
+    if text.endswith("Z"):
+        text = text[:-1] + "+00:00"
+    try:
+        parsed = datetime.fromisoformat(text)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
 
 
 async def _http_provider_probe(
