@@ -65,6 +65,7 @@ from .scheduler import (
     ScheduleStore,
     SchedulerRuntime,
 )
+from .credentials import CredentialBroker, validate_env as validate_credential_env
 from .service import ChatService
 from .store import ChatStore
 
@@ -227,6 +228,10 @@ class ServerConfig:
     @classmethod
     def from_env(cls, env: Mapping[str, str] | None = None) -> "ServerConfig":
         source = os.environ if env is None else env
+        try:
+            validate_credential_env(source)
+        except ValueError as exc:
+            raise ConfigError("invalid_credential_config", str(exc)) from None
 
         api_key = _text(source, API_KEY_ENV)
         if not api_key:
@@ -537,12 +542,16 @@ def build_app(
     maintenance: RetentionMaintenance | None = None
     scheduler: SchedulerRuntime | None = None
     proactive: ProactiveRunner | None = None
+    credential_broker: CredentialBroker | None = None
     owns_provider = provider is None
     runtime_provider = provider
     try:
         registry = SkillRegistry.load(config.skill_root)
         secrets = _service_secrets(registry, config, source)
-        secret_values = tuple(dict.fromkeys(secrets.values()))
+        secret_values = tuple(dict.fromkeys([*secrets.values(), *[
+            source[name] for name in ("KELP_VAULT_KEY", "KELP_BROWSER_WORKER_TOKEN")
+            if source.get(name)
+        ]]))
         # Redaction and level are process-wide: one scrubber source for logs,
         # metrics labels, and the audit trail.
         configure_logging(
@@ -619,8 +628,16 @@ def build_app(
                 status="error",
             )
         maintenance.start()
+        if validate_credential_env(source):
+            credential_broker = CredentialBroker(
+                config.db_path.parent / "credentials.db",
+                source["KELP_VAULT_KEY"], source["KELP_BROWSER_WORKER_TOKEN"],
+                [x.strip() for x in source["KELP_BROWSER_ALLOWED_ORIGINS"].split(",")],
+                audit=audit,
+            )
         api = ChatAPI(
             service,
+            credentials=credential_broker,
             auth_token=config.auth_token,
             csrf_token=config.csrf_token,
             health=HealthProbe.from_service(service, audit=audit),
@@ -681,6 +698,8 @@ def build_app(
             proactive=proactive,
         )
     except BaseException:
+        if credential_broker is not None:
+            credential_broker.close()
         if scheduler is not None:
             scheduler.stop()
         if proactive is not None:

@@ -344,3 +344,18 @@ review references that table rather than restating it.
 - Egress ledger: [`openshell/egress_ledger.py`](../openshell/egress_ledger.py)
 - Exec gate: [`openshell/exec_gate.py`](../openshell/exec_gate.py)
 - Tests: [`tests/test_privacy.py`](../tests/test_privacy.py), [`tests/test_retention.py`](../tests/test_retention.py)
+
+## Optional private credential channel
+
+When `KELP_CREDENTIALS_ENABLED=1`, owner input sent to the separate credential
+API is encrypted in `credentials.db` beside `chat.db`. It is never appended to
+chat, tool results, SSE replay, shares or provider requests. A separately
+authenticated trusted browser worker receives it once and enters it into the
+explicit HTTPS site. That site receives the entered values; the trusted server
+and worker briefly hold plaintext. Optional saved values remain encrypted until
+explicit reuse or deletion; verification codes cannot be saved. See
+[`CREDENTIAL_HANDOFF.md`](CREDENTIAL_HANDOFF.md) for the complete trust boundary,
+retention rules and limits. This optional worker is a separate process from the
+chat server and must pause agent observations during private entry. The earlier
+recipient table describes the chat server's provider/skill egress, not this
+new owner-to-worker-to-website credential path.
