@@ -658,6 +658,9 @@ var/plugins/                      # KELP_PLUGIN_ROOT (default)
   plugins.echo/                   # installed package (or plugins.echo.zip)
     manifest.json
     handler.py
+var/skill-store/                  # KELP_PLUGIN_STORE (default; local catalog)
+  plugins.echo/                   # package and matching plugins.lock.json pin
+  plugins.lock.json
 ```
 
 `python -m skills.cli install <package>` validates the package, copies it into a staging path
@@ -697,6 +700,30 @@ must be self-contained; plain `import sibling` statements inside a plugin are no
 **Contract tests.** `tests/test_plugins.py` exercises the CLI, pinning, boot refusal, package
 safety, planted-cache regression, and the no-`sys.path` guarantee (35 cases when this section
 was written). Keep that count in sync with §16 when cases are added.
+
+### 15.2 Local plugin store and approved installation (KEL-30)
+
+`KELP_PLUGIN_STORE` selects a local catalog directory (default `var/skill-store`). Catalog
+packages use the same directory/zip format as installed plugins and MUST have a matching
+`plugins.lock.json` pin. The catalog is local-only: no remote registry lookup or network fetch is
+performed. Seed or update the catalog with `python -m skills.cli install <package> --root
+<catalog>`; this validates, copies, and pins the package just like an installation.
+
+When the model requests a tool absent from the loaded registry, the executor looks for an
+exactly named package with a valid manifest and matching digest and version pin in the catalog.
+If none exists, normal `unknown_skill` behavior is unchanged. If one exists, the executor submits
+a `skill.install` request to the existing approval hook, including the skill name, version, and
+digest and limiting the declared write scope to the configured plugin root. It MUST NOT install
+or import the package before approval. A denial or failed approval is terminal for that request;
+no package is copied. On approval, the executor installs through `skills.cli.install_registered`,
+which revalidates and digest-pins the package, then reloads a fresh validated registry snapshot
+through `skills.loader`; the original model call can then execute through the ordinary
+schema, policy, and approval pipeline. This is a one-tap install flow, not a bypass of the
+package's own invocation approval requirements.
+
+The local store is a trust boundary: catalog packages must be vetted before being pinned. The
+approval screen confirms the exact package digest but does not replace operator review or
+sandboxing. Installation remains unavailable when no approval hook is configured.
 
 ---
 
