@@ -2,6 +2,9 @@
 from __future__ import annotations
 
 import asyncio
+import base64
+import hashlib
+import hmac
 import json
 from concurrent.futures import ThreadPoolExecutor
 
@@ -18,6 +21,7 @@ from tests.chatkit import make_service, text_script
 
 OWNER = 'owner-test-authorization-value'
 WORKER = 'worker-test-authorization-value-123456789'
+SIGNING_KEY = 'server-only-signing-key-12345678901234567890'
 SITE = 'https://login.example.test'
 VALUE = 'synthetic-credential-never-public-72641'
 FIELDS = [{'id': 'password', 'label': 'Password', 'kind': 'password', 'selector': '#password'}]
@@ -31,7 +35,7 @@ def descriptor(**changes):
 @pytest.fixture
 def broker(tmp_path):
     audit = AuditLog(tmp_path/'audit.jsonl')
-    b = CredentialBroker(tmp_path/'private'/'vault.db', Fernet.generate_key().decode(), WORKER, [SITE], audit=audit)
+    b = CredentialBroker(tmp_path/'private'/'vault.db', Fernet.generate_key().decode(), WORKER, [SITE], signing_key=SIGNING_KEY, audit=audit)
     yield b
     b.close()
 
@@ -124,13 +128,13 @@ def test_vault_reuse_requires_fresh_consent_and_exact_origin_and_roles(broker):
 def test_wrong_key_fails_on_reopen_and_claimed_work_never_replays(tmp_path):
     key = Fernet.generate_key().decode()
     path = tmp_path/'vault.db'
-    b = CredentialBroker(path, key, WORKER, [SITE])
+    b = CredentialBroker(path, key, WORKER, [SITE], signing_key=SIGNING_KEY)
     r = submit(b)
     b.claim(r['id'], r['binding'], r['session_id'], r['origin'])
     b.close()
     with pytest.raises(ValueError, match='Vault key'):
-        CredentialBroker(path, Fernet.generate_key().decode(), WORKER, [SITE])
-    b = CredentialBroker(path, key, WORKER, [SITE])
+        CredentialBroker(path, Fernet.generate_key().decode(), WORKER, [SITE], signing_key=SIGNING_KEY)
+    b = CredentialBroker(path, key, WORKER, [SITE], signing_key=SIGNING_KEY)
     assert b.get(r['id'])['status'] == 'failed'
     b.close()
     assert path.stat().st_mode & 0o777 == 0o600
@@ -163,6 +167,20 @@ def test_worker_tokens_are_request_scoped_and_expire(broker):
     assert not broker.worker_token_scope(token, first['id'], 'get')
 
 
+def test_bootstrap_holder_cannot_forge_request_scoped_token(broker):
+    request = broker.create(descriptor())
+    claims = {'v': 1, 'id': request['id'], 'device': broker._device_id,
+              'target': request['origin'], 'binding': request['binding'],
+              'session': request['session_id'], 'exp': int(request['expires_at']),
+              'scope': ['get', 'claim', 'finish']}
+    encoded = base64.urlsafe_b64encode(json.dumps(
+        claims, sort_keys=True, separators=(',', ':')).encode()).rstrip(b'=').decode()
+    bootstrap_digest = hashlib.sha256(WORKER.encode()).digest()
+    forged_signature = hmac.new(bootstrap_digest, encoded.encode(), hashlib.sha256).digest()
+    forged = encoded + '.' + base64.urlsafe_b64encode(forged_signature).rstrip(b'=').decode()
+    assert not broker.worker_token_scope(forged, request['id'], 'claim')
+
+
 @pytest.mark.parametrize('site', ['http://login.example.test', 'https://user:pass@login.example.test',
                                  'https://login.example.test/path', 'https://login.example.test?token=foo',
                                  'https://login.example.test:444', 'file:///secret', 'https://localhost'])
@@ -176,7 +194,8 @@ def test_configuration_requires_key_distinct_worker_and_explicit_origins():
     with pytest.raises(ValueError):
         validate_env({'KELP_CREDENTIALS_ENABLED': '1'})
     env = {'KELP_CREDENTIALS_ENABLED': '1', 'KELP_VAULT_KEY': Fernet.generate_key().decode(),
-           'KELP_BROWSER_WORKER_TOKEN': WORKER, 'KELP_BROWSER_ALLOWED_ORIGINS': SITE}
+           'KELP_BROWSER_WORKER_TOKEN': WORKER, 'KELP_CREDENTIAL_SIGNING_KEY': SIGNING_KEY,
+           'KELP_BROWSER_ALLOWED_ORIGINS': SITE}
     assert validate_env(env)
     with pytest.raises(ValueError):
         validate_env({**env, 'KELP_AUTH_TOKEN': WORKER})
@@ -352,11 +371,11 @@ def test_worker_cannot_release_the_owner_observation_lock(api):
 def test_pending_payload_survives_restart_encrypted(tmp_path):
     key = Fernet.generate_key().decode()
     path = tmp_path/'vault.db'
-    b = CredentialBroker(path, key, WORKER, [SITE])
+    b = CredentialBroker(path, key, WORKER, [SITE], signing_key=SIGNING_KEY)
     r = submit(b, save=True)
     b.close()
     assert VALUE.encode() not in path.read_bytes()
-    b = CredentialBroker(path, key, WORKER, [SITE])
+    b = CredentialBroker(path, key, WORKER, [SITE], signing_key=SIGNING_KEY)
     assert b.claim(r['id'], r['binding'], r['session_id'], r['origin'])['values']['password'] == VALUE
     assert len(b.list_vault()) == 1
     b.close()
