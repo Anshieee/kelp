@@ -12,6 +12,43 @@ test('the frozen v1 user facade is routed to Netlify Functions', async () => {
   assert.match(toml, /api-v1\/:splat/);
 });
 
+test('every route in the shared mobile contract is handled by the server', async () => {
+  const contract = await readFile(new URL('../../docs/HACKATHON_DEMO_CONTRACT.md', import.meta.url), 'utf8');
+  const api = await readFile(new URL('../../netlify/functions/api-v1.mjs', import.meta.url), 'utf8');
+  const routes = [...contract.matchAll(/^\| `?(GET|PUT|POST) ([^`|]+)`? \|/gm)]
+    .map(([, method, path]) => ({ method, path: path.split('?')[0] }));
+  assert.ok(routes.length > 0, 'shared contract must declare user routes');
+
+  const fixedRoutes = new Set([
+    'GET /me',
+    'PUT /me/provider',
+    'POST /me/onboarding/complete',
+    'GET /workspace',
+    'POST /tasks',
+  ]);
+  const taskActions = new Map([
+    ['GET /tasks/{id}', "if (!action && method === 'GET')"],
+    ['GET /tasks/{id}/events', "if (action === 'events' && method === 'GET')"],
+    ['GET /tasks/{id}/candidate', "if (action === 'candidate' && method === 'GET')"],
+    ['POST /tasks/{id}/decision', "if (action === 'decision' && method === 'POST')"],
+    ['POST /tasks/{id}/cancel', "if (action === 'cancel' && method === 'POST')"],
+  ]);
+  assert.match(api, /const taskRoute = path\.match\(\/\^\\\/tasks\\\/\(\[0-9a-f-\]\{36\}\)/i,
+    'server must match task IDs before handling task routes');
+
+  for (const { method, path } of routes) {
+    const route = `${method} ${path}`;
+    if (fixedRoutes.has(route)) {
+      const [, verb, pathname] = route.match(/^(\w+) (.+)$/);
+      assert.ok(api.includes(`path === '${pathname}' && method === '${verb}'`), `${route} must be handled server-side`);
+      continue;
+    }
+    const taskHandler = taskActions.get(route);
+    assert.ok(taskHandler, `${route} must be declared as a supported server route`);
+    assert.ok(api.includes(taskHandler), `${route} must be handled server-side`);
+  }
+});
+
 test('user endpoints reject missing and invalid identity before accessing persistence', async () => {
   const missing = await apiHandler({ httpMethod: 'GET', path: '/api/v1/me', headers: {} });
   assert.equal(missing.statusCode, 401);
