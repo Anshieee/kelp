@@ -34,12 +34,15 @@ The feature is off by default. Generate a Fernet key with
 `python -c 'from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())'`
 and a separate random worker token with
 `python -c 'import secrets; print(secrets.token_urlsafe(48))'`.
+Generate a third, independent random key for signing request-scoped worker
+tokens with the same `secrets.token_urlsafe(48)` command.
 Store them using the deployment's protected environment-file/secret manager:
 
 ```text
 KELP_CREDENTIALS_ENABLED=1
 KELP_VAULT_KEY=<generated Fernet key>
 KELP_BROWSER_WORKER_TOKEN=<separate random token, at least 32 characters>
+KELP_CREDENTIAL_SIGNING_KEY=<separate random signing key, at least 32 characters>
 KELP_BROWSER_ALLOWED_ORIGINS=https://github.com,https://example.com
 ```
 
@@ -48,8 +51,8 @@ nonstandard ports. A worker token must differ from the owner's root token.
 `make check-serve` validates these settings without opening the vault. The
 server refuses to unlock an existing vault with a different key.
 
-The worker receives only `KELP_BROWSER_WORKER_TOKEN`, not the vault key, owner
-token, or model-provider key. This bootstrap credential authenticates the one
+The worker receives only `KELP_BROWSER_WORKER_TOKEN`, not the vault key, signing
+key, owner token, or model-provider key. This bootstrap credential authenticates the one
 configured trusted worker identity and may only register a request. Registration
 returns a signed worker token scoped to that request's `get`, `claim`, and
 `finish` operations and bound to its request ID, target, session, form fingerprint,

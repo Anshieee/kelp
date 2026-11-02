@@ -158,8 +158,8 @@ These are the open Ansh items, not yet merged.
 
 An eval is a repeatable test of answer quality. The offline eval runs against
 recorded, fake answers and decides whether quality is good enough; it is part
-of the merge gate. A live eval calls the real model and needs a real key,
-`NEBIUS_API_KEY`. The project already supports running a live eval with a
+of the merge gate. A live eval calls the real model through OpenRouter and
+needs `OPENROUTER_API_KEY`. The project already supports running a live eval with a
 longer command. What is left is a short convenience command, `make eval-live`,
 that is a wrapper for that longer live command. It is a measurement tool only;
 it must not block merging, and it must fail with a clear message when the key
@@ -191,15 +191,6 @@ never the real id and never any secret. The split of work is:
 
 The order matters: Aakarsh's store half comes first, then Ansh's wiring, so
 there is always a working build.
-
-### 3.4 The Nebius strip, running separately
-
-Ansh already prepared the deployment manual and templates so a non-author can
-run them, the host-pass preparation above. What is still owed is actually
-running the full end-to-end deploy on a real Nebius host, a real cloud machine,
-by someone who did not write the manual, to prove the instructions are correct.
-That live run is a separate step from the preparation, and it is not something
-that merges into the codebase by itself.
 
 ---
 

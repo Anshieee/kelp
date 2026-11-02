@@ -583,7 +583,7 @@ def build_app(
         registry = SkillRegistry.load(config.skill_root)
         secrets = _service_secrets(registry, config, source)
         secret_values = tuple(dict.fromkeys([*secrets.values(), *[
-            source[name] for name in ("KELP_VAULT_KEY", "KELP_BROWSER_WORKER_TOKEN")
+            source[name] for name in ("KELP_VAULT_KEY", "KELP_BROWSER_WORKER_TOKEN", "KELP_CREDENTIAL_SIGNING_KEY")
             if source.get(name)
         ]]))
         # Redaction and level are process-wide: one scrubber source for logs,
@@ -667,6 +667,7 @@ def build_app(
                 config.db_path.parent / "credentials.db",
                 source["KELP_VAULT_KEY"], source["KELP_BROWSER_WORKER_TOKEN"],
                 [x.strip() for x in source["KELP_BROWSER_ALLOWED_ORIGINS"].split(",")],
+                signing_key=source["KELP_CREDENTIAL_SIGNING_KEY"],
                 audit=audit,
             )
         # Wallet and hosted Checkout share one durable ledger. Razorpay's

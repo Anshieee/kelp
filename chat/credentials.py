@@ -75,9 +75,13 @@ def validate_env(env: Mapping[str, str]) -> bool:
     if not enabled:
         return False
     try:
-        Fernet(env.get('KELP_VAULT_KEY', '').encode())
+        vault_key = env.get('KELP_VAULT_KEY', '')
+        Fernet(vault_key.encode())
         token = env.get('KELP_BROWSER_WORKER_TOKEN', '')
-        if len(token) < 32 or token == env.get('KELP_AUTH_TOKEN'):
+        signing_key = env.get('KELP_CREDENTIAL_SIGNING_KEY', '')
+        if (len(token) < 32 or token == env.get('KELP_AUTH_TOKEN')
+                or len(signing_key) < 32
+                or signing_key in {vault_key, token, env.get('KELP_AUTH_TOKEN')}):
             raise ValueError()
         allowed = env.get('KELP_BROWSER_ALLOWED_ORIGINS', '').split(',')
         if not allowed or not all(x.strip() for x in allowed):
@@ -93,9 +97,10 @@ class CredentialBroker:
     """Single-owner store, separate from chat content and excluded from tools."""
 
     def __init__(self, path: Path, key: str, worker_token: str, allowed_origins: list[str],
-                 *, audit: Any = None, clock: Callable[[], float] = time.time):
+                 *, signing_key: str, audit: Any = None, clock: Callable[[], float] = time.time):
         self._cipher = Fernet(key.encode())
         self._worker_digest = hashlib.sha256(worker_token.encode()).digest()
+        self._signing_key = signing_key.encode()
         self.allowed = frozenset(origin(x) for x in allowed_origins)
         self._audit = audit
         self._clock = clock
@@ -158,7 +163,7 @@ class CredentialBroker:
                                   'exp': int(row['expires']), 'scope': ['get', 'claim', 'finish']},
                                  sort_keys=True, separators=(',', ':')).encode()
         encoded = base64.urlsafe_b64encode(payload).rstrip(b'=').decode()
-        signature = hmac.new(self._worker_digest, encoded.encode(), hashlib.sha256).digest()
+        signature = hmac.new(self._signing_key, encoded.encode(), hashlib.sha256).digest()
         return encoded + '.' + base64.urlsafe_b64encode(signature).rstrip(b'=').decode()
 
     def worker_token_scope(self, token: str, ident: str, operation: str) -> bool:
@@ -166,7 +171,7 @@ class CredentialBroker:
         try:
             encoded, signature_text = token.split('.', 1)
             supplied = base64.urlsafe_b64decode(signature_text + '=' * (-len(signature_text) % 4))
-            expected = hmac.new(self._worker_digest, encoded.encode(), hashlib.sha256).digest()
+            expected = hmac.new(self._signing_key, encoded.encode(), hashlib.sha256).digest()
             if not hmac.compare_digest(supplied, expected):
                 return False
             raw = base64.urlsafe_b64decode(encoded + '=' * (-len(encoded) % 4))
