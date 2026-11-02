@@ -1,6 +1,6 @@
 # SDLC mind map — Always-On Private Assistant
 
-Snapshot: 30 October 2026
+Snapshot: 2 November 2026
 Program target: **30 October 2026** for M0 through M4
 Tracker site: [`netlify/index.html`](../netlify/index.html)
 
@@ -11,9 +11,10 @@ that goes with it is [`sdlc-mindmap.svg`](sdlc-mindmap.svg), with a PNG fallback
 site embeds a copy of the SVG directly in the page, so every box there can be clicked; that copy
 and these two files must be updated together.
 
-What this snapshot rests on: `main` is at `bbff376`, all **1045 tests pass**, and the repository is
-public. KEL-5 through KEL-10 are merged, reviewed, and done; KEL-11, KEL-12, KEL-13, KEL-14, KEL-15,
-and KEL-16 are merged and reviewed too, and close M2. KEL-17, KEL-18, KEL-20, KEL-21, KEL-19, and
+What this snapshot rests on: `main` is at `f7ed9d1`, and the dependency-audit branch takes the
+suite to **1055 tests, all passing**, with the repository public. KEL-5 through KEL-10 are merged,
+reviewed, and done; KEL-11, KEL-12, KEL-13, KEL-14, KEL-15, and KEL-16 are merged and reviewed too,
+and close M2. KEL-17, KEL-18, KEL-20, KEL-21, KEL-19, and
 KEL-22 then carried M3 to completion and are merged and reviewed: abuse resistance, spend ceilings,
 invoke-time policy, retention, owner sign-in, and the written privacy review. KEL-24 then opened M4
 by making those owner sessions durable devices, and KEL-23, KEL-25, and KEL-26 followed it with
@@ -165,11 +166,18 @@ promise that full-vision scope lands this week. Scope is cumulative: M2 includes
 
 | Stage | Target | State | What finishing it means |
 |---|---|---|---|
-| **M0 Foundation** | 30 Oct 2026 | IN PROGRESS | The repo (public), the docs, the tests, the standard development setup, model and provider chosen, and a written list of what could go wrong. The repo, docs, tests, and skill contract are in. Still open: the automated checks, the development setup, and the threat model. |
+| **M0 Foundation** | 30 Oct 2026 | IN PROGRESS | The repo (public), the docs, the tests, the standard development setup, model and provider chosen, and a written list of what could go wrong. The repo, docs, tests, and skill contract are in, and so are the automated checks: gitleaks secret scan, ruff, mypy, pytest, and a pip-audit dependency audit on every push and pull request. Still open: the standard development setup and the written threat model. |
 | **M1 Prototype** | 30 Oct 2026 | COMPLETE | The end-to-end story: ask, get an answer with sources, read a file, approve an action, pay with a saved card, watch the six-scene demo. All six work items live here, and all six are done: KEL-5 to KEL-9 were merged earlier, and KEL-10 closed on owner confirmation on 30 October 2026. |
 | **M2 Polished MVP** | 30 Oct 2026 | COMPLETE | Survives ordinary use: picks up after a restart, self-checks, better search over your documents, an honest account of what it did, repeatable quality measurements, and a deploy a stranger can repeat. All six work items are done: KEL-11, the serve entrypoint; KEL-12, health and readiness; KEL-13, real document search with citations; KEL-14, structured logs and metrics; KEL-15, the eval harness that measures answer quality; KEL-16, the image and runbook. The runbook's end-to-end pass on a real Nebius host is still to be done. |
 | **M3 Hardening** | 30 Oct 2026 | COMPLETE | The privacy and cost promises hold under pressure: who sees what, where keys live, caps on traffic, a retention rule, a spend ceiling, and a written privacy review. All six pieces are done: KEL-17, the traffic, body, and concurrency caps; KEL-18, the spend ceilings; KEL-19, owner sign-in with a session cookie, CSRF, and lockout; KEL-20, the policy enforced at every skill call; KEL-21, the retention rule; and KEL-22, the written privacy review with the egress ledger and the exec-boundary decision. |
 | **M4 Full vision** | 30 Oct 2026 | COMPLETE | More devices, work the assistant starts on its own, abilities added by others, and sharing. All six pieces are merged and reviewed: KEL-24, owner sessions as listable, revocable devices; KEL-23, durable scheduled tasks with a real cron runtime; KEL-25, digest-pinned plugin packages loaded by path; KEL-26, the written decision that keeps one owner and gives everyone else only a per-thread read-only link; KEL-27, the proactive turn runner that makes a due schedule a real turn behind spend, concurrency, and hourly caps; and KEL-28, the read-only share link, stored as a hash and revocable in one request. |
+
+M0 moved on **2 November 2026**. The automated checks the stage was missing are in:
+`.github/workflows/ci.yml` runs a gitleaks secret scan, `ruff check .`, `mypy`, and the test suite on
+every push and pull request, and another job, `deps`, audits the runtime dependencies declared in
+`pyproject.toml` with `pip-audit`, failing on a published advisory. Locally, `make audit` runs the
+same audit through `tools/audit_deps.py`, so the manifest is the only list to keep current. A red
+job blocks merge. Still open at M0: the standard development setup and the written threat model.
 
 ## The twenty-four work items
 
@@ -1347,7 +1355,7 @@ explicit revoke routes are the only kill switch. And a revoke cannot recall a co
 ### GitHub
 
 - Repository (public): https://github.com/Anshieee/kelp
-- Shared copy of the code: https://github.com/Anshieee/kelp/tree/main — head `bbff376`
+- Shared copy of the code: https://github.com/Anshieee/kelp/tree/main — head `f7ed9d1`
 - All branches: https://github.com/Anshieee/kelp/branches
   - `kel-5` — merged (`b8de92f`)
   - `kel-6` — merged at `d3c763e`; branch head `4c72afc`
@@ -1378,8 +1386,8 @@ explicit revoke routes are the only kill switch. And a revoke cannot recall a co
   - `kel-28` — merged at `dc50925`; branch head `98ded52`
 - Change history: https://github.com/Anshieee/kelp/commits/main
 - Pull requests: https://github.com/Anshieee/kelp/pulls
-- Tests: 1045 pass on `main` (`python -m pytest`); `make demo` plays all six beats, and
-  `make eval` passes offline with the network blocked
+- Tests: 1055 pass (`python -m pytest`); `make demo` plays all six beats, `make eval` passes offline
+  with the network blocked, and `make audit` finds no known vulnerability in a declared dependency
 
 ### Linear
 

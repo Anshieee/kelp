@@ -21,7 +21,7 @@ select = ["E4", "E7", "E9", "F"]
 
 [tool.mypy]
 python_version = "3.11"
-files = ["chat", "kernel", "openshell", "skills", "payments", "evals", "demo"]
+files = ["chat", "kernel", "openshell", "skills", "payments", "evals", "demo", "tools"]
 
 # Pre-existing type debt, tracked as a per-module baseline. mypy is green on
 # every module not listed below, so new modules and new files are checked from

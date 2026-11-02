@@ -1017,7 +1017,7 @@
         <div class="meta">
           <div>
             <p class="label">Snapshot</p>
-            <p>30 Oct 2026</p>
+            <p>2 Nov 2026</p>
           </div>
           <div>
             <p class="label">Program target</p>
@@ -1037,8 +1037,8 @@
         <div class="map-frame" id="map-frame" role="group" aria-label="Delivery mind map">
                     <svg class="mm" role="group" viewBox="0.00 0.00 1190.00 4226.00" preserveAspectRatio="xMidYMid meet" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink">
           <title>Delivery mind map</title>
-          <desc>Pale coloured boxes on a white panel. The centre is the Kelp assistant, live on 30 October. Branches lead to M0 to M4, the twenty-four work items KEL-5 to KEL-28, surfaces, payments, and design. All twenty-four work items are done: M1, M2, M3, and M4 are complete, and M4 closed with KEL-27, proactive turns, and KEL-28, per-thread read-only share links. Status words say done, complete, or later. Every box is a link to its entry or decision on the same page.</desc>
-<g id="graph0" class="graph" transform="scale(1 1) rotate(0) translate(4 4221.98)">
+          <desc>Pale coloured boxes on a white panel. The centre is the Kelp assistant, live on 30 October. Branches lead to M0 to M4, the twenty-four work items KEL-5 to KEL-28, surfaces, payments, and design. All twenty-four work items are done: M1, M2, M3, and M4 are complete, and M4 closed with KEL-27, proactive turns, and KEL-28, per-thread read-only share links. Status words say done, complete, or later. M0's automated checks are done; its development setup and threat model are still open. Every box is a link to its entry or decision on the same page.</desc>
+          <g id="graph0" class="graph" transform="scale(1 1) rotate(0) translate(4 4221.98)">
           <title>sdlc</title>
           <polygon fill="white" stroke="none" points="-4,4 -4,-4221.98 1185.98,-4221.98 1185.98,4 -4,4"/>
           <!-- center -->
@@ -1055,7 +1055,7 @@
           <!-- m0 -->
           <g id="node2" class="node">
           <title>m0</title>
-          <g id="a_node2"><a xlink:href="#m0" xlink:title="Stage 0: shared code, docs, checks, risk list. In progress.">
+          <g id="a_node2"><a xlink:href="#m0" xlink:title="Stage 0: shared code, docs, checks, risk list. Checks are live; the development setup and threat model are still open.">
           <path fill="#d6e6f7" stroke="black" stroke-width="2" d="M425.2,-4085.99C425.2,-4085.99 321.45,-4085.99 321.45,-4085.99 315.45,-4085.99 309.45,-4079.99 309.45,-4073.99 309.45,-4073.99 309.45,-4053.99 309.45,-4053.99 309.45,-4047.99 315.45,-4041.99 321.45,-4041.99 321.45,-4041.99 425.2,-4041.99 425.2,-4041.99 431.2,-4041.99 437.2,-4047.99 437.2,-4053.99 437.2,-4053.99 437.2,-4073.99 437.2,-4073.99 437.2,-4079.99 431.2,-4085.99 425.2,-4085.99"/>
           <text xml:space="preserve" text-anchor="middle" x="373.32" y="-4067.74" font-family="Helvetica,sans-Serif" font-size="15.00">M0 Foundation</text>
           <text xml:space="preserve" text-anchor="middle" x="373.32" y="-4049.74" font-family="Helvetica,sans-Serif" font-size="15.00">IN PROGRESS</text>
@@ -1187,17 +1187,17 @@
           <!-- m0_checks -->
           <g id="node11" class="node">
           <title>m0_checks</title>
-          <g id="a_node11"><a xlink:href="#m0" xlink:title="Tests that run on every change. Not started.">
-          <ellipse fill="#ebf3fc" stroke="black" cx="670.44" cy="-4105.99" rx="95.11" ry="28.99"/>
-          <text xml:space="preserve" text-anchor="middle" x="670.44" y="-4110.14" font-family="Helvetica,sans-Serif" font-size="13.00">Auto checks open</text>
-          <text xml:space="preserve" text-anchor="middle" x="670.44" y="-4093.64" font-family="Helvetica,sans-Serif" font-size="13.00">TO COME</text>
+          <g id="a_node11"><a xlink:href="#m0" xlink:title="Secret scan, lint, type check, tests, and a dependency audit run on every push. Finished.">
+          <ellipse fill="#ebf3fc" stroke="black" cx="670.44" cy="-4105.99" rx="88.21" ry="28.99"/>
+          <text xml:space="preserve" text-anchor="middle" x="670.44" y="-4110.14" font-family="Helvetica,sans-Serif" font-size="13.00">Auto checks live</text>
+          <text xml:space="preserve" text-anchor="middle" x="670.44" y="-4093.64" font-family="Helvetica,sans-Serif" font-size="13.00">DONE</text>
           </a>
           </g>
           </g>
           <!-- m0&#45;&gt;m0_checks -->
           <g id="edge10" class="edge">
           <title>m0&#45;&gt;m0_checks</title>
-          <path fill="none" stroke="#555555" d="M438,-4073.05C480.53,-4079.11 536.98,-4087.14 583.49,-4093.76"/>
+          <path fill="none" stroke="#555555" d="M438,-4073.05C482.22,-4079.35 541.5,-4087.78 589,-4094.54"/>
           </g>
           <!-- m0_risks -->
           <g id="node12" class="node">
@@ -2327,8 +2327,9 @@
               <p class="fact-label">Status</p>
               <p>
                 In progress. The repository (public since this snapshot), the documentation, the
-                tests, and the skill contract are in. Still open: the automated checks, the standard
-                development setup, and the written threat model.
+                tests, and the skill contract are in, and so are the automated checks: a secret
+                scan, a style check, a type check, the test suite, and a dependency audit on every
+                push. Still open: the standard development setup and the written threat model.
               </p>
             </div>
             <div class="fact fact-wide">
@@ -4616,7 +4617,8 @@
 
       <p class="note">
         Linear can lag behind by a day until someone updates it. The status here is the version this
-        page was built from, on 30 October 2026: main at bbff376, with all 1045 tests passing, M1,
+        page was built from, on 2 November 2026: main at f7ed9d1, with all 1055 tests passing after
+        the dependency audit joined the gate, M1,
         M2, M3, and M4 complete, and KEL-11 through KEL-28 merged. KEL-17, KEL-18, KEL-20, KEL-21,
         KEL-19, and KEL-22 carry M3: the traffic caps, the spend ceilings, the policy enforced at
         every skill call, the retention rule, owner sign-in, and the written privacy review. KEL-24,
@@ -4927,7 +4929,7 @@
 
 <footer>
   <div class="wrap">
-    <p>Snapshot 30 October 2026: main at bbff376, 1045 tests passing, M1, M2, M3, and M4 complete. Program target 30 October 2026, for M0 to M4.</p>
+    <p>Snapshot 2 November 2026: main at f7ed9d1, 1055 tests passing with the dependency audit in, M1, M2, M3, and M4 complete. Program target 30 October 2026, for M0 to M4.</p>
     <p>
       Source of truth: <a target="_blank" rel="noopener" href="https://github.com/Anshieee/kelp/blob/main/docs/SDLC_MINDMAP.md">docs/SDLC_MINDMAP.md</a>.
       Work items: <a target="_blank" rel="noopener" href="https://linear.app/kelp-ai/project/always-on-private-assistant-23297ecfd7f0">Linear project</a>.
