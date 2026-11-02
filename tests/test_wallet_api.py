@@ -9,7 +9,6 @@ import pytest
 
 from chat.api import Request, Response
 from chat.wallet import WalletAPI
-from payments.stripe_wallet import STRIPE_SECRET_KEY_ENV
 from payments.wallet import (
     SpendCaps,
     StripeGatewayError,

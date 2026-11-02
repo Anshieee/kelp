@@ -8,3 +8,48 @@ dependencies = ["jsonschema>=4.20,<5", "httpx>=0.27,<1"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-q"
+
+[tool.ruff]
+# Match the version declared in requires-python. The rule set is selected
+# explicitly so a new ruff release cannot widen the gate on its own. These are
+# the classic default groups: imports and syntax (E4), statements (E7),
+# runtime errors (E9), and pyflakes (F). Line length is not gated.
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E4", "E7", "E9", "F"]
+
+[tool.mypy]
+python_version = "3.11"
+files = ["chat", "kernel", "openshell", "skills", "payments", "evals", "demo"]
+
+# Pre-existing type debt, tracked as a per-module baseline. mypy is green on
+# every module not listed below, so new modules and new files are checked from
+# day one. Remove a module from this list when its errors are fixed; do not add
+# modules to silence new errors.
+[[tool.mypy.overrides]]
+module = [
+  "chat.api",
+  "chat.cards",
+  "chat.checkout",
+  "chat.metrics",
+  "chat.recovery",
+  "chat.retention",
+  "chat.scheduler",
+  "chat.server",
+  "chat.service",
+  "chat.wallet",
+  "demo.runner",
+  "evals.cli",
+  "evals.metrics",
+  "evals.runner",
+  "evals.scenarios",
+  "kernel.usage",
+  "payments.razorpay_gateway",
+  "skills.builtin.docs_answer.answer",
+  "skills.builtin.docs_answer.extract",
+  "skills.builtin.docs_answer.retrieval",
+  "skills.loader",
+  "skills.policy",
+]
+ignore_errors = true

@@ -11,7 +11,6 @@ from chat.api import Request, Response
 from chat.checkout import CheckoutAPI
 from payments.razorpay_checkout import (
     RazorpayCheckout,
-    expected_payment_signature,
     expected_webhook_signature,
 )
 from payments.razorpay_gateway import RazorpayWallet
@@ -21,7 +20,6 @@ from tests.test_razorpay_checkout import (
     WEBHOOK_SECRET,
     CheckoutTransport,
     make_checkout,
-    make_wallet,
     signature_for,
     webhook_event,
 )

@@ -1,0 +1,36 @@
+# gitleaks config for the CI gate.
+#
+# The default rules stay on. The allowlist below covers only test fixtures and
+# generated manifests that are already in history and are not credentials:
+# fake keys planted so scrubbing and redaction tests have something to redact,
+# and a generated token list for the video review manifest.
+#
+# Keep entries narrow. Do not add a source directory or a broad glob here: a
+# real credential added to an allowlisted file would not be caught.
+
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Known non-secret fixtures: scrubbing tests, fake provider keys, generated manifest."
+paths = [
+  # Fake Stripe-shaped key planted in an audited field; the demo asserts the
+  # audit log persists [redacted] instead. This file is a demo script, not a
+  # place where a real credential belongs.
+  '''demo/runner\.py''',
+  # Eval dataset sentinels exercised by the secret-scrubbing scenarios.
+  '''evals/datasets/v1/tasks\.json''',
+  # Test fixtures that assert redaction or rejection of credential-shaped
+  # strings. The values are synthetic.
+  '''tests/test_auth_sessions\.py''',
+  '''tests/test_chat_api\.py''',
+  '''tests/test_chat_cards\.py''',
+  '''tests/test_logging\.py''',
+  '''tests/test_metrics\.py''',
+  '''tests/test_openshell_audit\.py''',
+  '''tests/test_openshell_exec_gate\.py''',
+  '''tests/test_razorpay_checkout\.py''',
+  '''tests/test_razorpay_gateway\.py''',
+  # Generated token list for the video review scene; not a provider secret.
+  '''video/remotion/review/source-manifest\.json''',
+]
