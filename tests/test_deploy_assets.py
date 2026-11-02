@@ -31,7 +31,12 @@ COMPOSE_ENV = ROOT / "deploy" / "compose.env.example"
 RUNBOOK = ROOT / "docs" / "DEPLOY.md"
 
 #: Substrings that must never appear in a build-time directive or a template.
-SECRET_MARKERS = ("NEBIUS_API_KEY", "KELP_AUTH_TOKEN", "KELP_CSRF_TOKEN")
+SECRET_MARKERS = (
+    "NEBIUS_API_KEY",
+    "OPENROUTER_API_KEY",
+    "KELP_AUTH_TOKEN",
+    "KELP_CSRF_TOKEN",
+)
 
 
 def _lines(path: Path) -> list[str]:

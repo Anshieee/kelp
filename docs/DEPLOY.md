@@ -102,7 +102,7 @@ no default: the process refuses to start without them (`missing_api_key` or
 
 | Variable | Required | Default in image | Secret | What it does |
 |---|---|---|---|---|
-| `NEBIUS_API_KEY` | **yes** | — | **yes** | Token Factory key, server-side only |
+| `NEBIUS_API_KEY` | **yes**, for `nebius` | — | **yes** | Token Factory key, server-side only. The process refuses to start without the *selected provider's* key |
 | `KELP_AUTH_TOKEN` | **yes** | — | **yes** | Root owner bearer token for every `/api/*` call except `/api/healthz`; also the credential that mints a browser session |
 | `KELP_CSRF_TOKEN` | no | unset | **yes** | Static header token for **bearer** mutations. Session cookies use a per-session double-submit pair instead (§11.1) |
 | `KELP_SESSION_SECRET` | no | falls back to `KELP_AUTH_TOKEN` | **yes** | HMAC key for the derived per-device CSRF half; never stored. Set a dedicated value to rotate sessions independently of the root token (§11.1) |
@@ -113,9 +113,12 @@ no default: the process refuses to start without them (`missing_api_key` or
 | `KELP_AUTH_LOCKOUT_SECONDS` | no | `300` | no | Lockout duration; emitted as `Retry-After` |
 | `KELP_AUTH_FAILURE_IDLE_SECONDS` | no | `300` | no | Idle-out for an auth-failure record |
 | `KELP_AUTH_FAILURE_MAX_KEYS` | no | `4096` | no | Bound on the hashed auth-failure map |
-| `NEBIUS_TOKEN_FACTORY_BASE_URL` | no | `https://api.tokenfactory.nebius.com/v1` | no | Provider endpoint |
-| `KELP_PRIMARY_MODEL` | no | `nvidia/Nemotron-3_5-Super-VL` | no | Conversational model |
-| `KELP_BACKGROUND_MODEL` | no | `nvidia/Nemotron-3_5-Lightning` | no | Titles, summaries, compaction |
+| `KELP_PROVIDER` | no | `nebius` | no | Which model provider: `nebius` or `openrouter`. Any other value refuses to start (`invalid_config`) |
+| `OPENROUTER_API_KEY` | **yes**, for `openrouter` | — | **yes** | OpenRouter key, server-side only. Replaces `NEBIUS_API_KEY` when that provider is selected |
+| `KELP_PROVIDER_BASE_URL` | no | the provider's default | no | Provider-neutral endpoint override; wins for any provider. A custom value is recorded as `unlisted` egress |
+| `NEBIUS_TOKEN_FACTORY_BASE_URL` | no | `https://api.tokenfactory.nebius.com/v1` | no | Nebius endpoint. Honoured only while `KELP_PROVIDER=nebius` |
+| `KELP_PRIMARY_MODEL` | no | provider default | no | Conversational model. Override it when pointing at OpenRouter |
+| `KELP_BACKGROUND_MODEL` | no | provider default | no | Titles, summaries, compaction |
 | `KELP_HOST` | no | `0.0.0.0` | no | Bind address inside the container |
 | `KELP_PORT` | no | `8765` | no | Bind port |
 | `KELP_DB_PATH` | no | `/data/chat.db` | no | SQLite database |

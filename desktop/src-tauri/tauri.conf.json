@@ -23,14 +23,30 @@
         "label": "pet",
         "url": "pet.html",
         "title": "Kelp pet",
-        "width": 148,
-        "height": 148,
+        "width": 96,
+        "height": 96,
         "decorations": false,
         "transparent": true,
+        "shadow": false,
         "alwaysOnTop": true,
         "skipTaskbar": true,
         "resizable": false,
         "visible": true
+      },
+      {
+        "label": "overlay",
+        "url": "overlay.html",
+        "title": "Kelp",
+        "width": 400,
+        "height": 76,
+        "decorations": false,
+        "transparent": true,
+        "shadow": false,
+        "alwaysOnTop": true,
+        "skipTaskbar": true,
+        "resizable": false,
+        "visible": false,
+        "focus": true
       }
     ],
     "security": {

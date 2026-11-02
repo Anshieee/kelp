@@ -22,8 +22,12 @@ ul { list-style: none; padding: 0; }
 li { padding: 6px 4px; border-bottom: 1px solid #f0ece3; display: flex; justify-content: space-between; gap: 8px; }
 
 /* Pet overlay + orb fallback face */
-.pet-window { width: 148px; height: 148px; -webkit-app-region: drag; }
-[data-orb] { position: relative; width: 148px; height: 148px; }
+/* No drag region: the orb has to take clicks. Only the disc and its eyes take
+   pointer events, so the transparent corners of the square do nothing. */
+.pet-window { width: 96px; height: 96px; pointer-events: none; }
+[data-orb] { position: relative; width: 96px; height: 96px; pointer-events: none; }
+.pet-svg { pointer-events: none; }
+.pet-disc, .pet-eye { pointer-events: auto; cursor: pointer; }
 .e-orb-canvas { position: absolute; inset: 0; width: 100%; height: 100%; opacity: 0; }
 .e-orb--webgl .e-orb-canvas { opacity: 1; }
 .e-orb-face { position: absolute; inset: 18px; border-radius: 50%; background: #92d2a5; }
@@ -44,7 +48,7 @@ li { padding: 6px 4px; border-bottom: 1px solid #f0ece3; display: flex; justify-
 
 /* SVG desk pet (pet.svg, inlined in pet.html). State tints mirror the
    website orb flavours; blink matches the 6.4s website cadence. */
-.pet-svg { width: 148px; height: 148px; display: block; }
+.pet-svg { width: 96px; height: 96px; display: block; }
 .pet-disc { fill: #92d2a5; }
 .pet-spec { fill: #fbf9f5; opacity: 0.85; }
 .pet-eye { fill: #101614; }
@@ -52,7 +56,11 @@ li { padding: 6px 4px; border-bottom: 1px solid #f0ece3; display: flex; justify-
 [data-pet-state="waiting"] .pet-disc { fill: #e08d69; }
 [data-pet-state="done"] .pet-disc { fill: #76adc6; }
 [data-pet-state="idle"] .pet-disc { fill: #92d2a5; }
-.pet-gaze { transform: translate(calc(var(--gx, 0) * 6px), calc(var(--gy, 0) * 5px)); }
+.pet-gaze {
+  transform: translate(calc(var(--gx, 0) * 6px), calc(var(--gy, 0) * 5px));
+  /* The shell pushes the cursor ~16 times a second; this keeps it fluid. */
+  transition: transform 90ms linear;
+}
 .pet-eyes {
   transform-box: fill-box;
   transform-origin: center;
@@ -64,4 +72,5 @@ li { padding: 6px 4px; border-bottom: 1px solid #f0ece3; display: flex; justify-
 }
 @media (prefers-reduced-motion: reduce) {
   .pet-eyes { animation: none; }
+  .pet-gaze { transition: none; }
 }

@@ -1,34 +1,42 @@
 # Kelp desktop app + desk pet (Tauri thin client)
 
 Thin client over the Kelp server (`chat/api.py`). No chat logic lives here.
+This branch is a **frontend scaffold**: React + MUI surfaces with canned
+replies. Persistence and server wiring are owned by the backend track.
 
-- **Main window** (`src/`): sign-in, threads + SSE streaming chat,
-  approval cards, devices, spend readout. Shares UI and the schedules
-  screen are hidden entirely in v1.
-- **Pet overlay** (`src/pet.html`, `src/pet.js`, `src/orb.js`): always-on-top
-  frameless window reusing the landing orb (`initOrb` port from
-  `origin/landing-fx2`, `landing/e-fx.js`). Mirrors live SSE state;
-  notifications carry one-tap Approve/Deny with the receipt rendered
-  in-app; quiet under OS do-not-disturb; reduced-motion respected.
-- **Auth**: bearer is exchanged once via `POST /api/auth/session`
-  (`docs/CHAT_SPEC.md` §12.2). The raw bearer is kept in the OS keychain
-  (Tauri stronghold plugin in production; this scaffold ships a
-  `keychain` abstraction with an encrypted-store fallback so `cargo test`
-  and the webview dev path work without OS credentials). The session
-  itself is an `HttpOnly` cookie — JS never sees it.
-- **Server URL** is one constant (`src/config.js`) pointing at the Nebius
-  host. No runtime switcher, no per-environment list. Dev may repoint it at
-  `http://127.0.0.1:8000` for `make serve` verification.
-- **v1 surface:** chat + streaming, approval cards, devices + revoke, spend
-  readout. Shares UI and the schedules screen are hidden entirely.
+- **Main window** (`src/index.html`, `src/App.tsx`): a ChatGPT-shaped shell —
+  history sidebar grouped by day, conversation column, composer. Fixture
+  conversations; sends append to React state only. Closing it hides it rather
+  than destroying it, so the orb and panel stay live and "Open full app" always
+  brings it back.
+- **Command panel** (`src/overlay.html`, `src/OverlayPanel.tsx`): transparent,
+  frameless, always-on-top, opening to the **left of the orb** with bottom edges
+  aligned. Compact it is just a white input pill, 400 wide; expanded it keeps
+  that width and adds a white conversation surface below. Summoned by clicking
+  the orb or `CommandOrControl+Shift+Space`. The expand button opens the full
+  app once already expanded; clicking outside hides the panel.
+  The screen button is inert: it opens an explainer, and no capture code exists.
+- **Pet overlay** (`src/pet.html`, `src/pet.js`, `src/orb.js`): the avatar, at
+  the bottom right of the primary monitor — always-on-top, frameless, 96×96, no
+  shadow and no drag region, so only the disc takes clicks. Tapping it toggles
+  the panel. Vanilla on purpose — no React.
+- **Server URL** is one constant (`src/config.js`) pointing at the Kelp host.
+  No runtime switcher, no per-environment list. `src/api.js` stays as the
+  server contract fixture for whoever wires the client up.
+- **Not in this scaffold:** sign-in, keychain storage, SSE streaming,
+  approvals, devices, spend readout, and persistence. They return with the
+  backend wiring; `src/api.js` and `desktop/pet_state.py` already pin the
+  contract they must satisfy.
 
 ## Develop
 
 ```sh
 cd desktop
 npm install
-npm run dev        # vite dev server + tauri dev window
-npm run pet:dev    # pet overlay only
+npm run dev         # vite dev server (open / and /overlay.html)
+npm run typecheck   # tsc --noEmit
+npm run build       # typecheck + vite build (three entries)
+npm run pet:dev     # pet overlay only
 ```
 
 Rust/Tauri shell:
@@ -59,6 +67,5 @@ Unsigned dev builds only: no updater keys, no signing step
 
 ## Diagnostics
 
-Local logs only, no telemetry. The app keeps an in-memory event ring
-(Diagnostics card, copyable) and sends data nowhere except the single
-configured server URL.
+Local logs only, no telemetry. This scaffold sends nothing anywhere: there is
+no analytics, no crash reporting, and no network call in either window.

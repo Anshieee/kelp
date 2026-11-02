@@ -27,19 +27,42 @@ function setState(state) {
   orb?.setPetState?.(state);
 }
 
-// Pointer gaze for the SVG eyes (CSS vars drive .pet-gaze transform).
+// Pointer gaze for the SVG eyes (CSS vars drive .pet-gaze transform). Always
+// clamped: in a plain browser the viewport is far wider than the 96px orb, so
+// an unclamped ratio would fling the eyes out of the disc.
+function setGaze(x, y) {
+  if (!Number.isFinite(x) || !Number.isFinite(y)) return;
+  host.style.setProperty("--gx", Math.max(-1, Math.min(1, x)).toFixed(3));
+  host.style.setProperty("--gy", Math.max(-1, Math.min(1, y)).toFixed(3));
+}
+
 window.addEventListener(
   "pointermove",
   (e) => {
     const r = host.getBoundingClientRect();
     if (!r.width) return;
-    const gx = (((e.clientX - r.left) / r.width) * 2 - 1).toFixed(3);
-    const gy = (((e.clientY - r.top) / r.height) * 2 - 1).toFixed(3);
-    host.style.setProperty("--gx", gx);
-    host.style.setProperty("--gy", gy);
+    setGaze(
+      ((e.clientX - r.left) / r.width) * 2 - 1,
+      ((e.clientY - r.top) / r.height) * 2 - 1,
+    );
   },
   { passive: true },
 );
+
+// The shell feeds the cursor position from anywhere on screen: a webview only
+// hears pointer events inside its own window, so the eyes would freeze the
+// moment the cursor left the orb.
+void (async () => {
+  try {
+    const { listen } = await import("@tauri-apps/api/event");
+    await listen("pet-gaze", (event) => {
+      const gaze = event.payload || {};
+      setGaze(Number(gaze.x), Number(gaze.y));
+    });
+  } catch {
+    /* Plain browser: the pointermove handler above is all there is. */
+  }
+})();
 
 /** Hook the pet to a thread's SSE stream (called by main window / deep link). */
 export function watchThread(threadId) {
@@ -112,7 +135,20 @@ function focusMain(approvalId) {
   }
 }
 
-host?.addEventListener("click", () => focusMain());
+// Click the orb: summon or dismiss the command panel. The full app is reached
+// from inside the panel, not from the pet.
+async function togglePanel() {
+  try {
+    const { invoke } = await import("@tauri-apps/api/core");
+    await invoke("toggle_overlay");
+  } catch {
+    /* Plain browser: there is no panel window to summon. */
+  }
+}
+
+host?.addEventListener("click", () => {
+  void togglePanel();
+});
 
 // Right-click: mute motion / quit (Tauri menu; no-op in plain browser).
 host?.addEventListener("contextmenu", (e) => {

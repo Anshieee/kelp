@@ -73,6 +73,8 @@ export const ORB_FRAGMENT = `
 `;
 
 const clamp01 = (v) => Math.min(1, Math.max(0, v));
+/** Gaze runs the other way round: -1 looks left/up, +1 looks right/down. */
+const clamp11 = (v) => Math.min(1, Math.max(-1, v));
 
 /**
  * Mount the orb into `host` ([data-orb] with .e-orb-canvas + .e-orb-face).
@@ -179,8 +181,8 @@ export function initPetOrb(host, { muted = false } = {}) {
   const onPointer = (e) => {
     const r = canvas.getBoundingClientRect();
     if (!r.width) return;
-    gaze.x = clamp01(((e.clientX - r.left) / r.width) * 2 - 1, -1, 1);
-    gaze.y = clamp01(((e.clientY - r.top) / r.height) * 2 - 1, -1, 1);
+    gaze.x = clamp11(((e.clientX - r.left) / r.width) * 2 - 1);
+    gaze.y = clamp11(((e.clientY - r.top) / r.height) * 2 - 1);
   };
   window.addEventListener("pointermove", onPointer, { passive: true });
 
