@@ -34,6 +34,7 @@ from urllib.parse import parse_qs, unquote, urlsplit
 from openshell.egress_ledger import recipient_for_host
 
 from .artifacts import ArtifactError, MAX_UPLOAD_BYTES
+from .credentials import CredentialBroker
 from .errors import ChatError
 from .logging import (
     is_valid_request_id,
@@ -45,6 +46,7 @@ from .logging import (
 from .metrics import Metrics, get_metrics
 from .routers import (
     approvals as approval_routes,
+    credentials as credential_routes,
     artifacts as artifact_routes,
     auth as auth_routes,
     body as body_routes,
@@ -1374,8 +1376,10 @@ class ChatAPI:
         share_ttl: float | None = None,
         share_max_ttl: float | None = None,
         share_max_snapshot_bytes: int | None = None,
+        credentials: CredentialBroker | None = None,
     ):
         self.service = service
+        self.credentials = credentials
         self.auth_token = auth_token
         self.csrf_token = csrf_token
         self.stream_idle = stream_idle
@@ -1459,6 +1463,8 @@ class ChatAPI:
         self.runner = runner or LoopRunner()
 
     def close(self) -> None:
+        if self.credentials is not None:
+            self.credentials.close()
         if self._owns_runner:
             self.runner.close()
 
@@ -1525,6 +1531,8 @@ class ChatAPI:
             # liveness. It is dispatched here, before auth and before the
             # owner's route classes, so every method (including a body-carrying
             # POST) is answered 405 without ever reaching ``_authorize``.
+            if len(segments) >= 2 and segments[:2] == ["api", "credential-worker"]:
+                return credential_routes.credentials(self, request, segments[2:], worker=True)
             if len(segments) >= 2 and segments[0] == "api" and segments[1] == "shared":
                 return share_routes._shared(self, request, segments[2:])
             method = request.method.upper()
@@ -1587,6 +1595,8 @@ class ChatAPI:
         head = segments[0]
         method = request.method.upper()
 
+        if head == "credential-requests":
+            return credential_routes.credentials(self, request, segments[1:])
         if head == "auth":
             return auth_routes._auth(self, request, method, segments[1:])
         if head == "threads":
