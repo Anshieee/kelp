@@ -574,6 +574,57 @@ def test_a_clean_turn_resets_the_consecutive_failure_count(tmp_path: Path) -> No
         rig.close()
 
 
+def test_concurrent_failure_increments_are_not_lost(tmp_path: Path) -> None:
+    """Overlapping failure notes must land every increment (KEL-29).
+
+    The runner's counter updates used to be unlocked read-modify-write cycles
+    over the task file: two threads could read the same count and one
+    increment was lost. Every update now re-reads the task under the
+    scheduler's advisory tick lock, so the final count is exact even when the
+    calls overlap behind a barrier.
+    """
+
+    threads = 12
+    rig = Rig(
+        tmp_path,
+        config=ProactiveConfig(
+            max_concurrent=1,
+            max_runs_per_hour=100,
+            # Above N so no single note parks the schedule mid-run.
+            failure_limit=threads + 1,
+        ),
+    )
+    try:
+        task = rig.create_due_task()
+        schedule_id = task["task_id"]
+        assert rig.schedule_store.read_task(schedule_id)["state"] == "active"
+
+        barrier = threading.Barrier(threads)
+        errors: list[BaseException] = []
+
+        def note() -> None:
+            try:
+                barrier.wait(timeout=5.0)
+                rig.proactive._note_failure(schedule_id)
+            except BaseException as exc:  # reported after the join, not raised
+                errors.append(exc)
+
+        workers = [threading.Thread(target=note) for _ in range(threads)]
+        for worker in workers:
+            worker.start()
+        for worker in workers:
+            worker.join(timeout=10.0)
+        assert not any(worker.is_alive() for worker in workers)
+        assert not errors
+
+        final = rig.schedule_store.read_task(schedule_id)
+        assert final["failure_count"] == threads
+        # The limit was never reached, so the schedule stays runnable.
+        assert final["state"] == "active"
+    finally:
+        rig.close()
+
+
 def test_a_dead_loop_fails_the_run_without_an_unawaited_coroutine(
     tmp_path: Path,
 ) -> None:

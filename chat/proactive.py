@@ -63,7 +63,7 @@ from openshell.audit import AuditLog
 
 from .errors import ChatError
 from .logging import log
-from .scheduler import MAX_SKIPS, RUNNABLE_STATES, ScheduleStore, utc_now
+from .scheduler import MAX_SKIPS, RUNNABLE_STATES, ScheduleStore, tick_lock, utc_now
 from .service import ChatService
 from .store import ChatStore
 
@@ -656,23 +656,27 @@ class ProactiveRunner:
     def _note_skipped(self, task: Mapping[str, Any], run: _ActiveRun) -> None:
         """Bump the task's skip counter; the schedule keeps its next window.
 
-        Like :meth:`_note_failure`, this is an unlocked read-modify-write over
-        the task file. A tick in the same few milliseconds can overwrite it;
-        the skip is still in the ``schedule_run`` row, which is the durable
-        record, so a lost counter bump never hides that a run was skipped.
+        Like :meth:`_note_failure`, the read-modify-write below runs under the
+        scheduler's advisory tick lock and re-reads the task inside it, so a
+        concurrent tick can no longer overwrite the bump. When this runs from
+        the ticker's own ``fire`` callback the lock is already held and the
+        re-entrant acquisition is free.
         """
 
         schedule_id = str(task.get("task_id") or "")
         try:
-            current = self._schedule_store.read_task(schedule_id, now=self._now())
-            if current.get("state") not in RUNNABLE_STATES:
-                return
-            current["skipped_count"] = min(
-                MAX_SKIPS, int(current.get("skipped_count") or 0) + 1
-            )
-            current["last_skipped_for"] = run.scheduled_iso
-            current["updated_at"] = _iso(self._now())
-            self._schedule_store.write_task(current, now=self._now())
+            with tick_lock(self._schedule_store.root):
+                current = self._schedule_store.read_task(
+                    schedule_id, now=self._now()
+                )
+                if current.get("state") not in RUNNABLE_STATES:
+                    return
+                current["skipped_count"] = min(
+                    MAX_SKIPS, int(current.get("skipped_count") or 0) + 1
+                )
+                current["last_skipped_for"] = run.scheduled_iso
+                current["updated_at"] = _iso(self._now())
+                self._schedule_store.write_task(current, now=self._now())
         except Exception as exc:  # noqa: BLE001 - the run row already explains it
             log(
                 "proactive_skip_note_failed",
@@ -702,12 +706,15 @@ class ProactiveRunner:
         """Park the schedule until the owner decides; never auto-resume."""
 
         try:
-            current = self._schedule_store.read_task(schedule_id, now=self._now())
-            if current.get("state") not in RUNNABLE_STATES:
-                return
-            current["state"] = "paused_needs_approval"
-            current["updated_at"] = _iso(self._now())
-            self._schedule_store.write_task(current, now=self._now())
+            with tick_lock(self._schedule_store.root):
+                current = self._schedule_store.read_task(
+                    schedule_id, now=self._now()
+                )
+                if current.get("state") not in RUNNABLE_STATES:
+                    return
+                current["state"] = "paused_needs_approval"
+                current["updated_at"] = _iso(self._now())
+                self._schedule_store.write_task(current, now=self._now())
         except Exception as exc:  # noqa: BLE001 - the run row already says paused
             log(
                 "proactive_pause_failed",
@@ -723,27 +730,30 @@ class ProactiveRunner:
         then wait for the next window to fail again. ``failure_count`` is
         consecutive because :meth:`_clear_failures` resets it on a clean turn.
 
-        The read-modify-write below is not locked against the ticker's own
-        claim: a tick landing between this read and write can lose one update.
-        Both writers are in this process and the window is a few milliseconds,
-        so the next turn repairs the value; a crash between them loses only
-        this count, never the audit row. A store-level lock would remove the
-        race but is not worth taking the ticker's file lock per turn.
+        The read-modify-write below runs under the scheduler's advisory tick
+        lock and re-reads the task inside it, so a tick landing in the same
+        few milliseconds can no longer lose one update. When this runs from
+        the ticker's own ``fire`` callback the lock is already held and the
+        re-entrant acquisition is free.
         """
 
         try:
-            current = self._schedule_store.read_task(schedule_id, now=self._now())
-            if current.get("state") not in RUNNABLE_STATES:
-                return
-            count = int(current.get("failure_count") or 0) + 1
-            current["failure_count"] = count
-            if count >= self.config.failure_limit:
-                # ``disabled`` is the existing terminal pause: it is not a
-                # scheduler-shaped state like ``paused_needs_approval``, and
-                # the owner resumes by editing the task back to ``active``.
-                current["state"] = "disabled"
-            current["updated_at"] = _iso(self._now())
-            self._schedule_store.write_task(current, now=self._now())
+            with tick_lock(self._schedule_store.root):
+                current = self._schedule_store.read_task(
+                    schedule_id, now=self._now()
+                )
+                if current.get("state") not in RUNNABLE_STATES:
+                    return
+                count = int(current.get("failure_count") or 0) + 1
+                current["failure_count"] = count
+                if count >= self.config.failure_limit:
+                    # ``disabled`` is the existing terminal pause: it is not a
+                    # scheduler-shaped state like ``paused_needs_approval``,
+                    # and the owner resumes by editing the task back to
+                    # ``active``.
+                    current["state"] = "disabled"
+                current["updated_at"] = _iso(self._now())
+                self._schedule_store.write_task(current, now=self._now())
         except Exception as exc:  # noqa: BLE001 - the run row already says failed
             log(
                 "proactive_failure_note_failed",
@@ -755,14 +765,17 @@ class ProactiveRunner:
         """Reset the consecutive-failure count after a clean turn."""
 
         try:
-            current = self._schedule_store.read_task(schedule_id, now=self._now())
-            if not int(current.get("failure_count") or 0):
-                return
-            if current.get("state") not in RUNNABLE_STATES:
-                return
-            current["failure_count"] = 0
-            current["updated_at"] = _iso(self._now())
-            self._schedule_store.write_task(current, now=self._now())
+            with tick_lock(self._schedule_store.root):
+                current = self._schedule_store.read_task(
+                    schedule_id, now=self._now()
+                )
+                if not int(current.get("failure_count") or 0):
+                    return
+                if current.get("state") not in RUNNABLE_STATES:
+                    return
+                current["failure_count"] = 0
+                current["updated_at"] = _iso(self._now())
+                self._schedule_store.write_task(current, now=self._now())
         except Exception as exc:  # noqa: BLE001 - the next success retries the reset
             log(
                 "proactive_failure_reset_failed",
