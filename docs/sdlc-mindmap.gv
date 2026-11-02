@@ -2,10 +2,8 @@
 // One central node, one idea per branch, plain words.
 // Render: dot -Tsvg docs/sdlc-mindmap.gv -o docs/sdlc-mindmap.svg
 //         dot -Tpng docs/sdlc-mindmap.gv -o docs/sdlc-mindmap.png
-// (The 2 November 2026 refresh was rendered with the same Graphviz engine
-// compiled to WebAssembly (@viz-js/viz) because no system `dot` was
-// available on the rendering machine; the PNG is the SVG rasterized with
-// resvg. Layout is the Graphviz dot layout either way.)
+// Render with Graphviz dot; keep the SVG and PNG, plus the inline SVG copy
+// in netlify/index.html, in sync with the words in docs/SDLC_MINDMAP.md.
 // Colours: white background, small muted fills per branch, black text.
 // Meaning is carried by words, never by colour alone. No emojis.
 // Status words: DONE, COMPLETE, IN PROGRESS, TO COME, LATER.
@@ -201,6 +199,16 @@ digraph sdlc {
   k29 -> k29_share;
   k29 -> k29_sign;
   k29 -> k29_provider;
+
+  // Recent integration merges (2 November 2026; soft blue-grey family)
+  integ [label="Recent integrations\nDONE" shape="box" style="filled,bold,rounded" fontsize="15" penwidth="2" fillcolor="#DDE5EA" URL="#integration" tooltip="Credential handoff, stable share-ID test, and wallet/Checkout server mounting are merged. Main collects 1106 tests: 1102 pass and 4 skip."];
+  center -> integ;
+  integ_credentials [label="Private credential handoff\nDONE" fillcolor="#EEF2F5" URL="#integration" tooltip="PR #20: browser credential handoff and encrypted vault, with server routes and tests. Merged as 33e6d9a."];
+  integ_flake [label="Stable share-ID test\nDONE" fillcolor="#EEF2F5" URL="#integration" tooltip="PR #25: make the share public-ID casing assertion deterministic. Merged as 80f1eec."];
+  integ_wallet [label="Wallet and Checkout mounted\nDONE" fillcolor="#EEF2F5" URL="#integration" tooltip="Wallet and Checkout routes mounted in the server app with route-level tests. Merged as f17661b."];
+  integ -> integ_credentials;
+  integ -> integ_flake;
+  integ -> integ_wallet;
 
   // Surfaces leaves (soft teal family)
   s_dash [label="Dashboard chat now" fillcolor="#E6F4F1" URL="#surfaces" tooltip="Main screen in the browser. Built first."];
