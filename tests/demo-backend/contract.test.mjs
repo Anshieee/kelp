@@ -1,6 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
+import { execFileSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 import { handler as apiHandler } from '../../netlify/functions/api-v1.mjs';
 import { handler as workerHandler } from '../../netlify/functions/demo-worker.mjs';
 
@@ -47,6 +49,24 @@ test('every route in the shared mobile contract is handled by the server', async
     assert.ok(taskHandler, `${route} must be declared as a supported server route`);
     assert.ok(api.includes(taskHandler), `${route} must be handled server-side`);
   }
+});
+
+test('every API route called by the mobile fallback is supported by the server contract', async () => {
+  const root = fileURLToPath(new URL('../../', import.meta.url));
+  const contract = await readFile(new URL('../../docs/HACKATHON_DEMO_CONTRACT.md', import.meta.url), 'utf8');
+  const mobile = execFileSync('git', ['show', 'origin/feat/mobile-demo-fallback:netlify/mobile/app.js'], { cwd: root, encoding: 'utf8' });
+  const supportedRoutes = new Set([...contract.matchAll(/^\| `?(GET|PUT|POST) ([^`|]+)`? \|/gm)]
+    .map(([, method, path]) => `${method} ${path.split('?')[0]}`));
+  const mobileRoutes = [...mobile.matchAll(/\bapi\(\s*(['"`])([^'"`]*)\1/g)].map((match) => {
+    const rawPath = match[2];
+    const path = rawPath.replace(/\$\{encodeURIComponent\([^)]*\)\}/g, '{id}').split('?')[0];
+    const rest = mobile.slice(match.index + match[0].length, match.index + match[0].length + 120);
+    const method = rest.match(/^\s*,\s*\{\s*method:\s*['"]([A-Z]+)['"]/s)?.[1] || 'GET';
+    return `${method} ${path}`;
+  });
+
+  assert.ok(mobileRoutes.length > 0, 'mobile fallback must call the user API');
+  for (const route of mobileRoutes) assert.ok(supportedRoutes.has(route), `${route} must be supported by the server`);
 });
 
 test('user endpoints reject missing and invalid identity before accessing persistence', async () => {
