@@ -100,6 +100,7 @@ __all__ = [
     "next_run_local",
     "parse_cron",
     "resolve_timezone",
+    "tick_lock",
     "utc_now",
 ]
 
@@ -1395,6 +1396,70 @@ def _invoke_callback(
         asyncio.run(result)
 
 
+#: Per-thread re-entrancy marker for the advisory tick lock. The ticker holds
+#: the lock across its synchronous ``on_fire`` callback, and that callback (the
+#: proactive runner's skip path) needs the same lock; ``flock`` on a second
+#: descriptor would block against the holder's own lock, so the owning thread
+#: re-enters without touching the file again.
+_tick_lock_state = threading.local()
+
+
+@contextmanager
+def _advisory_tick_lock(root: Path, *, blocking: bool) -> Iterator[bool]:
+    """Shared body for :func:`tick_lock` and :func:`_tick_lock`.
+
+    Acquires the advisory ``flock`` on ``<root>/.tick.lock``: blocking waits
+    its turn, non-blocking reports contention as ``False``. A thread that
+    already holds the lock re-enters instead of deadlocking on itself.
+    """
+
+    if not root.exists():
+        yield True
+        return
+    if getattr(_tick_lock_state, "depth", 0):
+        yield True
+        return
+    descriptor: int | None = None
+    locked = False
+    try:
+        descriptor = os.open(
+            root / _TICK_LOCK_NAME, os.O_RDWR | os.O_CREAT, 0o600
+        )
+        flags = fcntl.LOCK_EX if blocking else fcntl.LOCK_EX | fcntl.LOCK_NB
+        fcntl.flock(descriptor, flags)
+        locked = True
+    except OSError:
+        locked = False
+    if locked:
+        _tick_lock_state.depth = 1
+    try:
+        yield locked
+    finally:
+        if locked:
+            _tick_lock_state.depth = 0
+        if descriptor is not None:
+            if locked:
+                try:
+                    fcntl.flock(descriptor, fcntl.LOCK_UN)
+                except OSError:  # pragma: no cover - best effort
+                    pass
+            os.close(descriptor)
+
+
+@contextmanager
+def tick_lock(root: Path) -> Iterator[bool]:
+    """Serialize task-file writers with the ticker, across processes on POSIX.
+
+    The blocking counterpart of :func:`_tick_lock`: the caller waits its turn
+    instead of reporting contention, so a read-modify-write of a task file
+    (the proactive runner's counters and pause transitions) cannot lose an
+    update to a concurrent tick. Yields ``True`` once the lock is held.
+    """
+
+    with _advisory_tick_lock(root, blocking=True) as locked:
+        yield locked
+
+
 @contextmanager
 def _tick_lock(root: Path) -> Iterator[bool]:
     """Serialize tickers in one process and across processes on POSIX.
@@ -1404,29 +1469,8 @@ def _tick_lock(root: Path) -> Iterator[bool]:
     skipped tick rather than running the due set twice.
     """
 
-    if not root.exists():
-        yield True
-        return
-    descriptor: int | None = None
-    locked = False
-    try:
-        descriptor = os.open(
-            root / _TICK_LOCK_NAME, os.O_RDWR | os.O_CREAT, 0o600
-        )
-        fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        locked = True
-    except OSError:
-        locked = False
-    try:
+    with _advisory_tick_lock(root, blocking=False) as locked:
         yield locked
-    finally:
-        if descriptor is not None:
-            if locked:
-                try:
-                    fcntl.flock(descriptor, fcntl.LOCK_UN)
-                except OSError:  # pragma: no cover - best effort
-                    pass
-            os.close(descriptor)
 
 
 def load_tasks(
