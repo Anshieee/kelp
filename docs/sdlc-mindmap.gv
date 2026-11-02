@@ -200,15 +200,19 @@ digraph sdlc {
   k29 -> k29_sign;
   k29 -> k29_provider;
 
-  // Recent integration merges (2 November 2026; soft blue-grey family)
-  integ [label="Recent integrations\nDONE" shape="box" style="filled,bold,rounded" fontsize="15" penwidth="2" fillcolor="#DDE5EA" URL="#integration" tooltip="Credential handoff, stable share-ID test, and wallet/Checkout server mounting are merged. Main collects 1106 tests: 1102 pass and 4 skip."];
+  // Recent integration merges (3 November 2026; soft blue-grey family)
+  integ [label="Recent integrations\nDONE" shape="box" style="filled,bold,rounded" fontsize="15" penwidth="2" fillcolor="#DDE5EA" URL="#integration" tooltip="Credential handoff, stable share-ID test, wallet/Checkout mount, approved GitHub writes, and the setup README are merged. Main collects 1111 tests."];
   center -> integ;
   integ_credentials [label="Private credential handoff\nDONE" fillcolor="#EEF2F5" URL="#integration" tooltip="PR #20: browser credential handoff and encrypted vault, with server routes and tests. Merged as 33e6d9a."];
   integ_flake [label="Stable share-ID test\nDONE" fillcolor="#EEF2F5" URL="#integration" tooltip="PR #25: make the share public-ID casing assertion deterministic. Merged as 80f1eec."];
   integ_wallet [label="Wallet and Checkout mounted\nDONE" fillcolor="#EEF2F5" URL="#integration" tooltip="Wallet and Checkout routes mounted in the server app with route-level tests. Merged as f17661b."];
+  integ_github [label="GitHub writes need approval\nDONE" fillcolor="#EEF2F5" URL="#integration" tooltip="PR #32: bounded GitHub branch, file, commit, and pull-request writes behind explicit owner approval. Merged as 69aefba."];
+  integ_readme [label="Minimal setup README\nDONE" fillcolor="#EEF2F5" URL="#integration" tooltip="PR #33: Docker Compose and Python quick starts, first-turn smoke test, and repository map. Merged as b319def."];
   integ -> integ_credentials;
   integ -> integ_flake;
   integ -> integ_wallet;
+  integ -> integ_github;
+  integ -> integ_readme;
 
   // Surfaces leaves (soft teal family)
   s_dash [label="Dashboard chat now" fillcolor="#E6F4F1" URL="#surfaces" tooltip="Main screen in the browser. Built first."];

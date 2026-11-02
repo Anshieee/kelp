@@ -1,6 +1,6 @@
 # SDLC mind map — Always-On Private Assistant
 
-Snapshot: 2 November 2026
+Snapshot: 3 November 2026
 Program target: **30 October 2026** for M0 through M4
 Tracker site: [`netlify/index.html`](../netlify/index.html)
 
@@ -11,8 +11,8 @@ that goes with it is [`sdlc-mindmap.svg`](sdlc-mindmap.svg), with a PNG fallback
 site embeds a copy of the SVG directly in the page, so every box there can be clicked; that copy
 and these two files must be updated together.
 
-What this snapshot rests on: `main` is at `f17661b` (the wallet-mount merge), and the suite
-collects **1106 tests: 1102 pass and 4 skip**. The repository is public. KEL-5 through KEL-10 are merged,
+What this snapshot rests on: `main` is at `b319def` (PR #33, the minimal-setup README), and
+`python -m pytest --collect-only -q` collects **1111 tests**. The repository is public. KEL-5 through KEL-10 are merged,
 reviewed, and done; KEL-11, KEL-12, KEL-13, KEL-14, KEL-15, and KEL-16 are merged and reviewed too,
 and close M2. KEL-17, KEL-18, KEL-20, KEL-21, KEL-19, and
 KEL-22 then carried M3 to completion and are merged and reviewed: abuse resistance, spend ceilings,
@@ -141,10 +141,11 @@ snapshot date.
 **LATER** on the last M4 leaf means outside this round; KEL-23, KEL-24, KEL-25, and KEL-26 are DONE,
 KEL-27 and KEL-28 are both DONE, so no work item is left open.
 
-## Recent integration merges — 2 November 2026
+## Recent integration merges — 3 November 2026
 
-Three follow-up merges landed after the KEL-29 gap sweep. They finish the credential, reliability,
-and server-wiring work without changing the milestone or KEL-5–KEL-29 status:
+Five follow-up merges landed after the KEL-29 gap sweep. They finish credential, reliability,
+server-wiring, approved GitHub-write, and setup-documentation work without changing the milestone or
+KEL-5–KEL-29 status:
 
 1. **Private browser credential handoff and encrypted vault** — PR #20 merged as `33e6d9a`.
    `chat/credential_browser.py` and `chat/credentials.py` implement the browser handoff and encrypted
@@ -154,8 +155,14 @@ and server-wiring work without changing the milestone or KEL-5–KEL-29 status:
    assertion, removing an order-dependent test failure without changing application behavior.
 3. **Wallet and Checkout server mount** — merged as `f17661b`. The wallet and Checkout routes are
    mounted in the server app, with route-level coverage in `tests/test_payment_server_routes.py`.
-   The final main test run reports 1102 passed and 4 skipped; `pytest --collect-only -q` confirms
-   1106 collected tests.
+4. **Approval-gated GitHub writes** — PR #32 merged as `69aefba`. The `github.write` skill can create
+   a branch, commit bounded file additions or updates, and open a pull request, but requires explicit
+   owner approval and scopes network access to the repository's GitHub API.
+5. **Minimal setup README** — PR #33 merged as `b319def`. The README now gives Docker Compose and
+   Python setup paths, a first-turn API smoke test, and a repository map.
+
+   At this snapshot `python -m pytest --collect-only -q` collects 1111 tests. This is a collection
+   count; it does not claim that all tests pass.
 
 ## The map
 
@@ -171,7 +178,7 @@ The same map in words, in case the image does not load:
 - **Surfaces** — where you talk to the assistant: dashboard first, Telegram next, WhatsApp and voice memos later.
 - **Money** — saved cards through Stripe and hosted Checkout through Razorpay, both merged and closed out; an in-app balance later.
 - **Design** — the screen plan is written, and so is the chat spec. The chat surface code is merged; the drawing file and the browser screen are next.
-- **Integration** — private credential handoff and encrypted vault (PR #20), the deterministic share-ID test fix (PR #25), and wallet/Checkout server mounting (`f17661b`) are merged. Main collects 1106 tests: 1102 pass and 4 skip.
+- **Integration** — private credential handoff and encrypted vault (PR #20), the deterministic share-ID test fix (PR #25), wallet/Checkout server mounting (`f17661b`), approval-gated GitHub writes (PR #32), and the minimal-setup README (PR #33) are merged. Main at `b319def` collects 1111 tests.
 
 On the tracker site ([`netlify/index.html`](../netlify/index.html)) the same SVG is embedded
 inside the page rather than loaded as a picture. Each box is a link: activating it opens the
@@ -1418,7 +1425,7 @@ explicit revoke routes are the only kill switch. And a revoke cannot recall a co
 ### GitHub
 
 - Repository (public): https://github.com/Anshieee/kelp
-- Shared copy of the code: https://github.com/Anshieee/kelp/tree/main — head `f17661b`
+- Shared copy of the code: https://github.com/Anshieee/kelp/tree/main — head `b319def`
 - All branches: https://github.com/Anshieee/kelp/branches
   - `kel-5` — merged (`b8de92f`)
   - `kel-6` — merged at `d3c763e`; branch head `4c72afc`
@@ -1457,9 +1464,11 @@ explicit revoke routes are the only kill switch. And a revoke cannot recall a co
   - `feat/secure-credential-handoff` — merged via pull request #20 at `33e6d9a` (2026-11-02)
   - `kel-30-flake-fix` — merged via pull request #25 at `80f1eec` (2026-11-02)
   - `kel-30-wallet-checkout-server` — merged at `f17661b` (2026-11-02)
+- `kel-30-github-write` — merged via PR #32 at `69aefba` (2026-11-03)
+- `kel-30-readme-minimal-setup` — merged via PR #33 at `b319def` (2026-11-03)
 - Change history: https://github.com/Anshieee/kelp/commits/main
 - Pull requests: https://github.com/Anshieee/kelp/pulls
-- Tests: 1102 pass, 4 skipped (`python -m pytest`; 1106 collected); `make demo` plays all six beats, `make eval` passes offline
+- Tests: 1111 collected (`python -m pytest --collect-only -q`; full-suite result not checked for this snapshot); `make demo` plays all six beats, `make eval` passes offline
   with the network blocked, and `make audit` finds no known vulnerability in a declared dependency
 
 ### Linear
