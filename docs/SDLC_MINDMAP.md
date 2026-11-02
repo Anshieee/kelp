@@ -691,16 +691,18 @@ Status detail: merged into `main` at `b48e113`, adding 15 tests to a suite of 74
 two must-fix bugs before the merge. A retried turn queues fresh work, so it now takes a global turn
 slot exactly like a send and returns it when the retry finalizes, or immediately if the call raises
 or the cap refuses it. And the HTTP adapter refuses a request carrying both `Content-Length` and
-`Transfer-Encoding` rather than picking one. Three honest gaps against the written issue. The issue
-asks for `503` when the concurrency queue is full; what ships is `429 rate_limited` with
+`Transfer-Encoding` rather than picking one. Two honest gaps against the written issue remain. The
+issue asks for `503` when the concurrency queue is full; what ships is `429 rate_limited` with
 `details.reason` of `turn_capacity` and a `Retry-After`, which keeps one "come back later" shape
-instead of two. The issue asks for counters `rate_limited_total{class}` and
-`rejected_body_too_large_total`; what ships on `/metrics` is `kelp_limiter_in_use`,
-`kelp_limiter_capacity`, and `kelp_limiter_saturation` per class, so current pressure is visible but
-the count of refusals over time is not. And a body over the ceiling on a JSON route reports
-`400 invalid_request`, matching the existing JSON body path, while only uploads report the named
-`413 upload_too_large`. Limiting is per process: that is the single-node design the issue scoped, and
-distributed limiting across hosts stays out of scope.
+instead of two. And a body over the ceiling on a JSON route reports `400 invalid_request`, matching
+the existing JSON body path, while only uploads report the named `413 upload_too_large`. The issue
+also asks for `rate_limited_total{class}` and `rejected_body_too_large_total`.
+`kelp_rate_limit_refusals_total{class}` now ships (added 2 November 2026): it increments once for
+every 429, labelled with the limiter class that refused, next to the `kelp_limiter_in_use`,
+`kelp_limiter_capacity`, and `kelp_limiter_saturation` pressure gauges.
+`rejected_body_too_large_total` is still not a separate series; the typed error names the refusal
+instead. Limiting is per process: that is the single-node design the issue scoped, and distributed
+limiting across hosts stays out of scope.
 
 ### KEL-18 — Spend guardrails — DONE
 

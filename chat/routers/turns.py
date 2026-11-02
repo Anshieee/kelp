@@ -65,6 +65,7 @@ def _send(api: "ChatAPI", request: "Request", thread_id: str) -> "Response":
             class_name="turns",
             reason="turn_capacity",
             limit=api._turn_slots.limit,
+            metrics=api.metrics,
         )
     try:
         payload, created = api.runner.run(
@@ -122,6 +123,7 @@ def _retry_turn(api: "ChatAPI", turn_id: str) -> "Response":
             class_name="turns",
             reason="turn_capacity",
             limit=api._turn_slots.limit,
+            metrics=api.metrics,
         )
     try:
         payload = api.runner.run(api.service.retry(turn_id))
