@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import asyncio
 import re
+import threading
 import time
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
@@ -211,6 +212,9 @@ class ChatService:
         self._waiter_loops: dict[str, asyncio.AbstractEventLoop] = {}
         self._waiting_approval: dict[str, str] = {}
         self._live_blocks: dict[str, list[dict[str, Any]]] = {}
+        # Serialize Stop against the approval's final cancel-check + consume.
+        # Whichever acquires this lock first defines whether execution began.
+        self._approval_lock = threading.RLock()
         self._closing = False
 
     # -- audit -------------------------------------------------------------
@@ -635,7 +639,8 @@ class ChatService:
             raise ChatError("turn_not_running", status=409)
         token = self._cancel.get(turn_id)
         if token is not None:
-            token.cancel()
+            with self._approval_lock:
+                token.cancel()
         task = self._tasks.get(turn_id)
         if task is not None and not task.done():
             self._arm_hard_cancel(turn_id, task)
@@ -1459,12 +1464,45 @@ class ChatService:
         if cancelled:
             self._abandon_approval(state, approval_id)
             return False
-        current = self.store.get_approval(approval_id)
-        if current is not None and current["status"] == "approved":
-            return True
-        if current is not None and current["status"] == "pending":
-            self._record_resolution(state, approval_id, "expired", executed=False)
-        return False
+        with self._approval_lock:
+            current = self.store.get_approval(approval_id)
+            token = self._cancel.get(state.turn["id"])
+            if token is not None and token.cancelled:
+                self._abandon_approval(state, approval_id)
+                return False
+            if (
+                current is not None
+                and current["status"] == "approved"
+                and current.get("arguments_digest") == request.argument_hash
+                and current.get("tool") == request.tool
+                and current.get("turn_id") == state.turn["id"]
+                and self._now()
+                < _as_aware(
+                    datetime.fromisoformat(
+                        str(current["expires_at"]).replace("Z", "+00:00")
+                    )
+                )
+            ):
+                # Consume atomically before the executor can enter the handler.
+                # A cancellation, expiry, replay, or mismatched request fails
+                # closed without invoking the side effect.
+                consumed, applied = self._record_resolution(
+                    state,
+                    approval_id,
+                    "consumed",
+                    executed=True,
+                    allowed_from=("approved",),
+                )
+                return applied and consumed.get("arguments_digest") == request.argument_hash
+            if current is not None and current["status"] == "approved":
+                self._record_resolution(
+                    state, approval_id, "expired", executed=False,
+                    allowed_from=("approved",),
+                )
+                return False
+            if current is not None and current["status"] == "pending":
+                self._record_resolution(state, approval_id, "expired", executed=False)
+            return False
 
     async def _wait_for_decision(
         self,
@@ -2057,6 +2095,7 @@ def _as_aware(value: datetime) -> datetime:
 def _approval_title(tool: str) -> str:
     return {
         "schedule.create": "Create a recurring task",
+        "github.write": "Open a GitHub pull request",
         "shell.exec": "Run a command",
     }.get(tool, f"Use {cards.tool_label(tool)}")
 

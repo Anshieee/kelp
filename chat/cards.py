@@ -42,6 +42,7 @@ __all__ = [
 
 MAX_SUMMARY_CHARS = 120
 MAX_ARGUMENT_BYTES = 4096
+MAX_APPROVAL_FILES = 20
 MAX_SOURCES = 8
 SWEEP_ITEM_LIMIT = 5
 _SNIPPET_CHARS = 240
@@ -77,6 +78,7 @@ TOOL_LABELS: dict[str, str] = {
     "web.search": "Web search",
     "docs.answer": "Document answer",
     "github.read": "GitHub",
+    "github.write": "Open GitHub pull request",
     "schedule.create": "Schedule task",
     "shell.exec": "Run command",
 }
@@ -493,10 +495,18 @@ def approval_rationale(
     *,
     scopes: Mapping[str, Any] | None = None,
     command: Sequence[str] | None = None,
+    tool: str = "",
 ) -> str:
     effect_set = {str(effect) for effect in effects}
     clauses: list[str] = []
-    if "write" in effect_set:
+    if tool == "github.write":
+        repos = list((scopes or {}).get("repos") or [])
+        repo = str(repos[0]) if repos else "the approved repository"
+        clauses.append(
+            "After you approve, the assistant will create a branch, commit the "
+            f"files summarized below, and open a pull request in {repo}."
+        )
+    elif "write" in effect_set:
         clauses.append("The assistant wants to change something in your workspace.")
     if "execute" in effect_set:
         if EXEC_AVAILABLE:
@@ -563,6 +573,34 @@ def approval_card(
     if command_list:
         summary_args = {"command": command_list}
     summary = summarize_arguments(tool, summary_args)
+    cleaned_arguments = redact_arguments(arguments, secrets=secret_values)
+    file_summary: dict[str, Any] | None = None
+    if tool == "github.write":
+        raw_files = (arguments or {}).get("files")
+        files = raw_files if isinstance(raw_files, (list, tuple)) else []
+        visible_files: list[dict[str, Any]] = []
+        for item in files[:MAX_APPROVAL_FILES]:
+            if not isinstance(item, Mapping):
+                continue
+            path = item.get("path")
+            content = item.get("content")
+            if not isinstance(path, str):
+                continue
+            size_bytes = len(content.encode("utf-8")) if isinstance(content, str) else None
+            visible_files.append(
+                {
+                    "path": _scrub(path, secret_values),
+                    "size_bytes": size_bytes,
+                }
+            )
+        file_summary = {
+            "files": visible_files,
+            # The arguments pane is intentionally all-or-nothing at 4 KB. Be
+            # explicit that this bounded metadata summary is not the full
+            # request whenever that payload (or the file list) was truncated.
+            "truncated": cleaned_arguments == {"truncated": True}
+            or len(files) > MAX_APPROVAL_FILES,
+        }
     safe_scopes = {
         "paths": _scrub(list((scopes or {}).get("paths") or []), secret_values),
         "hosts": _scrub(list((scopes or {}).get("hosts") or []), secret_values),
@@ -580,14 +618,15 @@ def approval_card(
         "skill": skill or tool,
         "title": title or f"Use {tool_label(tool)}",
         "rationale": approval_rationale(
-            effects, scopes=safe_scopes, command=command_list
+            effects, scopes=safe_scopes, command=command_list, tool=tool
         ),
         "summary": summary,
         "effects": [str(effect) for effect in effects],
         "blast_radius": _scrub([str(item) for item in blast_radius], secret_values),
         "scopes": safe_scopes,
         "command": command_list,
-        "arguments": redact_arguments(arguments, secrets=secret_values),
+        "arguments": cleaned_arguments,
+        **({"file_summary": file_summary} if file_summary is not None else {}),
         "arguments_digest": arguments_digest,
         "requested_at": requested,
         "expires_at": expires,

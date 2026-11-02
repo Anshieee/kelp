@@ -559,6 +559,64 @@ def test_stop_after_approve_spends_the_card_without_running_it(
         store.close()
 
 
+def test_concurrent_stop_wins_before_approval_consume_and_blocks_egress(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Stop between approval wakeup and consume must spend, not execute, once."""
+
+    executions: list[bool] = []
+    service, store, _provider = make_service(
+        tmp_path,
+        _schedule_scripts(),
+        tool_executor_factory=_approval_factory(executions),
+        approval_ttl_seconds=600,
+    )
+    monkeypatch.setattr(chat_service, "_HARD_CANCEL_DELAY", 5.0)
+    try:
+        thread = service.create_thread()
+
+        async def scenario() -> None:
+            decision_woke_waiter = asyncio.Event()
+            release_consume = asyncio.Event()
+            original_wait = service._wait_for_decision
+
+            async def pause_before_consume(state: object, waiter: object, timeout: float) -> bool:
+                stopped = await original_wait(state, waiter, timeout)  # type: ignore[arg-type]
+                decision_woke_waiter.set()
+                await release_consume.wait()
+                return stopped
+
+            monkeypatch.setattr(service, "_wait_for_decision", pause_before_consume)
+            payload, _created = await service.send(
+                thread["id"], text="schedule", client_turn_id="ct-stop-approve-race"
+            )
+            pending = await wait_until(lambda: store.list_approvals(status="pending"))
+            approval_id = pending[0]["id"]
+
+            # Approval wakes the turn, but a gate holds it before the final
+            # cancel-check/consume. Stop then deterministically wins that gate.
+            decision = await asyncio.to_thread(service.decide, approval_id, "approve")
+            assert decision["approval"]["status"] == "approved"
+            await asyncio.wait_for(decision_woke_waiter.wait(), timeout=2)
+            await service.stop(payload["turn_id"])
+            release_consume.set()
+            await service.wait_for_turn(payload["turn_id"], timeout=3)
+
+            assert store.get_turn(payload["turn_id"])["reason"] == "cancelled"
+            consumed = store.get_approval(approval_id)
+            assert consumed["status"] == "consumed"
+            assert consumed["consumed_at"] is not None
+            assert True not in executions  # the handler / guarded egress never ran
+            with pytest.raises(ChatErrorType) as repeated:
+                service.decide(approval_id, "approve")
+            assert repeated.value.status == 409
+            assert repeated.value.code == "already_used"
+
+        asyncio.run(scenario())
+    finally:
+        store.close()
+
+
 def test_exec_approval_never_stores_a_secret_in_its_command(tmp_path: Path) -> None:
     secret = "ghp_live_authorization_value_123"
     service, store, _provider = make_service(
