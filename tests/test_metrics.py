@@ -21,6 +21,7 @@ from chat.metrics import (
     Metrics,
     PROMETHEUS_CONTENT_TYPE,
 )
+from kernel import config as kernel_config
 from kernel.provider import ProviderFailure
 from kernel.usage import InMemoryUsageStore, JsonlUsageStore, UsageRecord
 from openshell.audit import AuditLog, SecretScrubber
@@ -289,8 +290,8 @@ def test_server_entrypoint_wires_the_logged_usage_store_and_registry(
             yield  # pragma: no cover - async generator
 
     env = {
-        "NEBIUS_API_KEY": "test-api-key-1234567890",
-        "NEBIUS_TOKEN_FACTORY_BASE_URL": "http://127.0.0.1:9/v1",
+        "KELP_PROVIDER_API_KEY": "test-api-key-1234567890",
+        "KELP_PROVIDER_BASE_URL": "http://127.0.0.1:9/v1",
         "KELP_AUTH_TOKEN": "owner-token-1234567890",
         "KELP_DB_PATH": str(tmp_path / "db" / "chat.db"),
         "KELP_ARTIFACT_DIR": str(tmp_path / "artifacts"),
@@ -324,8 +325,11 @@ def test_server_entrypoint_wires_the_logged_usage_store_and_registry(
 
 
 def test_one_send_shares_one_request_id_across_logs_audit_and_usage(
-    tmp_path: Path,
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    monkeypatch.setitem(
+        kernel_config.DEFAULT_PRICING, MODEL, kernel_config.ModelPricing(0.30, 0.90)
+    )
     stream = io.StringIO()
     configure_logging(level="debug", secret_values=(SECRET,), stream=stream)
     audit = AuditLog(tmp_path / "audit" / "audit.jsonl", secret_values=(SECRET,))

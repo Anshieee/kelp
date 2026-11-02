@@ -118,7 +118,7 @@ digraph sdlc {
   k13 [label="KEL-13 Real doc search\nDONE" shape="box" style="filled,bold,rounded" fillcolor="#FCEFC7" URL="#kel-13" tooltip="PDF and CSV ingestion, chunking, hybrid ranking, and answers quoted with page and row citations. Merged and reviewed."];
   k14 [label="KEL-14 Observability\nDONE" shape="box" style="filled,bold,rounded" fillcolor="#FCEFC7" URL="#kel-14" tooltip="One request id per turn, JSON log lines with no private text, and Prometheus metrics. Merged and reviewed."];
   k15 [label="KEL-15 Eval harness\nDONE" shape="box" style="filled,bold,rounded" fillcolor="#FCEFC7" URL="#kel-15" tooltip="One offline command proves the MVP behaviours still hold; a labelled second run checks the real model. Merged and reviewed."];
-  k16 [label="KEL-16 Deploy\nDONE" shape="box" style="filled,bold,rounded" fillcolor="#FCEFC7" URL="#kel-16" tooltip="One image, one Compose file, one systemd unit, and a runbook a stranger can follow. Merged and reviewed; proven locally, not yet run on Nebius."];
+  k16 [label="KEL-16 Deploy\nDONE" shape="box" style="filled,bold,rounded" fillcolor="#FCEFC7" URL="#kel-16" tooltip="One image, one Compose file, one systemd unit, and a runbook a stranger can follow. Merged and reviewed; proven locally, not yet run on a hosted VM."];
   m2 -> k11;
   m2 -> k12;
   m2 -> k13;
@@ -132,7 +132,7 @@ digraph sdlc {
   m2_search  [label="Better file search\nDONE" fillcolor="#FFF8E1" URL="#m2" tooltip="Finds the right bit of your documents and quotes where it came from. Merged and reviewed."];
   m2_trace   [label="One id per turn\nDONE" fillcolor="#FFF8E1" URL="#m2" tooltip="Logs and metrics let an operator follow one turn and its failures without reading private text. Merged and reviewed."];
   m2_quality [label="Quality measured\nDONE" fillcolor="#FFF8E1" URL="#m2" tooltip="One offline command proves the MVP behaviours still hold, with gates that fail the run on a regression. Merged and reviewed."];
-  m2_deploy  [label="One image, one runbook\nDONE" fillcolor="#FFF8E1" URL="#m2" tooltip="Image, Compose file, systemd unit, health probe, and a runbook that a stranger can follow. Proven locally on 30 October; the Nebius host run is the next step."];
+  m2_deploy  [label="One image, one runbook\nDONE" fillcolor="#FFF8E1" URL="#m2" tooltip="Image, Compose file, systemd unit, health probe, and a runbook that a stranger can follow. Proven locally on 30 October; the hosted VM run is the next step."];
   m2 -> m2_restart;
   m2 -> m2_health;
   m2 -> m2_search;

@@ -29,13 +29,13 @@ reference `{env:LINEAR_API_KEY}`. Use a `Read`-only key where writes are not nee
 
 ## Proposed Linear structure
 
-Team: `NEB` — Nebius Assistant
+Team: `KEL` (Kelp), the only team in the workspace
 Project: **Always-On Private Assistant** (one project, milestone-per-phase)
 
 Milestones (roadmap: Prototype polished MVP -> Full vision):
 1. **M0 — Foundation**: repo scaffold, CI, dev env, model/provider selection, threat model
 2. **M1 — Prototype**: end-to-end query -> tool -> answer loop, local persistence, single-user auth
-3. **M2 — Polished MVP**: reliability (restart/resume, health checks), memory/retrieval quality, evals, observability, deploy on Nebius GPU target
+3. **M2 — Polished MVP**: reliability (restart/resume, health checks), memory/retrieval quality, evals, observability, deploy on a GPU host
 4. **M3 — Hardening**: privacy controls, secret isolation, rate limits, data retention, cost guardrails
 5. **M4 — Full vision**: multi-device presence, proactive/background tasks, plugin surface, team sharing
 

@@ -19,7 +19,7 @@ from chat.metrics import Metrics
 from chat.service import ChatService
 from chat.store import ChatStore
 from kernel.config import KernelConfig
-from kernel.provider import ChatRequest, TokenFactoryClient
+from kernel.provider import ChatRequest, ProviderClient
 from kernel.usage import InMemoryUsageStore, UsageRecord
 from openshell.audit import AuditLog, SecretScrubber
 
@@ -54,7 +54,7 @@ from .tools import (
 
 __all__ = ["LiveModeError", "SuiteOutcome", "ThresholdError", "run_suite"]
 
-DEFAULT_MODEL = "nvidia/Nemotron-3_5-Super-VL"
+DEFAULT_MODEL = "nvidia/nemotron-3.5-super-vl"
 _MODE_OFFLINE = "offline"
 _MODE_LIVE = "live"
 _SECRET_PATTERNS = (
@@ -289,7 +289,7 @@ async def _run_task(
     live: bool,
     model: str,
     repeat: int,
-    live_client: TokenFactoryClient | None,
+    live_client: ProviderClient | None,
     work_root: Path,
 ) -> dict[str, Any]:
     task_id = str(task["id"])
@@ -412,7 +412,7 @@ async def _run_all(
     live: bool,
     model: str,
     repeat: int,
-    live_client: TokenFactoryClient | None,
+    live_client: ProviderClient | None,
     work_root: Path,
 ) -> list[dict[str, Any]]:
     results: list[dict[str, Any]] = []
@@ -526,7 +526,11 @@ def run_suite(
     if live:
         if not config.api_key:
             raise LiveModeError(
-                "live mode requires NEBIUS_API_KEY; the key is never printed or written"
+                "live mode requires KELP_PROVIDER_API_KEY; the key is never printed or written"
+            )
+        if not config.base_url:
+            raise LiveModeError(
+                "live mode requires KELP_PROVIDER_BASE_URL; there is no default host"
             )
         model = config.primary_model
     else:
@@ -542,10 +546,10 @@ def run_suite(
 
     temp_parent = Path("/tmp/opencode") if Path("/tmp/opencode").is_dir() else None
     work_root = Path(tempfile.mkdtemp(prefix="kelp-eval-", dir=str(temp_parent) if temp_parent else None))
-    live_client: TokenFactoryClient | None = None
+    live_client: ProviderClient | None = None
     try:
         if live:
-            live_client = TokenFactoryClient(config)
+            live_client = ProviderClient(config)
             guard = nullcontext()
         else:
             guard = block_network()
@@ -580,7 +584,7 @@ def run_suite(
     thresholds_passed = not violations and not regressions
 
     provider_label = (
-        "nebius://token-factory"
+        "provider://live"
         if live
         else str(fixtures.get("provider") or "recorded://synthetic")
     )

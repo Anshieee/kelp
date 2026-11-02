@@ -62,8 +62,8 @@ class SlowProvider:
 
 def _env(root: Path, **overrides: str) -> dict[str, str]:
     env = {
-        "NEBIUS_API_KEY": API_KEY,
-        "NEBIUS_TOKEN_FACTORY_BASE_URL": BASE_URL,
+        "KELP_PROVIDER_API_KEY": API_KEY,
+        "KELP_PROVIDER_BASE_URL": BASE_URL,
         "KELP_AUTH_TOKEN": AUTH_TOKEN,
         "KELP_DB_PATH": str(root / "db" / "chat.db"),
         "KELP_ARTIFACT_DIR": str(root / "artifacts"),
@@ -78,16 +78,12 @@ def _env(root: Path, **overrides: str) -> dict[str, str]:
 
 
 def _subprocess_env(root: Path, **overrides: str) -> dict[str, str]:
+    # Every KELP_ variable comes from the explicit map below, so the host
+    # environment cannot leak a provider URL or key into the child process.
     env = {
         key: value
         for key, value in os.environ.items()
         if not key.startswith("KELP_")
-        and key
-        not in {
-            "NEBIUS_API_KEY",
-            "NEBIUS_BASE_URL",
-            "NEBIUS_TOKEN_FACTORY_BASE_URL",
-        }
     }
     env.update(_env(root, **overrides))
     env["PYTHONUNBUFFERED"] = "1"
@@ -244,7 +240,8 @@ def test_config_uses_defaults_when_optional_paths_are_absent(
     monkeypatch.chdir(tmp_path)
     config = ServerConfig.from_env(
         {
-            "NEBIUS_API_KEY": API_KEY,
+            "KELP_PROVIDER_API_KEY": API_KEY,
+            "KELP_PROVIDER_BASE_URL": BASE_URL,
             "KELP_AUTH_TOKEN": AUTH_TOKEN,
         }
     )
@@ -265,12 +262,12 @@ def test_missing_api_key_fails_fast_without_echoing_anything(
     assert captured.out == ""
     assert captured.err.count("\n") == 1
     assert "missing_api_key" in captured.err
-    assert "NEBIUS_API_KEY" in captured.err
+    assert "KELP_PROVIDER_API_KEY" in captured.err
 
 
 def test_missing_api_key_process_exits_nonzero_with_one_line(tmp_path: Path) -> None:
     env = _subprocess_env(tmp_path)
-    env.pop("NEBIUS_API_KEY", None)
+    env.pop("KELP_PROVIDER_API_KEY", None)
     result = subprocess.run(
         [sys.executable, "-m", "chat.server", "--check"],
         cwd=ROOT,
@@ -283,12 +280,27 @@ def test_missing_api_key_process_exits_nonzero_with_one_line(tmp_path: Path) -> 
     assert result.stdout == ""
     assert len([line for line in result.stderr.splitlines() if line]) == 1
     assert "missing_api_key" in result.stderr
-    assert "NEBIUS_API_KEY" in result.stderr
+    assert "KELP_PROVIDER_API_KEY" in result.stderr
+
+
+def test_missing_base_url_fails_fast_without_a_default_host(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    env = {"KELP_PROVIDER_API_KEY": API_KEY, "KELP_AUTH_TOKEN": AUTH_TOKEN}
+    code = main(["--check"], env=env)
+    captured = capsys.readouterr()
+    assert code == 2
+    assert captured.out == ""
+    assert captured.err.count("\n") == 1
+    assert "missing_base_url" in captured.err
+    assert "KELP_PROVIDER_BASE_URL" in captured.err
 
 
 def test_invalid_auth_token_and_port_are_rejected(tmp_path: Path) -> None:
     with pytest.raises(ConfigError) as missing_token:
-        ServerConfig.from_env({"NEBIUS_API_KEY": API_KEY})
+        ServerConfig.from_env(
+            {"KELP_PROVIDER_API_KEY": API_KEY, "KELP_PROVIDER_BASE_URL": BASE_URL}
+        )
     assert "KELP_AUTH_TOKEN" in str(missing_token.value)
 
     with pytest.raises(ConfigError) as bad_port:
@@ -482,7 +494,7 @@ class SlowProvider:
         yield StreamEnd("stop")
 
 
-server.TokenFactoryClient = lambda config: SlowProvider()
+server.ProviderClient = lambda config: SlowProvider()
 sys.exit(server.main([]))
 '''
 

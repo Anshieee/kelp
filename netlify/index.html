@@ -1038,7 +1038,7 @@
                     <svg class="mm" role="group" viewBox="0.00 0.00 1190.00 4226.00" preserveAspectRatio="xMidYMid meet" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink">
           <title>Delivery mind map</title>
           <desc>Pale coloured boxes on a white panel. The centre is the Kelp assistant, live on 30 October. Branches lead to M0 to M4, the twenty-four work items KEL-5 to KEL-28, surfaces, payments, and design. All twenty-four work items are done: M1, M2, M3, and M4 are complete, and M4 closed with KEL-27, proactive turns, and KEL-28, per-thread read-only share links. Status words say done, complete, or later. Every box is a link to its entry or decision on the same page.</desc>
-<g id="graph0" class="graph" transform="scale(1 1) rotate(0) translate(4 4221.98)">
+          <g id="graph0" class="graph" transform="scale(1 1) rotate(0) translate(4 4221.98)">
           <title>sdlc</title>
           <polygon fill="white" stroke="none" points="-4,4 -4,-4221.98 1185.98,-4221.98 1185.98,4 -4,4"/>
           <!-- center -->
@@ -1382,7 +1382,7 @@
           <!-- k16 -->
           <g id="node43" class="node">
           <title>k16</title>
-          <g id="a_node43"><a xlink:href="#kel-16" xlink:title="One image, one Compose file, one systemd unit, and a runbook a stranger can follow. Merged and reviewed; proven locally, not yet run on Nebius.">
+          <g id="a_node43"><a xlink:href="#kel-16" xlink:title="One image, one Compose file, one systemd unit, and a runbook a stranger can follow. Merged and reviewed; proven locally, not yet run on a hosted VM.">
           <path fill="#fcefc7" stroke="black" stroke-width="2" d="M714.07,-2503.49C714.07,-2503.49 626.82,-2503.49 626.82,-2503.49 620.82,-2503.49 614.82,-2497.49 614.82,-2491.49 614.82,-2491.49 614.82,-2474.49 614.82,-2474.49 614.82,-2468.49 620.82,-2462.49 626.82,-2462.49 626.82,-2462.49 714.07,-2462.49 714.07,-2462.49 720.07,-2462.49 726.07,-2468.49 726.07,-2474.49 726.07,-2474.49 726.07,-2491.49 726.07,-2491.49 726.07,-2497.49 720.07,-2503.49 714.07,-2503.49"/>
           <text xml:space="preserve" text-anchor="middle" x="670.44" y="-2487.14" font-family="Helvetica,sans-Serif" font-size="13.00">KEL&#45;16 Deploy</text>
           <text xml:space="preserve" text-anchor="middle" x="670.44" y="-2470.64" font-family="Helvetica,sans-Serif" font-size="13.00">DONE</text>
@@ -1472,7 +1472,7 @@
           <!-- m2_deploy -->
           <g id="node49" class="node">
           <title>m2_deploy</title>
-          <g id="a_node49"><a xlink:href="#m2" xlink:title="Image, Compose file, systemd unit, health probe, and a runbook that a stranger can follow. Proven locally on 30 October; the Nebius host run is the next step.">
+          <g id="a_node49"><a xlink:href="#m2" xlink:title="Image, Compose file, systemd unit, health probe, and a runbook that a stranger can follow. Proven locally on 30 October; the hosted VM run is the next step.">
           <ellipse fill="#fff8e1" stroke="black" cx="670.44" cy="-1993.99" rx="127.99" ry="28.99"/>
           <text xml:space="preserve" text-anchor="middle" x="670.44" y="-1998.14" font-family="Helvetica,sans-Serif" font-size="13.00">One image, one runbook</text>
           <text xml:space="preserve" text-anchor="middle" x="670.44" y="-1981.64" font-family="Helvetica,sans-Serif" font-size="13.00">DONE</text>
@@ -2407,7 +2407,7 @@
               <p>
                 Making it hold up in ordinary use: picking up where it left off after a restart,
                 self-checks that say whether it is healthy, better search over your own documents,
-                repeatable quality measurements, and a deploy on the Nebius GPU.
+                repeatable quality measurements, and a deploy on a GPU host.
               </p>
             </div>
             <div class="fact">
@@ -2420,7 +2420,7 @@
             <div class="fact">
               <p class="fact-label">In plain words</p>
               <p class="plain">
-                A GPU is the chip that runs large models quickly; Nebius provides ours as a hosted
+                A GPU is the chip that runs large models quickly; a hosted provider runs ours as a
                 service, so the assistant itself runs on a small ordinary machine and only sends
                 questions out. An eval is a repeatable test of answer quality, not just whether the
                 code runs. A container image is one sealed copy of the app with everything it needs
@@ -2451,7 +2451,7 @@
                 824-line runbook that a stranger can follow from a bare VM to a working turn, then
                 back it up, roll it back, and tear it down. Every command in that runbook was run
                 locally against the image on 30 October 2026. The one step not yet performed is the
-                run on a real Nebius host; the runbook says so in its own verification record.
+                run on a real hosted VM; the runbook says so in its own verification record.
               </p>
             </div>
             <div class="fact fact-wide">
@@ -3355,7 +3355,7 @@
                 credentials and no real documents. Two honest gaps against the written issue. First,
                 the issue names a second target, <code>make eval-live</code>; what shipped is
                 <code>make eval EVAL_ARGS="--live"</code>, which is the only path that builds a real
-                provider client, needs <code>NEBIUS_API_KEY</code>, is labelled and non-gating, and
+                provider client, needs <code>KELP_PROVIDER_API_KEY</code>, is labelled and non-gating, and
                 still keeps third-party tool output on deterministic stubs. Second, the regression
                 compare reads the most recent offline report for the same dataset version, and those
                 reports live under the gitignored <code>var/</code>, so a clean checkout gates on the
@@ -3447,7 +3447,7 @@
                 <code>docker compose config -q</code> appears anywhere in the runbook, because the
                 bare form prints the tokens. And the asset tests pin all of it, including a check
                 that no deploy step ever builds through Compose. Two honest gaps. First, nothing was
-                deployed to Nebius: the image build, boot to healthy, the read-only and non-root
+                deployed to a hosted VM: the image build, boot to healthy, the read-only and non-root
                 checks, restart persistence, backup, and restore were executed locally against
                 <code>kelp:9b1c863</code> on 30 October 2026 and are recorded with their measured
                 times, but the end-to-end pass on a real host by someone who did not write the
@@ -3459,7 +3459,7 @@
             <div class="fact fact-wide">
               <p class="fact-label">Where to look</p>
               <ul class="links">
-                <li><a target="_blank" rel="noopener" href="https://linear.app/kelp-ai/issue/KEL-16/m2-f-nebius-deploy-dockerfile-gpu-runbook-restart-policy">KEL-16 in Linear</a><small>Description and acceptance criteria</small></li>
+                <li><a target="_blank" rel="noopener" href="https://linear.app/kelp-ai/issue/KEL-16">KEL-16 in Linear</a><small>Description and acceptance criteria</small></li>
                 <li><a target="_blank" rel="noopener" href="https://github.com/Anshieee/kelp/blob/main/docs/DEPLOY.md">docs/DEPLOY.md</a><small>The runbook, its verification record, and its limits</small></li>
                 <li><a target="_blank" rel="noopener" href="https://github.com/Anshieee/kelp/blob/main/Dockerfile">Dockerfile</a><small>Two stages, non-root runtime, stdlib healthcheck</small></li>
                 <li><a target="_blank" rel="noopener" href="https://github.com/Anshieee/kelp/blob/main/docker-compose.yml">docker-compose.yml</a><small>Image-only, required tag, loopback publish, resource caps</small></li>
@@ -4620,7 +4620,7 @@
         KEL-23, KEL-25, KEL-26, KEL-27, and KEL-28 carry M4: durable devices, scheduled tasks,
         digest-pinned plugins, the written sharing decision, proactive turns, and the read-only share
         link. Nothing in M3 or M4 is open. KEL-16's merge carries the deploy assets and runbook, and
-        the run on a real Nebius host is still the next step.
+        the run on a real hosted VM is still the next step.
       </p>
     </section>
 
@@ -4814,7 +4814,7 @@
         </div>
         <div>
           <dt>GPU</dt>
-          <dd>The chip that runs large models quickly. Nebius provides ours.</dd>
+          <dd>The chip that runs large models quickly. A hosted provider runs ours.</dd>
         </div>
         <div>
           <dt>Cron</dt>
@@ -4883,7 +4883,7 @@
             <li><a target="_blank" rel="noopener" href="https://linear.app/kelp-ai/issue/KEL-13/m2-c-retrieval-real-docsanswer-with-pdfcsv-chunking-ranking-citations">KEL-13 Real doc search</a></li>
             <li><a target="_blank" rel="noopener" href="https://linear.app/kelp-ai/issue/KEL-14/m2-d-observability-structured-json-logs-prometheus-metrics">KEL-14 Observability</a></li>
             <li><a target="_blank" rel="noopener" href="https://linear.app/kelp-ai/issue/KEL-15/m2-e-eval-harness-make-eval-offline-and-make-eval-live">KEL-15 Eval harness</a></li>
-            <li><a target="_blank" rel="noopener" href="https://linear.app/kelp-ai/issue/KEL-16/m2-f-nebius-deploy-dockerfile-gpu-runbook-restart-policy">KEL-16 Deploy</a></li>
+            <li><a target="_blank" rel="noopener" href="https://linear.app/kelp-ai/issue/KEL-16">KEL-16 Deploy</a></li>
             <li><a target="_blank" rel="noopener" href="https://linear.app/kelp-ai/issue/KEL-17/m3-a-abuse-resistance-rate-limits-body-ceiling-concurrency-caps">KEL-17 Abuse caps</a></li>
             <li><a target="_blank" rel="noopener" href="https://linear.app/kelp-ai/issue/KEL-18/m3-c-spend-guardrails-dailymonthly-usd-ceilings-with-a-hard-stop">KEL-18 Spend ceilings</a></li>
             <li><a target="_blank" rel="noopener" href="https://linear.app/kelp-ai/issue/KEL-19/m3-e-owner-auth-session-cookie-csrf-auth-audit-trail">KEL-19 Owner sign-in</a></li>

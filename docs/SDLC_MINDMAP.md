@@ -56,7 +56,7 @@ non-root user on a read-only filesystem, one Compose file that runs a named imag
 pulls, one systemd unit that refuses to start without that tag, a stdlib health probe, and a
 seventeen-section runbook from a bare VM to a working turn and back down again. It merged at
 `3f4d6cc` from `kel-16` (head `a63d49a`) and added 65 tests, taking the suite from 669 to **734**.
-No application code changed. Nothing was deployed to Nebius: every command in the runbook was run
+No application code changed. Nothing was deployed to a hosted VM: every command in the runbook was run
 locally against the image on 30 October 2026 and the measured results are recorded there, while the
 end-to-end pass on a real host by someone other than the author is still owed.
 
@@ -167,7 +167,7 @@ promise that full-vision scope lands this week. Scope is cumulative: M2 includes
 |---|---|---|---|
 | **M0 Foundation** | 30 Oct 2026 | IN PROGRESS | The repo (public), the docs, the tests, the standard development setup, model and provider chosen, and a written list of what could go wrong. The repo, docs, tests, and skill contract are in. Still open: the automated checks, the development setup, and the threat model. |
 | **M1 Prototype** | 30 Oct 2026 | COMPLETE | The end-to-end story: ask, get an answer with sources, read a file, approve an action, pay with a saved card, watch the six-scene demo. All six work items live here, and all six are done: KEL-5 to KEL-9 were merged earlier, and KEL-10 closed on owner confirmation on 30 October 2026. |
-| **M2 Polished MVP** | 30 Oct 2026 | COMPLETE | Survives ordinary use: picks up after a restart, self-checks, better search over your documents, an honest account of what it did, repeatable quality measurements, and a deploy a stranger can repeat. All six work items are done: KEL-11, the serve entrypoint; KEL-12, health and readiness; KEL-13, real document search with citations; KEL-14, structured logs and metrics; KEL-15, the eval harness that measures answer quality; KEL-16, the image and runbook. The runbook's end-to-end pass on a real Nebius host is still to be done. |
+| **M2 Polished MVP** | 30 Oct 2026 | COMPLETE | Survives ordinary use: picks up after a restart, self-checks, better search over your documents, an honest account of what it did, repeatable quality measurements, and a deploy a stranger can repeat. All six work items are done: KEL-11, the serve entrypoint; KEL-12, health and readiness; KEL-13, real document search with citations; KEL-14, structured logs and metrics; KEL-15, the eval harness that measures answer quality; KEL-16, the image and runbook. The runbook's end-to-end pass on a real hosted VM is still to be done. |
 | **M3 Hardening** | 30 Oct 2026 | COMPLETE | The privacy and cost promises hold under pressure: who sees what, where keys live, caps on traffic, a retention rule, a spend ceiling, and a written privacy review. All six pieces are done: KEL-17, the traffic, body, and concurrency caps; KEL-18, the spend ceilings; KEL-19, owner sign-in with a session cookie, CSRF, and lockout; KEL-20, the policy enforced at every skill call; KEL-21, the retention rule; and KEL-22, the written privacy review with the egress ledger and the exec-boundary decision. |
 | **M4 Full vision** | 30 Oct 2026 | COMPLETE | More devices, work the assistant starts on its own, abilities added by others, and sharing. All six pieces are merged and reviewed: KEL-24, owner sessions as listable, revocable devices; KEL-23, durable scheduled tasks with a real cron runtime; KEL-25, digest-pinned plugin packages loaded by path; KEL-26, the written decision that keeps one owner and gives everyone else only a per-thread read-only link; KEL-27, the proactive turn runner that makes a due schedule a real turn behind spend, concurrency, and hourly caps; and KEL-28, the read-only share link, stored as a hash and revocable in one request. |
 
@@ -596,7 +596,7 @@ tripwire, so a task that tries to dial out fails the run rather than passing qui
 fixtures are labelled `recorded://synthetic` in every report and contain no credentials and no real
 documents. Two honest gaps against the written issue. The issue names a second target,
 `make eval-live`; what shipped is `make eval EVAL_ARGS="--live"`, the only path that builds a real
-provider client, which requires `NEBIUS_API_KEY`, is labelled and non-gating, and keeps third-party
+provider client, which requires `KELP_PROVIDER_API_KEY`, is labelled and non-gating, and keeps third-party
 tool output on deterministic stubs. And the regression compare reads the most recent offline report
 for the same dataset version under the gitignored `var/evals`, so a clean checkout gates on the
 thresholds alone while a working tree also catches a drop against the previous run.
@@ -627,7 +627,7 @@ runbook records what was measured rather than what was hoped.
 **systemd** is the part of Linux that starts things at boot. A **reverse proxy** is the small server
 in front that adds HTTPS. A **read-only root filesystem** means the app cannot rewrite its own code.
 
-- Linear: https://linear.app/kelp-ai/issue/KEL-16/m2-f-nebius-deploy-dockerfile-gpu-runbook-restart-policy
+- Linear: https://linear.app/kelp-ai/issue/KEL-16
 - Runbook: [`docs/DEPLOY.md`](DEPLOY.md)
 - Image: [`Dockerfile`](../Dockerfile), with [`.dockerignore`](../.dockerignore)
 - Runtime: [`docker-compose.yml`](../docker-compose.yml),
@@ -645,7 +645,7 @@ and 25 probe checks — with no application code changed. Four review fixes rode
 Section 12.3 gained the build-host venv line, so the offline smoke step runs on a fresh host. Only
 `docker compose config -q` appears in the runbook, because the bare form prints the tokens. The asset
 tests pin all of it, including that no deploy step builds through Compose. Two honest gaps. Nothing
-was deployed to Nebius: the image build, boot to healthy, the read-only and non-root checks, restart
+was deployed to a hosted VM: the image build, boot to healthy, the read-only and non-root checks, restart
 persistence, backup, and restore were executed locally against `kelp:9b1c863` on 30 October 2026 and
 are recorded with their measured times, but the end-to-end pass on a real host by someone who did not
 write the runbook is still owed. And the image is CPU-only by design: the model is a hosted service,
@@ -920,7 +920,7 @@ password form, so the root token remains the thing to protect, rotate, and keep 
 ### KEL-22 — Privacy review — DONE
 
 `docs/PRIVACY.md` is the written position the owner can audit. It names every outbound recipient —
-Token Factory for models, Tavily for search, GitHub for reads, Stripe and Razorpay for money, plus an
+the model provider for models, Tavily for search, GitHub for reads, Stripe and Razorpay for money, plus an
 `unlisted` bucket for an operator-supplied base URL — and for each one states what it receives, what
 it does not, and why; it then lists where each data class sits on the machine and points at the
 retention table in the runbook instead of restating it, so there is one clock and not two.
@@ -1395,7 +1395,7 @@ explicit revoke routes are the only kill switch. And a revoke cannot recall a co
   [KEL-13](https://linear.app/kelp-ai/issue/KEL-13/m2-c-retrieval-real-docsanswer-with-pdfcsv-chunking-ranking-citations),
   [KEL-14](https://linear.app/kelp-ai/issue/KEL-14/m2-d-observability-structured-json-logs-prometheus-metrics),
   [KEL-15](https://linear.app/kelp-ai/issue/KEL-15/m2-e-eval-harness-make-eval-offline-and-make-eval-live),
-  [KEL-16](https://linear.app/kelp-ai/issue/KEL-16/m2-f-nebius-deploy-dockerfile-gpu-runbook-restart-policy),
+  [KEL-16](https://linear.app/kelp-ai/issue/KEL-16),
   [KEL-17](https://linear.app/kelp-ai/issue/KEL-17/m3-a-abuse-resistance-rate-limits-body-ceiling-concurrency-caps),
   [KEL-18](https://linear.app/kelp-ai/issue/KEL-18/m3-c-spend-guardrails-dailymonthly-usd-ceilings-with-a-hard-stop),
   [KEL-20](https://linear.app/kelp-ai/issue/KEL-20/m3-d-enforce-declared-effects-and-scopes-at-invoke-time),
@@ -1451,4 +1451,4 @@ explicit revoke routes are the only kill switch. And a revoke cannot recall a co
 - **Approval gate** — a checkpoint that asks you before an action, and a yes that works once.
 - **Fixture** — a saved sample answer, used so a test runs the same way every time.
 - **Eval** — a repeatable test of answer quality, not just whether the code runs.
-- **GPU** — the chip that runs large models quickly. Nebius provides ours.
+- **GPU** — the chip that runs large models quickly. A hosted provider runs ours.

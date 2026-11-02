@@ -58,7 +58,7 @@ def test_every_recorded_task_has_a_fixture_and_every_fixture_is_used() -> None:
 def test_dataset_and_fixtures_contain_no_credential_shaped_text() -> None:
     text = Path(DEFAULT_DATASET).read_text(encoding="utf-8")
     text += Path(DEFAULT_FIXTURES).read_text(encoding="utf-8")
-    assert "NEBIUS_API_KEY" not in text
+    assert "KELP_PROVIDER_API_KEY" not in text
     assert not re.search(r"\b(?:sk|rk|pk)_(?:live|test)_[A-Za-z0-9]{4,}", text)
 
 

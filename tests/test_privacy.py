@@ -32,7 +32,7 @@ import chat.server as chat_server
 from chat import cards
 from chat.retention import RETENTION_ROWS
 from kernel.config import KernelConfig
-from kernel.provider import ChatRequest, TextDelta, TokenFactoryClient
+from kernel.provider import ChatRequest, TextDelta, ProviderClient
 from openshell.audit import AuditLog
 from openshell.egress_ledger import (
     EGRESS_EVENT,
@@ -63,7 +63,7 @@ ALLOWED_EXTRA_KEYS = frozenset(
 EGRESS_PACKAGES = ("chat", "kernel", "skills", "openshell", "payments")
 
 API_KEY = "test-key-not-a-real-secret"
-TRANSCRIPT = "my private notes about the nebius gpu cluster"
+TRANSCRIPT = "my private notes about the gpu cluster"
 
 
 # ---------------------------------------------------------------------------
@@ -310,9 +310,9 @@ def _sse(*chunks: Any) -> str:
     return body + "\n\ndata: [DONE]\n\n"
 
 
-def _drain(client: TokenFactoryClient, message: str) -> list[Any]:
+def _drain(client: ProviderClient, message: str) -> list[Any]:
     request = ChatRequest(
-        model="nvidia/Nemotron-3_5-Super-VL",
+        model="nvidia/nemotron-3.5-super-vl",
         messages=[{"role": "user", "content": message}],
     )
 
@@ -337,8 +337,8 @@ def test_model_turn_writes_one_content_free_ledger_row(tmp_path: Path) -> None:
             ),
         )
 
-    client = TokenFactoryClient(
-        KernelConfig(api_key=API_KEY),
+    client = ProviderClient(
+        KernelConfig(api_key=API_KEY, base_url="https://openrouter.ai/api/v1"),
         client=httpx.AsyncClient(transport=httpx.MockTransport(handler)),
         ledger=ledger,
     )
@@ -348,7 +348,7 @@ def test_model_turn_writes_one_content_free_ledger_row(tmp_path: Path) -> None:
     rows = ledger.entries()
     assert len(rows) == 1
     extra = rows[0]["extra"]
-    assert extra["recipient"] == "tokenfactory"
+    assert extra["recipient"] == "openrouter"
     assert extra["purpose"] == "chat.completions"
     assert extra["outcome"] == "completed"
     assert extra["request_bytes"] > 0
@@ -365,8 +365,8 @@ def test_model_turn_with_a_provider_error_still_writes_one_row(tmp_path: Path) -
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(401, text="{}")
 
-    client = TokenFactoryClient(
-        KernelConfig(api_key=API_KEY),
+    client = ProviderClient(
+        KernelConfig(api_key=API_KEY, base_url="https://openrouter.ai/api/v1"),
         client=httpx.AsyncClient(transport=httpx.MockTransport(handler)),
         ledger=ledger,
     )
@@ -381,8 +381,8 @@ def test_model_turn_with_a_provider_error_still_writes_one_row(tmp_path: Path) -
 
 def test_model_turn_with_no_key_never_touches_the_ledger(tmp_path: Path) -> None:
     _audit, ledger = _ledger(tmp_path)
-    client = TokenFactoryClient(
-        KernelConfig(api_key=None),
+    client = ProviderClient(
+        KernelConfig(api_key=None, base_url="https://openrouter.ai/api/v1"),
         client=httpx.AsyncClient(transport=httpx.MockTransport(_unreachable)),
         ledger=ledger,
     )
@@ -396,7 +396,7 @@ def test_an_overridden_base_url_is_recorded_as_unlisted(tmp_path: Path) -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(200, text=_sse({"choices": [{"delta": {}, "finish_reason": "stop"}]}))
 
-    client = TokenFactoryClient(
+    client = ProviderClient(
         KernelConfig(api_key=API_KEY, base_url="https://gateway.example.test/v1"),
         client=httpx.AsyncClient(transport=httpx.MockTransport(handler)),
         ledger=ledger,
@@ -487,7 +487,7 @@ def test_transport_failure_writes_a_zero_response_row(tmp_path: Path) -> None:
     )
 
     with pytest.raises(OSError):
-        asyncio.run(client.get("https://api.github.com/repos/Anshieee/nebius-nvidia"))
+        asyncio.run(client.get("https://api.github.com/repos/Anshieee/kelp"))
 
     rows = ledger.entries()
     assert len(rows) == 1
@@ -499,12 +499,12 @@ def test_transport_failure_writes_a_zero_response_row(tmp_path: Path) -> None:
 def test_provider_health_probe_writes_a_content_free_row(tmp_path: Path) -> None:
     _audit, ledger = _ledger(tmp_path)
     chat_api._record_probe_egress(
-        ledger, "https://api.tokenfactory.nebius.com/v1/models", 512, "completed"
+        ledger, "https://openrouter.ai/api/v1/models", 512, "completed"
     )
     rows = ledger.entries()
     assert len(rows) == 1
     extra = rows[0]["extra"]
-    assert extra["recipient"] == "tokenfactory"
+    assert extra["recipient"] == "openrouter"
     assert extra["purpose"] == "provider.health"
     assert extra["method"] == "get"
     assert extra["request_bytes"] == 0
@@ -554,16 +554,16 @@ def test_provider_probe_rejection_is_provider_error_with_status(
     with pytest.raises(OSError) as excinfo:
         asyncio.run(
             chat_api._http_provider_probe(
-                "https://api.tokenfactory.nebius.com/v1", API_KEY, ledger
+                "https://openrouter.ai/api/v1", API_KEY, ledger
             )
         )
     assert "401" in str(excinfo.value)
-    assert client.requested == ["https://api.tokenfactory.nebius.com/v1/models"]
+    assert client.requested == ["https://openrouter.ai/api/v1/models"]
 
     rows = ledger.entries()
     assert len(rows) == 1
     extra = rows[0]["extra"]
-    assert extra["recipient"] == "tokenfactory"
+    assert extra["recipient"] == "openrouter"
     assert extra["purpose"] == "provider.health"
     assert extra["outcome"] == "provider_error"
     assert extra["status"] == 401
@@ -581,7 +581,7 @@ def test_provider_probe_success_is_completed_with_status(
 
     asyncio.run(
         chat_api._http_provider_probe(
-            "https://api.tokenfactory.nebius.com/v1", API_KEY, ledger
+            "https://openrouter.ai/api/v1", API_KEY, ledger
         )
     )
 
@@ -754,7 +754,8 @@ def _env(tmp_path: Path) -> dict[str, str]:
         "KELP_WORKSPACE_ROOT": str(tmp_path),
         "KELP_SKILL_ROOT": str(ROOT / "skills" / "builtin"),
         "KELP_AUTH_TOKEN": "auth-token-for-tests",
-        "NEBIUS_API_KEY": API_KEY,
+        "KELP_PROVIDER_API_KEY": API_KEY,
+        "KELP_PROVIDER_BASE_URL": "https://openrouter.ai/api/v1",
     }
 
 

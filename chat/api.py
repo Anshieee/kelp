@@ -605,7 +605,7 @@ def _package_version() -> str:
     try:
         from importlib.metadata import version
 
-        return version("nebius-assistant")
+        return version("kelp-assistant")
     except Exception:  # noqa: BLE001 - an uninstalled tree still serves
         return "0.0.0"
 

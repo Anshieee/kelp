@@ -68,8 +68,9 @@ offline result.
 
 ## Live mode
 
-`--live` is the only path that creates a `TokenFactoryClient`. It requires
-`NEBIUS_API_KEY`; the harness never prints, stores, or reports the key. Tool
+`--live` is the only path that creates a `ProviderClient`. It requires both
+`KELP_PROVIDER_BASE_URL` and `KELP_PROVIDER_API_KEY`; there is no default host,
+and the harness never prints, stores, or reports the key. Tool
 execution is still constrained: `docs.answer` is the real local handler, and the
 other tool outputs are deterministic recording stubs, so live mode measures
 model tool selection without granting third-party egress.

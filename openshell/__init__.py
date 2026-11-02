@@ -11,7 +11,7 @@ Public surface::
         allowed_commands=frozenset({"echo"}),
         allow_exec=True,
     ))
-    audit = AuditLog("var/audit/openshell.jsonl", secret_names=("NEBIUS_API_KEY",))
+    audit = AuditLog("var/audit/openshell.jsonl", secret_names=("KELP_PROVIDER_API_KEY",))
     ledger = EgressLedger(audit)  # one content-free row per outbound call
     gate = ExecGate(policy=policy, approvals=ApprovalStore(), audit=audit)
 

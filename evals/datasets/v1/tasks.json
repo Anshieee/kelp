@@ -86,7 +86,7 @@
         "kind": "pdf",
         "filename": "handbook.pdf",
         "pages": [
-          ["Nebius platform overview.", "The platform runs on NVIDIA GPUs."],
+          ["GPU platform overview.", "The platform runs on NVIDIA GPUs."],
           ["Support.", "Production support response target is 30 minutes."],
           ["Billing.", "Invoices are issued on the first day of each month."]
         ]
@@ -147,20 +147,20 @@
       "category": "tool",
       "scenario": "tool_turn",
       "name": "Selects web.search with a fresh query",
-      "prompt": "Search the web for the latest Nebius GPU pricing.",
+      "prompt": "Search the web for the latest GPU cloud pricing.",
       "fixture": "provider_v1",
       "expect": {
         "tool_calls": [
           {
             "name": "web.search",
             "arguments": {
-              "query": "latest Nebius GPU pricing",
+              "query": "latest GPU cloud pricing",
               "max_results": 5,
               "freshness": "week"
             }
           }
         ],
-        "final_contains": ["latest Nebius GPU pricing"]
+        "final_contains": ["latest GPU cloud pricing"]
       }
     },
     {
@@ -224,7 +224,7 @@
         "kind": "pdf",
         "filename": "handbook.pdf",
         "pages": [
-          ["Nebius platform overview.", "The platform runs on NVIDIA GPUs."],
+          ["GPU platform overview.", "The platform runs on NVIDIA GPUs."],
           ["Support.", "Production support response target is 30 minutes."]
         ]
       },
@@ -276,20 +276,20 @@
       "category": "tool",
       "scenario": "tool_turn",
       "name": "Preserves optional search limits",
-      "prompt": "Search the web for Nebius news from the past week, at most 3 results.",
+      "prompt": "Search the web for GPU cloud news from the past week, at most 3 results.",
       "fixture": "provider_v1",
       "expect": {
         "tool_calls": [
           {
             "name": "web.search",
             "arguments": {
-              "query": "Nebius news",
+              "query": "GPU cloud news",
               "max_results": 3,
               "freshness": "week"
             }
           }
         ],
-        "final_contains": ["Nebius"]
+        "final_contains": ["GPU cloud"]
       }
     },
     {

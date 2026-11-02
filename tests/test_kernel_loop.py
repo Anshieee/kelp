@@ -30,7 +30,7 @@ from kernel.provider import (
     UsageReport,
 )
 
-MODEL = "nvidia/Nemotron-3_5-Super-VL"
+MODEL = "nvidia/nemotron-3.5-super-vl"
 
 
 def text_script(text: str, *, usage: tuple[int, int] = (10, 5), finish: str = "stop") -> list[Any]:
@@ -113,7 +113,7 @@ def test_zero_tool_calls_completes_and_accounts_usage() -> None:
     assert finished.steps == 1
     assert finished.input_tokens == 10
     assert finished.output_tokens == 5
-    assert finished.estimated_cost_usd == pytest.approx(7.5e-06)
+    assert finished.estimated_cost_usd is None
     assert finished.usage_persisted is True
     assert len(store.records) == 1
     record = store.records[0]
@@ -121,7 +121,7 @@ def test_zero_tool_calls_completes_and_accounts_usage() -> None:
     assert record.session_id == "s1"
     assert record.model == MODEL
     assert record.total_tokens == 15
-    assert record.cost_known is True
+    assert record.cost_known is False
     assert record.usage_reported is True
     assert record.outcome == "stop"
     assert provider.requests[0].max_tokens == 1024
@@ -132,10 +132,10 @@ def test_one_tool_call_completes_end_to_end() -> None:
 
     async def executor(call: ToolCall) -> Mapping[str, Any]:
         calls.append(call)
-        return {"ok": True, "results": [{"title": "Nebius"}]}
+        return {"ok": True, "results": [{"title": "GPU cloud"}]}
 
     loop, provider = build(
-        [tool_script("web.search", {"query": "nebius"}), text_script("Found one.")],
+        [tool_script("web.search", {"query": "gpu"}), text_script("Found one.")],
         executor=CallableToolExecutor(executor),
     )
     result = collect(loop, [{"role": "user", "content": "search"}])
@@ -150,9 +150,9 @@ def test_one_tool_call_completes_end_to_end() -> None:
         "usage_updated",
         "turn_finished",
     ]
-    assert calls == [ToolCall(call_id="call_1", name="web.search", arguments={"query": "nebius"})]
+    assert calls == [ToolCall(call_id="call_1", name="web.search", arguments={"query": "gpu"})]
     started = [e for e in result if e.kind == "tool_call_started"][0]
-    assert started.arguments == {"query": "nebius"}
+    assert started.arguments == {"query": "gpu"}
     finished = [e for e in result if e.kind == "tool_call_finished"][0]
     assert finished.ok is True
     assert result[-1].message == "Found one."

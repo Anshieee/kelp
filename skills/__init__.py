@@ -5,7 +5,7 @@ Public surface (see ``docs/SKILL_SPEC.md``)::
     from skills import SkillRegistry, SkillContext, SkillManifestError
 
     registry = SkillRegistry.load()          # raises SkillManifestError on a bad manifest
-    result = await registry.invoke("web.search", {"query": "nebius gpu"})
+    result = await registry.invoke("web.search", {"query": "gpu cluster"})
 """
 
 from .context import ApprovalRequest, SkillContext

@@ -3,8 +3,8 @@
 Status: **prepared, nothing created in Linear.** This file is the create-ready source of truth.
 Verified: 2026-10-28 via Linear MCP.
 
-Supersedes the `NEB` target in `docs/linear-p0-plan.md`. Structure, milestones, and issue
-content are identical; only the team key changes to `KEL`.
+Supersedes the earlier target in `docs/linear-p0-plan.md`. Structure, milestones, and
+issue content are identical; the team is `KEL`.
 
 ## 1. Verified state
 
@@ -13,13 +13,12 @@ content are identical; only the team key changes to `KEL`.
 | MCP auth | OK — workspace read + write tools available |
 | Workspace | `kelp` — https://linear.app/kelp-ai — `ad8e918a-296b-4e99-ac70-313019458f5c` |
 | Team | **`KEL`** (Kelp) — `6e2b9438-ee47-4bcc-adc5-67fe7f890581` — **only team in workspace** |
-| `NEB` | does **not** exist; no `create_team` tool is exposed via MCP (UI/API only) |
 | Projects | none |
 | Issue labels | `Bug`, `Improvement`, `Feature` (defaults only, workspace-level) |
 | Workflow states (KEL) | Backlog, Todo (`844f8bfc-…`), In Progress, Done, Canceled, Duplicate |
 | Users | `anshchampion` (`838c64bd-f997-45e4-ac34-edd03cb56e8b`, admin) |
 
-**Decision:** file into `KEL` now. Branch prefix must be `kel-<n>-<slug>`; `neb-…` will
+**Decision:** file into `KEL` now. Branch prefix must be `kel-<n>-<slug>`; any other prefix will
 silently break PR auto-linking. If a dedicated team is wanted later, create it in the UI and
 move issues — identifiers re-key, so doing it before creation is cheaper.
 
@@ -34,7 +33,7 @@ move issues — identifiers re-key, so doing it before creation is cheaper.
   "lead": "anshchampion",
   "priority": 2,
   "state": "Planned",
-  "summary": "Always-on private assistant: local-first agent kernel on Nebius GPU, dashboard-primary chat, approval-gated tools, eval-backed reliability.",
+  "summary": "Always-on private assistant: local-first agent kernel on a GPU host, dashboard-primary chat, approval-gated tools, eval-backed reliability.",
   "description": "..."
 }
 ```
@@ -46,7 +45,7 @@ Description body:
 
 > ## Goal
 > A private, always-on assistant the owner talks to from a dashboard, backed by a local-first
-> agent kernel running on a Nebius GPU. It answers with sources, reads the owner's documents,
+> agent kernel running on a GPU host. It answers with sources, reads the owner's documents,
 > and takes real actions only behind explicit human approval.
 >
 > ## Non-goals for the MVP
@@ -77,7 +76,7 @@ Description body:
 |---|---|---|---|
 | M0 | M0 — Foundation | repo scaffold, CI, dev env, model/provider selection, threat model | 2026-11-07 |
 | M1 | M1 — Prototype | query → tool → answer loop, persistence, single-user auth, dashboard chat, approvals, demo script | 2026-11-28 |
-| M2 | M2 — Polished MVP | restart/resume, health checks, retrieval quality, evals, observability, Nebius GPU deploy | 2026-12-19 |
+| M2 | M2 — Polished MVP | restart/resume, health checks, retrieval quality, evals, observability, GPU host deploy | 2026-12-19 |
 | M3 | M3 — Hardening | privacy controls, secret isolation, rate limits, retention, cost guardrails | 2027-01-23 |
 | M4 | M4 — Full vision | multi-device presence, proactive tasks, plugin surface, team sharing | 2027-03-06 |
 
@@ -131,7 +130,7 @@ All: `team: "KEL"`, `project: "Always-On Private Assistant"`, `state: "Todo"`,
 > Build the kernel agent loop that turns a user turn into a streamed answer with tool calls.
 >
 > **Scope**
-> - Single provider interface (Nebius-hosted endpoint) behind an adapter so the model is swappable.
+> - Single provider interface (hosted provider endpoint) behind an adapter so the model is swappable.
 > - Streaming tokens to the dashboard over one persistent channel; tool calls interleaved mid-stream.
 > - Tool-call protocol: model emits a typed call → runtime validates → executes → returns observation → model continues.
 > - Hard turn budget (max steps, max tokens, wall-clock cap) to bound cost.
@@ -298,9 +297,9 @@ All: `team: "KEL"`, `project: "Always-On Private Assistant"`, `state: "Todo"`,
 
 ## 7. Git / GitHub / Linear integration — required steps
 
-Current: `/home/ansh/Projects/nebius-nvidia` is **not a git repo** (only `docs/`, `logs/`).
+Current: `/home/ansh/Projects/kelp` is **not a git repo** (only `docs/`, `logs/`).
 Verified: `gh` 2.102.0 authed as **Anshieee** with `repo` + `workflow` scopes;
-`Anshieee/nebius-nvidia` **does not exist yet** (name is free).
+`Anshieee/kelp` **does not exist yet** (name is free).
 `logs/` contains local MCP audit logs — no credential patterns found (checked 2026-10-28),
 but they are still excluded from git.
 
@@ -317,12 +316,12 @@ but they are still excluded from git.
 **Commands (agent-runnable once approved)**
 
 ```bash
-cd /home/ansh/Projects/nebius-nvidia
+cd /home/ansh/Projects/kelp
 git init -b main
 # write .gitignore first, then:
 git add .gitignore docs/
 git commit -m "chore: scaffold docs + planning pack"
-gh repo create nebius-nvidia --private --source=. --remote=origin --push
+gh repo create kelp --private --source=. --remote=origin --push
 ```
 
 Private is the right default: the product claims privacy and the repo will accumulate
@@ -333,7 +332,7 @@ architecture and threat-model detail.
 4. **Branch protection** on `main` (Settings → Branches): require PR, require CI status,
    no force-push, no direct pushes.
 5. **Linear ↔ GitHub** (Linear Settings → Integrations → GitHub, workspace admin): install the
-   app, grant access to `Anshieee/nebius-nvidia` **only**, then enable
+   app, grant access to `Anshieee/kelp` **only**, then enable
    - link PRs/branches by issue ID,
    - auto-move to In Progress on branch create,
    - auto-close on merge to `main`.

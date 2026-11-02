@@ -8,8 +8,9 @@
   `tests/test_deploy_assets.py` (40 cases); full suite **1045** passed on
   `main`
 - **Not in scope:** evals, chat/turn logic, payments, the tracker site, and any
-  actual server. Nothing here was deployed to Nebius; every command below was
-  executed locally against this image and is reported with its measured time.
+  actual server. Nothing here was deployed to a hosted VM; every command below
+  was executed locally against this image and is reported with its measured
+  time.
 
 This is the runbook a stranger follows to put the assistant on a VM and prove
 it works. It assumes one operator, one VM, one owner, and a domain you control.
@@ -22,8 +23,8 @@ anything.
 
 One Python process, `python -m chat.server`, serving plain HTTP on port `8765`.
 It owns SQLite, the skill workspace, the audit log, and the usage log — all under
-`/data`. Model calls leave the box over HTTPS to Nebius Token Factory; nothing
-else does.
+`/data`. Model calls leave the box over HTTPS to the provider named by
+`KELP_PROVIDER_BASE_URL`; nothing else does.
 
 ```
 browser ──TLS──▶ Caddy/nginx on :443 ──HTTP──▶ kelp container :8765
@@ -33,8 +34,8 @@ browser ──TLS──▶ Caddy/nginx on :443 ──HTTP──▶ kelp containe
 ```
 
 The image is CPU-only. The "GPU" in the milestone is the *model host*: this
-service is a thin client of Token Factory, so a 2 vCPU / 8 GB VM is enough
-(measured idle footprint: ~50 MiB RSS, ~2% CPU).
+service is a thin client of a hosted model endpoint, so a 2 vCPU / 8 GB VM is
+enough (measured idle footprint: ~50 MiB RSS, ~2% CPU).
 
 ### Files in this slice
 
@@ -52,9 +53,8 @@ service is a thin client of Token Factory, so a 2 vCPU / 8 GB VM is enough
 
 ## 2. Prerequisites
 
-- A Linux VM you can SSH into (x86_64; any Nebius CPU shape with 2 vCPU / 8 GB
-  is sufficient — the smallest CPU preset is `2vcpu-8gb`). Open only `22`,
-  `80`, `443`.
+- A Linux VM you can SSH into (x86_64; any 2 vCPU / 8 GB shape is sufficient,
+  and the smallest standard CPU preset will do). Open only `22`, `80`, `443`.
 - Docker Engine 24+ with the Compose v2 plugin (`docker compose version`).
   Verified against Docker 29.9.1 / Compose 5.6.0.
 - `curl` 8.2+ on the VM for the smoke steps (`--header @file`, so the owner
@@ -68,10 +68,12 @@ service is a thin client of Token Factory, so a 2 vCPU / 8 GB VM is enough
   sudo apt-get install -y python3-venv    # Debian/Ubuntu, once
   ```
 
-- Outbound HTTPS to `https://api.tokenfactory.nebius.com` (readiness probes
-  `GET /models`; turns call `POST /chat/completions`).
+- Outbound HTTPS to the model provider's host (readiness probes `GET /models`;
+  turns call `POST /chat/completions`). The documented path is
+  `https://openrouter.ai`.
 - A DNS name pointing at the VM, e.g. `kelp.example.com`.
-- A Nebius Token Factory API key and one long random owner token:
+- A model provider API key (for example an OpenRouter key) and one long random
+  owner token:
 
   ```bash
   python3 -c "import secrets; print(secrets.token_urlsafe(32))"
@@ -95,14 +97,14 @@ there would be silently ignored.
 
 ## 3. Environment contract
 
-The image sets every **non-secret** default below, so the env file only has to
-carry the two required secrets. Secrets are not baked into the image and have
-no default: the process refuses to start without them (`missing_api_key` or
-`missing_auth_token`, exit `2`).
+The image sets every non-secret default below. Three values have no default and
+are required: the provider endpoint (`missing_base_url`), its key
+(`missing_api_key`), and the owner token (`missing_auth_token`). Secrets are not
+baked into the image; the process refuses to start without all three, exit `2`.
 
 | Variable | Required | Default in image | Secret | What it does |
 |---|---|---|---|---|
-| `NEBIUS_API_KEY` | **yes** | — | **yes** | Token Factory key, server-side only |
+| `KELP_PROVIDER_API_KEY` | **yes** | — | **yes** | Model provider key, server-side only |
 | `KELP_AUTH_TOKEN` | **yes** | — | **yes** | Root owner bearer token for every `/api/*` call except `/api/healthz`; also the credential that mints a browser session |
 | `KELP_CSRF_TOKEN` | no | unset | **yes** | Static header token for **bearer** mutations. Session cookies use a per-session double-submit pair instead (§11.1) |
 | `KELP_SESSION_SECRET` | no | falls back to `KELP_AUTH_TOKEN` | **yes** | HMAC key for the derived per-device CSRF half; never stored. Set a dedicated value to rotate sessions independently of the root token (§11.1) |
@@ -113,9 +115,9 @@ no default: the process refuses to start without them (`missing_api_key` or
 | `KELP_AUTH_LOCKOUT_SECONDS` | no | `300` | no | Lockout duration; emitted as `Retry-After` |
 | `KELP_AUTH_FAILURE_IDLE_SECONDS` | no | `300` | no | Idle-out for an auth-failure record |
 | `KELP_AUTH_FAILURE_MAX_KEYS` | no | `4096` | no | Bound on the hashed auth-failure map |
-| `NEBIUS_TOKEN_FACTORY_BASE_URL` | no | `https://api.tokenfactory.nebius.com/v1` | no | Provider endpoint |
-| `KELP_PRIMARY_MODEL` | no | `nvidia/Nemotron-3_5-Super-VL` | no | Conversational model |
-| `KELP_BACKGROUND_MODEL` | no | `nvidia/Nemotron-3_5-Lightning` | no | Titles, summaries, compaction |
+| `KELP_PROVIDER_BASE_URL` | **yes** | — | no | OpenAI-compatible provider endpoint, e.g. `https://openrouter.ai/api/v1` |
+| `KELP_PRIMARY_MODEL` | no | `nvidia/nemotron-3.5-super-vl` | no | Conversational model |
+| `KELP_BACKGROUND_MODEL` | no | `nvidia/nemotron-3.5-lightning` | no | Titles, summaries, compaction |
 | `KELP_HOST` | no | `0.0.0.0` | no | Bind address inside the container |
 | `KELP_PORT` | no | `8765` | no | Bind port |
 | `KELP_DB_PATH` | no | `/data/chat.db` | no | SQLite database |
@@ -168,7 +170,7 @@ stream, and share stream (`share_streams`) caps.
 cd /opt/kelp
 cp deploy/kelp.env.example deploy/kelp.env
 chmod 600 deploy/kelp.env
-$EDITOR deploy/kelp.env          # set NEBIUS_API_KEY and KELP_AUTH_TOKEN
+$EDITOR deploy/kelp.env          # set the provider URL/key and KELP_AUTH_TOKEN
 ```
 
 `deploy/kelp.env` is gitignored and excluded from the build context. Never put
@@ -844,7 +846,7 @@ Expected: `{"ok":true,...,"commit":"<tag>"}` and
 
 ### 12.2 One real turn
 
-Needs the real `NEBIUS_API_KEY`; this is the only step that proves the model
+Needs the real `KELP_PROVIDER_API_KEY`; this is the only step that proves the model
 path, not just the process.
 
 ```bash
@@ -920,7 +922,7 @@ if the VM is also the checkout you tested; otherwise record the numbers from the
 build host next to the commit, and treat the VM as proven by §12.1 and §12.2.
 
 Measured on the verification host: **68 passed in 0.74 s** for the
-retrieval/answer suites and **1045 passed** for the full suite on the current
+retrieval/answer suites and **1048 passed** for the full suite on the current
 `main`. Record this number next to the commit in the release note; a drop means
 the deploy is not the code you tested.
 
@@ -930,25 +932,20 @@ the deploy is not the code you tested.
 
 Two cost centres, both visible from `/data/usage/usage.jsonl` and `/api/metrics`.
 
-**Tokens.** The repo's list prices (`kernel/config.py`, recorded 2026-10-28) are
-per million tokens: Super VL `$0.30` in / `$0.90` out; Lightning `$0.06` in /
-`$0.24` out. At an illustrative 2,000 input and 500 output tokens per turn:
-
-```
-2,000/1e6 × $0.30 = $0.00060
-  500/1e6 × $0.90 = $0.00045
-                    ─────────
-                    $0.00105 per turn  ≈ $1.05 per 1,000 turns
-```
-
-Background work (titles, summaries) uses Lightning at roughly a fifth of that
-rate. The number that matters is the one in `usage.jsonl`; unknown models record
-no price rather than a fake `$0`.
+**Tokens.** `kernel/config.py` ships `DEFAULT_PRICING` empty on purpose: the
+endpoint is operator-chosen, so a repo-wide list price would be wrong for most
+deployments. Until prices are added, every turn records
+`estimated_cost_usd: null` and `cost_known: false`, and the spend guardrail
+treats such a window as blocked (§13.1). To price turns, add the model ids this
+deployment uses to `DEFAULT_PRICING` with that provider's current
+USD-per-million list price, then rebuild. The number that matters is the one in
+`usage.jsonl`; an unknown model records no price rather than a fake `$0`.
 
 **VM and disk.** One small CPU instance runs 24/7 at ~50 MiB RSS; a 20 GB volume
-holds the database, uploads, and logs for a very long time. Check current Nebius
-prices in the console — this document does not quote them. Egress is negligible:
-requests are small, and the heavy lifting happens in Token Factory.
+holds the database, uploads, and logs for a very long time. Check current VM
+prices in the provider's console; this document does not quote them. Egress is
+negligible: requests are small, and the heavy lifting happens at the model
+provider.
 
 ### 13.1 Spend guardrail
 
@@ -989,7 +986,7 @@ means "unlimited".
 The app cap protects the product; the provider cap protects the account. Do
 both, in this order:
 
-- [ ] Set a hard monthly spend limit in the Token Factory console for the key
+- [ ] Set a hard monthly spend limit in the model provider's console for the key
       this deployment uses, at or slightly above `KELP_SPEND_CAP_MONTH_USD`.
 - [ ] Confirm `KELP_SPEND_CAP_DAY_USD`/`_MONTH_USD` are set in
       `deploy/kelp.env` (the container environment; no secret belongs there but
@@ -1064,7 +1061,7 @@ rm -f "$HDRS"
 
 **Never paste plain `compose config` output (the form without `-q`) or
 `docker inspect` output into a ticket, a chat, or a PR.** Both print the merged
-environment, and `KELP_AUTH_TOKEN` / `NEBIUS_API_KEY` are in it in clear text.
+environment, and `KELP_AUTH_TOKEN` / `KELP_PROVIDER_API_KEY` are in it in clear text.
 `config -q` only validates; when something is wrong, report the tag, the failing
 check code (`provider=timeout`), and whether the file exists — not its contents.
 
@@ -1114,7 +1111,7 @@ sends the token as a header and never prints it.
 | Backup | tar of `/data` into a host backup dir | archive with numeric owners | 1 s |
 | Restore | fresh volume + `tar --numeric-owner` | 2 threads / 2 turns, uid 10001 | < 1 s |
 | Offline eval | `pytest tests/test_docs_answer*.py` | 68 passed | 0.74 s |
-| Full suite | `python -m pytest` | 1045 passed on `main` | — |
+| Full suite | `python -m pytest` | 1048 passed on `main` | — |
 | Asset tests | `pytest tests/test_deploy_assets.py` | 40 passed | 0.12 s |
 | Probe tests | `pytest tests/test_deploy_healthcheck.py` | 25 passed | 4.08 s |
 | Live checkout receipt | test-mode order `order_TtyLUT5JHr4pdK`, ₹1 (100 paise) netbanking payment `pay_TtyOkNxvfHSKFS` captured; confirm → HTTP 200 `idempotent=false` with receipt `pi_rzpTtyOkNxvfHSKFS`; replay idempotent; ledger shows one paid proposal + one provider payment | verified | 2026-10-30 |
