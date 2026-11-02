@@ -7,12 +7,13 @@ name = "kelp-assistant"
 version = "0.0.0"
 description = "Always-On Private Assistant: local-first agent kernel, skill contracts, dashboard"
 requires-python = ">=3.11"
-dependencies = ["jsonschema>=4.20,<5", "httpx>=0.27,<1"]
+dependencies = ["jsonschema>=4.20,<5", "httpx>=0.27,<1", "cryptography>=46,<51"]
 
 # One command sets up a development environment: `pip install -e ".[dev]"`.
 # The three pins match .github/workflows/ci.yml exactly, so a local run gates
 # with the same tool versions the CI gate uses. Bump them together.
 [project.optional-dependencies]
+browser = ["playwright>=1.49,<2"]
 dev = ["pytest==9.2.0", "ruff==0.17.3", "mypy==2.4.1"]
 
 [tool.setuptools.packages.find]
