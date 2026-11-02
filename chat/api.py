@@ -1527,6 +1527,20 @@ class ChatAPI:
         try:
             path = unquote(urlsplit(request.path).path)
             segments = [segment for segment in path.split("/") if segment]
+            # The owner credential inbox is a same-origin, phone-friendly page.
+            # Its API calls remain protected by normal owner authentication + CSRF.
+            if path == "/credential-requests" and request.method.upper() == "GET":
+                page = Path(__file__).with_name("credential_inbox.html").read_bytes()
+                return Response(200, {
+                    "Content-Type": "text/html; charset=utf-8",
+                    "Cache-Control": "no-store",
+                    "X-Content-Type-Options": "nosniff",
+                    "X-Frame-Options": "DENY",
+                    "Referrer-Policy": "no-referrer",
+                    "Content-Security-Policy": "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; connect-src 'self'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'",
+                }, page)
+            if path == "/credential-requests":
+                return _method_not_allowed_response("GET")
             # A share is the only unauthenticated read surface besides
             # liveness. It is dispatched here, before auth and before the
             # owner's route classes, so every method (including a body-carrying

@@ -1,0 +1,83 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Kelp</title>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <div id="app">
+      <header class="topbar">
+        <h1>Kelp</h1>
+        <span id="connState" class="pill">offline</span>
+      </header>
+
+      <section id="signin" class="card">
+        <h2>Sign in</h2>
+        <p class="hint">Paste the root bearer once. It is exchanged for a session cookie and kept in the OS keychain only.</p>
+        <input id="bearer" type="password" autocomplete="off" placeholder="Kelp root bearer" />
+        <input id="deviceLabel" placeholder="Device label (this MacBook)" maxlength="40" />
+        <button id="signinBtn" type="button">Sign in</button>
+        <button id="signoutBtn" type="button" class="ghost">Sign out</button>
+        <p id="signinMsg" class="msg"></p>
+        <p id="receipt" class="msg receipt"></p>
+      </section>
+
+      <main id="main" hidden>
+        <div class="cols">
+          <section class="card">
+            <h2>Threads</h2>
+            <div class="row">
+              <button id="newThread" type="button">New thread</button>
+              <button id="refreshThreads" type="button" class="ghost">Refresh</button>
+            </div>
+            <ul id="threadList"></ul>
+            <div class="row">
+              <input id="chatInput" placeholder="Send a message…" />
+              <button id="sendBtn" type="button">Send</button>
+            </div>
+            <div id="stream"></div>
+          </section>
+
+          <section class="card">
+            <h2>Approvals</h2>
+            <div id="approvals"><p class="hint">No pending approvals.</p></div>
+          </section>
+        </div>
+
+        <section class="card credential-inbox" aria-labelledby="credentialHeading">
+          <div class="section-heading">
+            <div><h2 id="credentialHeading">Private sign-in requests</h2>
+              <p class="hint">Review the destination and requested fields. Values never appear in chat or diagnostics.</p></div>
+            <button id="refreshCredentials" type="button" class="ghost">Refresh</button>
+          </div>
+          <div id="credentialRequests" aria-live="polite"><p class="hint">No pending requests.</p></div>
+        </section>
+
+        <div class="cols">
+          <section class="card">
+            <h2>Devices</h2>
+            <button id="refreshDevices" type="button" class="ghost">Refresh</button>
+            <ul id="deviceList"></ul>
+          </section>
+
+          <section class="card">
+            <h2>Spend</h2>
+            <button id="refreshSpend" type="button" class="ghost">Refresh</button>
+            <p id="spendWarn" class="spend-warn" hidden></p>
+            <pre id="spend">(no data)</pre>
+            <ul id="cardList"></ul>
+          </section>
+        </div>
+
+        <details class="card">
+          <summary>Diagnostics (local log only, no telemetry)</summary>
+          <button id="copyDiag" type="button" class="ghost">Copy</button>
+          <pre id="diag">(no events yet)</pre>
+        </details>
+      </main>
+    </div>
+    <script type="module" src="./app.js"></script>
+  </body>
+</html>
