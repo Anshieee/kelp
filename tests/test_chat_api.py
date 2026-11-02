@@ -152,7 +152,7 @@ def test_mutations_require_csrf_or_same_origin(tmp_path: Path) -> None:
 def test_thread_crud_over_http(tmp_path: Path) -> None:
     api, _service, store = make_api(tmp_path)
     try:
-        thread = create_thread(api, "Nebius GPU pricing")
+        thread = create_thread(api, "GPU cloud pricing")
         assert thread["title_source"] == "user"
 
         listed = call(api, "GET", "/api/threads")
@@ -707,10 +707,10 @@ def test_artifact_path_traversal_is_unknown(tmp_path: Path) -> None:
 
 
 def test_responses_never_contain_secret_values(tmp_path: Path) -> None:
-    secret = "nebius-key-abcdef123456"
+    secret = "provider-key-abcdef123456"
     scripts = [tool_script("web.search", {"query": f"q {secret}"}), text_script("done")]
     api, service, store = make_api(
-        tmp_path, scripts, secrets={"NEBIUS_API_KEY": secret}
+        tmp_path, scripts, secrets={"KELP_PROVIDER_API_KEY": secret}
     )
     try:
         thread = create_thread(api)

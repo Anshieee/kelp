@@ -1,8 +1,15 @@
-"""Kernel configuration: Token Factory endpoint, model roles, and pricing.
+"""Kernel configuration: model provider endpoint, model roles, and pricing.
+
+The provider endpoint has no default. This process sends the whole transcript to
+whatever OpenAI-compatible service the operator names, so the endpoint is a
+required, explicit choice rather than a baked-in third party: a missing
+``KELP_PROVIDER_BASE_URL`` is a typed failure, never a silent call somewhere
+else.
 
 Secrets are read from the environment at construction time and are never echoed.
 ``KernelConfig.from_env`` is deliberately tolerant: a missing API key does not
-crash startup, it produces a typed ``missing_api_key`` event on first use.
+crash startup, it produces a typed ``missing_api_key`` event on first use (the
+server entry point does refuse to start without one).
 """
 
 from __future__ import annotations
@@ -17,7 +24,6 @@ __all__ = [
     "BACKGROUND_MODEL_ENV",
     "BASE_URL_ENV",
     "DEFAULT_BACKGROUND_MODEL",
-    "DEFAULT_BASE_URL",
     "DEFAULT_PRIMARY_MODEL",
     "DEFAULT_PRICING",
     "KernelConfig",
@@ -26,17 +32,16 @@ __all__ = [
     "PRIMARY_MODEL_ENV",
 ]
 
-BASE_URL_ENV = "NEBIUS_TOKEN_FACTORY_BASE_URL"
-LEGACY_BASE_URL_ENV = "NEBIUS_BASE_URL"
-API_KEY_ENV = "NEBIUS_API_KEY"
+BASE_URL_ENV = "KELP_PROVIDER_BASE_URL"
+API_KEY_ENV = "KELP_PROVIDER_API_KEY"
 PRIMARY_MODEL_ENV = "KELP_PRIMARY_MODEL"
 BACKGROUND_MODEL_ENV = "KELP_BACKGROUND_MODEL"
 
-DEFAULT_BASE_URL = "https://api.tokenfactory.nebius.com/v1"
 #: Default conversational model: multimodal, documents and screenshots.
-DEFAULT_PRIMARY_MODEL = "nvidia/Nemotron-3_5-Super-VL"
+#: The slugs are OpenRouter's, the endpoint this repository documents.
+DEFAULT_PRIMARY_MODEL = "nvidia/nemotron-3.5-super-vl"
 #: Cheap model for titles, summaries, compaction, and other background work.
-DEFAULT_BACKGROUND_MODEL = "nvidia/Nemotron-3_5-Lightning"
+DEFAULT_BACKGROUND_MODEL = "nvidia/nemotron-3.5-lightning"
 
 
 class ModelRole(str, Enum):
@@ -48,7 +53,7 @@ class ModelRole(str, Enum):
 
 @dataclass(frozen=True)
 class ModelPricing:
-    """USD per one million tokens (Token Factory list price)."""
+    """USD per one million tokens for one model at one provider."""
 
     input_per_million: float
     output_per_million: float
@@ -61,20 +66,20 @@ class ModelPricing:
         )
 
 
-#: List prices as published on the Token Factory model page (2026-10-28).
-#: Unknown models intentionally have no entry: accounting reports cost as
-#: unknown rather than silently recording $0.
+#: USD per one million tokens, from the documented provider's public model
+#: list (``https://openrouter.ai/api/v1/models``, read 2026-11-02). Only the two
+#: default models are listed: a model this deployment does not use has no entry,
+#: so its cost stays unknown rather than becoming a fabricated number. Update
+#: the rows when the provider's published prices change.
 DEFAULT_PRICING: Mapping[str, ModelPricing] = {
-    "nvidia/Nemotron-3_5-Super-VL": ModelPricing(0.30, 0.90),
-    "nvidia/Nemotron-3_5-Lightning": ModelPricing(0.06, 0.24),
-    "nvidia/nemotron-3-super-120b-a12b": ModelPricing(0.30, 0.90),
-    "nvidia/Nemotron-3-Ultra-550b-a55b": ModelPricing(1.00, 3.00),
+    "nvidia/nemotron-3.5-super-vl": ModelPricing(0.15, 0.50),
+    "nvidia/nemotron-3.5-lightning": ModelPricing(0.07, 0.20),
 }
 
 
 @dataclass(frozen=True)
 class KernelConfig:
-    base_url: str = DEFAULT_BASE_URL
+    base_url: str | None = None
     primary_model: str = DEFAULT_PRIMARY_MODEL
     background_model: str = DEFAULT_BACKGROUND_MODEL
     api_key: str | None = field(default=None, repr=False)
@@ -85,14 +90,10 @@ class KernelConfig:
     @classmethod
     def from_env(cls, env: Mapping[str, str] | None = None) -> "KernelConfig":
         source = os.environ if env is None else env
-        base_url = (
-            source.get(BASE_URL_ENV)
-            or source.get(LEGACY_BASE_URL_ENV)
-            or DEFAULT_BASE_URL
-        )
+        base_url = (source.get(BASE_URL_ENV) or "").strip().rstrip("/") or None
         key = source.get(API_KEY_ENV) or None
         return cls(
-            base_url=base_url.rstrip("/"),
+            base_url=base_url,
             primary_model=source.get(PRIMARY_MODEL_ENV) or DEFAULT_PRIMARY_MODEL,
             background_model=source.get(BACKGROUND_MODEL_ENV) or DEFAULT_BACKGROUND_MODEL,
             api_key=key,
@@ -101,6 +102,10 @@ class KernelConfig:
     @property
     def api_key_configured(self) -> bool:
         return bool(self.api_key)
+
+    @property
+    def base_url_configured(self) -> bool:
+        return bool(self.base_url)
 
     def model_for(self, role: ModelRole | str) -> str:
         try:

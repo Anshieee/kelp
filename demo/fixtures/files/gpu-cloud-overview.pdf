@@ -1,0 +1,50 @@
+%PDF-1.4
+1 0 obj
+<< /Type /Catalog /Pages 2 0 R >>
+endobj
+2 0 obj
+<< /Type /Pages /Kids [3 0 R 5 0 R] /Count 2 >>
+endobj
+3 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R >>
+endobj
+4 0 obj
+<< /Length 277 >>
+stream
+BT
+/F1 12 Tf
+72 720 Td
+16 TL
+(GPU cloud pricing overview \(demo fixture\)) Tj
+T*
+(NVIDIA H200 141GB: $2.49 per GPU-hour on demand.) Tj
+T*
+(NVIDIA L40S 48GB: $1.19 per GPU-hour on demand.) Tj
+T*
+(Reserved capacity is billed monthly; spot capacity is billed per minute.) Tj
+T*
+ET
+endstream
+endobj
+5 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 6 0 R >>
+endobj
+6 0 obj
+<< /Length 185 >>
+stream
+BT
+/F1 12 Tf
+72 720 Td
+16 TL
+(Support and availability) Tj
+T*
+(Production tier support response target is 30 minutes.) Tj
+T*
+(The demo region lists H200 capacity as available.) Tj
+T*
+ET
+endstream
+endobj
+trailer
+<< /Root 1 0 R >>
+%%EOF

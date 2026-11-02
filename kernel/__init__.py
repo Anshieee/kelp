@@ -2,9 +2,9 @@
 
 Public surface::
 
-    from kernel import AgentLoop, TokenFactoryClient, TurnBudget, JsonlUsageStore
+    from kernel import AgentLoop, ProviderClient, TurnBudget, JsonlUsageStore
 
-    client = TokenFactoryClient.from_env()
+    client = ProviderClient.from_env()
     loop = AgentLoop(
         provider=client,
         tool_executor=RegistryToolExecutor(registry),
@@ -13,8 +13,9 @@ Public surface::
     async for event in loop.run_turn([{"role": "user", "content": "hi"}]):
         ...
 
-Defaults: primary model ``nvidia/Nemotron-3_5-Super-VL`` (documents, vision),
-background model ``nvidia/Nemotron-3_5-Lightning`` (titles, summaries, compaction).
+Defaults: primary model ``nvidia/nemotron-3.5-super-vl`` (documents, vision),
+background model ``nvidia/nemotron-3.5-lightning`` (titles, summaries, compaction).
+The provider base URL has no default and must be set explicitly.
 """
 
 from .config import (
@@ -46,10 +47,10 @@ from .loop import (
 )
 from .provider import (
     ChatRequest,
+    ProviderClient,
     ProviderFailure,
     StreamEnd,
     TextDelta,
-    TokenFactoryClient,
     ToolCall,
     ToolCallReady,
     UsageReport,
@@ -75,7 +76,7 @@ __all__ = [
     "StreamEnd",
     "TextDelta",
     "TokenDelta",
-    "TokenFactoryClient",
+    "ProviderClient",
     "ToolCall",
     "ToolCallFinished",
     "ToolCallReady",

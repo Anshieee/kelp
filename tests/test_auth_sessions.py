@@ -679,8 +679,8 @@ def test_server_config_wires_session_bounds(tmp_path: Path) -> None:
     from chat.server import ServerConfig, build_app
 
     env = {
-        "NEBIUS_API_KEY": "test-api-key",
-        "NEBIUS_TOKEN_FACTORY_BASE_URL": "http://127.0.0.1:9/v1",
+        "KELP_PROVIDER_API_KEY": "test-api-key",
+        "KELP_PROVIDER_BASE_URL": "http://127.0.0.1:9/v1",
         "KELP_AUTH_TOKEN": ROOT_TOKEN,
         "KELP_SESSION_TTL_SECONDS": "120",
         "KELP_SESSION_MAX": "7",

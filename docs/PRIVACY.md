@@ -27,11 +27,11 @@ recipient named here that the code no longer knows.
 
 | Question | Answer |
 |---|---|
-| Where does the conversation go? | Nebius Token Factory, as the model provider — every turn, in full |
+| Where does the conversation go? | The model provider named by `KELP_PROVIDER_BASE_URL` (OpenRouter on the documented path) — every turn, in full |
 | Does anything else receive conversation text? | Not by default: no analytics, no telemetry, no crash reporter, no CDN, no third-party log sink |
 | Do skills reach the network? | Only through one chokepoint, and only to hosts a manifest declares. `web.search` (Tavily) and `github.read` (GitHub) are declared but their handlers are not implemented; today they send nothing |
 | Do payments reach the network? | Not in this build. The Stripe and Razorpay clients exist but `build_app` constructs neither |
-| Where are keys? | Only in the server process environment. `NEBIUS_API_KEY`, `TAVILY_API_KEY`, `GITHUB_TOKEN` are read from `os.environ`, sent only to their own recipient, and scrubbed from every log line |
+| Where are keys? | Only in the server process environment. `KELP_PROVIDER_API_KEY`, `TAVILY_API_KEY`, `GITHUB_TOKEN` are read from `os.environ`, sent only to their own recipient, and scrubbed from every log line |
 | What records exist? | Chat content until the owner deletes the thread; audit and usage records on a stated clock; a content-free egress ledger inside the audit trail; a device row per signed-in browser with a short label and timestamps, no credential |
 | Can I audit what left? | Yes: one `egress` line per outbound call — recipient, purpose, byte counts, outcome, no content |
 
@@ -45,12 +45,12 @@ through one of these rows.
 
 | Recipient id | Host | What is sent | When | Credential | Wired today? |
 |---|---|---|---|---|---|
-| `tokenfactory` | `api.tokenfactory.nebius.com` | The full model request: system prompt, every message in the thread context (user text, assistant text, tool results), the tool schemas, model name, and sampling settings. Document text and quoted excerpts appear inside those messages once a document tool has read them | Every assistant turn | `NEBIUS_API_KEY` (bearer header) | **Yes** — the only content-bearing egress |
+| `openrouter` | `openrouter.ai` | The full model request: system prompt, every message in the thread context (user text, assistant text, tool results), the tool schemas, model name, and sampling settings. Document text and quoted excerpts appear inside those messages once a document tool has read them | Every assistant turn | `KELP_PROVIDER_API_KEY` (bearer header) | **Yes**, when the base URL is `https://openrouter.ai/api/v1` — the only content-bearing egress |
 | `tavily` | `api.tavily.com` | The search query string, plus the API key header | On a `web.search` call | `TAVILY_API_KEY` | **No** — handler raises `not_implemented` |
 | `github` | `api.github.com` | The repository `owner/name`, and the issue, pull-request, or file path in the URL; `GET` only | On a `github.read` call | `GITHUB_TOKEN` (bearer header) | **No** — handler raises `not_implemented` |
 | `stripe` | `api.stripe.com` | Customer id, payment-method id, amount, currency, description, idempotency key. Card numbers are typed into Stripe's own form and never reach this process | On a saved-card charge | `STRIPE_SECRET_KEY` | **No** — `HttpStripeGateway` is never constructed by `build_app` |
 | `razorpay` | `api.razorpay.com` | Order amount, currency, receipt, and the key id in the auth header; webhook settlement re-reads the order by id. Card numbers are typed on Razorpay's hosted page | On a hosted Checkout order | Key id + key secret | **No** — `HttpRazorpayTransport` is never constructed by `build_app` |
-| `unlisted` | whatever `NEBIUS_TOKEN_FACTORY_BASE_URL` points at | Exactly what `tokenfactory` would receive: the whole transcript | Every turn, when an operator overrides the base URL | `NEBIUS_API_KEY` | Only if the operator sets the override |
+| `unlisted` | whatever else `KELP_PROVIDER_BASE_URL` points at | Exactly what `openrouter` would receive: the whole transcript | Every turn, when the base URL is another host | `KELP_PROVIDER_API_KEY` | Yes, for any endpoint that is not `openrouter.ai` |
 
 Two consequences worth stating plainly:
 
@@ -58,10 +58,11 @@ Two consequences worth stating plainly:
    this machine can answer without it. Attachments are read locally, but the text
    the tools quote back travels inside the next model request. If a document must
    not leave the machine, it must not be attached.
-2. **`unlisted` is a real recipient, not a detail.** Pointing
-   `NEBIUS_TOKEN_FACTORY_BASE_URL` at a gateway or a proxy makes that endpoint a
-   recipient of the full transcript. The ledger records it under `unlisted` so the
-   override is visible in the audit trail instead of being reported as Nebius.
+2. **`unlisted` is a real recipient, not a detail.** Choosing a base URL other
+   than `openrouter.ai` (a gateway, a proxy, or a regional mirror) makes that
+   endpoint a recipient of the full transcript. The ledger records it under
+   `unlisted` so the choice is visible in the audit trail instead of being
+   attributed to a host this repository documents.
 
 ### 2.1 The provider health probe
 
@@ -273,7 +274,7 @@ does.
 ## 6. What this review does not promise
 
 - **The provider is trusted with the transcript.** TLS protects the hop, not the
-  recipient. Token Factory's own retention is outside this repository; this
+  recipient. The provider's own retention is outside this repository; this
   document does not claim anything about it.
 - **Attachments leave via the model request.** Document tools read locally and
   send nothing, but the excerpts they return become part of the next model
@@ -313,7 +314,7 @@ does.
   direction — a row left in §3 after the code drops it — is not test-bound, and
   `docs/DEPLOY.md` §8.1 is mirrored by hand, so both are checked at review;
 - a model turn writes an `egress` row with byte counts and no content, including
-  through the real `TokenFactoryClient` stream path;
+  through the real `ProviderClient` stream path;
 - a skill egress call writes a `tavily` / `github` row, and a policy denial still
   writes a row with zero response bytes;
 - the readiness probe records `completed` with its status on 2xx and

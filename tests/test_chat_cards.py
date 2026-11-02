@@ -21,15 +21,15 @@ from chat.cards import (
 
 
 def test_display_rules_are_deterministic() -> None:
-    assert summarize_arguments("web.search", {"query": "Nebius GPU pricing"}) == (
-        "Nebius GPU pricing"
+    assert summarize_arguments("web.search", {"query": "GPU cloud pricing"}) == (
+        "GPU cloud pricing"
     )
     assert summarize_arguments("docs.answer", {"question": "Total revenue?"}) == (
         "Total revenue?"
     )
     assert summarize_arguments(
-        "github.read", {"kind": "issue", "repo": "Anshieee/nebius-nvidia"}
-    ) == "Anshieee/nebius-nvidia, issue"
+        "github.read", {"kind": "issue", "repo": "Anshieee/kelp"}
+    ) == "Anshieee/kelp, issue"
     assert summarize_arguments(
         "schedule.create",
         {"title": "Weekday summary", "schedule": {"expr": "0 8 * * 1-5"}},

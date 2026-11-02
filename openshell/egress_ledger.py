@@ -55,7 +55,7 @@ EGRESS_EVENT = "egress"
 #: bucket for an operator-supplied base URL; the review names it too, because an
 #: override is a real recipient even when this repo did not choose it.
 RECIPIENTS: Mapping[str, tuple[str, ...]] = {
-    "tokenfactory": ("api.tokenfactory.nebius.com",),
+    "openrouter": ("openrouter.ai",),
     "tavily": ("api.tavily.com",),
     "github": ("api.github.com",),
     "stripe": ("api.stripe.com",),

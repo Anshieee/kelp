@@ -1,8 +1,8 @@
 # Linear plan — Always-On Private Assistant (P0 ready-to-create)
 
-> **Superseded target:** this doc files into team `NEB`, which does not exist and cannot be
-> created via MCP. The active, create-ready pack is **`docs/linear-issue-pack-kel.md`**
-> (team `KEL`, branch prefix `kel-`). Content below is kept for rationale.
+> **Superseded:** the active, create-ready pack is
+> **`docs/linear-issue-pack-kel.md`** (team `KEL`, branch prefix `kel-`). Content below
+> is kept for rationale.
 
 Status: **prepared, not yet created.** Nothing below has been written to Linear.
 Verified: 2026-10-28.
@@ -13,34 +13,27 @@ Verified: 2026-10-28.
 |---|---|
 | Linear MCP auth | OK (OAuth, read + write tools available) |
 | Workspace | `kelp` — https://linear.app/kelp-ai (`ad8e918a-296b-4e99-ac70-313019458f5c`) |
-| Teams | **only `KEL` (Kelp)** — `NEB` does not exist |
+| Teams | **only `KEL` (Kelp)** |
 | Projects | none |
 | Labels in KEL | `Bug`, `Improvement`, `Feature` (defaults only) |
 | Workflow states (KEL) | Backlog, Todo, In Progress, Done, Canceled, Duplicate |
 | Users | anshchampion (admin), Linear app |
 | MCP team-create tool | **absent** — no `create_team`; team creation is UI/API only |
 
-Blocker: the workspace was created today and contains a single team. Team `NEB` must be
-created in the Linear UI (Settings → Teams → Create team, key `NEB`) or via the Linear
-GraphQL API with an API key before any issue can be filed there.
-
-Two options:
-
-- **A (as planned):** create team `NEB`, then everything below applies verbatim.
-- **B (unblock now):** file into `KEL` and keep branch convention `kel-<n>-<slug>`.
-  Project/milestones/labels are identical; only the key changes.
+The workspace contains a single team, `KEL`. Issues file there with branch prefix
+`kel-<n>-<slug>`; a second team is not needed.
 
 ## 2. Structure to create
 
 ### Team
-`NEB` — display name "Nebius Assistant", key `NEB`, public.
+`KEL` — display name "Kelp", key `KEL`, public.
 
 ### Project
-**Always-On Private Assistant** — lead team `NEB`, lead `anshchampion`, priority High,
+**Always-On Private Assistant** — lead team `KEL`, lead `anshchampion`, priority High,
 state `Planned`.
 
 Summary (≤255 chars):
-> Always-on private assistant: local-first agent kernel on Nebius GPU, dashboard-primary chat, approval-gated tools, eval-backed reliability.
+> Always-on private assistant: local-first agent kernel on a GPU host, dashboard-primary chat, approval-gated tools, eval-backed reliability.
 
 Description: goal, non-goals (voice memo, WhatsApp, team sharing are post-MVP), architecture
 one-pager link, decision log pointer to `docs/adr/`.
@@ -51,7 +44,7 @@ one-pager link, decision log pointer to `docs/adr/`.
 |---|---|---|---|
 | M0 | Foundation | repo scaffold, CI, dev env, model/provider selection, threat model | 2026-11-07 |
 | M1 | Prototype | query → tool → answer loop, local persistence, single-user auth, dashboard chat | 2026-11-28 |
-| M2 | Polished MVP | restart/resume, health checks, retrieval quality, evals, observability, Nebius GPU deploy | 2026-12-19 |
+| M2 | Polished MVP | restart/resume, health checks, retrieval quality, evals, observability, GPU host deploy | 2026-12-19 |
 | M3 | Hardening | privacy controls, secret isolation, rate limits, retention, cost guardrails | 2027-01-23 |
 | M4 | Full vision | multi-device presence, proactive tasks, plugin surface, team sharing | 2027-03-06 |
 
@@ -84,7 +77,7 @@ assignee `anshchampion`.
 > Build the kernel agent loop that turns a user turn into a streamed answer with tool calls.
 >
 > **Scope**
-> - Single provider interface (Nebius-hosted endpoint) behind an adapter so the model is swappable.
+> - Single provider interface (hosted provider endpoint) behind an adapter so the model is swappable.
 > - Streaming tokens to the dashboard over one persistent channel; tool calls interleaved mid-stream.
 > - Tool-call protocol: model emits a typed call → runtime validates → executes → returns observation → model continues.
 > - Hard turn budget (max steps, max tokens, wall-clock cap) to bound cost.
@@ -233,7 +226,7 @@ assignee `anshchampion`.
 
 ## 5. Git / GitHub / Linear integration requirements
 
-Current state of `/home/ansh/Projects/nebius-nvidia`: **not a git repo.** Contains
+Current state of `/home/ansh/Projects/kelp`: **not a git repo.** Contains
 `docs/linear-setup.md`, `docs/linear-p0-plan.md`, `logs/` (local MCP logs). No source yet.
 
 `git init` + push needs:
@@ -244,20 +237,20 @@ Current state of `/home/ansh/Projects/nebius-nvidia`: **not a git repo.** Contai
 2. Secret hygiene: `logs/` must not be committed (MCP audit logs). Add a pre-commit secret
    scan (gitleaks or `detect-secrets`) and a CI job running it.
 3. `git init -b main`, initial commit of docs + scaffold, then
-   `gh repo create nebius-nvidia --private --source=. --remote=origin --push`.
+   `gh repo create kelp --private --source=. --remote=origin --push`.
    **Private repo is recommended** — the product claims privacy and the repo will accumulate
    architecture and threat-model detail.
 4. Large files: no model weights in git; if unavoidable use Git LFS and configure it in the
    same commit that adds the first binary.
 5. Branch protection on `main`: require PR, require CI, no force-push, no direct pushes.
 6. Linear ↔ GitHub integration (Linear Settings → Integrations → GitHub, workspace admin):
-   - Install the Linear GitHub app, grant access to `Anshieee/nebius-nvidia` only.
+   - Install the Linear GitHub app, grant access to `Anshieee/kelp` only.
    - Enable: link PRs/branches by issue ID, auto-move to In Progress on branch create,
      auto-close on merge to `main`.
-   - The branch prefix must match the team key. `neb-123-slug` only works if team `NEB`
-     exists; with team `KEL` use `kel-123-slug`. Mismatch silently breaks auto-linking.
+   - The branch prefix must match the team key: with team `KEL` use `kel-123-slug`.
+     A mismatch silently breaks auto-linking.
 7. CI baseline (GitHub Actions): secret scan, lint, typecheck, unit tests; add a `demo`
    workflow only once P0-5 exists.
 
-Manual steps only the account owner can do: create team `NEB`, install the GitHub app,
-create the GitHub repo, set branch protection.
+Manual steps only the account owner can do: install the GitHub app, create the
+GitHub repo, set branch protection.

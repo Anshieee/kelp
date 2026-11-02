@@ -71,8 +71,8 @@ def test_audit_is_append_only_and_mode_600(tmp_path: Path) -> None:
 def test_audit_secret_names_are_read_from_env(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setenv("NEBIUS_API_KEY", SECRET)
-    log = AuditLog.from_env(tmp_path / "audit.jsonl", secret_names=("NEBIUS_API_KEY",))
+    monkeypatch.setenv("KELP_PROVIDER_API_KEY", SECRET)
+    log = AuditLog.from_env(tmp_path / "audit.jsonl", secret_names=("KELP_PROVIDER_API_KEY",))
     log.record("test", extra={"value": SECRET})
     assert SECRET not in (tmp_path / "audit.jsonl").read_text(encoding="utf-8")
 

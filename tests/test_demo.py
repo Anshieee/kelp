@@ -250,7 +250,7 @@ def test_github_fixture_is_read_only_and_repo_scoped(tmp_path: Path) -> None:
 
     output = asyncio.run(
         github_read.run(
-            {"kind": "issue", "repo": "Anshieee/nebius-nvidia", "number": 12}, context
+            {"kind": "issue", "repo": "Anshieee/kelp", "number": 12}, context
         )
     )
     assert output["issue"]["number"] == 12
@@ -262,7 +262,7 @@ def test_github_fixture_is_read_only_and_repo_scoped(tmp_path: Path) -> None:
 
 def test_web_search_returns_recorded_results(tmp_path: Path) -> None:
     output = asyncio.run(
-        web_search.run({"query": "nebius gpu"}, SkillContext("web.search", tmp_path))
+        web_search.run({"query": "gpu cluster"}, SkillContext("web.search", tmp_path))
     )
     assert output["backend"] == "fixture"
     assert len(output["results"]) == 3

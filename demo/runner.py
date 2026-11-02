@@ -36,7 +36,7 @@ from openshell.audit import AuditLog
 __all__ = ["Beat", "Demo", "PLANTED_SECRET", "RESUME_SCRIPT", "TURN_SCRIPTS", "build_scripts"]
 
 TOTAL_BUDGET_SECONDS = 240.0
-GITHUB_REPO = "Anshieee/nebius-nvidia"
+GITHUB_REPO = "Anshieee/kelp"
 
 # A fake provider key planted in an audited field. The audit log must persist
 # ``[redacted]`` instead of this value; beat 4 asserts that against the file.
@@ -48,11 +48,11 @@ TURN_SCRIPTS: list[list[list[Any]]] = [
     [
         tool_script(
             "web.search",
-            {"query": "Nebius GPU pricing H200 L40S", "max_results": 3},
+            {"query": "GPU cloud pricing H200 L40S", "max_results": 3},
             call_id="call_search",
         ),
         text_script(
-            "Nebius lists the H200 at $2.49 and the L40S at $1.19 per GPU-hour, "
+            "The recorded sources list the H200 at $2.49 and the L40S at $1.19 per GPU-hour, "
             "with reserved capacity billed monthly [1][3]."
         ),
     ],
@@ -519,7 +519,7 @@ class Demo:
         turn_id, blocks = self._run_turn(
             beat,
             thread["id"],
-            "What is the latest Nebius GPU pricing? Cite your sources.",
+            "What is the latest GPU cloud pricing? Cite your sources.",
             client_turn_id="demo-1",
         )
         turn = self.store.get_turn(turn_id) or {}
@@ -541,7 +541,7 @@ class Demo:
         urls = {source.get("url") for source in assistant["sources"]}
         self.check(
             beat,
-            "https://nebius.com/prices" in urls,
+            "https://example.com/prices" in urls,
             "source chips carry the recorded URLs",
         )
         self.check(
@@ -569,7 +569,7 @@ class Demo:
         thread_id = thread["id"]
         beat.data["thread_id"] = thread_id
 
-        pdf = self.surface.upload("nebius-overview.pdf", assets.pdf_bytes())
+        pdf = self.surface.upload("gpu-cloud-overview.pdf", assets.pdf_bytes())
         csv = self.surface.upload("q3-revenue.csv", assets.csv_bytes())
         self.substitutions["pdf"] = pdf["handle"]
         self.substitutions["csv"] = csv["handle"]
@@ -678,7 +678,7 @@ class Demo:
         turn_id, blocks = self._run_turn(
             beat,
             thread_id,
-            "What is the status of issue 12 in Anshieee/nebius-nvidia?",
+            "What is the status of issue 12 in Anshieee/kelp?",
             client_turn_id="demo-3",
         )
         read = self._block(blocks, "github.read")
@@ -701,7 +701,7 @@ class Demo:
         )
         self.check(
             beat,
-            "https://github.com/Anshieee/nebius-nvidia/issues/12"
+            "https://github.com/Anshieee/kelp/issues/12"
             in {source.get("url") for source in assistant["sources"]},
             "issue URL became a source chip",
         )
@@ -934,7 +934,7 @@ class Demo:
         thread = self.surface.create_thread("Kill and resume")
         thread_id = thread["id"]
         beat.data["thread_id"] = thread_id
-        question = "Write a long status report about the Nebius demo while I kill this server."
+        question = "Write a long status report about the demo while I kill this server."
 
         # A real child process serves the turn that gets killed.
         child, ready = self._spawn_server(

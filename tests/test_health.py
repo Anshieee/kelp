@@ -576,7 +576,7 @@ def test_bodies_never_leak_tokens_paths_or_exception_text(
         assert secret not in text
         assert str(tmp_path) not in text
         assert "Traceback" not in text
-        assert "NEBIUS" not in text
+        assert "KELP_PROVIDER" not in text
 
 
 def test_uptime_moves_forward(stack: Stack) -> None:
@@ -593,8 +593,8 @@ def _server_env(root: Path) -> dict[str, str]:
     """The minimal documented environment ``chat.server`` reads."""
 
     return {
-        "NEBIUS_API_KEY": "test-api-key-never-printed-9876",
-        "NEBIUS_TOKEN_FACTORY_BASE_URL": "http://127.0.0.1:9/v1",
+        "KELP_PROVIDER_API_KEY": "test-api-key-never-printed-9876",
+        "KELP_PROVIDER_BASE_URL": "http://127.0.0.1:9/v1",
         "KELP_AUTH_TOKEN": TOKEN,
         "KELP_DB_PATH": str(root / "db" / "chat.db"),
         "KELP_ARTIFACT_DIR": str(root / "artifacts"),

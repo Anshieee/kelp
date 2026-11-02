@@ -11,25 +11,27 @@ anything; the dashboard, Telegram, and CLI are adapters.
 
 ## 1. Provider
 
-`kernel.provider.TokenFactoryClient` speaks the OpenAI-compatible
+`kernel.provider.ProviderClient` speaks the OpenAI-compatible
 `POST /chat/completions` API with `stream: true` and
 `stream_options.include_usage: true`.
 
 | Setting | Env var | Default |
 |---|---|---|
-| Base URL | `NEBIUS_TOKEN_FACTORY_BASE_URL` (legacy `NEBIUS_BASE_URL`) | `https://api.tokenfactory.nebius.com/v1` |
-| API key (server-only) | `NEBIUS_API_KEY` | — |
-| Primary model | `KELP_PRIMARY_MODEL` | `nvidia/Nemotron-3_5-Super-VL` |
-| Background model | `KELP_BACKGROUND_MODEL` | `nvidia/Nemotron-3_5-Lightning` |
+| Base URL | `KELP_PROVIDER_BASE_URL` | **required**, no default (the documented path is `https://openrouter.ai/api/v1`) |
+| API key (server-only) | `KELP_PROVIDER_API_KEY` | — |
+| Primary model | `KELP_PRIMARY_MODEL` | `nvidia/nemotron-3.5-super-vl` |
+| Background model | `KELP_BACKGROUND_MODEL` | `nvidia/nemotron-3.5-lightning` |
 
 `Super VL` is the default conversational model because the product reads
 documents and screenshots. `Lightning` is the cheap **background** model for
 titles, summaries, compaction, and other non-user-facing work; select it with
 `config.model_for(ModelRole.BACKGROUND)`.
 
-A missing key does not crash startup. The first call yields a typed
-`missing_api_key` event. Redirects are disabled; the client never follows a
-provider-controlled URL.
+A missing base URL yields a typed `missing_base_url` event and no request is
+made, so a misconfigured process cannot send the transcript to an inherited
+host. A missing key yields `missing_api_key` and likewise sends nothing. Neither
+crashes startup (the server entry point does refuse to start without both).
+Redirects are disabled; the client never follows a provider-controlled URL.
 
 ### Streaming events (internal)
 
@@ -55,7 +57,7 @@ leak into the UI or logs.
 
 ```python
 loop = AgentLoop(
-    provider=TokenFactoryClient.from_env(),
+    provider=ProviderClient.from_env(),
     tool_executor=RegistryToolExecutor(registry),
     usage_store=JsonlUsageStore("var/usage/turns.jsonl"),
 )
@@ -104,15 +106,17 @@ crosses `run_turn`.
 One `UsageRecord` per turn is appended to the configured store:
 
 ```json
-{"turn_id":"turn_…","session_id":"s-1","model":"nvidia/Nemotron-3_5-Super-VL",
+{"turn_id":"turn_…","session_id":"s-1","model":"nvidia/nemotron-3.5-super-vl",
  "input_tokens":812,"output_tokens":143,"total_tokens":955,
- "estimated_cost_usd":0.0003723,"cost_known":true,"usage_reported":true,
+ "estimated_cost_usd":null,"cost_known":false,"usage_reported":true,
  "steps":2,"tool_calls":1,"started_at":"…","finished_at":"…",
  "duration_ms":912,"outcome":"stop"}
 ```
 
-- Pricing comes from `kernel.config.DEFAULT_PRICING` (USD per 1M tokens, list
-  price on 2026-10-28). Update it when Token Factory pricing changes.
+- Pricing comes from `kernel.config.DEFAULT_PRICING` (USD per 1M tokens). It
+  ships the two default models at the documented provider's published list price
+  (`openrouter.ai/api/v1/models`, read 2026-11-02); add any other model id this
+  deployment uses with the provider's current price.
 - Unknown models record `estimated_cost_usd: null` and `cost_known: false`; the
   kernel never invents a price.
 - `JsonlUsageStore` appends with `fsync` and creates the file `0600`. It contains
@@ -140,6 +144,6 @@ no partial message is written (`docs/DEPLOY.md` §13.1).
 - Dashboard/transport (SSE/WebSocket) and any UI.
 - Memory, retrieval, and prompt assembly.
 - Retry policy beyond surfacing the retryable flag; the caller decides.
-- A real recorded-fixture integration test against Token Factory. Provider tests
+- A real recorded-fixture integration test against a live provider. Provider tests
   use `httpx.MockTransport` and stay offline. Add the recorded cassette when the
   first live key is provisioned.

@@ -135,7 +135,7 @@
     "scopes": {
       "paths": [],
       "hosts": ["api.github.com"],
-      "repos": ["Anshieee/nebius-nvidia"]
+      "repos": ["Anshieee/kelp"]
     },
     "requires_approval": false,
     "secrets": ["GITHUB_TOKEN"]

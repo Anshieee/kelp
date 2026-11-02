@@ -89,7 +89,7 @@ the same stream. Cards are never floated or reordered to the end of the message.
 ```json
 {
   "id": "ses_8f3c…",
-  "title": "Nebius GPU pricing",
+  "title": "GPU cloud pricing",
   "title_source": "auto",
   "created_at": "2026-10-29T09:12:03.114Z",
   "updated_at": "2026-10-29T09:14:51.902Z",
@@ -165,13 +165,13 @@ grants no approval authority and the scheduled turn can never satisfy a gate.
       "call_id": "call_a1",
       "tool": "web.search",
       "label": "Web search",
-      "summary": "Nebius GPU pricing",
+      "summary": "GPU cloud pricing",
       "status": "done",
       "duration_ms": 412,
       "effects": ["read", "network"],
       "approval_id": null,
       "detail": {
-        "arguments": { "query": "Nebius GPU pricing", "max_results": 5 },
+        "arguments": { "query": "GPU cloud pricing", "max_results": 5 },
         "result_summary": "5 results",
         "result": { "ok": true, "output": { "results": [] } },
         "error": null
@@ -197,8 +197,8 @@ grants no approval authority and the scheduled turn can never satisfy a gate.
     {
       "id": "src_0",
       "kind": "web",
-      "title": "GPU pricing — Nebius",
-      "url": "https://nebius.com/prices",
+      "title": "GPU pricing comparison",
+      "url": "https://example.com/prices",
       "snippet": "H200 from $2.90/hr…",
       "published_at": "2026-10-01",
       "status": "ok",
@@ -460,9 +460,9 @@ card, the rest contribute rows and keep their own `call_id` (order is unchanged,
   "tool": "github.read",
   "status": "done",
   "detail": {
-    "arguments": { "kind": "issue", "repo": "Anshieee/nebius-nvidia" },
+    "arguments": { "kind": "issue", "repo": "Anshieee/kelp" },
     "sweep": {
-      "repo": "Anshieee/nebius-nvidia",
+      "repo": "Anshieee/kelp",
       "kind": "issue",
       "count": 12,
       "items": [
@@ -923,7 +923,7 @@ KEL-8 adds a network surface to a private assistant; these are requirements, not
 |---|---|
 | Auth | Single owner. The root `KELP_AUTH_TOKEN` is accepted as a bearer token and can mint a server-side device session (`POST /api/auth/session`). The session cookie is `HttpOnly; Secure; SameSite=Lax`, 30-day rolling; cookie mutations require a same-origin `Origin` **and** a per-session CSRF double-submit pair (`csrf` cookie + `X-CSRF-Token`). `GET /api/auth/devices` lists signed-in devices; `DELETE /api/auth/devices/{id_short}` revokes one; `DELETE /api/auth/session` revokes the presented one; `DELETE /api/auth/sessions` revokes all. Unauthenticated API → `401` JSON, not a redirect, for `/api/*`. |
 | Authorisation | Thread, approval, and artifact access is checked against the authenticated owner on **every** call. Guessing an id must not leak existence: `404`, not `403`. |
-| Secrets | No API keys or Stripe values in any response; the provider's base URL is server config and is never echoed to the client. `NEBIUS_API_KEY` stays server-side. `arguments`, `result`, and audit text pass the existing scrubbers; error envelopes keep their no-echo rule. |
+| Secrets | No API keys or Stripe values in any response; the provider's base URL is server config and is never echoed to the client. `KELP_PROVIDER_API_KEY` stays server-side. `arguments`, `result`, and audit text pass the existing scrubbers; error envelopes keep their no-echo rule. |
 | SSE | Same-origin only; no `Access-Control-Allow-Origin: *`; no `EventSource` with credentials in a URL; stream disconnects on auth expiry. |
 | XSS | Model text renders as text (no `dangerouslySetInnerHTML`, no Markdown HTML). Chip URLs restricted to http/https. Artifact content served with `nosniff` and a fixed content-type allowlist, and downloaded filenames sanitised. |
 | Path traversal | Artifact resolution is registry-lookup only, never `join(user_input)`. Handles are looked up, then the stored path is used. Symlinks are rejected; the target must resolve inside `${WORKSPACE}/var/artifacts`. |

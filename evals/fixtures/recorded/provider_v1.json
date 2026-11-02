@@ -2,18 +2,18 @@
   "fixture_version": 1,
   "recorded_at": "2026-10-30T00:00:00Z",
   "provider": "recorded://synthetic",
-  "model": "nvidia/Nemotron-3_5-Super-VL",
+  "model": "nvidia/nemotron-3.5-super-vl",
   "notes": "Hand-maintained deterministic replays for the offline KEL-15 dataset. They are not captured production traffic and contain no credentials.",
   "tasks": {
     "EV-008": {
       "turns": [
         [
-          {"type": "tool_call", "index": 0, "call_id": "call_web_1", "name": "web.search", "arguments": {"query": "latest Nebius GPU pricing", "max_results": 5, "freshness": "week"}},
+          {"type": "tool_call", "index": 0, "call_id": "call_web_1", "name": "web.search", "arguments": {"query": "latest GPU cloud pricing", "max_results": 5, "freshness": "week"}},
           {"type": "usage", "input_tokens": 180, "output_tokens": 42},
           {"type": "stream_end", "finish_reason": "tool_calls"}
         ],
         [
-          {"type": "text", "text": "I found the latest Nebius GPU pricing for you."},
+          {"type": "text", "text": "I found the latest GPU cloud pricing for you."},
           {"type": "usage", "input_tokens": 240, "output_tokens": 14},
           {"type": "stream_end", "finish_reason": "stop"}
         ]
@@ -79,12 +79,12 @@
     "EV-013": {
       "turns": [
         [
-          {"type": "tool_call", "index": 0, "call_id": "call_web_limits", "name": "web.search", "arguments": {"query": "Nebius news", "max_results": 3, "freshness": "week"}},
+          {"type": "tool_call", "index": 0, "call_id": "call_web_limits", "name": "web.search", "arguments": {"query": "GPU cloud news", "max_results": 3, "freshness": "week"}},
           {"type": "usage", "input_tokens": 170, "output_tokens": 36},
           {"type": "stream_end", "finish_reason": "tool_calls"}
         ],
         [
-          {"type": "text", "text": "Here is the Nebius news."},
+          {"type": "text", "text": "Here is the GPU cloud news."},
           {"type": "usage", "input_tokens": 220, "output_tokens": 9},
           {"type": "stream_end", "finish_reason": "stop"}
         ]

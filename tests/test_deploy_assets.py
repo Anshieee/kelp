@@ -31,7 +31,7 @@ COMPOSE_ENV = ROOT / "deploy" / "compose.env.example"
 RUNBOOK = ROOT / "docs" / "DEPLOY.md"
 
 #: Substrings that must never appear in a build-time directive or a template.
-SECRET_MARKERS = ("NEBIUS_API_KEY", "KELP_AUTH_TOKEN", "KELP_CSRF_TOKEN")
+SECRET_MARKERS = ("KELP_PROVIDER_API_KEY", "KELP_AUTH_TOKEN", "KELP_CSRF_TOKEN")
 
 
 def _lines(path: Path) -> list[str]:
@@ -248,7 +248,7 @@ def test_unit_stops_the_project_and_orders_after_docker() -> None:
 
 def test_unit_does_not_carry_secrets_or_container_env() -> None:
     for line in _lines(UNIT):
-        assert not line.strip().startswith("Environment=NEBIUS"), line
+        assert not line.strip().startswith("Environment=KELP_PROVIDER"), line
         for marker in SECRET_MARKERS:
             assert marker not in line, line
     assert "deploy/kelp.env" in UNIT.read_text(encoding="utf-8")
@@ -259,9 +259,9 @@ def test_unit_does_not_carry_secrets_or_container_env() -> None:
 
 def test_container_env_example_has_empty_secrets() -> None:
     text = CONTAINER_ENV.read_text(encoding="utf-8")
-    assert "\nNEBIUS_API_KEY=\n" in text
+    assert "\nKELP_PROVIDER_API_KEY=\n" in text
     assert "\nKELP_AUTH_TOKEN=\n" in text
-    assert not re.search(r"^NEBIUS_API_KEY=.+\S", text, re.MULTILINE)
+    assert not re.search(r"^KELP_PROVIDER_API_KEY=.+\S", text, re.MULTILINE)
     assert not re.search(r"^KELP_AUTH_TOKEN=.+\S", text, re.MULTILINE)
 
 
