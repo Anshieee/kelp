@@ -59,6 +59,8 @@ def body_limit_for(api: "ChatAPI", path: str) -> tuple[int, int, str]:
         segments = []
     if len(segments) >= 2 and segments[0] == "api" and segments[1] == "attachments":
         return api.max_upload + _UPLOAD_OVERHEAD, 413, "upload_too_large"
+    if len(segments) >= 2 and segments[1] in {"credential-requests", "credential-worker"}:
+        return 16_384, 413, "credential_body_too_large"
     return _JSON_LIMIT, 400, "invalid_request"
 
 
