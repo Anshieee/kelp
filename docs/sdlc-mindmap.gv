@@ -201,18 +201,24 @@ digraph sdlc {
   k29 -> k29_provider;
 
   // Recent integration merges (2-3 November 2026; soft blue-grey family)
-  integ [label="Recent integrations\nDONE" shape="box" style="filled,bold,rounded" fontsize="15" penwidth="2" fillcolor="#DDE5EA" URL="#integration" tooltip="Credential handoff, stable share-ID test, wallet/Checkout mounting, skill-store install, and approval routing are merged. Main collects 1121 tests: 1117 pass and 4 skip."];
+  integ [label="Recent integrations\nDONE" shape="box" style="filled,bold,rounded" fontsize="15" penwidth="2" fillcolor="#DDE5EA" URL="#integration" tooltip="README setup, credential handoff, stable share-ID test, wallet/Checkout mounting, skill-store install, approval routing and clarity, and reviewed plugin imports are merged. Main collects 1132 tests: 1128 pass and 4 skip."];
   center -> integ;
   integ_credentials [label="Private credential handoff\nDONE" fillcolor="#EEF2F5" URL="#integration" tooltip="PR #20: browser credential handoff and encrypted vault, with server routes and tests. Merged as 33e6d9a."];
   integ_flake [label="Stable share-ID test\nDONE" fillcolor="#EEF2F5" URL="#integration" tooltip="PR #25: make the share public-ID casing assertion deterministic. Merged as 80f1eec."];
   integ_wallet [label="Wallet and Checkout mounted\nDONE" fillcolor="#EEF2F5" URL="#integration" tooltip="Wallet and Checkout routes mounted in the server app with route-level tests. Merged as f17661b."];
   integ_skillstore [label="Approval-gated skill store\nDONE" fillcolor="#EEF2F5" URL="#integration" tooltip="PR #35: digest-pinned local skill-store discovery and approval-gated install. Merged as d6a5424; 1113 collected, 1109 passed, 4 skipped; required CI checks passed."];
   integ_approval [label="Approval summaries and stop race\nDONE" fillcolor="#EEF2F5" URL="#integration" tooltip="PR #36: fixes approval file summaries and covers the stop race. Merged as 5e2123b; 1121 collected, 1117 passed, 4 skipped; required CI checks passed."];
+  integ_readme [label="Minimal setup guide\nDONE" fillcolor="#EEF2F5" URL="#integration" tooltip="PR #33: README quick start for Compose and Python, environment setup, API smoke test, and repository map. Merged as b319def."];
+  integ_scope [label="Scoped approval clarity\nDONE" fillcolor="#EEF2F5" URL="#integration" tooltip="PR #38: approval rationale names effects and scopes, amount, expiry, and truncation. Merged as 3f75979."];
+  integ_imports [label="Reviewed plugin imports\nDONE" fillcolor="#EEF2F5" URL="#integration" tooltip="PR #39: statically reviews imports, flags aliased dynamic imports, and binds approval to the reviewed package digest. Merged as b6d8226."];
   integ -> integ_credentials;
   integ -> integ_flake;
   integ -> integ_wallet;
   integ -> integ_skillstore;
   integ -> integ_approval;
+  integ -> integ_readme;
+  integ -> integ_scope;
+  integ -> integ_imports;
 
   // Surfaces leaves (soft teal family)
   s_dash [label="Dashboard chat now" fillcolor="#E6F4F1" URL="#surfaces" tooltip="Main screen in the browser. Built first."];
