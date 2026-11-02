@@ -10,6 +10,7 @@ import httpx
 import pytest
 
 from chat import ChatService, ChatStore
+from chat.errors import ChatError
 from chat.server import _tool_specs
 from kernel.provider import StreamEnd, ToolCallReady, UsageReport
 from openshell.audit import AuditLog
@@ -102,7 +103,12 @@ def test_model_is_offered_github_write_and_pending_approval_has_no_egress(
             cards = await wait_until(lambda: store.list_approvals(status="pending"))
             card = cards[0]
             assert requests == []
-            offered = provider.requests[0].tools
+            provider_request = provider.requests[0]
+            assert any(
+                message.get("role") == "user" and message.get("content") == "Open a PR"
+                for message in provider_request.messages
+            )
+            offered = provider_request.tools
             assert any(item["function"]["name"] == "github.write" for item in offered)
             assert "After you approve" in card["rationale"]
             assert "Anshieee/kelp" in card["rationale"]
@@ -112,17 +118,29 @@ def test_model_is_offered_github_write_and_pending_approval_has_no_egress(
             assert card["scopes"]["repos"] == ["Anshieee/kelp"]
             assert card["arguments_digest"].startswith("sha256:")
             service.decide(card["id"], "approve")
-            # A second approval cannot authorize a second invocation.
-            try:
-                service.decide(card["id"], "approve")
-            except Exception as exc:
-                assert getattr(exc, "code", None) in {"already_used", "not_approved"}
             await service.wait_for_turn(payload["turn_id"])
-            assert sum(request.url.path.endswith("/pulls") for request in requests) == 1
+            assert sum(
+                request.method == "POST" and request.url.path.endswith("/git/refs")
+                for request in requests
+            ) == 1
+            assert sum(
+                request.method == "POST" and request.url.path.endswith("/git/commits")
+                for request in requests
+            ) == 1
+            assert sum(
+                request.method == "POST" and request.url.path.endswith("/pulls")
+                for request in requests
+            ) == 1
             assert len(requests) == 8
             assert all(request.url.host == "api.github.com" for request in requests)
             settled = store.get_approval(card["id"])
             assert settled["status"] == "consumed"
+
+            # A consumed approval is single-use and cannot replay the writer.
+            with pytest.raises(ChatError) as replay:
+                service.decide(card["id"], "approve")
+            assert replay.value.code == "already_used"
+            assert len(requests) == 8
 
         asyncio.run(scenario())
         assert any(row.get("event") == "skill_egress" for row in audit.entries())
