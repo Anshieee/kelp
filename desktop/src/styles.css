@@ -22,8 +22,12 @@ ul { list-style: none; padding: 0; }
 li { padding: 6px 4px; border-bottom: 1px solid #f0ece3; display: flex; justify-content: space-between; gap: 8px; }
 
 /* Pet overlay + orb fallback face */
-.pet-window { width: 148px; height: 148px; -webkit-app-region: drag; }
-[data-orb] { position: relative; width: 148px; height: 148px; }
+/* No drag region: the orb has to take clicks. Only the disc and its eyes take
+   pointer events, so the transparent corners of the square do nothing. */
+.pet-window { width: 148px; height: 148px; pointer-events: none; }
+[data-orb] { position: relative; width: 148px; height: 148px; pointer-events: none; }
+.pet-svg { pointer-events: none; }
+.pet-disc, .pet-eye { pointer-events: auto; cursor: pointer; }
 .e-orb-canvas { position: absolute; inset: 0; width: 100%; height: 100%; opacity: 0; }
 .e-orb--webgl .e-orb-canvas { opacity: 1; }
 .e-orb-face { position: absolute; inset: 18px; border-radius: 50%; background: #92d2a5; }

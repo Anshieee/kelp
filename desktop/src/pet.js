@@ -112,7 +112,20 @@ function focusMain(approvalId) {
   }
 }
 
-host?.addEventListener("click", () => focusMain());
+// Click the orb: summon or dismiss the command panel. The full app is reached
+// from inside the panel, not from the pet.
+async function togglePanel() {
+  try {
+    const { invoke } = await import("@tauri-apps/api/core");
+    await invoke("toggle_overlay");
+  } catch {
+    /* Plain browser: there is no panel window to summon. */
+  }
+}
+
+host?.addEventListener("click", () => {
+  void togglePanel();
+});
 
 // Right-click: mute motion / quit (Tauri menu; no-op in plain browser).
 host?.addEventListener("contextmenu", (e) => {

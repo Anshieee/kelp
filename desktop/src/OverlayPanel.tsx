@@ -1,6 +1,5 @@
 import { useEffect, useRef, useState } from "react";
 import {
-  Avatar,
   Box,
   Button,
   Dialog,
@@ -16,24 +15,25 @@ import {
   Typography,
 } from "@mui/material";
 import ArrowUpwardRoundedIcon from "@mui/icons-material/ArrowUpwardRounded";
-import CloseRoundedIcon from "@mui/icons-material/CloseRounded";
-import ExpandMoreRoundedIcon from "@mui/icons-material/ExpandMoreRounded";
+import KeyboardArrowDownRoundedIcon from "@mui/icons-material/KeyboardArrowDownRounded";
 import MicRoundedIcon from "@mui/icons-material/MicRounded";
+import OpenInFullRoundedIcon from "@mui/icons-material/OpenInFullRounded";
 import OpenInNewRoundedIcon from "@mui/icons-material/OpenInNewRounded";
 import ScreenshotMonitorRoundedIcon from "@mui/icons-material/ScreenshotMonitorRounded";
-import SmartToyRoundedIcon from "@mui/icons-material/SmartToyRounded";
 
 import { cannedReply } from "./mock";
-import { hideOverlay, openFullApp, resizeOverlay } from "./tauri";
+import { hideOverlay, onFocusLost, openFullApp, resizeOverlay } from "./tauri";
 import type { ChatMessage } from "./types";
 
-const COMPACT = { width: 640, height: 88 };
-const EXPANDED = { width: 760, height: 420 };
+// The window is exactly this wide in both states; only the height changes.
+const WIDTH = 400;
+const COMPACT = { width: WIDTH, height: 76 };
+const EXPANDED = { width: WIDTH, height: 440 };
 
 let nextId = 0;
 const uid = () => `overlay-${++nextId}`;
 
-export default function Overlay() {
+export default function OverlayPanel() {
   const [expanded, setExpanded] = useState(false);
   const [draft, setDraft] = useState("");
   const [messages, setMessages] = useState<ChatMessage[]>([]);
@@ -44,6 +44,21 @@ export default function Overlay() {
     inputRef.current?.focus();
   }, []);
 
+  // Outside click: the panel goes away entirely, not back to the bar.
+  useEffect(
+    () =>
+      onFocusLost(() => {
+        setExpanded(false);
+        void hideOverlay();
+      }),
+    [],
+  );
+
+  function collapse() {
+    setExpanded(false);
+    void resizeOverlay(COMPACT.width, COMPACT.height);
+  }
+
   useEffect(() => {
     function onKey(event: KeyboardEvent) {
       if (event.key !== "Escape") return;
@@ -52,8 +67,7 @@ export default function Overlay() {
         return;
       }
       if (expanded) {
-        setExpanded(false);
-        void resizeOverlay(COMPACT.width, COMPACT.height);
+        collapse();
         return;
       }
       void hideOverlay();
@@ -62,21 +76,19 @@ export default function Overlay() {
     return () => window.removeEventListener("keydown", onKey);
   }, [expanded, screenNote]);
 
-  function grow() {
-    if (expanded) return;
+  function expand() {
+    if (expanded) {
+      void openFullApp();
+      return;
+    }
     setExpanded(true);
     void resizeOverlay(EXPANDED.width, EXPANDED.height);
-  }
-
-  function shrink() {
-    setExpanded(false);
-    void resizeOverlay(COMPACT.width, COMPACT.height);
   }
 
   function send() {
     const trimmed = draft.trim();
     if (!trimmed) return;
-    grow();
+    if (!expanded) expand();
     setMessages((current) => [
       ...current,
       { id: uid(), role: "user", text: trimmed },
@@ -89,46 +101,30 @@ export default function Overlay() {
     <Box
       sx={{
         height: "100%",
+        boxSizing: "border-box",
+        p: "6px",
         display: "flex",
         flexDirection: "column",
-        gap: 1,
-        p: 1,
-        boxSizing: "border-box",
+        gap: "8px",
+        background: "transparent",
       }}
     >
       <Paper
-        elevation={8}
+        elevation={6}
         sx={{
           display: "flex",
           alignItems: "center",
-          gap: 1,
-          px: 1.5,
-          py: 0.75,
+          gap: 0.5,
+          height: 64,
+          px: 1,
           borderRadius: 999,
-          border: "1px solid rgba(25,24,23,0.10)",
+          flexShrink: 0,
         }}
       >
-        <Tooltip title={expanded ? "Collapse" : "Expand"}>
-          <Avatar
-            onClick={expanded ? shrink : grow}
-            sx={{
-              width: 34,
-              height: 34,
-              bgcolor: "primary.main",
-              cursor: "pointer",
-            }}
-          >
-            <SmartToyRoundedIcon sx={{ fontSize: 20 }} />
-          </Avatar>
-        </Tooltip>
-
         <InputBase
           inputRef={inputRef}
           value={draft}
-          onChange={(event) => {
-            setDraft(event.target.value);
-            if (event.target.value) grow();
-          }}
+          onChange={(event) => setDraft(event.target.value)}
           onKeyDown={(event) => {
             if (event.key === "Enter" && !event.shiftKey) {
               event.preventDefault();
@@ -136,9 +132,8 @@ export default function Overlay() {
             }
           }}
           placeholder="Ask Kelp…"
-          sx={{ flex: 1, fontSize: 15 }}
+          sx={{ flex: 1, fontSize: 15, px: 1.5 }}
         />
-
         <Tooltip title="Screen access — not wired yet">
           <IconButton size="small" onClick={() => setScreenNote(true)}>
             <ScreenshotMonitorRoundedIcon fontSize="small" />
@@ -147,6 +142,19 @@ export default function Overlay() {
         <Tooltip title="Voice — not wired yet">
           <IconButton size="small">
             <MicRoundedIcon fontSize="small" />
+          </IconButton>
+        </Tooltip>
+        <Tooltip title={expanded ? "Open the full app" : "Expand"}>
+          <IconButton
+            size="small"
+            onClick={expand}
+            aria-label={expanded ? "Open the full app" : "Expand"}
+          >
+            {expanded ? (
+              <OpenInNewRoundedIcon fontSize="small" />
+            ) : (
+              <OpenInFullRoundedIcon fontSize="small" />
+            )}
           </IconButton>
         </Tooltip>
         <IconButton
@@ -167,18 +175,41 @@ export default function Overlay() {
 
       {expanded && (
         <Paper
-          elevation={8}
+          elevation={6}
           sx={{
             flex: 1,
             minHeight: 0,
             display: "flex",
             flexDirection: "column",
             borderRadius: 3,
-            border: "1px solid rgba(25,24,23,0.10)",
             overflow: "hidden",
           }}
         >
-          <Box sx={{ flex: 1, minHeight: 0, overflowY: "auto", p: 2 }}>
+          <Stack
+            direction="row"
+            alignItems="center"
+            sx={{ px: 2, py: 0.5, borderBottom: "1px solid rgba(25,24,23,0.08)" }}
+          >
+            <Typography
+              variant="caption"
+              sx={{
+                flex: 1,
+                fontWeight: 600,
+                letterSpacing: "0.04em",
+                textTransform: "uppercase",
+                color: "text.secondary",
+              }}
+            >
+              Kelp
+            </Typography>
+            <Tooltip title="Collapse">
+              <IconButton size="small" onClick={collapse} aria-label="Collapse">
+                <KeyboardArrowDownRoundedIcon fontSize="small" />
+              </IconButton>
+            </Tooltip>
+          </Stack>
+
+          <Box sx={{ flex: 1, minHeight: 0, overflowY: "auto", px: 2, py: 1.5 }}>
             {messages.length === 0 ? (
               <Typography variant="body2" color="text.secondary">
                 Type to chat. Replies are canned in this preview.
@@ -191,7 +222,7 @@ export default function Overlay() {
                     sx={{
                       alignSelf:
                         message.role === "user" ? "flex-end" : "flex-start",
-                      maxWidth: "82%",
+                      maxWidth: "84%",
                       px: 1.5,
                       py: 1,
                       borderRadius: 3,
@@ -212,8 +243,6 @@ export default function Overlay() {
 
           <Stack
             direction="row"
-            alignItems="center"
-            spacing={1}
             sx={{ px: 2, py: 1, borderTop: "1px solid rgba(25,24,23,0.08)" }}
           >
             <Button
@@ -223,17 +252,6 @@ export default function Overlay() {
             >
               Open full app
             </Button>
-            <Box sx={{ flex: 1 }} />
-            <Tooltip title="Close">
-              <IconButton size="small" onClick={shrink} aria-label="Collapse">
-                <ExpandMoreRoundedIcon fontSize="small" />
-              </IconButton>
-            </Tooltip>
-            <Tooltip title="Hide">
-              <IconButton size="small" onClick={() => void hideOverlay()} aria-label="Hide">
-                <CloseRoundedIcon fontSize="small" />
-              </IconButton>
-            </Tooltip>
           </Stack>
         </Paper>
       )}

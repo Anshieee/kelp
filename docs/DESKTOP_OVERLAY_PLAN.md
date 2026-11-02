@@ -15,16 +15,26 @@
 
 Two windows, one shell.
 
-**Overlay** (`overlay.html`, label `overlay`) — a transparent, frameless,
-always-on-top window summoned by a global shortcut (`CommandOrControl+Shift+Space`)
-or by clicking the pet. It has two states:
+**Command panel** (`overlay.html`, label `overlay`) — a transparent, frameless,
+always-on-top window. It is parked **beside the orb**, never centred: right of
+it by default, flipped to the left when the orb sits near the screen edge, and
+clamped to the monitor work area. Summoned by clicking the orb or with
+`CommandOrControl+Shift+Space`; both run the same Rust toggle.
 
-- *Compact*: an avatar, a "Ask Kelp…" field, mic, screen, send. 640×88.
-- *Expanded*: the same bar plus a response column below it, an "Open full app"
-  button and a close control. 760×420.
+- *Compact* (400×76): fully transparent window holding one white input pill —
+  field, mic, screen, expand, send. No panel, no avatar: the orb is the avatar.
+- *Expanded* (400×440): the **same width** and same pill at the top, with a
+  white conversation surface beneath it and a chevron to collapse.
 
-Escape hides it. Sending appends a canned reply so the interaction reads
-correctly; nothing leaves the process.
+The expand button does double duty: compact → expanded, and expanded → open the
+full app and hide the panel. Clicking anywhere else hides the window entirely
+(debounced focus-loss), as does Escape from the compact state. Sending appends a
+canned reply so the interaction reads correctly; nothing leaves the process.
+
+**Pet** (`pet.html`, label `pet`) — the avatar. 148×148, transparent, no shadow,
+no drag region, and only the disc takes pointer events, so the orb looks and
+behaves like a floating object rather than a window. A click toggles the panel;
+the full app is reached from inside the panel.
 
 **Main window** (`index.html`, label `main`) — a ChatGPT-shaped shell:
 
