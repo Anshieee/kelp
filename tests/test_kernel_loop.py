@@ -112,7 +112,7 @@ def test_zero_tool_calls_completes_and_accounts_usage() -> None:
     assert finished.steps == 1
     assert finished.input_tokens == 10
     assert finished.output_tokens == 5
-    assert finished.estimated_cost_usd is None
+    assert finished.estimated_cost_usd == pytest.approx(4.0e-06)
     assert finished.usage_persisted is True
     assert len(store.records) == 1
     record = store.records[0]
@@ -120,7 +120,7 @@ def test_zero_tool_calls_completes_and_accounts_usage() -> None:
     assert record.session_id == "s1"
     assert record.model == MODEL
     assert record.total_tokens == 15
-    assert record.cost_known is False
+    assert record.cost_known is True
     assert record.usage_reported is True
     assert record.outcome == "stop"
     assert provider.requests[0].max_tokens == 1024

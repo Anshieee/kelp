@@ -66,12 +66,15 @@ class ModelPricing:
         )
 
 
-#: Deliberately empty. The endpoint is operator-chosen, so list prices are
-#: provider-specific and cannot be shipped as a repo-wide default. An unknown
-#: model reports cost as unknown rather than silently recording $0, and the
-#: spend guard treats an unmeasurable window as blocked unless the operator
-#: sets ``KELP_SPEND_UNKNOWN_PRICE_MODE=count_as`` with a fixed amount.
-DEFAULT_PRICING: Mapping[str, ModelPricing] = {}
+#: USD per one million tokens, from the documented provider's public model
+#: list (``https://openrouter.ai/api/v1/models``, read 2026-11-02). Only the two
+#: default models are listed: a model this deployment does not use has no entry,
+#: so its cost stays unknown rather than becoming a fabricated number. Update
+#: the rows when the provider's published prices change.
+DEFAULT_PRICING: Mapping[str, ModelPricing] = {
+    "nvidia/nemotron-3.5-super-vl": ModelPricing(0.15, 0.50),
+    "nvidia/nemotron-3.5-lightning": ModelPricing(0.07, 0.20),
+}
 
 
 @dataclass(frozen=True)

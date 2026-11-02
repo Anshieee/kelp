@@ -968,14 +968,25 @@ the deploy is not the code you tested.
 
 Two cost centres, both visible from `/data/usage/usage.jsonl` and `/api/metrics`.
 
-**Tokens.** `kernel/config.py` ships `DEFAULT_PRICING` empty on purpose: the
-endpoint is operator-chosen, so a repo-wide list price would be wrong for most
-deployments. Until prices are added, every turn records
-`estimated_cost_usd: null` and `cost_known: false`, and the spend guardrail
-treats such a window as blocked (§13.1). To price turns, add the model ids this
-deployment uses to `DEFAULT_PRICING` with that provider's current
-USD-per-million list price, then rebuild. The number that matters is the one in
-`usage.jsonl`; an unknown model records no price rather than a fake `$0`.
+**Tokens.** `kernel/config.py` ships `DEFAULT_PRICING` with the two default
+models at the documented provider's published list price (`openrouter.ai/api/v1/models`,
+read 2026-11-02): Super VL `$0.15` in / `$0.50` out per million tokens; Lightning
+`$0.07` in / `$0.20` out. At an illustrative 2,000 input and 500 output tokens
+per turn:
+
+```
+2,000/1e6 × $0.15 = $0.00030
+  500/1e6 × $0.50 = $0.00025
+                    ─────────
+                    $0.00055 per turn  ≈ $0.55 per 1,000 turns
+```
+
+Background work (titles, summaries) uses Lightning at less than half of that
+rate. A model that is not in the table records `estimated_cost_usd: null` and
+`cost_known: false`, which the spend guardrail treats as blocked (§13.1); add
+that model id to `DEFAULT_PRICING` with the provider's current price, then
+rebuild. The number that matters is the one in `usage.jsonl`; an unknown model
+records no price rather than a fake `$0`.
 
 **VM and disk.** One small CPU instance runs 24/7 at ~50 MiB RSS; a 20 GB volume
 holds the database, uploads, and logs for a very long time. Check current VM

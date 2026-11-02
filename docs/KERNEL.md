@@ -113,9 +113,10 @@ One `UsageRecord` per turn is appended to the configured store:
  "duration_ms":912,"outcome":"stop"}
 ```
 
-- Pricing comes from `kernel.config.DEFAULT_PRICING` (USD per 1M tokens), which
-  is empty by default because the endpoint is operator-chosen. Add the model ids
-  this deployment uses with that provider's current list price to populate it.
+- Pricing comes from `kernel.config.DEFAULT_PRICING` (USD per 1M tokens). It
+  ships the two default models at the documented provider's published list price
+  (`openrouter.ai/api/v1/models`, read 2026-11-02); add any other model id this
+  deployment uses with the provider's current price.
 - Unknown models record `estimated_cost_usd: null` and `cost_known: false`; the
   kernel never invents a price.
 - `JsonlUsageStore` appends with `fsync` and creates the file `0600`. It contains
