@@ -868,6 +868,7 @@ def test_registry_executor_offers_approved_install_for_pinned_local_plugin(
     requests: list[Any] = []
 
     async def approve(request: Any) -> bool:
+        assert not (tmp_path / "installed" / "plugins.echo").exists()
         requests.append(request)
         return True
 
@@ -941,6 +942,20 @@ def test_registry_executor_does_not_install_when_installation_is_denied(
     result = asyncio.run(executor.execute(ToolCall("install-2", "plugins.echo", {"text": "hi"})))
 
     assert result["error"]["code"] == "approval_denied"
+    assert not plugin_root.exists()
+
+
+def test_registry_executor_does_not_install_without_approval_hook(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    store = tmp_path / "skill-store"
+    cli.install(_write_plugin(tmp_path / "source" / "echo"), root=store)
+    monkeypatch.setenv(PLUGIN_STORE_ENV, str(store))
+    plugin_root = tmp_path / "installed"
+    executor = RegistryToolExecutor(_load(plugin_root))
+
+    asyncio.run(executor.execute(ToolCall("install-no-approval", "plugins.echo", {"text": "hi"})))
+
     assert not plugin_root.exists()
 
 
