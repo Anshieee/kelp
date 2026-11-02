@@ -11,8 +11,8 @@ that goes with it is [`sdlc-mindmap.svg`](sdlc-mindmap.svg), with a PNG fallback
 site embeds a copy of the SVG directly in the page, so every box there can be clicked; that copy
 and these two files must be updated together.
 
-What this snapshot rests on: `main` is at `f7ed9d1`, and the dependency-audit branch takes the
-suite to **1055 tests, all passing**, with the repository public. KEL-5 through KEL-10 are merged,
+What this snapshot rests on: `main` is at `cfeaea4` (the tracker-sync snapshot itself follows it),
+and the suite is **1071 tests, all passing**, with the repository public. KEL-5 through KEL-10 are merged,
 reviewed, and done; KEL-11, KEL-12, KEL-13, KEL-14, KEL-15, and KEL-16 are merged and reviewed too,
 and close M2. KEL-17, KEL-18, KEL-20, KEL-21, KEL-19, and
 KEL-22 then carried M3 to completion and are merged and reviewed: abuse resistance, spend ceilings,
@@ -143,13 +143,15 @@ KEL-27 and KEL-28 are both DONE, so no work item is left open.
 
 ## The map
 
-![Mind map of the delivery: milestones M0 to M4, work items KEL-5 to KEL-26, product surfaces, payments, and design.](sdlc-mindmap.svg)
+![Mind map of the delivery: milestones M0 to M4, work items KEL-5 to KEL-28 plus the KEL-29 gap sweep, product surfaces, payments, and design.](sdlc-mindmap.svg)
 
 The same map in words, in case the image does not load:
 
-- **Milestones** — five stages, M0 to M4: M1, M2, and M3 are complete, and M4 is in progress.
+- **Milestones** — five stages, M0 to M4: all five are complete. M0 closed on 2 November 2026
+  with the threat model and the standard development setup.
 - **The work** — twenty-four work items, KEL-5 to KEL-28: all twenty-four are done, and M4 closed
-  with KEL-27, proactive turns, and KEL-28, the read-only share link.
+  with KEL-27, proactive turns, and KEL-28, the read-only share link. The KEL-29 gap sweep then
+  closed the six honest gaps the reviews had named; it is complete too.
 - **Surfaces** — where you talk to the assistant: dashboard first, Telegram next, WhatsApp and voice memos later.
 - **Money** — saved cards through Stripe and hosted Checkout through Razorpay, both merged and closed out; an in-app balance later.
 - **Design** — the screen plan is written, and so is the chat spec. The chat surface code is merged; the drawing file and the browser screen are next.
@@ -166,7 +168,7 @@ promise that full-vision scope lands this week. Scope is cumulative: M2 includes
 
 | Stage | Target | State | What finishing it means |
 |---|---|---|---|
-| **M0 Foundation** | 30 Oct 2026 | IN PROGRESS | The repo (public), the docs, the tests, the standard development setup, model and provider chosen, and a written list of what could go wrong. The repo, docs, tests, and skill contract are in, and so are the automated checks: gitleaks secret scan, ruff, mypy, pytest, and a pip-audit dependency audit on every push and pull request. Still open: the standard development setup and the written threat model. |
+| **M0 Foundation** | 30 Oct 2026 | COMPLETE | The repo (public), the docs, the tests, the standard development setup, model and provider chosen, and a written list of what could go wrong. The repo, docs, tests, and skill contract are in, and so are the automated checks: gitleaks secret scan, ruff, mypy, pytest, and a pip-audit dependency audit on every push and pull request. The standard development setup is in (`pip install -e ".[dev]"`, dev tools pinned to the CI versions), and the written threat model is in (`docs/THREAT_MODEL.md`). Nothing in M0 is open. |
 | **M1 Prototype** | 30 Oct 2026 | COMPLETE | The end-to-end story: ask, get an answer with sources, read a file, approve an action, pay with a saved card, watch the six-scene demo. All six work items live here, and all six are done: KEL-5 to KEL-9 were merged earlier, and KEL-10 closed on owner confirmation on 30 October 2026. |
 | **M2 Polished MVP** | 30 Oct 2026 | COMPLETE | Survives ordinary use: picks up after a restart, self-checks, better search over your documents, an honest account of what it did, repeatable quality measurements, and a deploy a stranger can repeat. All six work items are done: KEL-11, the serve entrypoint; KEL-12, health and readiness; KEL-13, real document search with citations; KEL-14, structured logs and metrics; KEL-15, the eval harness that measures answer quality; KEL-16, the image and runbook. The runbook's end-to-end pass on a real hosted VM is still to be done. |
 | **M3 Hardening** | 30 Oct 2026 | COMPLETE | The privacy and cost promises hold under pressure: who sees what, where keys live, caps on traffic, a retention rule, a spend ceiling, and a written privacy review. All six pieces are done: KEL-17, the traffic, body, and concurrency caps; KEL-18, the spend ceilings; KEL-19, owner sign-in with a session cookie, CSRF, and lockout; KEL-20, the policy enforced at every skill call; KEL-21, the retention rule; and KEL-22, the written privacy review with the egress ledger and the exec-boundary decision. |
@@ -177,7 +179,51 @@ M0 moved on **2 November 2026**. The automated checks the stage was missing are 
 every push and pull request, and another job, `deps`, audits the runtime dependencies declared in
 `pyproject.toml` with `pip-audit`, failing on a published advisory. Locally, `make audit` runs the
 same audit through `tools/audit_deps.py`, so the manifest is the only list to keep current. A red
-job blocks merge. Still open at M0: the standard development setup and the written threat model.
+job blocks merge. The two items that were still open at M0 closed the same day: the standard
+development setup now works as documented (`pip install -e ".[dev]"` builds the package and installs
+pytest, ruff, and mypy at the exact versions the CI gate pins), and the written threat model is
+`docs/THREAT_MODEL.md`. With that, **M0 Foundation is complete**.
+
+## The KEL-29 gap sweep
+
+KEL-29 is the agent-core track's answer to the honest gaps the M1&ndash;M4 reviews had named. Six
+tasks, one branch and one pull request each, all merged and reviewed on **2 November 2026**:
+
+1. **Threat model doc** (M0 debt) — `docs/THREAT_MODEL.md` states the three trust boundaries
+   (process, loop-to-tool, network), exactly what reaches the model provider, and what stays
+   server-side, with every claim naming the file and function that enforces it. Merged in pull
+   request #8.
+2. **Scheduler counter fix** (KEL-27 gap) — the proactive runner's failure, skip, and pause
+   counters were unlocked read-modify-write cycles over the task file; a tick landing between a
+   read and a write lost one increment. They now re-read the task inside the scheduler's advisory
+   tick lock, exposed as a public blocking `tick_lock` shared with the ticker's non-blocking one
+   through one re-entrant body. A twelve-thread barrier test proves every increment lands, and it
+   fails on the pre-fix code. Merged in pull request #3.
+3. **Device audit rows** (KEL-24 gap) — a session mint, a single revoke, and a mass revoke each
+   write one content-free audit row (`session_minted`, `session_revoked`, `sessions_revoked`)
+   carrying the actor and an eight-character hash prefix or a count, never the raw session id or
+   the device label. Wired through `ChatStore` so the HTTP routes did not change. Merged in pull
+   request #6.
+4. **Share projection refinements** (KEL-28 data side) — the snapshot projection moved into
+   `chat/cards.py` as one shared builder (`share_snapshot`) with an explicit deny-list,
+   `SHARE_DROPPED_FIELDS`, of thirty-one forbidden field names, and an exhaustive test that walks
+   a deliberately poisoned fixture asserting none of them survive and no artifact handle string
+   leaks through free text. The API route delegates to the shared builder. Merged in pull
+   request #7.
+5. **Plugin signing spike** (KEL-25 gap) — `skills/signing.py` prototypes an Ed25519 attestation
+   over the existing SHA-256 digest pin (sign the digest string with an operator key, verify with
+   the public key, fail closed on a missing key), and `docs/SPIKE_PLUGIN_SIGNING.md` writes the
+   chain of trust, key rotation, and the named follow-ups. The production loader is untouched;
+   enforcement is a deliberate later decision. Merged in pull request #9.
+6. **Provider change recipe** (KEL-18 gap) — `docs/PROVIDER_CHANGE.md` is the runbook for
+   swapping the model or the whole endpoint: the four environment switches
+   (`KELP_PROVIDER_BASE_URL`, `KELP_PROVIDER_API_KEY`, `KELP_PRIMARY_MODEL`,
+   `KELP_BACKGROUND_MODEL`), the required pricing-table update and the fail-closed consequence of
+   skipping it, the offline evals, and the rollback path. Merged in pull request #10.
+
+Across the cycle the suite went from 1066 to **1071 tests, all passing** (one from the scheduler
+fix, two from the device audit rows, two from the share projection). The tracker sync itself is
+this snapshot.
 
 ## The twenty-four work items
 
@@ -1355,7 +1401,7 @@ explicit revoke routes are the only kill switch. And a revoke cannot recall a co
 ### GitHub
 
 - Repository (public): https://github.com/Anshieee/kelp
-- Shared copy of the code: https://github.com/Anshieee/kelp/tree/main — head `f7ed9d1`
+- Shared copy of the code: https://github.com/Anshieee/kelp/tree/main — head `cfeaea4`
 - All branches: https://github.com/Anshieee/kelp/branches
   - `kel-5` — merged (`b8de92f`)
   - `kel-6` — merged at `d3c763e`; branch head `4c72afc`
@@ -1384,9 +1430,16 @@ explicit revoke routes are the only kill switch. And a revoke cannot recall a co
   - `kel-26` — merged at `05d7508`; branch head `a1a5b1f`
   - `kel-27` — merged at `c62be17`; branch head `79dd6f8`
   - `kel-28` — merged at `dc50925`; branch head `98ded52`
+  - `kel-29-scheduler-counter` — merged via pull request #3 (2026-11-02)
+  - `kel-29-device-audit` — merged via pull request #6 (2026-11-02)
+  - `kel-29-share-projection` — merged via pull request #7 (2026-11-02)
+  - `kel-29-threat-model` — merged via pull request #8 (2026-11-02)
+  - `kel-29-plugin-signing` — merged via pull request #9 (2026-11-02)
+  - `kel-29-provider-change` — merged via pull request #10 (2026-11-02)
+  - `kel-29-dev-deps` — merged via pull request #4 (2026-11-02)
 - Change history: https://github.com/Anshieee/kelp/commits/main
 - Pull requests: https://github.com/Anshieee/kelp/pulls
-- Tests: 1055 pass (`python -m pytest`); `make demo` plays all six beats, `make eval` passes offline
+- Tests: 1071 pass (`python -m pytest`); `make demo` plays all six beats, `make eval` passes offline
   with the network blocked, and `make audit` finds no known vulnerability in a declared dependency
 
 ### Linear
