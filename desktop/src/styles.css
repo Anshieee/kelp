@@ -56,7 +56,11 @@ li { padding: 6px 4px; border-bottom: 1px solid #f0ece3; display: flex; justify-
 [data-pet-state="waiting"] .pet-disc { fill: #e08d69; }
 [data-pet-state="done"] .pet-disc { fill: #76adc6; }
 [data-pet-state="idle"] .pet-disc { fill: #92d2a5; }
-.pet-gaze { transform: translate(calc(var(--gx, 0) * 6px), calc(var(--gy, 0) * 5px)); }
+.pet-gaze {
+  transform: translate(calc(var(--gx, 0) * 6px), calc(var(--gy, 0) * 5px));
+  /* The shell pushes the cursor ~16 times a second; this keeps it fluid. */
+  transition: transform 90ms linear;
+}
 .pet-eyes {
   transform-box: fill-box;
   transform-origin: center;
@@ -68,4 +72,5 @@ li { padding: 6px 4px; border-bottom: 1px solid #f0ece3; display: flex; justify-
 }
 @media (prefers-reduced-motion: reduce) {
   .pet-eyes { animation: none; }
+  .pet-gaze { transition: none; }
 }

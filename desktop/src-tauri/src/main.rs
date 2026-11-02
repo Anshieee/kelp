@@ -10,8 +10,18 @@
 
 #![cfg_attr(all(not(debug_assertions), target_os = "windows"), windows_subsystem = "windows")]
 
-use tauri::{LogicalSize, Manager, PhysicalPosition, WebviewUrl, WebviewWindowBuilder};
+use tauri::{Emitter, LogicalSize, Manager, PhysicalPosition, WebviewUrl, WebviewWindowBuilder};
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
+
+use mouse_position::mouse_position::Mouse;
+use serde::Serialize;
+
+/// Where the eyes should look, normalised to -1..1 relative to the orb.
+#[derive(Clone, Serialize)]
+struct Gaze {
+    x: f32,
+    y: f32,
+}
 
 const OVERLAY_SHORTCUT: &str = "CommandOrControl+Shift+Space";
 /// Panel width in logical pixels. The webview keeps this width in both states.
@@ -204,6 +214,60 @@ fn keep_main_alive(app: &tauri::AppHandle) {
     });
 }
 
+/// Feed the orb the cursor position from anywhere on screen. A webview only
+/// sees pointer events inside its own window, so without this the eyes freeze
+/// the moment the cursor leaves the 96px orb.
+fn spawn_gaze_emitter(app: tauri::AppHandle) {
+    std::thread::spawn(move || loop {
+        std::thread::sleep(std::time::Duration::from_millis(60));
+
+        let Some(pet) = app.get_webview_window("pet") else {
+            continue;
+        };
+        if !pet.is_visible().unwrap_or(false) {
+            continue;
+        }
+        let (Ok(position), Ok(size)) = (pet.outer_position(), pet.outer_size()) else {
+            continue;
+        };
+        let Mouse::Position { x, y } = Mouse::get_mouse_position() else {
+            continue;
+        };
+
+        let half_w = size.width as f32 / 2.0;
+        let half_h = size.height as f32 / 2.0;
+        let centre_x = position.x as f32 + half_w;
+        let centre_y = position.y as f32 + half_h;
+
+        // Normalise per direction against the screen edge, so the eyes reach
+        // full deflection exactly at the edge of the monitor. A fixed radius
+        // would leave a bottom-right orb unable to look right or down.
+        let (left, top, right, bottom) = pet
+            .current_monitor()
+            .ok()
+            .flatten()
+            .map(|monitor| {
+                let origin = monitor.position();
+                let monitor_size = monitor.size();
+                (
+                    origin.x as f32,
+                    origin.y as f32,
+                    (origin.x + monitor_size.width as i32) as f32,
+                    (origin.y + monitor_size.height as i32) as f32,
+                )
+            })
+            .unwrap_or((centre_x - half_w * 3.0, centre_y - half_h * 3.0, centre_x + half_w * 3.0, centre_y + half_h * 3.0));
+
+        let span_x = if (x as f32) < centre_x { centre_x - left } else { right - centre_x };
+        let span_y = if (y as f32) < centre_y { centre_y - top } else { bottom - centre_y };
+
+        let nx = ((x as f32 - centre_x) / span_x.max(1.0)).clamp(-1.0, 1.0);
+        let ny = ((y as f32 - centre_y) / span_y.max(1.0)).clamp(-1.0, 1.0);
+
+        let _ = pet.emit("pet-gaze", Gaze { x: nx, y: ny });
+    });
+}
+
 fn main() {
     tauri::Builder::default()
         .plugin(tauri_plugin_store::Builder::default().build())
@@ -227,6 +291,7 @@ fn main() {
             place_pet(app.handle());
             watch_overlay_blur(app.handle());
             keep_main_alive(app.handle());
+            spawn_gaze_emitter(app.handle().clone());
 
             // Desk pet rides on all workspaces (macOS). Elsewhere the
             // always-on-top frameless window is the whole story.
