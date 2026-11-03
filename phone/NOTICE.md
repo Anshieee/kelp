@@ -30,3 +30,18 @@ contract (`docs/CHAT_SPEC.md`). Changes from the upstream originals are
 substantial and are recorded here per Apache-2.0 §4(b).
 
 Upstream copyright: `Copyright 2026 Milind Soni and OpenMausBot contributors`.
+
+## In-repo design adaptation (Midnight/Meadow, Geist, drawer UI)
+
+The current visual language (Midnight and Meadow color tokens, Geist
+typography, conversation drawer, rounded composer, approval-card and task
+bubble patterns, kelp-avatar motif) is adapted from the OpenMausBot-derived
+design already in this repository at `netlify/mobile/` (see
+`third-party/OpenMausBot/` for the upstream license and notice). Token values
+and component patterns were re-expressed in this app's own stylesheet
+(`src/styles.css`) and components; nothing was copied wholesale, and no shared
+asset files were referenced or moved.
+
+The bundled font `public/fonts/geist-latin.woff2` is Geist, Copyright 2026
+The Geist Project Authors, under the SIL Open Font License 1.1 (see
+`third-party/Geist/`). The same subset ships in the in-repo demo client.
