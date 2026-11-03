@@ -52,3 +52,29 @@ not advertise computer preview, so the phone UI does not offer it.
 
 See [reuse and attribution review](MOBILE_REUSE_NOTES.md) for the five-minute
 upstream inventory, commit ID, license attribution and reuse scope.
+
+
+## OpenMausBot-style interface
+
+The mobile client now uses OpenMausBot's Midnight and Meadow palette values, compact chat header, conversation drawer, desktop sidebar and rounded composer. It remains a Kelp task client over the same API. Theme selection is available in the sidebar. On phones, open the conversation menu to switch themes or reopen a task from this browser session. The menu supports Escape, focus return and keyboard focus containment.
+
+All screenshots below use isolated API fixtures, not a live account or real PR. They show the actual rendered client. No sample state is shipped in the production app.
+
+| Midnight phone | Meadow phone |
+| --- | --- |
+| ![Midnight](mobile-preview/phone-welcome.png) | ![Meadow](mobile-preview/phone-meadow.png) |
+
+![Task composer](mobile-preview/phone-workspace.png)
+![Task activity](mobile-preview/phone-task.png)
+![Approval review](mobile-preview/phone-review.png)
+![Desktop layout](mobile-preview/desktop-workspace.png)
+
+Browser smoke test (install Playwright in a temporary tools directory if it is not already available):
+
+```sh
+npm install --prefix /tmp/kelp-ui-tools playwright
+/tmp/kelp-ui-tools/node_modules/.bin/playwright install chromium
+NODE_PATH=/tmp/kelp-ui-tools/node_modules node tests/browser/mobile-ui.cjs
+```
+
+The smoke test starts an ephemeral localhost server, intercepts auth and API calls with isolated responses, and checks the drawer, Escape, themes, workspace, task submission, candidate review, approval/result, and horizontal overflow at 320/390/768/1440 pixels. It refreshes screenshots in `docs/mobile-preview`. `KELP_BROWSER_EXECUTABLE` optionally selects an already installed Chromium executable. This does not verify live identity configuration, remote execution, or GitHub permissions.
