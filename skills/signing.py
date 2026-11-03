@@ -1,6 +1,6 @@
-"""Prototype Ed25519 attestation for plugin package digests (KEL-29 spike).
+"""Ed25519 attestation for plugin package digests (KEL-29 spike, real backend).
 
-**Prototype-grade. Imported by nothing in the production path.** The loader
+**Spike module. Imported by nothing in the production path.** The loader
 (``skills/loader.py``) and the CLI (``skills/cli.py``) are untouched; this
 module exists to prove the round trip before the team decides whether
 attested installs are worth enforcing at boot.
@@ -18,21 +18,23 @@ closes that gap by signing the digest string returned by
 - ``load_public_key_from_env()`` resolves the trusted key from an env path
   (``KELP_PLUGIN_SIGNING_PUBLIC_KEY``) and refuses a missing variable or file.
 
-Crypto backend — read this before shipping any of it to production:
+Crypto backend — production grade as of the KEL-29 follow-up:
 
-- The venv has only ``jsonschema`` and ``httpx``; neither ``cryptography`` nor
-  PyNaCl is installed, and this spike adds no dependency. The Ed25519 below is
-  a small pure-Python RFC 8032 implementation. It is **not constant-time**,
-  has no side-channel hardening, and has not been audited. It is correct
-  enough for a round-trip spike and wrong for a hostile environment.
-- The entire backend is isolated behind two internal functions,
+- The backend is the ``cryptography`` package's Ed25519
+  (``Ed25519PrivateKey`` / ``Ed25519PublicKey``), a dependency since the
+  credential-vault work made it a core requirement. The implementation is
+  Rust-backed, constant-time, and audited — the pure-Python RFC 8032 sketch
+  the spike shipped first is gone. Signatures are the standard 64-byte
+  detached Ed25519 form, so attestations signed before the swap still verify
+  (both implementations follow RFC 8032; pinned by a test vector).
+- The backend is still isolated behind two internal functions,
   ``_sign_raw(seed, message)`` and ``_verify_raw(public, message,
-  signature)``, so the production swap is a two-function change. The intended
-  production dependency is ``cryptography`` (``Ed25519PrivateKey``/
-  ``Ed25519PublicKey``) or PyNaCl (``nacl.signing.SigningKey``); both speak
-  the same 64-byte detached-signature format used here.
-- Key files are plain 64-hex-character text (one key per file). Production
-  would move to PEM/PKCS#8 via ``cryptography`` and a real secret store.
+  signature)``, so a future backend change (PyNaCl, a hardware key) touches
+  only this section.
+- Key files are plain 64-hex-character text (one key per file) so the
+  operator workflow needs no crypto tooling. Moving to PEM/PKCS#8 via
+  ``cryptography`` and a real secret store remains the production hardening
+  step, and is a format change, not a signature change.
 
 What this module deliberately does NOT do: it does not touch
 ``plugins.lock.json``, does not add a ``signature`` field to any pin, and does
@@ -42,12 +44,21 @@ that WOULD do those things.
 
 from __future__ import annotations
 
-import hashlib
 import os
 import re
 import secrets
 from pathlib import Path
 from typing import Final
+
+from cryptography.exceptions import InvalidSignature
+from cryptography.hazmat.primitives.asymmetric.ed25519 import (
+    Ed25519PrivateKey,
+    Ed25519PublicKey,
+)
+from cryptography.hazmat.primitives.serialization import (
+    Encoding as _Encoding,
+    PublicFormat as _PublicFormat,
+)
 
 from .loader import inspect_plugin_package
 
@@ -82,136 +93,41 @@ class SigningError(Exception):
 
 
 # ---------------------------------------------------------------------------
-# Ed25519 backend (pure Python, RFC 8032) — prototype-grade, not constant-time.
+# Ed25519 backend (cryptography) — constant-time, Rust-backed, audited.
 # Everything below routes through _sign_raw / _verify_raw and nothing else, so
-# the production swap to `cryptography` or PyNaCl touches only this section.
+# a future backend change (PyNaCl, a hardware key) touches only this section.
 # ---------------------------------------------------------------------------
-
-_P: Final = 2**255 - 19
-_L: Final = 2**252 + 27742317777372353535851937790883648493
-_D: Final = (-121665 * pow(121666, _P - 2, _P)) % _P
-_SQRT_M1: Final = pow(2, (_P - 1) // 4, _P)
-
-_Point = tuple[int, int, int, int]  # extended coordinates (X, Y, Z, T)
-_IDENTITY: Final[_Point] = (0, 1, 1, 0)
-
-
-def _inverse(value: int) -> int:
-    return pow(value, _P - 2, _P)
-
-
-def _xrecover(y: int) -> int:
-    """One x with ``x^2 = (y^2 - 1) / (d y^2 + 1)`` (mod p), if it exists."""
-
-    xx = ((y * y - 1) * _inverse(_D * y * y + 1)) % _P
-    x = pow(xx, (_P + 3) // 8, _P)
-    if (x * x - xx) % _P != 0:
-        x = (x * _SQRT_M1) % _P
-    if (x * x - xx) % _P != 0:
-        raise ValueError("point is not on the curve")
-    if x & 1:
-        x = _P - x
-    return x
-
-
-_BY: Final = (4 * _inverse(5)) % _P
-_BX: Final = _xrecover(_BY)
-_BASE: Final[_Point] = (_BX % _P, _BY % _P, 1, (_BX * _BY) % _P)
-
-
-def _edwards_add(first: _Point, second: _Point) -> _Point:
-    x1, y1, z1, t1 = first
-    x2, y2, z2, t2 = second
-    a = ((y1 - x1) * (y2 - x2)) % _P
-    b = ((y1 + x1) * (y2 + x2)) % _P
-    c = (2 * t1 * t2 * _D) % _P
-    d = (2 * z1 * z2) % _P
-    e = b - a
-    f = d - c
-    g = d + c
-    h = b + a
-    return ((e * f) % _P, (g * h) % _P, (f * g) % _P, (e * h) % _P)
-
-
-def _scalarmult(point: _Point, scalar: int) -> _Point:
-    result = _IDENTITY
-    addend = point
-    while scalar:
-        if scalar & 1:
-            result = _edwards_add(result, addend)
-        addend = _edwards_add(addend, addend)
-        scalar >>= 1
-    return result
-
-
-def _compress(point: _Point) -> bytes:
-    x, y, z, _ = point
-    z_inv = _inverse(z)
-    x = (x * z_inv) % _P
-    y = (y * z_inv) % _P
-    return int.to_bytes(y | ((x & 1) << 255), 32, "little")
-
-
-def _decompress(encoded: bytes) -> _Point:
-    value = int.from_bytes(encoded, "little")
-    sign = (value >> 255) & 1
-    y = value & ((1 << 255) - 1)
-    if y >= _P:
-        raise ValueError("non-canonical y coordinate")
-    x = _xrecover(y)
-    if (x & 1) != sign:
-        x = _P - x
-    if (y * y - x * x - 1 - _D * x * x * y * y) % _P != 0:
-        raise ValueError("point is not on the curve")
-    return (x, y, 1, (x * y) % _P)
-
-
-def _clamp_scalar(seed: bytes) -> int:
-    digest = hashlib.sha512(seed).digest()
-    scalar = int.from_bytes(digest[:32], "little")
-    scalar &= (1 << 254) - 8
-    scalar |= 1 << 254
-    return scalar
 
 
 def _public_from_seed(seed: bytes) -> bytes:
-    return _compress(_scalarmult(_BASE, _clamp_scalar(seed)))
-
-
-def _sign_raw(seed: bytes, message: bytes) -> bytes:
-    """RFC 8032 §5.1.6: detached 64-byte Ed25519 signature over ``message``."""
+    """The 32-byte raw Ed25519 public key derived from a 32-byte seed."""
 
     if len(seed) != PRIVATE_KEY_BYTES:
         raise SigningError(f"private key must be {PRIVATE_KEY_BYTES} bytes")
-    digest = hashlib.sha512(seed).digest()
-    scalar = _clamp_scalar(seed)
-    prefix = digest[32:]
-    public = _compress(_scalarmult(_BASE, scalar))
-    r = int.from_bytes(hashlib.sha512(prefix + message).digest(), "little") % _L
-    r_encoded = _compress(_scalarmult(_BASE, r))
-    k = int.from_bytes(hashlib.sha512(r_encoded + public + message).digest(), "little") % _L
-    s = (r + k * scalar) % _L
-    return r_encoded + int.to_bytes(s, 32, "little")
+    private = Ed25519PrivateKey.from_private_bytes(seed)
+    return private.public_key().public_bytes(
+        _Encoding.Raw, _PublicFormat.Raw
+    )
+
+
+def _sign_raw(seed: bytes, message: bytes) -> bytes:
+    """Detached 64-byte Ed25519 signature over ``message`` (RFC 8032 §5.1.6)."""
+
+    if len(seed) != PRIVATE_KEY_BYTES:
+        raise SigningError(f"private key must be {PRIVATE_KEY_BYTES} bytes")
+    return Ed25519PrivateKey.from_private_bytes(seed).sign(message)
 
 
 def _verify_raw(public: bytes, message: bytes, signature: bytes) -> bool:
-    """RFC 8032 §5.1.7 check ``s·B == R + k·A``; False on any malformed input."""
+    """RFC 8032 §5.1.7 check; False on any malformed input, never an error."""
 
     if len(public) != PUBLIC_KEY_BYTES or len(signature) != SIGNATURE_BYTES:
         return False
-    s = int.from_bytes(signature[32:], "little")
-    if s >= _L:
-        return False
     try:
-        r_point = _decompress(signature[:32])
-        a_point = _decompress(public)
-    except ValueError:
+        Ed25519PublicKey.from_public_bytes(public).verify(signature, message)
+    except (InvalidSignature, ValueError):
         return False
-    k = int.from_bytes(hashlib.sha512(signature[:32] + public + message).digest(), "little") % _L
-    left = _scalarmult(_BASE, s)
-    right = _edwards_add(r_point, _scalarmult(a_point, k))
-    return _compress(left) == _compress(right)
-
+    return True
 
 # ---------------------------------------------------------------------------
 # Key files and env resolution
