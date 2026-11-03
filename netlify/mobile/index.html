@@ -1,0 +1,95 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+    <meta name="theme-color" content="#0b1613">
+    <meta name="description" content="Kelp mobile demo workspace">
+    <link rel="manifest" href="/mobile/manifest.webmanifest">
+    <link rel="icon" href="/mobile/icon.svg" type="image/svg+xml">
+    <link rel="stylesheet" href="/mobile/app.css?v=1">
+    <title>Kelp — mobile workspace</title>
+    <script src="https://identity.netlify.com/v1/netlify-identity-widget.js"></script>
+    <script defer src="/mobile/app.js?v=1"></script>
+  </head>
+  <body>
+    <div class="app-shell">
+      <header class="topbar"><a class="brand" href="/mobile/" aria-label="Kelp home"><span class="brand-mark" aria-hidden="true">k</span><span>Kelp</span></a><span id="connection" class="connection" role="status">Connecting</span></header>
+      <main id="main" tabindex="-1">
+        <section id="welcome" class="screen" aria-labelledby="welcome-title">
+          <div class="eyebrow">A focused build, wherever you are</div>
+          <h1 id="welcome-title">Your workspace,<br><em>in your pocket.</em></h1>
+          <p class="lede">Review a real change, run the checks, and approve a pull request from your phone.</p>
+          <div class="feature-list"><div><span>01</span><p>One entitled repository</p></div><div><span>02</span><p>Tests before approval</p></div><div><span>03</span><p>You decide what ships</p></div></div>
+          <button id="login" class="button primary wide" type="button">Sign in to continue <span aria-hidden="true">↗</span></button>
+          <p class="privacy-note">Your provider key is validated and stored securely by the service. It is never saved on this phone.</p>
+          <p class="install-note">Tip: use your browser’s <strong>Add to Home Screen</strong> option for an app-like shortcut.</p>
+          <div id="auth-message" class="notice" role="status" hidden></div>
+        </section>
+
+        <section id="onboarding" class="screen" aria-labelledby="onboarding-title" hidden>
+          <div class="eyebrow">Your setup · <span id="setup-step">01 / 02</span></div>
+          <h1 id="onboarding-title">Connect your<br><em>model provider.</em></h1>
+          <p class="lede">The demo uses OpenRouter only. Your key is sent over HTTPS for server-side validation and never retained by this app.</p>
+          <form id="provider-form" class="card form-card" autocomplete="off">
+            <label for="provider">Provider</label><div class="readonly-field">OpenRouter <span>Only provider enabled</span></div>
+            <label for="model">Model</label>
+            <select id="model" name="model" required>
+              <option value="openai/gpt-4o-mini">OpenAI · GPT-4o mini</option>
+              <option value="anthropic/claude-3.5-haiku">Anthropic · Claude 3.5 Haiku</option>
+              <option value="google/gemini-2.0-flash-001">Google · Gemini 2.0 Flash</option>
+              <option value="deepseek/deepseek-chat">DeepSeek · Chat</option>
+            </select>
+            <label for="api-key">OpenRouter API key</label>
+            <input id="api-key" name="api_key" type="password" inputmode="text" autocomplete="new-password" autocapitalize="none" spellcheck="false" placeholder="sk-or-…" required maxlength="512">
+            <p class="field-help">Masked on screen. Cleared after validation. Never stored in browser storage, logs, or offline cache.</p>
+            <button id="save-provider" class="button primary wide" type="submit">Validate and continue <span aria-hidden="true">→</span></button>
+          </form>
+          <button id="complete-onboarding" class="button secondary wide" type="button" hidden>Finish setup</button>
+          <div id="onboarding-message" class="notice" role="status" hidden></div>
+        </section>
+
+        <section id="workspace" class="screen" aria-labelledby="workspace-title" hidden>
+          <div class="eyebrow">Your demo workspace</div>
+          <h1 id="workspace-title">Ready when<br><em>you are.</em></h1>
+          <article class="card workspace-card"><div class="card-label">Entitled repository</div><strong id="repo-name">Checking access…</strong><div class="workspace-meta"><span id="workspace-state" class="state-pill">Loading</span><span id="backend-kind">Checking capabilities</span></div><div id="capabilities" class="capability-list"></div></article>
+          <form id="task-form" class="card task-form"><label for="prompt">What should Kelp work on?</label><textarea id="prompt" rows="4" maxlength="12000" placeholder="Describe a small, focused change…" required></textarea><div class="form-foot"><span>Changes are tested before you review them.</span><button class="button primary" type="submit">Start task <span aria-hidden="true">→</span></button></div></form>
+          <div class="history-heading"><h2>Recent tasks</h2><button id="refresh-workspace" class="text-button" type="button">Refresh</button></div>
+          <ol id="history" class="history-list"><li class="empty-history">Tasks you start here will appear in this session.</li></ol>
+          <div id="workspace-message" class="notice" role="status" hidden></div>
+          <button id="logout" class="text-button logout" type="button">Sign out</button>
+        </section>
+
+        <section id="task" class="screen" aria-labelledby="task-title" hidden>
+          <div class="eyebrow"><button id="back-workspace" class="back-button" type="button">← Workspace</button> <span id="task-state" class="state-pill">Restoring</span></div>
+          <h1 id="task-title">Work in<br><em>progress.</em></h1>
+          <article class="card task-summary"><div class="card-label">Task</div><p id="task-summary">Restoring your task…</p><div class="task-id">ID <code id="task-id"></code></div></article>
+          <div class="events-heading"><h2>Activity</h2><span id="reconnect-status" class="subtle">Connecting…</span></div>
+          <ol id="events" class="event-list"></ol>
+          <div id="task-message" class="notice" role="status" hidden></div>
+          <button id="open-review" class="button primary wide" type="button" hidden>Review candidate <span aria-hidden="true">→</span></button>
+          <div id="task-result" class="card result-card" hidden></div>
+        </section>
+
+        <section id="review" class="screen" aria-labelledby="review-title" hidden>
+          <div class="eyebrow"><button id="back-task" class="back-button" type="button">← Task</button> · Approval required</div>
+          <h1 id="review-title">Review the<br><em>real change.</em></h1>
+          <article class="card candidate-card"><div class="card-label">Candidate identity</div><dl><div><dt>Base revision</dt><dd id="base-sha">Loading</dd></div><div><dt>Candidate digest</dt><dd id="candidate-digest">Loading</dd></div><div><dt>Summary</dt><dd id="candidate-summary">Loading</dd></div></dl></article>
+          <article class="card checks-card"><div class="card-label">Test results</div><ul id="checks"></ul></article>
+          <article class="card diff-card"><div class="diff-head"><div class="card-label">Reviewed diff</div><span id="file-count" class="subtle"></span></div><pre id="diff" tabindex="0" aria-label="Candidate diff"></pre></article>
+          <p class="review-note">Approval publishes this exact tested candidate. It does not rerun the model. Approval expires after 10 minutes.</p>
+          <div class="decision-row"><button id="reject" class="button secondary" type="button">Reject</button><button id="approve" class="button primary" type="button">Approve &amp; publish <span aria-hidden="true">→</span></button></div>
+          <div id="review-message" class="notice" role="status" hidden></div>
+        </section>
+
+        <section id="result" class="screen" aria-labelledby="result-title" hidden>
+          <div class="eyebrow">Task complete</div>
+          <h1 id="result-title">A real PR,<br><em>ready for you.</em></h1>
+          <article class="card result-card"><div class="card-label">Pull request</div><p id="result-summary"></p><a id="pr-link" class="button primary wide" target="_blank" rel="noopener noreferrer">Open pull request <span aria-hidden="true">↗</span></a><div class="commit-line">Commit <code id="commit-sha"></code></div></article>
+          <button id="new-task" class="button secondary wide" type="button">Back to workspace</button>
+        </section>
+      </main>
+      <footer class="footer"><span>Built for careful changes.</span><span>HTTPS · approval-gated</span></footer>
+    </div>
+  </body>
+</html>
