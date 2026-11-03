@@ -1,0 +1,62 @@
+name: Kelp demo prepare and publish
+
+on:
+  repository_dispatch:
+    types: [kelp-demo-prepare, kelp-demo-publish]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: kelp-demo-${{ github.run_id }}
+  cancel-in-progress: false
+
+jobs:
+  prepare:
+    if: github.event.action == 'kelp-demo-prepare'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install test dependencies
+        run: python -m pip install -e '.[dev]'
+      - name: Claim, edit, test, and seal candidate
+        env:
+          DEMO_JOB: prepare
+          DEMO_API_BASE: ${{ vars.DEMO_API_BASE }}
+          DEMO_WORKER_TOKEN: ${{ secrets.DEMO_WORKER_TOKEN }}
+          DEMO_READ_TOKEN: ${{ secrets.DEMO_READ_TOKEN }}
+        run: python scripts/kelp_demo_worker.py
+
+  publish:
+    if: github.event.action == 'kelp-demo-publish'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Verify immutable candidate and publish once
+        env:
+          DEMO_JOB: publish
+          DEMO_API_BASE: ${{ vars.DEMO_API_BASE }}
+          DEMO_WORKER_TOKEN: ${{ secrets.DEMO_WORKER_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.DEMO_REPO_TOKEN }}
+          GITHUB_EVENT_CLIENT_PAYLOAD: ${{ toJson(github.event.client_payload) }}
+          DEMO_PUBLISH_BASE: main
+        run: python scripts/kelp_demo_worker.py
