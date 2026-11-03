@@ -17,7 +17,7 @@ test('provider secret is masked, transient, and excluded from storage and logs',
   assert.match(app, /api_key: secret/);
   assert.match(app, /input\.value = ''/);
   assert.doesNotMatch(app, /localStorage|console\.(?:log|error|warn)/);
-  assert.match(worker, /kelp-mobile-public-shell-v2/);
+  assert.match(worker, /kelp-mobile-public-shell-v3/);
   assert.doesNotMatch(worker, /caches\.open\([^)]*api|cache\.put\(/);
 });
 

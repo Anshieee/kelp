@@ -7,10 +7,11 @@
     <meta name="description" content="Kelp mobile demo workspace">
     <link rel="manifest" href="/mobile/manifest.webmanifest">
     <link rel="icon" href="/mobile/icon.svg" type="image/svg+xml">
-    <link rel="stylesheet" href="/mobile/app.css?v=2">
+    <link rel="apple-touch-icon" href="/mobile/apple-touch-icon.png">
+    <link rel="stylesheet" href="/mobile/app.css?v=3">
     <title>Kelp — mobile workspace</title>
     <script src="https://identity.netlify.com/v1/netlify-identity-widget.js"></script>
-    <script defer src="/mobile/app.js?v=2"></script>
+    <script defer src="/mobile/app.js?v=3"></script>
   </head>
   <body>
     <div class="app-shell">
@@ -28,6 +29,7 @@
         <section id="welcome" class="screen" aria-labelledby="welcome-title">
           <div class="empty-chat"><span class="kelp-avatar hero-avatar" aria-hidden="true"><i></i><i></i></span><h1 id="welcome-title">Hey, I'm Kelp.</h1><p class="lede">What would you like to work on?</p><div class="suggestions"><span>⌘ &nbsp; Make a code change</span><span>✓ &nbsp; Review and approve</span><span>↗ &nbsp; Open a pull request</span></div></div>
           <button id="login" class="button primary wide" type="button">Sign in to Kelp <span aria-hidden="true">→</span></button>
+          <button id="retry-connect" class="button secondary wide" type="button" hidden>Retry connection <span aria-hidden="true">↻</span></button>
           <p class="privacy-note">Connect your own model. Keep control of every change.</p>
           <p class="install-note">Tip: use your browser’s <strong>Add to Home Screen</strong> option for an app-like shortcut.</p>
           <div id="auth-message" class="notice" role="status" hidden></div>
