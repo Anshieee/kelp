@@ -15,13 +15,17 @@ const jwt = (subject) => {
 const req = (method, path, subject, body) => handler({ httpMethod: method, path: `/api/v1${path}`, rawUrl: `https://demo.test/api/v1${path}`,
   headers: { authorization: `Bearer ${jwt(subject)}` }, body: body === undefined ? undefined : JSON.stringify(body) });
 
-test('Postgres contract: user isolation, idempotent task creation, ordered cursors, and one-time approval', { skip: !enabled }, async () => {
+test('Postgres contract: user isolation, idempotent task creation, ordered cursors, and one-time approval', { skip: !enabled }, async (t) => {
+  const oldFetch = globalThis.fetch;
+  t.after(() => { globalThis.fetch = oldFetch; });
+  globalThis.fetch = async () => ({ ok: true, status: 204 });
   process.env.DATABASE_URL = process.env.DEMO_TEST_DATABASE_URL;
   process.env.DATABASE_SSL = 'disable';
   process.env.NETLIFY_IDENTITY_JWT_SECRET = 'integration-secret';
   process.env.DEMO_ALLOWED_SUBJECTS = 'contract-user';
   process.env.DEMO_ALLOWED_REPOS = 'example/kelp';
   process.env.GITHUB_REPOSITORY = 'example/kelp';
+  process.env.GITHUB_DISPATCH_TOKEN = 'integration-dispatch-token';
   const db = database();
   await ensureSchema(db);
   await db.query(`INSERT INTO demo_users(subject,model,onboarding_complete) VALUES('contract-user','openai/gpt-4o-mini',true)
