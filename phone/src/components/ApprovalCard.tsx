@@ -33,7 +33,6 @@ export default function ApprovalCard({ approval, onDecide }: ApprovalCardProps) 
 
   return (
     <article className="approval-card" aria-label={`Approval: ${approval.title ?? approval.tool}`}>
-      <div className="card-label">Approval required</div>
       <header className="approval-head">
         <span className="approval-status">Waiting on you</span>
         {secondsLeft !== null && !expired && (
@@ -42,47 +41,36 @@ export default function ApprovalCard({ approval, onDecide }: ApprovalCardProps) 
         {expired && <span className="approval-timer">expired</span>}
       </header>
       <h3>{approval.title ?? approval.tool}</h3>
-      <dl className="candidate-identity">
-        <div>
-          <dt>Tool</dt>
-          <dd className="digest">{approval.tool}</dd>
-        </div>
-        {approval.summary && (
-          <div>
-            <dt>Summary</dt>
-            <dd>{approval.summary}</dd>
-          </div>
-        )}
-      </dl>
+      {approval.summary && <p className="approval-summary">{approval.summary}</p>}
       {approval.rationale && <p className="approval-rationale">{approval.rationale}</p>}
       {approval.effects.length > 0 && (
-        <ul className="checks-list">
+        <p className="approval-effects">
           {approval.effects.map((effect) => (
-            <li key={effect}>
-              <span aria-hidden="true">✓</span> {effect}
-            </li>
+            <span key={effect} className="effect-chip">
+              {effect}
+            </span>
           ))}
-        </ul>
+        </p>
       )}
       <div className="approval-actions">
-        <button
-          type="button"
-          className="btn btn-deny"
-          disabled={busy !== null || expired}
-          onClick={() => void decide("deny")}
-        >
-          {busy === "deny" ? "Rejecting…" : "Reject"}
-        </button>
         <button
           type="button"
           className="btn btn-approve"
           disabled={busy !== null || expired}
           onClick={() => void decide("approve")}
         >
-          {busy === "approve" ? "Approving…" : "Approve & publish →"}
+          {busy === "approve" ? "Approving…" : "Approve"}
+        </button>
+        <button
+          type="button"
+          className="btn btn-deny"
+          disabled={busy !== null || expired}
+          onClick={() => void decide("deny")}
+        >
+          {busy === "deny" ? "Denying…" : "Deny"}
         </button>
       </div>
-      <p className="approval-footnote">Approval publishes this exact change. Nothing reruns. Approval expires after 10 minutes.</p>
+      <p className="approval-footnote">Nothing has run yet. This approval works once.</p>
     </article>
   );
 }
