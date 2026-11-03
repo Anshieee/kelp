@@ -9,7 +9,9 @@ server cannot drift apart:
   idempotent replay, unknown id is 404;
 - SSE reconnect: resume with ``after=`` replays only missed frames;
 - pet state mapping: ``desktop/pet_state.py`` (mirrored in
-  ``desktop/src/orb.js``) maps live SSE events to working/waiting/done/idle.
+  ``desktop/src/orb.js``) maps the live SSE vocabulary to working/waiting/
+  done/idle, and a turn that ended badly settles to idle rather than
+  celebrating.
 """
 
 from __future__ import annotations
@@ -344,13 +346,42 @@ def test_desktop_pet_states_cover_working_waiting_done_idle() -> None:
 def test_desktop_pet_state_follows_live_sse_stream() -> None:
     assert pet_state_from_event({"type": "turn_started"}) == "working"
     assert pet_state_from_event({"type": "token_delta"}) == "working"
-    assert pet_state_from_event({"type": "tool_call"}) == "working"
-    assert pet_state_from_event({"type": "approval_created"}) == "waiting"
-    assert pet_state_from_event({"type": "approval_pending"}) == "waiting"
-    assert pet_state_from_event({"type": "approval_decided"}) == "working"
-    assert pet_state_from_event({"type": "turn_finished"}) == "done"
-    assert pet_state_from_event({"type": "turn_failed"}) == "idle"
-    assert pet_state_from_event({"type": "stream_closed"}) == "idle"
+    assert pet_state_from_event({"type": "tool_call_started"}) == "working"
+    assert pet_state_from_event({"type": "tool_call_finished"}) == "working"
+    assert pet_state_from_event({"type": "approval_requested"}) == "waiting"
+    assert pet_state_from_event({"type": "approval_resolved"}) == "working"
+    assert pet_state_from_event({"type": "turn_finished", "reason": "stop"}) == "done"
+    assert pet_state_from_event({"type": "turn_finished", "reason": "error"}) == "idle"
+    assert pet_state_from_event({"type": "turn_finished", "reason": "cancelled"}) == "idle"
+
+
+def test_desktop_pet_state_no_longer_knows_invented_event_names() -> None:
+    # These keys used to be in the table but the server never emits them, so
+    # the states they claimed to drive could not fire: `waiting` in particular
+    # could never appear.
+    for invented in (
+        "approval_created",
+        "approval_pending",
+        "approval_decided",
+        "tool_call",
+        "turn_stopped",
+        "turn_failed",
+        "stream_closed",
+    ):
+        assert pet_state_from_event({"type": invented}) is None, invented
+
+
+def test_desktop_pet_state_stays_quiet_on_noisy_events() -> None:
+    # Reacting to these would restart the animation mid-loop.
+    for noisy in (
+        "usage_updated",
+        "sources_ready",
+        "artifact_ready",
+        "thread_updated",
+        "message_created",
+        "error",
+    ):
+        assert pet_state_from_event({"type": noisy}) is None, noisy
 
 
 def test_desktop_pet_state_ignores_unknown_and_malformed_events() -> None:

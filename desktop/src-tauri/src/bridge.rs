@@ -64,6 +64,7 @@ pub struct Bridge {
     server: String,
     csrf: Mutex<Option<String>>,
     streams: Mutex<HashMap<String, tokio::sync::watch::Sender<bool>>>,
+    reachable: Mutex<Option<bool>>,
 }
 
 impl Bridge {
@@ -82,6 +83,7 @@ impl Bridge {
             server,
             csrf: Mutex::new(None),
             streams: Mutex::new(HashMap::new()),
+            reachable: Mutex::new(None),
         }
     }
 
@@ -101,8 +103,26 @@ impl Bridge {
         }
     }
 
+    /// Tell every window whether the server can be reached, but only when the
+    /// answer *changes*: a flapping connection must not spam the pet with
+    /// events, and the first answer is worth emitting so it can leave `idle`.
+    fn note_reachability(&self, app: &tauri::AppHandle, reachable: bool) {
+        let changed = match self.reachable.lock() {
+            Ok(mut slot) => {
+                let changed = *slot != Some(reachable);
+                *slot = Some(reachable);
+                changed
+            }
+            Err(_) => false,
+        };
+        if changed {
+            let _ = app.emit("bridge-reachability", json!({ "reachable": reachable }));
+        }
+    }
+
     async fn request(
         &self,
+        app: &tauri::AppHandle,
         method: reqwest::Method,
         path: &str,
         body: Option<Value>,
@@ -122,10 +142,16 @@ impl Bridge {
             request = request.json(&payload);
         }
 
-        let response = request
-            .send()
-            .await
-            .map_err(|error| ApiError::transport(error.to_string()))?;
+        let response = match request.send().await {
+            Ok(response) => response,
+            Err(error) => {
+                self.note_reachability(app, false);
+                return Err(ApiError::transport(error.to_string()));
+            }
+        };
+        // Any answer at all — including a 500 — proves the server is there.
+        self.note_reachability(app, true);
+
         let status = response.status().as_u16();
         let text = response.text().await.unwrap_or_default();
         let value: Value = serde_json::from_str(&text).unwrap_or(Value::Null);
@@ -144,18 +170,26 @@ pub fn bridge_server_url(bridge: State<'_, Bridge>) -> String {
 
 #[tauri::command]
 pub async fn bridge_sign_in(
+    app: tauri::AppHandle,
     bridge: State<'_, Bridge>,
     bearer: String,
     device_label: String,
 ) -> Result<Value, ApiError> {
-    let response = bridge
+    let response = match bridge
         .client
         .post(format!("{}/api/auth/session", bridge.server))
         .header("Authorization", format!("Bearer {bearer}"))
         .json(&json!({ "device_label": device_label }))
         .send()
         .await
-        .map_err(|error| ApiError::transport(error.to_string()))?;
+    {
+        Ok(response) => response,
+        Err(error) => {
+            bridge.note_reachability(&app, false);
+            return Err(ApiError::transport(error.to_string()));
+        }
+    };
+    bridge.note_reachability(&app, true);
 
     // Capture the CSRF half before the body is consumed: it is the cookie the
     // browser would have read with document.cookie.
@@ -180,9 +214,12 @@ pub async fn bridge_sign_in(
 }
 
 #[tauri::command]
-pub async fn bridge_sign_out(bridge: State<'_, Bridge>) -> Result<Value, ApiError> {
+pub async fn bridge_sign_out(
+    app: tauri::AppHandle,
+    bridge: State<'_, Bridge>,
+) -> Result<Value, ApiError> {
     let result = bridge
-        .request(reqwest::Method::DELETE, "/api/auth/session", None)
+        .request(&app, reqwest::Method::DELETE, "/api/auth/session", None)
         .await;
     if let Ok(mut slot) = bridge.csrf.lock() {
         *slot = None;
@@ -192,6 +229,7 @@ pub async fn bridge_sign_out(bridge: State<'_, Bridge>) -> Result<Value, ApiErro
 
 #[tauri::command]
 pub async fn bridge_api(
+    app: tauri::AppHandle,
     bridge: State<'_, Bridge>,
     method: String,
     path: String,
@@ -199,7 +237,7 @@ pub async fn bridge_api(
 ) -> Result<Value, ApiError> {
     let method = reqwest::Method::from_bytes(method.to_uppercase().as_bytes())
         .map_err(|_| ApiError::transport("Unsupported method"))?;
-    bridge.request(method, &path, body).await
+    bridge.request(&app, method, &path, body).await
 }
 
 /// Open one SSE subscription. Frames arrive as `chat-event`.

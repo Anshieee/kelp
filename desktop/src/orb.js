@@ -10,24 +10,29 @@
 
 export const PET_STATES = ["working", "waiting", "done", "idle"];
 
-// Subset of SSE event types the pet cares about. Anything unlisted keeps
-// the current state (returns null).
-const EVENT_TO_STATE = {
+// The stream vocabulary, as `chat/service.py` actually emits it. An unlisted
+// event keeps the current state (returns null) — that is what stops a noisy
+// event (`usage_updated`, `sources_ready`, `thread_updated`) from resetting the
+// animation mid-loop.
+export const EVENT_TO_STATE = {
   turn_started: "working",
-  turn_stopped: "idle",
   token_delta: "working",
-  tool_call: "working",
-  approval_created: "waiting",
-  approval_pending: "waiting",
-  approval_decided: "working",
+  tool_call_started: "working",
+  tool_call_finished: "working",
+  approval_requested: "waiting",
+  approval_resolved: "working",
   turn_finished: "done",
-  turn_failed: "idle",
-  stream_closed: "idle",
 };
 
-/** Map one SSE event to a pet state, or null to keep the current state. */
+//: A turn that ended badly settles rather than celebrating.
+const IDLE_REASONS = new Set(["error", "cancelled"]);
+
+/** Map one streamed event to a pet state, or null to keep the current state. */
 export function petStateFromEvent(event) {
   if (!event || typeof event.type !== "string") return null;
+  if (event.type === "turn_finished") {
+    return IDLE_REASONS.has(event.reason) ? "idle" : "done";
+  }
   return EVENT_TO_STATE[event.type] ?? null;
 }
 

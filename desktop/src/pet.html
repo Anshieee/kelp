@@ -12,17 +12,27 @@
   </head>
   <body class="pet-window">
     <div data-orb data-pet-state="idle" title="Kelp">
-      <svg class="pet-svg" viewBox="0 0 148 148" role="img" aria-label="Kelp">
-        <circle class="pet-disc" cx="74" cy="74" r="60" />
-        <ellipse class="pet-spec" cx="56" cy="52" rx="16" ry="9" transform="rotate(-24 56 52)" />
-        <g class="pet-gaze">
-          <g class="pet-eyes">
-            <rect class="pet-eye" x="38" y="62" width="28" height="17" rx="8.5" />
-            <rect class="pet-eye" x="82" y="62" width="28" height="17" rx="8.5" />
+      <!-- Ten animated states, from assets/kelp-pet (see its manifest.json).
+           The component picks .webp normally and its own .svg stills under
+           reduced motion, so this element carries no motion logic itself. -->
+      <kelp-pet id="companion" class="kelp-pet" state="idle"></kelp-pet>
+
+      <!-- Last resort only: the kit's stills already cover reduced motion, so
+           this appears when the asset files themselves fail to load. -->
+      <div class="pet-fallback" hidden>
+        <svg class="pet-svg" viewBox="0 0 148 148" role="img" aria-label="Kelp">
+          <circle class="pet-disc" cx="74" cy="74" r="60" />
+          <ellipse class="pet-spec" cx="56" cy="52" rx="16" ry="9" transform="rotate(-24 56 52)" />
+          <g class="pet-gaze">
+            <g class="pet-eyes">
+              <rect class="pet-eye" x="38" y="62" width="28" height="17" rx="8.5" />
+              <rect class="pet-eye" x="82" y="62" width="28" height="17" rx="8.5" />
+            </g>
           </g>
-        </g>
-      </svg>
+        </svg>
+      </div>
     </div>
+    <script type="module" src="/assets/kelp-pet/kelp-pet.js"></script>
     <script type="module" src="./pet.js"></script>
   </body>
 </html>

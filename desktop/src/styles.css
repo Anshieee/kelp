@@ -28,6 +28,20 @@ li { padding: 6px 4px; border-bottom: 1px solid #f0ece3; display: flex; justify-
 [data-orb] { position: relative; width: 96px; height: 96px; pointer-events: none; }
 .pet-svg { pointer-events: none; }
 .pet-disc, .pet-eye { pointer-events: auto; cursor: pointer; }
+
+/* The kit's ten animated states. Its canvas carries margins and a drop shadow
+   the old disc did not, so the element is scaled past the window and centred
+   rather than shrunk to fit: 112px inside a 96px window lands the body at ~68px
+   against the old disc's 78px, and is the largest size that still keeps the
+   shadow inside the frame. The element therefore fills the window, which makes
+   the whole window the click target — not just the disc, as before. */
+.kelp-pet {
+  position: absolute; inset: -8px; width: 112px; height: 112px;
+  pointer-events: auto; cursor: pointer;
+}
+/* Shown only when the kit's own files cannot be loaded. */
+.pet-fallback { position: absolute; inset: 0; }
+[data-pet-fallback] .kelp-pet { display: none; }
 .e-orb-canvas { position: absolute; inset: 0; width: 100%; height: 100%; opacity: 0; }
 .e-orb--webgl .e-orb-canvas { opacity: 1; }
 .e-orb-face { position: absolute; inset: 18px; border-radius: 50%; background: #92d2a5; }
