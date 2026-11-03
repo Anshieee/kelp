@@ -1,0 +1,18 @@
+{
+  "id": "/phone/",
+  "name": "Kelp",
+  "short_name": "Kelp",
+  "description": "Your private Kelp assistant, in your pocket.",
+  "start_url": "/phone/",
+  "scope": "/phone/",
+  "display": "standalone",
+  "orientation": "portrait-primary",
+  "background_color": "#08080a",
+  "theme_color": "#08080a",
+  "icons": [
+    { "src": "icons/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "icons/icon-maskable-192.png", "sizes": "192x192", "type": "image/png", "purpose": "maskable" },
+    { "src": "icons/icon-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
+}

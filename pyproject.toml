@@ -31,6 +31,9 @@ include = [
   "demo*",
 ]
 
+[tool.setuptools.package-data]
+chat = ["credential_inbox.html"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-q"

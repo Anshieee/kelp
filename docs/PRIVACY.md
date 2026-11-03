@@ -29,7 +29,7 @@ recipient named here that the code no longer knows.
 |---|---|
 | Where does the conversation go? | The model provider named by `KELP_PROVIDER_BASE_URL` (OpenRouter on the documented path) — every turn, in full |
 | Does anything else receive conversation text? | Not by default: no analytics, no telemetry, no crash reporter, no CDN, no third-party log sink |
-| Do skills reach the network? | Only through one chokepoint, and only to hosts a manifest declares. `web.search` (Tavily) and `github.read` (GitHub) are declared but their handlers are not implemented; today they send nothing |
+| Do skills reach the network? | Only through one chokepoint, and only to hosts a manifest declares. `github.write` can create a branch, commit, and pull request in `Anshieee/kelp`, but its handler cannot run before owner approval; other network skills are not implemented |
 | Do payments reach the network? | Not in this build. The Stripe and Razorpay clients exist but `build_app` constructs neither |
 | Where are keys? | Only in the server process environment. `KELP_PROVIDER_API_KEY`, `TAVILY_API_KEY`, `GITHUB_TOKEN` are read from `os.environ`, sent only to their own recipient, and scrubbed from every log line |
 | What records exist? | Chat content until the owner deletes the thread; audit and usage records on a stated clock; a content-free egress ledger inside the audit trail; a device row per signed-in browser with a short label and timestamps, no credential |
@@ -47,7 +47,7 @@ through one of these rows.
 |---|---|---|---|---|---|
 | `openrouter` | `openrouter.ai` | The full model request: system prompt, every message in the thread context (user text, assistant text, tool results), the tool schemas, model name, and sampling settings. Document text and quoted excerpts appear inside those messages once a document tool has read them | Every assistant turn | `KELP_PROVIDER_API_KEY` (bearer header) | **Yes**, when the base URL is `https://openrouter.ai/api/v1` — the only content-bearing egress |
 | `tavily` | `api.tavily.com` | The search query string, plus the API key header | On a `web.search` call | `TAVILY_API_KEY` | **No** — handler raises `not_implemented` |
-| `github` | `api.github.com` | The repository `owner/name`, and the issue, pull-request, or file path in the URL; `GET` only | On a `github.read` call | `GITHUB_TOKEN` (bearer header) | **No** — handler raises `not_implemented` |
+| `github` | `api.github.com` | Repository `Anshieee/kelp`, branch/commit metadata, file content, and pull-request title/body; bounded to the manifest's repo/host scope | Only after owner approval of a `github.write` request | `GITHUB_TOKEN` (bearer header) | **Yes**, after approval; the egress ledger records each request without content |
 | `stripe` | `api.stripe.com` | Customer id, payment-method id, amount, currency, description, idempotency key. Card numbers are typed into Stripe's own form and never reach this process | On a saved-card charge | `STRIPE_SECRET_KEY` | **No** — `HttpStripeGateway` is never constructed by `build_app` |
 | `razorpay` | `api.razorpay.com` | Order amount, currency, receipt, and the key id in the auth header; webhook settlement re-reads the order by id. Card numbers are typed on Razorpay's hosted page | On a hosted Checkout order | Key id + key secret | **No** — `HttpRazorpayTransport` is never constructed by `build_app` |
 | `unlisted` | whatever else `KELP_PROVIDER_BASE_URL` points at | Exactly what `openrouter` would receive: the whole transcript | Every turn, when the base URL is another host | `KELP_PROVIDER_API_KEY` | Yes, for any endpoint that is not `openrouter.ai` |
@@ -261,6 +261,12 @@ the gate must be wired. The wiring check parses `build_app` rather than grepping
 it, and a second test builds the app with `ExecGate.__init__` booby-trapped, so a
 newly constructed gate fails at construction time. It cannot be flipped as a copy
 change alone.
+
+The approved `github.write` skill is a separate, narrowly-scoped network write:
+its manifest allows only `api.github.com` and `Anshieee/kelp`, and the owner must
+approve the exact request before the handler can run. Approval does not enable
+local command execution: `chat.cards.EXEC_AVAILABLE` remains `False`, the server
+does not construct `ExecGate`, and no local commands run.
 
 **Why this side of the decision.** Wiring the gate would have added a
 process-spawning capability to the same change that writes the privacy review,

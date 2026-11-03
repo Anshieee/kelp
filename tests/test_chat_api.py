@@ -112,6 +112,32 @@ def test_missing_auth_is_json_401(tmp_path: Path) -> None:
         store.close()
 
 
+def test_phone_credential_inbox_is_same_origin_and_uncached(tmp_path: Path) -> None:
+    api, _service, store = make_api(tmp_path)
+    try:
+        response = call(api, "GET", "/credential-requests", auth=False)
+        assert response.status == 200
+        assert response.headers["Content-Type"] == "text/html; charset=utf-8"
+        assert response.headers["Cache-Control"] == "no-store"
+        assert response.headers["X-Frame-Options"] == "DENY"
+        assert "connect-src 'self'" in response.headers["Content-Security-Policy"]
+        assert b"Waiting on you" in response.body
+        assert b'type = "password"' in response.body
+    finally:
+        api.close()
+        store.close()
+
+
+def test_phone_credential_inbox_rejects_non_get(tmp_path: Path) -> None:
+    api, _service, store = make_api(tmp_path)
+    try:
+        response = call(api, "POST", "/credential-requests", auth=False)
+        assert response.status == 405
+    finally:
+        api.close()
+        store.close()
+
+
 def test_mutations_require_csrf_or_same_origin(tmp_path: Path) -> None:
     api, _service, store = make_api(tmp_path)
     try:

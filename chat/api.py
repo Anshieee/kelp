@@ -34,6 +34,7 @@ from urllib.parse import parse_qs, unquote, urlsplit
 from openshell.egress_ledger import recipient_for_host
 
 from .artifacts import ArtifactError, MAX_UPLOAD_BYTES
+from . import phone as phone_routes
 from .credentials import CredentialBroker
 from .errors import ChatError
 from .logging import (
@@ -1379,11 +1380,15 @@ class ChatAPI:
         credentials: CredentialBroker | None = None,
         wallet_api: Any | None = None,
         checkout_api: Any | None = None,
+        phone_root: Path | None = None,
     ):
         self.service = service
         self.credentials = credentials
         self.wallet_api = wallet_api
         self.checkout_api = checkout_api
+        # The phone app's static mount (chat/phone.py); None defers to the
+        # default root resolution inside phone_response.
+        self.phone_root = phone_root
         self.auth_token = auth_token
         self.csrf_token = csrf_token
         self.stream_idle = stream_idle
@@ -1531,6 +1536,20 @@ class ChatAPI:
         try:
             path = unquote(urlsplit(request.path).path)
             segments = [segment for segment in path.split("/") if segment]
+            # The owner credential inbox is a same-origin, phone-friendly page.
+            # Its API calls remain protected by normal owner authentication + CSRF.
+            if path == "/credential-requests" and request.method.upper() == "GET":
+                page = Path(__file__).with_name("credential_inbox.html").read_bytes()
+                return Response(200, {
+                    "Content-Type": "text/html; charset=utf-8",
+                    "Cache-Control": "no-store",
+                    "X-Content-Type-Options": "nosniff",
+                    "X-Frame-Options": "DENY",
+                    "Referrer-Policy": "no-referrer",
+                    "Content-Security-Policy": "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; connect-src 'self'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'",
+                }, page)
+            if path == "/credential-requests":
+                return _method_not_allowed_response("GET")
             # A share is the only unauthenticated read surface besides
             # liveness. It is dispatched here, before auth and before the
             # owner's route classes, so every method (including a body-carrying
@@ -1547,6 +1566,10 @@ class ChatAPI:
                 return self.checkout_api.handle(request)
             if len(segments) >= 2 and segments[0] == "api" and segments[1] == "shared":
                 return share_routes._shared(self, request, segments[2:])
+            # The phone app's static shell: public, read-only, traversal-safe
+            # (chat/phone.py). Its /api calls keep the normal auth and CSRF.
+            if segments and segments[0] == phone_routes.PHONE_PATH_PREFIX:
+                return phone_routes.phone_response(self, request, segments[1:])
             method = request.method.upper()
             if method not in _SUPPORTED_METHODS:
                 return _method_not_allowed_response("GET, POST, PATCH, DELETE")
