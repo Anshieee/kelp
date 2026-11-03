@@ -18,6 +18,7 @@
   let pendingSubmission = null;
 
   function show(name) {
+    document.body.dataset.screen = name;
     screens.forEach((screen) => { $(screen).hidden = screen !== name; });
     $("main").focus({ preventScroll: true });
     window.scrollTo({ top: 0, behavior: 'smooth' });
@@ -104,6 +105,7 @@
   async function renderHistory() {
     const list = $('history');
     const ids = taskHistory();
+    $('sidebar-history').replaceChildren();
     if (!ids.length) {
       list.replaceChildren(Object.assign(document.createElement('li'), { className: 'empty-history', textContent: 'Tasks you start here will appear in this session.' }));
       return;
@@ -124,6 +126,9 @@
       button.append(left, arrow);
       button.addEventListener('click', () => openTask(id));
       row.append(button); list.append(row);
+      const sidebarButton = button.cloneNode(true);
+      sidebarButton.addEventListener('click', () => { closeSidebar(); openTask(id).catch((error) => notice('workspace-message', error.message, true)); });
+      const sidebarRow = document.createElement('li'); sidebarRow.append(sidebarButton); $('sidebar-history').append(sidebarRow);
     }
     if (!list.children.length) list.append(Object.assign(document.createElement('li'), { className: 'empty-history', textContent: 'No tasks available in this session.' }));
   }
@@ -168,7 +173,7 @@
       $('task-state').textContent = currentTask.state;
       taskState(currentTask.state);
       $('task-summary').textContent = currentTask.summary || 'Your request is being prepared.';
-      $('task-title').innerHTML = currentTask.state === 'completed' ? 'Change<br><em>published.</em>' : currentTask.state === 'awaiting_approval' ? 'Ready for<br><em>review.</em>' : 'Work in<br><em>progress.</em>';
+      $('task-title').innerHTML = currentTask.state === 'completed' ? 'Change published' : currentTask.state === 'awaiting_approval' ? 'Ready for review' : 'Working on your task';
       $('open-review').hidden = currentTask.state !== 'awaiting_approval';
       if (currentTask.state === 'awaiting_approval') await loadCandidate();
       if (currentTask.state === 'completed') showResult(currentTask);
@@ -247,6 +252,48 @@
     } catch (error) { notice('review-message', error.message, true); }
     finally { controls.forEach((control) => { control.disabled = false; }); }
   }
+
+  let sidebarReturnFocus = null;
+  function closeSidebar() {
+    document.body.classList.remove('sidebar-open');
+    $('sidebar-backdrop').hidden = true;
+    $('open-sidebar').setAttribute('aria-expanded', 'false');
+    if (sidebarReturnFocus) sidebarReturnFocus.focus();
+  }
+  $('open-sidebar').addEventListener('click', () => {
+    sidebarReturnFocus = document.activeElement;
+    document.body.classList.add('sidebar-open');
+    $('sidebar-backdrop').hidden = false;
+    $('open-sidebar').setAttribute('aria-expanded', 'true');
+    $('close-sidebar').focus();
+  });
+  $('close-sidebar').addEventListener('click', closeSidebar);
+  $('sidebar-backdrop').addEventListener('click', closeSidebar);
+  document.addEventListener('keydown', (event) => {
+    if (!document.body.classList.contains('sidebar-open')) return;
+    if (event.key === 'Escape') closeSidebar();
+    if (event.key === 'Tab') {
+      const controls = [...$('sidebar').querySelectorAll('a, button')].filter((el) => el.getClientRects().length);
+      const first = controls[0], last = controls[controls.length - 1];
+      if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last.focus(); }
+      else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus(); }
+    }
+  });
+  async function newTask() {
+    closeSidebar(); stopPolling(); replaceTaskUrl(null);
+    if (!identity) { show('welcome'); return; }
+    try { await refreshMe(); if (!me?.onboarding?.complete) return; $('prompt').focus(); }
+    catch (error) { show('welcome'); notice('auth-message', error.message, true); }
+  }
+  $('new-chat').addEventListener('click', newTask);
+  $('sidebar-home').addEventListener('click', newTask);
+  $('theme-toggle').addEventListener('click', () => {
+    const light = document.documentElement.dataset.skin !== 'meadow';
+    document.documentElement.dataset.skin = light ? 'meadow' : 'midnight';
+    $('theme-label').textContent = light ? 'Meadow' : 'Midnight';
+    $('theme-toggle').setAttribute('aria-label', light ? 'Switch to Midnight dark theme' : 'Switch to Meadow light theme');
+    document.querySelector('meta[name="theme-color"]').content = light ? '#f6f8f6' : '#141414';
+  });
 
   $('login').addEventListener('click', () => {
     if (window.netlifyIdentity) window.netlifyIdentity.open('login');
@@ -331,6 +378,6 @@
   }));
 
   if ('serviceWorker' in navigator && location.protocol === 'https:') {
-    navigator.serviceWorker.register('/mobile/sw.js?v=1', { scope: '/mobile/' }).catch(() => {});
+    navigator.serviceWorker.register('/mobile/sw.js?v=2', { scope: '/mobile/' }).catch(() => {});
   }
 })();

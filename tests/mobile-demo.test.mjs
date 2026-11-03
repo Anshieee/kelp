@@ -17,7 +17,7 @@ test('provider secret is masked, transient, and excluded from storage and logs',
   assert.match(app, /api_key: secret/);
   assert.match(app, /input\.value = ''/);
   assert.doesNotMatch(app, /localStorage|console\.(?:log|error|warn)/);
-  assert.match(worker, /kelp-mobile-public-shell-v1/);
+  assert.match(worker, /kelp-mobile-public-shell-v2/);
   assert.doesNotMatch(worker, /caches\.open\([^)]*api|cache\.put\(/);
 });
 
@@ -50,10 +50,10 @@ test('reconnect restores task state and does not claim unsupported desktop conne
   assert.doesNotMatch(html + app, /VNC|remote desktop|desktop connected/i);
 });
 
-test('reuse note records checked upstream commit and Apache-2.0 attribution without reusing its runtime', async () => {
+test('reuse note records upstream palette adaptation and Apache-2.0 attribution', async () => {
   const note = await read('docs/MOBILE_REUSE_NOTES.md');
   assert.match(note, /f52effc1a5871e4e54b3d2c699336a28c6cb1f97/);
   assert.match(note, /Apache-2\.0/);
-  assert.match(note, /No source, assets, runtime,/);
-  assert.match(note, /backend, brand marks, mascot/);
+  assert.match(note, /palette/);
+  assert.match(note, /third-party\/OpenMausBot/);
 });

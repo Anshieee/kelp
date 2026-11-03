@@ -1,11 +1,12 @@
-const CACHE = 'kelp-mobile-public-shell-v1';
+const CACHE = 'kelp-mobile-public-shell-v2';
 const SHELL = [
   '/mobile/',
   '/mobile/index.html',
-  '/mobile/app.css?v=1',
-  '/mobile/app.js?v=1',
+  '/mobile/app.css?v=2',
+  '/mobile/app.js?v=2',
   '/mobile/manifest.webmanifest',
   '/mobile/icon.svg',
+  '/mobile/fonts/geist-latin.woff2',
 ];
 
 self.addEventListener('install', (event) => {
