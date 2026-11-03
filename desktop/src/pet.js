@@ -7,15 +7,24 @@
 // pet only listens. It must never open its own stream: the bridge keys streams
 // by thread id, so a second opener would cancel the main window's.
 //
-// Layers, lowest first: the streamed turn state, a held hover, and a one-shot
+// Layers, lowest first: the streamed turn state, a held hover, a one-shot
 // (click or fidget). A real state change preempts a one-shot; hover is held
 // until the pointer leaves. `offline` is reachability rather than a turn state,
 // so the bridge decides it, not the event table.
+//
+// Between real turns the mascot fidgets on its own — a restless rotation of
+// thinking / curious / surprised / happy / excited expressions, never twice in
+// a row (see pet_motion.js for what is deliberately excluded and why).
+//
+// Gaze leans the mascot toward the cursor; the kit's loops have their eyes
+// baked in, so the lean is what stands in for eye tracking.
 //
 // Right-click still mutes motion by switching the kit to its still.
 
 import { petStateFromEvent } from "./orb.js";
 import {
+  GAZE_TRAVEL_X,
+  GAZE_TRAVEL_Y,
   ONE_SHOT_MS,
   ONE_SHOT_SLACK_MS,
   canFidget,
@@ -34,8 +43,13 @@ let base = "idle";
 let oneShot = null;
 let hovering = false;
 let muted = false;
+let lastFidget = null;
 let oneShotTimer = 0;
 let fidgetTimer = 0;
+
+// One source of truth for the lean distance; styles.css consumes these.
+host?.style.setProperty("--gaze-x", `${GAZE_TRAVEL_X}px`);
+host?.style.setProperty("--gaze-y", `${GAZE_TRAVEL_Y}px`);
 
 function render() {
   const state = resolveState({ base, oneShot, hovering });
@@ -52,8 +66,9 @@ function cancelOneShot() {
 /* -- transient motion --------------------------------------------------- */
 
 function playOneShot(kind) {
-  const state = motionState(kind);
+  const state = motionState(kind, Math.random, kind === "fidget" ? lastFidget : null);
   if (!state) return;
+  if (kind === "fidget") lastFidget = state;
   oneShot = { kind, state };
   clearTimeout(oneShotTimer);
   // The kit's loops run 2.56 s; the slack absorbs a dropped frame so the pet
@@ -147,11 +162,14 @@ if (!customElements.get("kelp-pet")) {
   companion?.shadowRoot?.querySelector("img")?.addEventListener("error", showFallback);
 }
 
-/* -- gaze (fallback face only) ------------------------------------------ */
+/* -- gaze --------------------------------------------------------------- */
 
+// The kit's loops have their eyes baked into the artwork, so the mascot cannot
+// have independently moving pupils. What it can do — and what reads as
+// tracking — is lean toward the cursor: the eyes sit high in the body, so
+// shifting the whole sprite moves them. The same custom properties drive the
+// fallback's vector eyes, which *do* move independently.
 function setGaze(x, y) {
-  // The kit's loops own their motion, so gaze only ever drives the fallback.
-  if (!host.dataset.petFallback) return;
   if (!Number.isFinite(x) || !Number.isFinite(y)) return;
   host.style.setProperty("--gx", Math.max(-1, Math.min(1, x)).toFixed(3));
   host.style.setProperty("--gy", Math.max(-1, Math.min(1, y)).toFixed(3));
@@ -227,6 +245,14 @@ export function toggleMute() {
   render();
   return muted;
 }
+
+// Keep the fidget loop in step with the OS setting. Pausing under reduced
+// motion is correct, but a loop that never re-arms once reduce is switched back
+// off leaves a permanently still pet — so re-arm on the change.
+reduceMotion.addEventListener("change", () => {
+  if (reduceMotion.matches) clearTimeout(fidgetTimer);
+  else scheduleFidget(nextFidgetGap());
+});
 
 render();
 scheduleFidget();

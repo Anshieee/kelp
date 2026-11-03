@@ -1,60 +1,73 @@
 // Transient motion layer for the desk pet.
 //
-// The kit ships ten loops, but only four of them describe the turn
-// (`working`/`waiting`/`done`/`idle`) and one describes the bridge
-// (`offline`). The rest are reactions, and they are what hover, click and the
-// idle fidget use. They deliberately live outside `PET_STATES`, which stays the
-// streamed turn vocabulary: a pointer is not a turn.
+// The kit ships ten loops. Four describe the turn (`working`/`waiting`/`done`/
+// `idle`) and one describes the bridge (`offline`); the rest are expressions,
+// and they are what hover, click and the idle fidget draw from. They live
+// outside `PET_STATES` on purpose: a pointer is not a turn.
 //
-// Everything here is pure so the timing and precedence rules are testable
+// Everything here is pure so the cadence and precedence rules are testable
 // without a DOM.
 
 /** One loop of the kit, from manifest.json: 64 frames at 40 ms. */
 export const ONE_SHOT_MS = 2560;
 
 /** How long a one-shot runs past the loop before it is cut short, so a
- *  dropped frame cannot leave the pet stuck mid-hop. */
+ *  dropped frame cannot leave the pet parked mid-hop. */
 export const ONE_SHOT_SLACK_MS = 120;
 
 /** Pointer-driven states. Hover is held while the pointer stays; click fires. */
 export const HOVER_STATE = "curious";
 export const CLICK_STATE = "excited";
 
-/**
- * Loops the idle fidget may draw from. Deliberately excludes the six that mean
- * something: `idle`/`working`/`waiting`/`done`/`offline` describe real app
- * state, `thinking` implies processing that is not happening, and `excited` is
- * kept for the click so a click always reads as *the* celebration. A random
- * draw from those would be the pet lying about what is going on.
- */
-export const FIDGET_POOL = ["curious", "happy", "surprised"];
+/** How far the mascot leans toward the cursor, in px, at full deflection.
+ *  Kept small: the element overhangs its 96px window by 8px a side, so this
+ *  both stays legible and never reveals an edge. */
+export const GAZE_TRAVEL_X = 5;
+export const GAZE_TRAVEL_Y = 4;
 
-/** Idle must last this long before the first fidget (20–40 s). */
-export const FIDGET_AFTER_MS = [20_000, 40_000];
-/** And at least this long between fidgets (30–90 s). */
-export const FIDGET_GAP_MS = [30_000, 90_000];
+/**
+ * Loops the idle fidget draws from — the mascot's restless repertoire:
+ * listening (`curious`), mulling something over (`thinking`), startled
+ * (`surprised`), pleased (`happy`), and briefly delighted (`excited`).
+ *
+ * Deliberately excluded:
+ * - `idle`/`working`/`done`: they would be indistinguishable from real state;
+ * - `offline`: it would claim the server is down;
+ * - `waiting`: in *this* app that state means "an approval is pending", which
+ *   is actionable and occasionally about payments or credentials. A random
+ *   draw would raise a false alarm, so it stays reserved.
+ */
+export const FIDGET_POOL = ["curious", "thinking", "surprised", "happy", "excited"];
+
+/** Fidget soon after settling: restlessness is the point (6–14 s). */
+export const FIDGET_AFTER_MS = [6_000, 14_000];
+/** Then keep it up, but never back to back (8–25 s). */
+export const FIDGET_GAP_MS = [8_000, 25_000];
 
 const between = ([low, high], random) => low + random() * (high - low);
 
-/** Wall-clock delay before the next fidget may play. */
+/** Wall-clock delay before the first fidget after settling into idle. */
 export const nextFidgetDelay = (random = Math.random) => between(FIDGET_AFTER_MS, random);
 
 /** Wall-clock gap enforced after a fidget has played. */
 export const nextFidgetGap = (random = Math.random) => between(FIDGET_GAP_MS, random);
 
-export function pickFidget(random = Math.random) {
-  const index = Math.min(
-    FIDGET_POOL.length - 1,
-    Math.floor(random() * FIDGET_POOL.length),
-  );
-  return FIDGET_POOL[index];
+/**
+ * Pick a fidget, avoiding an immediate repeat so two draws never look like the
+ * same beat twice. `avoid` is the state last played, if any.
+ */
+export function pickFidget(random = Math.random, avoid = null) {
+  const candidates = FIDGET_POOL.filter((state) => state !== avoid);
+  const pool = candidates.length ? candidates : FIDGET_POOL;
+  const index = Math.min(pool.length - 1, Math.floor(random() * pool.length));
+  return pool[index];
 }
 
 /** The kit state one kind of transient motion renders. */
-export function motionState(kind, random = Math.random) {
+export function motionState(kind, random = Math.random, avoid = null) {
   if (kind === "hover") return HOVER_STATE;
   if (kind === "click") return CLICK_STATE;
-  if (kind === "fidget") return pickFidget(random);
+  if (kind === "fidget") return pickFidget(random, avoid);
   return null;
 }
 

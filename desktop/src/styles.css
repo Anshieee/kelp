@@ -38,6 +38,15 @@ li { padding: 6px 4px; border-bottom: 1px solid #f0ece3; display: flex; justify-
 .kelp-pet {
   position: absolute; inset: -8px; width: 112px; height: 112px;
   pointer-events: auto; cursor: pointer;
+  /* Gaze: lean toward the cursor. The kit's eyes are baked into its loops, so
+     moving the sprite is what stands in for eye tracking — the eyes sit high in
+     the body, so they travel with it. The travel distance is set from JS
+     (pet_motion.js) and stays well inside the element's 8px overhang. */
+  transform: translate(
+    calc(var(--gx, 0) * var(--gaze-x, 5px)),
+    calc(var(--gy, 0) * var(--gaze-y, 4px))
+  );
+  transition: transform 120ms ease-out;
 }
 /* Shown only when the kit's own files cannot be loaded. */
 .pet-fallback { position: absolute; inset: 0; }
@@ -87,4 +96,6 @@ li { padding: 6px 4px; border-bottom: 1px solid #f0ece3; display: flex; justify-
 @media (prefers-reduced-motion: reduce) {
   .pet-eyes { animation: none; }
   .pet-gaze { transition: none; }
+  /* The mascot holds still under reduced motion, so it must not lean either. */
+  .kelp-pet { transform: none; transition: none; }
 }
