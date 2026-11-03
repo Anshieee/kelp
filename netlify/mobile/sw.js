@@ -1,11 +1,14 @@
-const CACHE = 'kelp-mobile-public-shell-v2';
+const CACHE = 'kelp-mobile-public-shell-v3';
 const SHELL = [
   '/mobile/',
   '/mobile/index.html',
-  '/mobile/app.css?v=2',
-  '/mobile/app.js?v=2',
+  '/mobile/app.css?v=3',
+  '/mobile/app.js?v=3',
   '/mobile/manifest.webmanifest',
   '/mobile/icon.svg',
+  '/mobile/apple-touch-icon.png',
+  '/mobile/icon-192.png',
+  '/mobile/icon-512.png',
   '/mobile/fonts/geist-latin.woff2',
 ];
 
