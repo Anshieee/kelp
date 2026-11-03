@@ -14,7 +14,7 @@ HTML = '<form method="post" action="/login"><input id="password" type="password"
 async def scenario(change):
     from playwright.async_api import async_playwright
     async with async_playwright() as p:
-        browser = await p.chromium.launch()
+        browser = await p.chromium.launch(args=['--enable-automation'])
         page = await browser.new_page()
         await page.route('https://login.example.test/**', lambda route: route.fulfill(body=HTML, content_type='text/html'))
         await page.goto('https://login.example.test/')

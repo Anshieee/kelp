@@ -57,7 +57,7 @@ EGRESS_EVENT = "egress"
 RECIPIENTS: Mapping[str, tuple[str, ...]] = {
     "openrouter": ("openrouter.ai",),
     "tavily": ("api.tavily.com",),
-    "github": ("api.github.com",),
+    "github": ("api.github.com", "github.com", "github.githubassets.com"),
     "stripe": ("api.stripe.com",),
     "razorpay": ("api.razorpay.com",),
     "unlisted": (),

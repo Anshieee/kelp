@@ -20,6 +20,7 @@ __all__ = ["BUILTIN_ROOT", "HANDLERS", "build_registry", "fixture_manifest"]
 BUILTIN_ROOT = REPO_ROOT / "skills" / "builtin"
 
 HANDLERS: dict[str, str] = {
+    "browser.act": "demo.handlers.browser_act",
     "web.search": "demo.handlers.web_search",
     "docs.answer": "demo.handlers.docs_answer",
     "github.read": "demo.handlers.github_read",

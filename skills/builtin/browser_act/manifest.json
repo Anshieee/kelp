@@ -1,0 +1,49 @@
+{
+  "manifest_version": "1.0",
+  "name": "browser.act",
+  "version": "0.1.0",
+  "description": "Control the visible dedicated demo Chromium window after approval. Open the showcase repo https://github.com/Anshieee/kelp, visibly move its pointer, click its README link, or read the README heading/text. Use action open, move_pointer (viewport x/y), click_readme, read_heading, or read_text. Session is demo, page defaults to 0. No typing, forms, arbitrary selectors, scripts, screenshots, credential sessions, or shell commands.",
+  "triggers": [{"kind": "model", "description": "Use for the visible showcase browser rehearsal.", "examples": ["Open the showcase repo, visibly move the pointer, click README and report its heading"]}],
+  "tools": ["browser.act"],
+  "input_schema": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": ["action"],
+    "properties": {
+      "session": {"const": "demo"},
+      "page": {"type": "integer", "minimum": 0, "maximum": 9},
+      "action": {"enum": ["open", "move_pointer", "click_readme", "read_heading", "read_text"]},
+      "url": {"type": "string", "format": "kelp-host", "enum": ["https://github.com/Anshieee/kelp", "https://github.com/Anshieee/kelp/blob/main/README.md"]},
+      "x": {"type": "integer", "minimum": 0, "maximum": 4096},
+      "y": {"type": "integer", "minimum": 0, "maximum": 2160}
+    },
+    "allOf": [
+      {"if": {"properties": {"action": {"const": "open"}}}, "then": {"required": ["url"]}, "else": {"not": {"required": ["url"]}}},
+      {"if": {"properties": {"action": {"const": "move_pointer"}}}, "then": {"required": ["x", "y"]}, "else": {"not": {"anyOf": [{"required": ["x"]}, {"required": ["y"]}]}}}
+    ]
+  },
+  "output_schema": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": ["session", "page", "action", "status"],
+    "properties": {
+      "session": {"const": "demo"},
+      "page": {"type": "integer"},
+      "action": {"type": "string"},
+      "status": {"const": "done"},
+      "heading": {"type": "string", "maxLength": 240},
+      "text": {"type": "string", "maxLength": 1200},
+      "pointer": {"const": "visible in demo browser"}
+    }
+  },
+  "permissions": {
+    "effects": ["read", "network"],
+    "scopes": {"paths": [], "hosts": ["github.com", "github.githubassets.com"], "repos": ["Anshieee/kelp"]},
+    "requires_approval": true,
+    "secrets": []
+  },
+  "entry": {"module": "skills.builtin.browser_act.handler", "callable": "run"},
+  "timeout_ms": 30000,
+  "idempotent": true,
+  "cost_class": "free"
+}

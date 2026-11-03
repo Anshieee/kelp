@@ -80,6 +80,7 @@ TOOL_LABELS: dict[str, str] = {
     "github.read": "GitHub",
     "github.write": "Open GitHub pull request",
     "schedule.create": "Schedule task",
+    "browser.act": "Showcase browser action",
     "shell.exec": "Run command",
 }
 
@@ -89,6 +90,7 @@ _DISPLAY_FIELDS: dict[str, tuple[str, ...]] = {
     "docs.answer": ("question",),
     "github.read": ("repo", "kind"),
     "schedule.create": ("title", "schedule.expr"),
+    "browser.act": ("action", "session", "page"),
     "shell.exec": ("command",),
 }
 
@@ -546,6 +548,13 @@ def approval_rationale(
         clauses.append(
             "After you approve, the repository action is to create a branch, commit the files "
             "summarized below, and open a pull request."
+        )
+    elif tool == "browser.act":
+        clauses.append(
+            "After you approve, this one scoped action can open the public Kelp showcase, "
+            "move its visible demo pointer, click only its README link, or read its README. "
+            "It uses the separate demo browser profile, never credential sessions. "
+            "It cannot type, submit forms, capture screenshots, or run shell commands."
         )
     elif "write" in effect_set:
         clauses.append("The assistant wants to change something in your workspace.")

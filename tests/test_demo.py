@@ -133,6 +133,7 @@ def test_demo_exits_non_zero_when_a_beat_fails(tmp_path: Path, monkeypatch: pyte
 def test_fixture_manifests_keep_the_real_contract(tmp_path: Path) -> None:
     registry = build_registry(tmp_path / "skills")
     assert set(registry.names()) == {
+        "browser.act",
         "docs.answer",
         "github.read",
         "github.write",
@@ -140,7 +141,7 @@ def test_fixture_manifests_keep_the_real_contract(tmp_path: Path) -> None:
         "web.search",
     }
     manifests = sorted((tmp_path / "skills").glob("*/manifest.json"))
-    assert len(manifests) == 5
+    assert len(manifests) == 6
     for manifest in manifests:
         fixture = json.loads(manifest.read_text())
         builtin = json.loads(

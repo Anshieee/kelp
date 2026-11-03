@@ -556,6 +556,7 @@ def test_context_repr_hides_secrets() -> None:
 def test_builtin_skills_load() -> None:
     registry = SkillRegistry.load(BUILTIN_ROOT)
     assert registry.names() == (
+        "browser.act",
         "docs.answer",
         "github.read",
         "github.write",

@@ -19,6 +19,7 @@ from urllib.parse import urlsplit
 import httpx
 
 from .credentials import fields_spec, origin
+from .browser_privacy import is_demo_browser, register_private_page
 
 # Read only metadata, never input values. Refuse frames, hidden/disabled fields,
 # GET submissions, cross-site form actions, and ambiguous selectors.
@@ -69,6 +70,7 @@ class PrivateBrowserSession:
         self._submit: str | None = None
         self._binding = ''
         self._origin = ''
+        register_private_page(page, self)
 
     def assert_observable(self) -> None:
         if self._blocked:
@@ -82,6 +84,10 @@ class PrivateBrowserSession:
 
     async def begin(self, fields: list[dict[str, str]], submit: str | None = None) -> dict[str, Any]:
         self.assert_observable()
+        # Never deliver credentials into the model-facing demo profile, even
+        # from a separate worker process with a fresh Playwright connection.
+        if await is_demo_browser(self._page.context.browser):
+            raise RuntimeError('credential_handoff_forbidden_in_demo_profile')
         self._blocked = True
         self._fields = fields_spec(fields)
         if submit is not None and (not isinstance(submit, str) or not 1 <= len(submit) <= 256):

@@ -33,7 +33,7 @@ recipient named here that the code no longer knows.
 | Do payments reach the network? | Not in this build. The Stripe and Razorpay clients exist but `build_app` constructs neither |
 | Where are keys? | Only in the server process environment. `KELP_PROVIDER_API_KEY`, `TAVILY_API_KEY`, `GITHUB_TOKEN` are read from `os.environ`, sent only to their own recipient, and scrubbed from every log line |
 | What records exist? | Chat content until the owner deletes the thread; audit and usage records on a stated clock; a content-free egress ledger inside the audit trail; a device row per signed-in browser with a short label and timestamps, no credential |
-| Can I audit what left? | Yes: one `egress` line per outbound call — recipient, purpose, byte counts, outcome, no content |
+| Can I audit what left? | Server HTTP calls have content-free `egress` records. The optional approved demo browser uses a separate Chromium transport; its action is audited, but its request bytes aren't metered in this ledger |
 
 ---
 
@@ -47,7 +47,7 @@ through one of these rows.
 |---|---|---|---|---|---|
 | `openrouter` | `openrouter.ai` | The full model request: system prompt, every message in the thread context (user text, assistant text, tool results), the tool schemas, model name, and sampling settings. Document text and quoted excerpts appear inside those messages once a document tool has read them | Every assistant turn | `KELP_PROVIDER_API_KEY` (bearer header) | **Yes**, when the base URL is `https://openrouter.ai/api/v1` — the only content-bearing egress |
 | `tavily` | `api.tavily.com` | The search query string, plus the API key header | On a `web.search` call | `TAVILY_API_KEY` | **No** — handler raises `not_implemented` |
-| `github` | `api.github.com` | Repository `Anshieee/kelp`, branch/commit metadata, file content, and pull-request title/body; bounded to the manifest's repo/host scope | Only after owner approval of a `github.write` request | `GITHUB_TOKEN` (bearer header) | **Yes**, after approval; the egress ledger records each request without content |
+| `github` | `api.github.com`, `github.com`, `github.githubassets.com` | Repository `Anshieee/kelp`, branch/commit metadata, file content, and pull-request title/body for the API. The optional `browser.act` sends public showcase navigation and static asset requests from a separate demo profile | Only after owner approval of a write or browser action | `GITHUB_TOKEN` for the API only; no credentials in the demo profile | **Yes**, after approval. API calls have per-request ledger entries. Chromium requests have scope interception and action audit, but no byte metering |
 | `stripe` | `api.stripe.com` | Customer id, payment-method id, amount, currency, description, idempotency key. Card numbers are typed into Stripe's own form and never reach this process | On a saved-card charge | `STRIPE_SECRET_KEY` | **No** — `HttpStripeGateway` is never constructed by `build_app` |
 | `razorpay` | `api.razorpay.com` | Order amount, currency, receipt, and the key id in the auth header; webhook settlement re-reads the order by id. Card numbers are typed on Razorpay's hosted page | On a hosted Checkout order | Key id + key secret | **No** — `HttpRazorpayTransport` is never constructed by `build_app` |
 | `unlisted` | whatever else `KELP_PROVIDER_BASE_URL` points at | Exactly what `openrouter` would receive: the whole transcript | Every turn, when the base URL is another host | `KELP_PROVIDER_API_KEY` | Yes, for any endpoint that is not `openrouter.ai` |

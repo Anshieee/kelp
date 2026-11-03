@@ -235,10 +235,17 @@ class FakeLocator:
 
 class FakePage:
     def __init__(self):
+        self.context = type('Context', (), {'browser': self})()
         self.site = SITE
         self.version = 1
         self.filled = ''
         self.clicked = False
+    async def new_browser_cdp_session(self):
+        return self
+    async def send(self, method):
+        return {'arguments': ['--user-data-dir=/tmp/credential-browser']}
+    async def detach(self):
+        pass
     async def evaluate(self, script, arg=None):
         if arg is None:
             return self.site
