@@ -60,7 +60,10 @@ export default function MessageList({ messages, activeTurnId, turnError, onRetry
 function MessageBubble({ message, working }: { message: Message; working: boolean }) {
   const isUser = message.role === "user";
   return (
-    <article className={`message ${isUser ? "message-user" : "message-assistant"}`}>
+    <article
+      className={`message ${isUser ? "message-user" : "message-assistant"}`}
+      data-status={message.status}
+    >
       {message.blocks.map((block, index) => (
         <BlockView key={index} block={block} />
       ))}

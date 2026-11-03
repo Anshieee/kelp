@@ -1,19 +1,12 @@
 /*
- * Threads list: recent conversations, a new-chat action, a pending-approvals
- * badge, and per-thread rename/delete. Paints instantly from the in-memory
- * cache, then refreshes from the server.
+ * Threads list: recent conversations in a slide-over drawer (netlify/mobile
+ * sidebar pattern), plus a compact home panel. Data behavior is unchanged —
+ * see ThreadList for the cache/refresh/create/rename/delete logic.
  */
-import { useCallback, useEffect, useRef, useState } from "react";
-import {
-  ApiError,
-  createThread,
-  deleteThread,
-  listDevices,
-  listThreads,
-  pendingApprovals,
-  renameThread,
-} from "../api";
-import { cacheThreads, getCachedThreads, type ThreadSummary } from "../state";
+import { useState } from "react";
+import ConversationDrawer from "../components/ConversationDrawer";
+import ThemeToggle from "../components/ThemeToggle";
+import { AccountChip, ThreadListView, useThreadsList } from "../components/ThreadList";
 
 interface ThreadsProps {
   onOpenThread: (threadId: string) => void;
@@ -21,106 +14,31 @@ interface ThreadsProps {
 }
 
 export default function Threads({ onOpenThread, onOpenSettings }: ThreadsProps) {
-  const [threads, setThreads] = useState<ThreadSummary[]>(() => getCachedThreads()?.threads ?? []);
-  const [loading, setLoading] = useState(threads.length === 0);
-  const [error, setError] = useState<string | null>(null);
-  const [creating, setCreating] = useState(false);
-  const [pendingCount, setPendingCount] = useState(0);
-  const [pendingThreadId, setPendingThreadId] = useState<string | null>(null);
-  const [deviceLabel, setDeviceLabel] = useState<string | null>(null);
-  const [menuThreadId, setMenuThreadId] = useState<string | null>(null);
-  const [renaming, setRenaming] = useState<{ id: string; title: string } | null>(null);
-  const [deleting, setDeleting] = useState<ThreadSummary | null>(null);
-  const loaded = useRef(false);
-
-  const refresh = useCallback(async () => {
-    try {
-      const data = await listThreads(50);
-      const mapped = data.threads.map((thread) => ({
-        id: thread.id,
-        title: thread.title,
-        updated_at: thread.updated_at,
-        last_message_preview: thread.last_message_preview ?? null,
-        message_count: thread.message_count ?? null,
-        active_turn_id: thread.active_turn_id ?? null,
-      }));
-      setThreads(mapped);
-      cacheThreads(mapped);
-      setError(null);
-    } catch (cause) {
-      if (!(cause instanceof ApiError)) setError("Couldn't load your threads.");
-    } finally {
-      setLoading(false);
-    }
-  }, []);
-
-  useEffect(() => {
-    if (loaded.current) return;
-    loaded.current = true;
-    void refresh();
-    void pendingApprovals()
-      .then((data) => {
-        setPendingCount(data.approvals.length);
-        setPendingThreadId(data.approvals[0]?.thread_id ?? null);
-      })
-      .catch(() => setPendingCount(0));
-    void listDevices()
-      .then((data) => {
-        const current = data.devices.find((device) => device.current);
-        setDeviceLabel(current?.label ?? null);
-      })
-      .catch(() => setDeviceLabel(null));
-  }, [refresh]);
-
-  const newChat = async () => {
-    if (creating) return;
-    setCreating(true);
-    setError(null);
-    try {
-      const data = await createThread();
-      onOpenThread(data.thread.id);
-    } catch (cause) {
-      setError(cause instanceof ApiError ? cause.message : "Couldn't start a new chat.");
-      setCreating(false);
-    }
-  };
-
-  const confirmRename = async () => {
-    if (!renaming) return;
-    const title = renaming.title.trim();
-    if (!title) return;
-    try {
-      await renameThread(renaming.id, title);
-      setRenaming(null);
-      await refresh();
-    } catch (cause) {
-      setError(cause instanceof ApiError ? cause.message : "Couldn't rename that.");
-    }
-  };
-
-  const confirmDelete = async () => {
-    if (!deleting) return;
-    try {
-      await deleteThread(deleting.id);
-      setDeleting(null);
-      setMenuThreadId(null);
-      await refresh();
-    } catch (cause) {
-      setDeleting(null);
-      if (cause instanceof ApiError && cause.code === "turn_in_progress") {
-        setError("Still answering in that thread. Wait or press Stop, then delete.");
-      } else {
-        setError(cause instanceof ApiError ? cause.message : "Couldn't delete that.");
-      }
-    }
-  };
+  const list = useThreadsList(onOpenThread);
+  const [drawerOpen, setDrawerOpen] = useState(false);
 
   return (
     <main className="screen threads-screen">
       <header className="top-bar">
+        <button
+          type="button"
+          className="icon-btn"
+          aria-label="Open conversations"
+          aria-expanded={drawerOpen}
+          aria-controls="conv-drawer"
+          onClick={() => setDrawerOpen(true)}
+        >
+          <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true">
+            <path d="M4 7h16M4 12h16M4 17h16" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+          </svg>
+        </button>
         <div className="top-bar-title">
-          <h1>Threads</h1>
-          {deviceLabel && <span className="device-chip">{deviceLabel}</span>}
+          <span className="kelp-avatar small" aria-hidden="true">
+            <i />
+            <i />
+          </span>
+          <h1>Kelp</h1>
+          {list.deviceLabel && <span className="device-chip">{list.deviceLabel}</span>}
         </div>
         <button
           type="button"
@@ -137,156 +55,66 @@ export default function Threads({ onOpenThread, onOpenSettings }: ThreadsProps) 
         </button>
       </header>
 
-      {pendingCount > 0 && (
-        <a
-          className="approval-badge"
-          href="#/"
-          onClick={(event) => {
-            event.preventDefault();
-            if (pendingThreadId) onOpenThread(pendingThreadId);
-          }}
-        >
-          <span className="approval-badge-dot" aria-hidden="true" />
-          {pendingCount} {pendingCount === 1 ? "approval" : "approvals"} waiting on you
-        </a>
-      )}
+      <ConversationDrawer open={drawerOpen} onClose={() => setDrawerOpen(false)}>
+        <div className="drawer-scroll">
+          <ThreadListView list={list} onOpenThread={onOpenThread} />
+        </div>
+        <div className="drawer-bottom">
+          <ThemeToggle />
+          <AccountChip label={list.deviceLabel} />
+        </div>
+      </ConversationDrawer>
 
-      {error && (
-        <p className="form-error" role="alert">
-          {error}
-        </p>
-      )}
-
-      {loading ? (
-        <p className="empty-note">Loading…</p>
-      ) : threads.length === 0 ? (
-        <div className="empty-state">
-          <p>
-            No conversations yet. Ask about a document, the web, or your repo — anything that
-            changes something waits for your approval.
+      <div className="threads-home">
+        {list.pendingCount > 0 && (
+          <a
+            className="approval-badge"
+            href="#/"
+            onClick={(event) => {
+              event.preventDefault();
+              if (list.pendingThreadId) onOpenThread(list.pendingThreadId);
+            }}
+          >
+            <span className="approval-badge-dot" aria-hidden="true" />
+            {list.pendingCount} {list.pendingCount === 1 ? "approval" : "approvals"} waiting on you
+          </a>
+        )}
+        {list.error && (
+          <p className="form-error" role="alert">
+            {list.error}
           </p>
-        </div>
-      ) : (
-        <ul className="thread-list">
-          {threads.map((thread) => (
-            <li key={thread.id} className="thread-item">
-              {renaming?.id === thread.id ? (
-                <div className="thread-rename">
-                  <input
-                    autoFocus
-                    value={renaming.title}
-                    maxLength={80}
-                    onChange={(event) => setRenaming({ id: thread.id, title: event.target.value })}
-                    onKeyDown={(event) => {
-                      if (event.key === "Enter") void confirmRename();
-                      if (event.key === "Escape") setRenaming(null);
-                    }}
-                    aria-label="Thread title"
-                  />
-                  <button type="button" className="btn btn-small" onClick={() => void confirmRename()}>
-                    Save
-                  </button>
-                  <button type="button" className="btn btn-small btn-ghost" onClick={() => setRenaming(null)}>
-                    Cancel
-                  </button>
-                </div>
-              ) : (
-                <>
-                  <button
-                    type="button"
-                    className="thread-row"
-                    onClick={() => onOpenThread(thread.id)}
-                  >
-                    <span className="thread-title">
-                      {thread.title}
-                      {thread.active_turn_id && <span className="working-dot" aria-label="Working" />}
-                    </span>
-                    {thread.last_message_preview && (
-                      <span className="thread-preview">{thread.last_message_preview}</span>
-                    )}
-                    <span className="thread-meta">{relativeTime(thread.updated_at)}</span>
-                  </button>
-                  <button
-                    type="button"
-                    className="icon-btn thread-menu-btn"
-                    aria-label={`Actions for ${thread.title}`}
-                    aria-expanded={menuThreadId === thread.id}
-                    onClick={() => setMenuThreadId(menuThreadId === thread.id ? null : thread.id)}
-                  >
-                    ⋯
-                  </button>
-                  {menuThreadId === thread.id && (
-                    <div className="thread-menu" role="menu">
-                      <button
-                        type="button"
-                        role="menuitem"
-                        onClick={() => {
-                          setRenaming({ id: thread.id, title: thread.title });
-                          setMenuThreadId(null);
-                        }}
-                      >
-                        Rename
-                      </button>
-                      <button
-                        type="button"
-                        role="menuitem"
-                        className="danger"
-                        onClick={() => {
-                          setDeleting(thread);
-                          setMenuThreadId(null);
-                        }}
-                      >
-                        Delete
-                      </button>
-                    </div>
-                  )}
-                </>
+        )}
+        <div className="empty-state">
+          <span className="kelp-avatar hero-avatar" aria-hidden="true">
+            <i />
+            <i />
+          </span>
+          <p>
+            {list.loading
+              ? "Loading…"
+              : list.threads.length === 0
+                ? "No conversations yet. Ask about a document, the web, or your repo — anything that changes something waits for your approval."
+                : "Pick up a conversation to keep going, or start something new."}
+          </p>
+          {!list.loading && (
+            <div className="threads-home-actions">
+              <button
+                type="button"
+                className="btn btn-primary"
+                onClick={list.newChat}
+                disabled={list.creating}
+              >
+                {list.creating ? "Starting…" : "New chat"}
+              </button>
+              {list.threads.length > 0 && (
+                <button type="button" className="btn" onClick={() => setDrawerOpen(true)}>
+                  Open conversations
+                </button>
               )}
-            </li>
-          ))}
-        </ul>
-      )}
-
-      <div className="fab-slot">
-        <button type="button" className="btn btn-primary fab" onClick={() => void newChat()} disabled={creating}>
-          {creating ? "Starting…" : "New chat"}
-        </button>
-      </div>
-
-      {deleting && (
-        <div
-          className="modal-backdrop"
-          onMouseDown={(event) => {
-            if (event.target === event.currentTarget) setDeleting(null);
-          }}
-        >
-          <div className="modal" role="dialog" aria-modal="true" aria-labelledby="delete-title">
-            <h2 id="delete-title">Delete “{deleting.title}”?</h2>
-            <p>This permanently removes the conversation and everything in it.</p>
-            <div className="modal-actions">
-              <button type="button" className="btn btn-ghost" onClick={() => setDeleting(null)}>
-                Cancel
-              </button>
-              <button type="button" className="btn btn-danger" onClick={() => void confirmDelete()}>
-                Delete
-              </button>
             </div>
-          </div>
+          )}
         </div>
-      )}
+      </div>
     </main>
   );
-}
-
-function relativeTime(iso: string): string {
-  const then = Date.parse(iso);
-  if (Number.isNaN(then)) return "";
-  const seconds = Math.max(0, Math.round((Date.now() - then) / 1000));
-  if (seconds < 60) return "now";
-  const minutes = Math.round(seconds / 60);
-  if (minutes < 60) return `${minutes}m`;
-  const hours = Math.round(minutes / 60);
-  if (hours < 24) return `${hours}h`;
-  const days = Math.round(hours / 24);
-  return `${days}d`;
 }
