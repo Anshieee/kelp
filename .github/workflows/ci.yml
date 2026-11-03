@@ -121,3 +121,5 @@ jobs:
         run: npm run test:demo
       - name: Mobile JavaScript contract tests
         run: npm run test:mobile-contract
+      - name: Mobile web-app tests
+        run: npm run test:mobile

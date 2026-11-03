@@ -10,6 +10,7 @@ import re
 import subprocess
 import sys
 import tempfile
+import threading
 import urllib.parse
 import urllib.error
 import urllib.request
@@ -25,6 +26,58 @@ TEST_SECRET_ENV = re.compile(
     r"AWS_(?:ACCESS_KEY|SECRET|SESSION|WEB_IDENTITY)|.*(?:TOKEN|API_KEY|SECRET|CREDENTIAL|PASSWORD|PRIVATE_KEY).*)",
     re.IGNORECASE,
 )
+
+
+class LeaseHeartbeat:
+    """Keep a claimed task lease alive, retry transient failures, and expose loss."""
+
+    def __init__(self, task_id: str, worker_id: str, lease_seconds: int) -> None:
+        self.task_id = task_id
+        self.worker_id = worker_id
+        self.interval = max(1, lease_seconds // 3)
+        self._stop = threading.Event()
+        self._thread = threading.Thread(target=self._run, name="demo-lease-heartbeat", daemon=True)
+        self._error: RuntimeError | None = None
+        self._failed = threading.Event()
+
+    def __enter__(self) -> "LeaseHeartbeat":
+        self._thread.start()
+        return self
+
+    def __exit__(self, exc_type: object, exc: object, traceback: object) -> None:
+        self.stop()
+        if self._error and exc is None:
+            raise RuntimeError("Worker lease heartbeat failed; task cannot continue") from self._error
+
+    def stop(self) -> None:
+        self._stop.set()
+        self._thread.join(timeout=31)
+
+    def check(self) -> None:
+        if self._error:
+            raise RuntimeError("Worker lease heartbeat failed; task cannot continue") from self._error
+
+    def _run(self) -> None:
+        while not self._stop.wait(self.interval):
+            delay = 1
+            while not self._stop.is_set():
+                try:
+                    api("heartbeat", {"task_id": self.task_id, "worker_id": self.worker_id})
+                    break
+                except Exception as error:
+                    if "lease_lost" in str(error):
+                        self._error = RuntimeError("Worker lease was lost")
+                        self._failed.set()
+                        print("Demo lease heartbeat rejected; stopping worker", file=sys.stderr)
+                        return
+                    print(
+                        f"Demo lease heartbeat failed ({type(error).__name__}); retrying in {delay}s",
+                        file=sys.stderr,
+                        flush=True,
+                    )
+                    if self._stop.wait(delay):
+                        return
+                    delay = min(delay * 2, 30)
 
 
 def canonical(value: object) -> bytes:
@@ -168,59 +221,65 @@ def prepare_one() -> bool:
         return False
     global ACTIVE_TASK
     ACTIVE_TASK = (task["task_id"], worker_id)
+    heartbeat = LeaseHeartbeat(task["task_id"], worker_id, int(task.get("lease_seconds", 300)))
     # Immediately mask the user key; it is kept only in this process and is never written to disk.
     provider_key = task.pop("provider_key")
     print(f"::add-mask::{provider_key}")
-    api("event", {"task_id": task["task_id"], "worker_id": worker_id, "type": "working", "data": {"state": "working"}})
-    base = task.get("base_sha") or os.environ["GITHUB_SHA"]
-    if not re.fullmatch(r"[0-9a-f]{40}", base):
-        base = os.environ["GITHUB_SHA"]
-    with tempfile.TemporaryDirectory(prefix="kelp-demo-") as scratch:
-        tree = pathlib.Path(scratch) / "repo"
-        run(["git", "clone", "--no-checkout", f"https://github.com/{REPO}.git", str(tree)], pathlib.Path.cwd())
-        run(["git", "fetch", "--depth=1", "origin", base], tree)
-        run(["git", "checkout", "--detach", "FETCH_HEAD"], tree)
-        os.environ.pop("DEMO_READ_TOKEN", None)
-        base_sha = run(["git", "rev-parse", "HEAD"], tree).stdout.strip()
-        if base_sha != base:
-            raise RuntimeError("Pinned base SHA changed during checkout")
+    with heartbeat:
+        api("event", {"task_id": task["task_id"], "worker_id": worker_id, "type": "working", "data": {"state": "working"}})
+        base = task.get("base_sha") or os.environ["GITHUB_SHA"]
+        if not re.fullmatch(r"[0-9a-f]{40}", base):
+            base = os.environ["GITHUB_SHA"]
+        with tempfile.TemporaryDirectory(prefix="kelp-demo-") as scratch:
+            tree = pathlib.Path(scratch) / "repo"
+            run(["git", "clone", "--no-checkout", f"https://github.com/{REPO}.git", str(tree)], pathlib.Path.cwd())
+            run(["git", "fetch", "--depth=1", "origin", base], tree)
+            run(["git", "checkout", "--detach", "FETCH_HEAD"], tree)
+            os.environ.pop("DEMO_READ_TOKEN", None)
+            base_sha = run(["git", "rev-parse", "HEAD"], tree).stdout.strip()
+            if base_sha != base:
+                raise RuntimeError("Pinned base SHA changed during checkout")
 
-        patch = model_patch(tree, task["model"], task["prompt"], provider_key)
-        del provider_key
-        validate_patch(patch)
-        patch_path = pathlib.Path(scratch) / "candidate.patch"
-        patch_path.write_text(patch, encoding="utf-8")
-        run(["git", "apply", "--check", str(patch_path)], tree)
-        run(["git", "apply", str(patch_path)], tree)
-        changed = sorted(set(run(["git", "diff", "--name-only"], tree).stdout.splitlines()) |
-                         set(run(["git", "ls-files", "--others", "--exclude-standard"], tree).stdout.splitlines()))
-        if not changed or len(changed) > 100:
-            raise RuntimeError("Model patch changed no files or too many files")
-        if run(["git", "diff", "--name-only", "--diff-filter=D"], tree).stdout.strip():
-            raise RuntimeError("Model patch may not delete files")
+            patch = model_patch(tree, task["model"], task["prompt"], provider_key)
+            heartbeat.check()
+            del provider_key
+            validate_patch(patch)
+            patch_path = pathlib.Path(scratch) / "candidate.patch"
+            patch_path.write_text(patch, encoding="utf-8")
+            run(["git", "apply", "--check", str(patch_path)], tree)
+            run(["git", "apply", str(patch_path)], tree)
+            changed = sorted(set(run(["git", "diff", "--name-only"], tree).stdout.splitlines()) |
+                             set(run(["git", "ls-files", "--others", "--exclude-standard"], tree).stdout.splitlines()))
+            if not changed or len(changed) > 100:
+                raise RuntimeError("Model patch changed no files or too many files")
+            if run(["git", "diff", "--name-only", "--diff-filter=D"], tree).stdout.strip():
+                raise RuntimeError("Model patch may not delete files")
 
-        api("event", {"task_id": task["task_id"], "worker_id": worker_id, "type": "testing", "data": {"state": "testing"}})
-        tests = run([sys.executable, "-m", "pytest", "-q"], tree, check=False, isolated_test_env=True)
-        checks = {"pytest": {"passed": tests.returncode == 0, "exit_code": tests.returncode}}
-        if tests.returncode:
-            raise RuntimeError("Test suite failed")
-        files = []
-        for name in changed:
-            relative = pathlib.PurePosixPath(name)
-            target = tree.joinpath(*relative.parts)
-            if relative.is_absolute() or ".." in relative.parts or target.is_symlink() or not target.resolve().is_relative_to(tree.resolve()):
-                raise RuntimeError("Candidate contains an unsafe path")
-            files.append({"path": name, "content": target.read_text(encoding="utf-8")})
-        patch_parts = [run(["git", "diff", "--no-ext-diff", "--", name], tree).stdout for name in changed if (tree / name).exists() and not (tree / name).is_symlink()]
-        for name in changed:
-            if run(["git", "ls-files", "--error-unmatch", name], tree, check=False).returncode:
-                patch_parts.append(run(["git", "diff", "--no-index", "--no-ext-diff", "/dev/null", name], tree, check=False).stdout)
-        candidate = {"summary": "Prepared model edit; all repository tests passed.", "files": files,
-                     "diff": "\n".join(patch_parts),
-                     "checks": checks, "base_sha": base_sha}
-        candidate_hash = hashlib.sha256(canonical(candidate)).hexdigest()
-        api("candidate", {"task_id": task["task_id"], "worker_id": worker_id, "base_sha": base_sha,
-                          "candidate": candidate, "candidate_digest": candidate_hash})
+            api("event", {"task_id": task["task_id"], "worker_id": worker_id, "type": "testing", "data": {"state": "testing"}})
+            tests = run([sys.executable, "-m", "pytest", "-q"], tree, check=False, isolated_test_env=True)
+            checks = {"pytest": {"passed": tests.returncode == 0, "exit_code": tests.returncode}}
+            if tests.returncode:
+                raise RuntimeError("Test suite failed")
+            heartbeat.check()
+            files = []
+            for name in changed:
+                relative = pathlib.PurePosixPath(name)
+                target = tree.joinpath(*relative.parts)
+                if relative.is_absolute() or ".." in relative.parts or target.is_symlink() or not target.resolve().is_relative_to(tree.resolve()):
+                    raise RuntimeError("Candidate contains an unsafe path")
+                files.append({"path": name, "content": target.read_text(encoding="utf-8")})
+            patch_parts = [run(["git", "diff", "--no-ext-diff", "--", name], tree).stdout for name in changed if (tree / name).exists() and not (tree / name).is_symlink()]
+            for name in changed:
+                if run(["git", "ls-files", "--error-unmatch", name], tree, check=False).returncode:
+                    patch_parts.append(run(["git", "diff", "--no-index", "--no-ext-diff", "/dev/null", name], tree, check=False).stdout)
+            candidate = {"summary": "Prepared model edit; all repository tests passed.", "files": files,
+                         "diff": "\n".join(patch_parts),
+                         "checks": checks, "base_sha": base_sha}
+            candidate_hash = hashlib.sha256(canonical(candidate)).hexdigest()
+            heartbeat.check()
+            heartbeat.stop()
+            api("candidate", {"task_id": task["task_id"], "worker_id": worker_id, "base_sha": base_sha,
+                              "candidate": candidate, "candidate_digest": candidate_hash})
     ACTIVE_TASK = None
     return True
 

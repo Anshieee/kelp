@@ -6,6 +6,7 @@
   "scripts": {
     "test:demo": "node --test tests/demo-backend/*.test.mjs",
     "test:mobile-contract": "node --test tests/demo-backend/contract.test.mjs",
+    "test:mobile": "node --test tests/mobile-demo.test.mjs",
     "check:demo": "node --check netlify/functions/demo-core.mjs && node --check netlify/functions/api-v1.mjs && node --check netlify/functions/demo-worker.mjs"
   },
   "dependencies": {
