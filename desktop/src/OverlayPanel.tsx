@@ -149,7 +149,9 @@ export default function OverlayPanel() {
           }}
           placeholder={ready ? "Ask Kelp…" : "Sign in from the full app"}
           disabled={!ready}
-          sx={{ flex: 1, fontSize: 15, px: 1.5 }}
+          // Text sits at 6 (window) + 8 (pill) + 8 (input) = 22px from the
+          // window edge, matching the expanded panel's 6 + 16 = 22px.
+          sx={{ flex: 1, fontSize: 15, px: 1 }}
         />
         <IconButton
           size="small"
@@ -220,7 +222,9 @@ export default function OverlayPanel() {
           <Stack
             direction="row"
             alignItems="center"
-            sx={{ px: 2, py: 0.5, borderBottom: "1px solid rgba(25,24,23,0.08)" }}
+            // py:0.5 (4px) left the title and the collapse chevron sitting on
+            // the panel's rounded corner; 8px gives the header real room.
+            sx={{ px: 2, py: 1, borderBottom: "1px solid rgba(25,24,23,0.08)" }}
           >
             <Typography
               variant="caption"
