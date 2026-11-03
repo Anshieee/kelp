@@ -1,0 +1,889 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="theme-color" content="#FBF9F5" />
+    <meta
+      name="description"
+      content="If you can text, you can run it. Meet Kelp: an agent with no setup and no technical skills needed. A product preview."
+    />
+    <title>Kelp — A little less on your mind.</title>
+    <link
+      rel="icon"
+      href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Ccircle cx='32' cy='32' r='32' fill='%23D6E8D8'/%3E%3Cpath d='M32 51V15M32 39Q10 38 16 20Q34 21 32 39M32 30Q52 29 49 12Q30 15 32 30' fill='none' stroke='%23191817' stroke-width='4' stroke-linecap='round'/%3E%3C/svg%3E"
+    />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=Newsreader:ital,wght@0,400;1,400&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="styles.css" />
+    <link rel="stylesheet" href="a-motion.css" />
+    <link rel="stylesheet" href="b-scroll.css" />
+    <link rel="stylesheet" href="c-copy.css" />
+    <link rel="stylesheet" href="d-fx.css" />
+    <link rel="stylesheet" href="e-fx.css" />
+    <link rel="stylesheet" href="f-fx.css" />
+    <!-- a-motion.js must run before the GSAP/app renderer: it composites the
+         existing canvas artwork and only observes state the app sets up. -->
+    <script defer src="a-motion.js"></script>
+    <script
+      defer
+      src="https://cdn.jsdelivr.net/npm/gsap@3.12.5/dist/gsap.min.js"
+    ></script>
+    <script
+      defer
+      src="https://cdn.jsdelivr.net/npm/gsap@3.12.5/dist/ScrollTrigger.min.js"
+    ></script>
+    <script type="importmap">
+      {"imports": {"three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js"}}
+    </script>
+    <script type="module" src="g-phone.js"></script>
+    <script defer src="app.js"></script>
+    <!-- b-scroll.js must run after app.js; it retires the legacy GSAP tweens. -->
+    <script defer src="b-scroll.js"></script>
+    <script defer src="c-copy.js"></script>
+    <script defer src="d-fx.js"></script>
+    <script defer src="e-fx.js"></script>
+    <!-- f-fx.js must run after d-fx.js: it reads d-fx's field canvas as its
+         texture. Without WebGL it adds nothing and the field stays as painted. -->
+    <script defer src="f-fx.js"></script>
+  </head>
+  <body>
+    <a class="skip-link pill" href="#main">Skip to content</a>
+    <svg
+      class="icon-library"
+      xmlns="http://www.w3.org/2000/svg"
+      aria-hidden="true"
+    >
+      <defs>
+        <symbol id="arrow" viewBox="0 0 24 24">
+          <path d="M5 12h14m-6-6 6 6-6 6" />
+        </symbol>
+        <symbol id="sprout" viewBox="0 0 32 40">
+          <path
+            d="M16 37V6M16 28C3 28 1 19 5 12c10 0 13 8 11 16Zm0-10C29 18 31 9 27 2 17 2 14 10 16 18Z"
+          />
+        </symbol>
+        <symbol id="attach" viewBox="0 0 24 24">
+          <path
+            d="m8 13 6-6a3 3 0 0 1 4 4l-8 8a5 5 0 0 1-7-7l9-9a7 7 0 0 1 10 10l-8 8"
+          />
+        </symbol>
+        <symbol id="mic" viewBox="0 0 24 24">
+          <rect x="9" y="2" width="6" height="13" rx="3" />
+          <path d="M5 10v2a7 7 0 0 0 14 0v-2M12 19v3m-4 0h8" />
+        </symbol>
+        <symbol id="shield" viewBox="0 0 24 24">
+          <path d="m12 3 8 3v6c0 5-8 9-8 9s-8-4-8-9V6l8-3Z" />
+          <path d="m8 12 3 3 5-6" />
+        </symbol>
+        <symbol id="close" viewBox="0 0 24 24">
+          <path d="m6 6 12 12M18 6 6 18" />
+        </symbol>
+        <symbol id="play" viewBox="0 0 24 24">
+          <path d="M9 5.5v13L19.5 12 9 5.5Z" />
+        </symbol>
+      </defs>
+    </svg>
+
+    <header class="site-header">
+      <a class="wordmark" href="#main" aria-label="Kelp home"
+        ><svg aria-hidden="true"><use href="#sprout" /></svg>kelp</a
+      >
+      <nav class="main-nav" aria-label="Main navigation">
+        <a href="#a-conversation">Kelp in action</a
+        ><a href="#possibilities">How it works</a>
+      </nav>
+      <a
+        class="pill nav-cta dashboard-link"
+        href="https://kelp-demo.netlify.app/mobile/"
+        >Dashboard <span aria-hidden="true">↗</span></a
+      >
+    </header>
+
+    <main id="main">
+      <section class="hero" aria-labelledby="hero-title">
+        <div class="hero-art" aria-hidden="true">
+          <canvas id="kelp-field"></canvas>
+          <div class="art-orbit"></div>
+        </div>
+        <h1 id="hero-title" class="reveal">
+          If you can text,<br />you can <em>run it.</em>
+        </h1>
+        <div class="hero-note" aria-hidden="true">
+          Your call.<br /><em>Always.</em><span>↙</span>
+        </div>
+        <div class="hero-copy reveal">
+          <p>
+            Meet Kelp. An agent that needs no setup and no technical skills.
+            Just say what you need, in your own words. Kelp takes it from there.
+          </p>
+          <div class="hero-actions">
+            <a
+              class="pill primary dashboard-link"
+              href="https://kelp-demo.netlify.app/mobile/"
+              >Meet your assistant
+              <svg aria-hidden="true"><use href="#arrow" /></svg></a
+            ><a class="pill tertiary" href="#a-conversation"
+              >Take a look <span aria-hidden="true">↓</span></a
+            >
+          </div>
+        </div>
+        <div class="hero-bottom">
+          <span>No setup. No technical know-how.</span
+          ><a href="#a-conversation"
+            >A little room to breathe <span aria-hidden="true">↓</span></a
+          >
+        </div>
+      </section>
+
+      <section
+        class="c-computer section-shell"
+        id="own-computer"
+        aria-labelledby="computer-title"
+      >
+        <div class="c-section-heading reveal">
+          <h2 id="computer-title">
+            Your agent.<br />Its own <em>computer.</em>
+          </h2>
+          <p>
+            You shouldn’t have to watch over every step. Kelp gets a computer of
+            its own to do the work you ask for, not just tell you how.
+          </p>
+        </div>
+        <ol class="c-handoff" aria-label="How a task gets done">
+          <li>
+            <span class="c-step">1</span>
+            <h3>Ask once.</h3>
+            <p>One message, in plain language. Say what done looks like.</p>
+          </li>
+          <li>
+            <span class="c-step">2</span>
+            <h3>Go about your day.</h3>
+            <p>
+              Your agent works on its own computer. No need to keep a tab open.
+            </p>
+          </li>
+          <li>
+            <span class="c-step">3</span>
+            <h3>Come back to done.</h3>
+            <p>
+              Find the result waiting. If a decision needs your approval, Kelp
+              asks.
+            </p>
+          </li>
+        </ol>
+      </section>
+
+      <section
+        class="c-computer e-phone-section section-shell"
+        id="on-your-phone"
+        aria-labelledby="phone-title"
+      >
+        <div class="e-phone-copy reveal">
+          <h2 id="phone-title">
+            Talk to it on your phone,<br />in an app you
+            <em>already use.</em>
+          </h2>
+          <p>
+            Send a message in Telegram or WhatsApp, the way you’d text a friend.
+            Kelp picks it up from there, so there’s no new app to learn and
+            nothing extra to install.
+          </p>
+          <p class="e-phone-note">
+            A typed message or a voice note. Either is fine.
+          </p>
+        </div>
+        <figure class="e-phone reveal">
+          <div class="phone-shell" data-phone-spin aria-hidden="true">
+            <span class="phone-key phone-key--silent"></span>
+            <span class="phone-key phone-key--volume-up"></span>
+            <span class="phone-key phone-key--volume-down"></span>
+            <span class="phone-key phone-key--power"></span>
+            <div class="phone-screen">
+              <div class="phone-notch"></div>
+              <div class="phone-status">
+                <span class="phone-time">9:41</span>
+                <span class="phone-reception">
+                  <i></i><i></i><i></i><i></i>
+                  <b></b>
+                </span>
+              </div>
+              <span class="phone-home"></span>
+              <div class="phone-glare"></div>
+            </div>
+          </div>
+        </figure>
+      </section>
+
+      <section
+        class="c-examples section-shell"
+        id="everyday-examples"
+        aria-labelledby="examples-title"
+      >
+        <h2 id="examples-title">
+          What would you like<br />off your <em>plate?</em>
+        </h2>
+        <div
+          class="c-example-stage"
+          role="region"
+          aria-roledescription="carousel"
+          aria-label="Example requests"
+        >
+          <div class="c-example-copy" id="example-slides" aria-live="off">
+            <p
+              id="example-1"
+              role="group"
+              aria-roledescription="slide"
+              aria-label="1 of 4"
+            >
+              Sort my inbox and show me only what needs a reply.
+            </p>
+            <p
+              id="example-2"
+              role="group"
+              aria-roledescription="slide"
+              aria-label="2 of 4"
+              hidden
+            >
+              Watch this laptop’s price and ask before buying when it drops.
+            </p>
+            <p
+              id="example-3"
+              role="group"
+              aria-roledescription="slide"
+              aria-label="3 of 4"
+              hidden
+            >
+              Turn this 60-page report into a one-page decision brief.
+            </p>
+            <p
+              id="example-4"
+              role="group"
+              aria-roledescription="slide"
+              aria-label="4 of 4"
+              hidden
+            >
+              Follow up on this unpaid invoice, politely, until I hear back.
+            </p>
+          </div>
+          <div class="c-example-controls" hidden>
+            <div
+              class="c-example-dots"
+              role="group"
+              aria-label="Choose an example"
+            >
+              <button
+                type="button"
+                aria-label="Show example 1: inbox"
+                aria-controls="example-1"
+                aria-pressed="true"
+              >
+                <span></span>
+              </button>
+              <button
+                type="button"
+                aria-label="Show example 2: price watch"
+                aria-controls="example-2"
+                aria-pressed="false"
+              >
+                <span></span>
+              </button>
+              <button
+                type="button"
+                aria-label="Show example 3: document brief"
+                aria-controls="example-3"
+                aria-pressed="false"
+              >
+                <span></span>
+              </button>
+              <button
+                type="button"
+                aria-label="Show example 4: invoice follow-up"
+                aria-controls="example-4"
+                aria-pressed="false"
+              >
+                <span></span>
+              </button>
+            </div>
+            <button
+              class="pill c-example-pause"
+              type="button"
+              aria-pressed="false"
+            >
+              Pause examples
+            </button>
+          </div>
+        </div>
+        <div class="handwritten e-handwritten" aria-hidden="true">
+          One thing at a time. <span>↖</span>
+        </div>
+        <p class="c-scope-note">
+          Illustrative requests, not live tasks. Access and approvals stay in
+          your hands.
+        </p>
+      </section>
+
+      <section
+        class="conversation section-shell"
+        id="a-conversation"
+        aria-labelledby="conversation-title"
+      >
+        <div class="conversation-intro reveal">
+          <h2 id="conversation-title">
+            No perfect<br />prompt <em>needed.</em>
+          </h2>
+          <p>
+            A question, a document, a thing you’ve been putting off. Start where
+            you are.
+          </p>
+        </div>
+        <figure class="e-video reveal">
+          <div class="e-video-frame">
+            <canvas
+              class="e-video-poster"
+              data-dither="poster"
+              width="720"
+              height="405"
+              aria-hidden="true"
+            ></canvas>
+            <video
+              class="e-video-player"
+              controls
+              playsinline
+              preload="none"
+              hidden
+            >
+              <source
+                src="media/kelp-concept-film-narrated.mp4"
+                type="video/mp4"
+              />
+              Your browser can’t play this video.
+            </video>
+            <button
+              class="e-play"
+              type="button"
+              aria-label="Play the Kelp concept film"
+            >
+              <svg aria-hidden="true"><use href="#play" /></svg>
+            </button>
+          </div>
+          <figcaption>
+            <strong>Kelp in action.</strong>
+            <span>A two-minute look at Kelp · narrated</span>
+          </figcaption>
+        </figure>
+        <!-- app.js still binds the retired prompt preview by id and has no
+             feature detection, so these inert hooks keep the rest of that file
+             working until it is retired. Nothing here is focusable, visible or
+             announced. -->
+        <div class="e-legacy-hooks" hidden>
+          <form id="conversation-form">
+            <input id="prompt" type="text" tabindex="-1" />
+            <button id="attach-button" type="button" tabindex="-1"></button>
+            <button id="mic-button" type="button" tabindex="-1"></button>
+          </form>
+          <div id="preview-response"></div>
+        </div>
+      </section>
+
+      <section
+        class="c-comparison section-shell"
+        id="compare"
+        aria-labelledby="comparison-title"
+      >
+        <div class="c-section-heading reveal">
+          <h2 id="comparison-title">
+            Useful shouldn’t<br />mean <em>complicated.</em>
+          </h2>
+          <p>
+            Some agents give you freedom. Others make it easy to start. We’re
+            building Kelp so you don’t have to choose.
+          </p>
+        </div>
+        <div class="e-compare-wrap reveal">
+          <table class="e-compare">
+            <caption class="sr-only">
+              How Kelp compares with other agent setups and with simple
+              assistants, across setup, capability, limits and who each suits.
+            </caption>
+            <thead>
+              <tr>
+                <td class="e-compare-corner"></td>
+                <th scope="col">
+                  Hermes,<br />OpenClaw &amp; co.
+                </th>
+                <th scope="col">Simple assistants<br /><small
+                    >e.g. Instinct</small
+                  ></th>
+                <th scope="col" class="e-kelp-col">Kelp</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <th scope="row">Setup effort</th>
+                <td><span class="e-cell-label">Hermes &amp; co.</span>
+                  You install it and set it up yourself. Expect a few technical
+                  steps, and some upkeep.
+                </td>
+                <td><span class="e-cell-label">Simple assistants</span>
+                  Quick. A guided sign-up, then straight into a conversation.
+                </td>
+                <td class="e-kelp-col">
+                  <span class="e-cell-label">Kelp</span>
+                  Our aim: none. You send a message and Kelp works on a computer
+                  of its own.
+                </td>
+              </tr>
+              <tr>
+                <th scope="row">What it can do</th>
+                <td><span class="e-cell-label">Hermes &amp; co.</span>
+                  Broad. You choose the models and tools, and shape how the agent
+                  works.
+                </td>
+                <td><span class="e-cell-label">Simple assistants</span>
+                  Everyday help: questions, writing, simple reminders.
+                </td>
+                <td class="e-kelp-col">
+                  <span class="e-cell-label">Kelp</span>
+                  Longer, multi-step work. Researching, drafting a document,
+                  following up on an invoice.
+                </td>
+              </tr>
+              <tr>
+                <th scope="row">Limits</th>
+                <td><span class="e-cell-label">Hermes &amp; co.</span>
+                  Freedom brings choices. Someone has to keep it running and up
+                  to date.
+                </td>
+                <td><span class="e-cell-label">Simple assistants</span>
+                  A narrower scope. Fewer jobs that carry on without you.
+                </td>
+                <td class="e-kelp-col">
+                  <span class="e-cell-label">Kelp</span>
+                  Still a preview. Kelp asks before anything that costs money or
+                  changes your files.
+                </td>
+              </tr>
+              <tr>
+                <th scope="row">Who it suits</th>
+                <td><span class="e-cell-label">Hermes &amp; co.</span>
+                  People who enjoy tinkering and want to own the whole setup.
+                </td>
+                <td><span class="e-cell-label">Simple assistants</span>
+                  Anyone who wants a quick, low-effort start.
+                </td>
+                <td class="e-kelp-col">
+                  <span class="e-cell-label">Kelp</span>
+                  People who want the work done without learning the plumbing.
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+        <p class="c-scope-note">
+          A positioning sketch, not a feature-by-feature test. Tools change;
+          check each product’s current capabilities before choosing.
+        </p>
+      </section>
+
+      <section
+        class="possibilities section-shell"
+        id="possibilities"
+        aria-labelledby="possibilities-title"
+      >
+        <div class="possibilities-heading reveal">
+          <h2 id="possibilities-title">
+            A thought. A tap.<br />A little <em>follow-through.</em>
+          </h2>
+          <p>Three ways to make room.<br />Open one to look a little closer.</p>
+        </div>
+        <ol class="proof-list">
+          <li class="reveal">
+            <button
+              class="proof-row"
+              type="button"
+              data-dossier="chat"
+              aria-haspopup="dialog"
+              aria-controls="dossier-chat"
+            >
+              <span class="proof-number" aria-hidden="true">01</span
+              ><span class="proof-title"
+                >Talk it <em>through.</em><small>Chat</small></span
+              ><span class="proof-description"
+                >From a loose thought<br />to a useful next step.</span
+              ><span class="proof-open" aria-hidden="true">↗</span>
+            </button>
+          </li>
+          <li class="reveal">
+            <button
+              class="proof-row approval-row"
+              type="button"
+              data-dossier="approvals"
+              aria-haspopup="dialog"
+              aria-controls="dossier-approvals"
+            >
+              <span class="proof-number" aria-hidden="true">02</span
+              ><span class="proof-title"
+                >You have the <em>say.</em><small>Approvals</small></span
+              ><span class="proof-description"
+                >A clear proposal.<br />A decision that stays yours.</span
+              ><span class="proof-open" aria-hidden="true">↗</span>
+            </button>
+          </li>
+          <li class="reveal">
+            <button
+              class="proof-row schedule-row"
+              type="button"
+              data-dossier="scheduled"
+              aria-haspopup="dialog"
+              aria-controls="dossier-scheduled"
+            >
+              <span class="proof-number" aria-hidden="true">03</span
+              ><span class="proof-title"
+                >Find your <em>rhythm.</em><small>Scheduled work</small></span
+              ><span class="proof-description"
+                >Give recurring work<br />a time of its own.</span
+              ><span class="proof-open" aria-hidden="true">↗</span>
+            </button>
+          </li>
+        </ol>
+        <noscript
+          ><p>
+            Interactive previews need JavaScript. Kelp brings together chat,
+            human approvals, and scheduled work. You can open the Kelp demo
+            using the links on this page.
+          </p></noscript
+        >
+      </section>
+
+      <section
+        class="c-companion section-shell"
+        id="desktop-companion"
+        aria-labelledby="companion-title"
+      >
+        <div class="c-companion-art">
+          <div class="e-pet">
+            <div class="e-orb" data-orb>
+              <canvas
+                class="e-orb-canvas"
+                width="320"
+                height="320"
+                role="img"
+                aria-label="Kelp’s desktop-companion mark: a soft jade orb with two dark eyes that follow the pointer, its body drifting between jade, coral and sky."
+              ></canvas>
+              <div class="e-orb-face" aria-hidden="true">
+                <span class="e-orb-eye"></span><span class="e-orb-eye"></span>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div class="c-companion-copy">
+          <h2 id="companion-title">
+            A familiar face<br />on your <em>desktop.</em>
+          </h2>
+          <p>
+            We’d like your agent to sit quietly on your computer as a small
+            companion. There when you need a hand, out of the way when you don’t.
+            It would tell you where things stand at a glance: working, waiting on
+            you, or done.
+          </p>
+          <p class="c-scope-note">
+            Not built yet. The desktop companion is a planned part of Kelp, not a
+            feature you can use today. The drifting bloom beside this note is a
+            design sketch.
+          </p>
+        </div>
+      </section>
+
+      <section class="trust section-shell" aria-labelledby="trust-title">
+        <div class="trust-heading reveal">
+          <h2 id="trust-title">
+            A little help.<br /><em>Clear boundaries.</em>
+          </h2>
+          <p>Especially when money is involved.</p>
+        </div>
+        <div class="trust-strip reveal">
+          <article>
+            <span class="trust-icon" aria-hidden="true"
+              ><svg><use href="#shield" /></svg
+            ></span>
+            <h3>Cards in the vault.</h3>
+            <p>Saved cards are held by Stripe, not by your assistant.</p>
+          </article>
+          <article>
+            <span class="trust-icon cap-icon" aria-hidden="true">↔</span>
+            <h3>Limits you set.</h3>
+            <p>Spending caps put a boundary around what can be spent.</p>
+          </article>
+          <article>
+            <span class="trust-icon audit-icon" aria-hidden="true">↳</span>
+            <h3>A trail you can follow.</h3>
+            <p>An activity log records the decisions and what happened next.</p>
+          </article>
+        </div>
+      </section>
+
+      <section class="closing section-shell" aria-labelledby="closing-title">
+        <div class="closing-cell" aria-hidden="true"></div>
+        <h2 id="closing-title">Make a little <em>room.</em></h2>
+        <div class="closing-actions">
+          <a
+            class="pill primary dashboard-link"
+            href="https://kelp-demo.netlify.app/mobile/"
+            >Meet your assistant
+            <svg aria-hidden="true"><use href="#arrow" /></svg
+          ></a>
+        </div>
+      </section>
+    </main>
+
+    <footer class="site-footer section-shell">
+      <div class="footer-main">
+        <a class="wordmark" href="#main" aria-label="Kelp home"
+          ><svg aria-hidden="true"><use href="#sprout" /></svg>kelp</a
+        >
+        <p>A little less on your mind.</p>
+        <nav aria-label="Footer navigation">
+          <a
+            class="dashboard-link"
+            href="https://kelp-demo.netlify.app/mobile/"
+            >Open Kelp demo ↗</a
+          ><a href="https://kelp-sdlc.netlify.app">Follow the build ↗</a>
+        </nav>
+      </div>
+      <div class="footer-bottom">
+        <span>© 2026 Kelp</span
+        ><button class="text-button" type="button" data-privacy>
+          Privacy (draft)</button
+        ><span>Made to leave you in charge.</span>
+      </div>
+    </footer>
+
+    <aside class="cookie-bar" aria-label="Site storage notice" hidden>
+      <p>
+        No analytics. No cookies.
+        <button class="text-button" type="button" data-privacy>
+          Privacy (draft)
+        </button>
+      </p>
+      <button class="pill" id="dismiss-cookie" type="button">
+        Got it <span aria-hidden="true">×</span>
+      </button>
+    </aside>
+
+    <dialog
+      class="dossier"
+      id="dossier-chat"
+      aria-labelledby="chat-title"
+      aria-describedby="chat-claim"
+    >
+      <div class="dialog-top">
+        <span>Chat</span
+        ><button class="pill close-dialog" type="button" autofocus>
+          Close <svg aria-hidden="true"><use href="#close" /></svg>
+        </button>
+      </div>
+      <div class="dossier-grid">
+        <div class="dossier-copy">
+          <h2 id="chat-title">A place to<br /><em>think out loud.</em></h2>
+          <p class="dossier-claim" id="chat-claim">
+            Start with a thought. Build towards something useful.
+          </p>
+          <ul>
+            <li>
+              Keep different pieces of work in separate conversation threads.
+            </li>
+            <li>
+              Read responses as they arrive, without waiting for the whole
+              answer.
+            </li>
+            <li>Turn the conversation into documents and files you can use.</li>
+          </ul>
+        </div>
+        <div class="dossier-visual chat-visual">
+          <span class="visual-caption"
+            >Illustrative preview · not a live session</span
+          >
+          <div class="mock-card">
+            <div class="mock-card-header">
+              <span class="assistant-avatar" aria-hidden="true"
+                ><svg><use href="#sprout" /></svg></span
+              >Kelp
+            </div>
+            <p class="mock-message">Help me organise my notes for the week.</p>
+            <h3>Let’s make a little<br /><em>sense of it.</em></h3>
+            <p>
+              We can start with what needs your attention, then work through the
+              rest.
+            </p>
+            <div class="file-pill">
+              <span aria-hidden="true">↳</span
+              ><span>week-ahead.md<small>Example document</small></span
+              ><span aria-hidden="true">↗</span>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="dialog-bottom">
+        <p>Your words. A place to begin.</p>
+        <a
+          class="pill primary dashboard-link"
+          href="https://kelp-demo.netlify.app/mobile/"
+          >Open Kelp demo <svg aria-hidden="true"><use href="#arrow" /></svg></a
+        >
+      </div>
+    </dialog>
+
+    <dialog
+      class="dossier"
+      id="dossier-approvals"
+      aria-labelledby="approvals-title"
+      aria-describedby="approvals-claim"
+    >
+      <div class="dialog-top">
+        <span>Approvals</span
+        ><button class="pill close-dialog" type="button" autofocus>
+          Close <svg aria-hidden="true"><use href="#close" /></svg>
+        </button>
+      </div>
+      <div class="dossier-grid">
+        <div class="dossier-copy">
+          <h2 id="approvals-title">
+            A proposal.<br /><em>Not a surprise.</em>
+          </h2>
+          <p class="dossier-claim" id="approvals-claim">
+            Review the action before you say yes. It’s fine to say no.
+          </p>
+          <ul>
+            <li>See what is proposed and the cost, if money is involved.</li>
+            <li>Approve or reject a single-use request before it expires.</li>
+            <li>Find the decision and its outcome in the activity log.</li>
+          </ul>
+        </div>
+        <div class="dossier-visual approval-visual">
+          <span class="visual-caption"
+            >Illustrative preview · no real action</span
+          >
+          <div class="mock-card">
+            <div class="mock-card-header">
+              <span class="status-dot"></span>Waiting on you<span
+                class="timestamp"
+                >09:59</span
+              >
+            </div>
+            <h3>Save this note<br />as a file?</h3>
+            <p>
+              Review the destination and contents before anything is written.
+            </p>
+            <div class="mock-detail">
+              <span>Destination</span><strong>My workspace</strong>
+            </div>
+            <div class="mock-actions">
+              <button class="pill demo-approve" type="button">
+                Approve example <span aria-hidden="true">✓</span></button
+              ><button class="pill demo-reject" type="button">Reject</button>
+            </div>
+            <p class="example-result" role="status">
+              Nothing will happen without your tap.
+            </p>
+          </div>
+        </div>
+      </div>
+      <div class="dialog-bottom">
+        <p>You can always take your time.</p>
+        <a
+          class="pill primary dashboard-link"
+          href="https://kelp-demo.netlify.app/mobile/"
+          >Open Kelp demo
+          <svg aria-hidden="true"><use href="#arrow" /></svg></a
+        >
+      </div>
+    </dialog>
+
+    <dialog
+      class="dossier"
+      id="dossier-scheduled"
+      aria-labelledby="scheduled-title"
+      aria-describedby="scheduled-claim"
+    >
+      <div class="dialog-top">
+        <span>Scheduled work</span
+        ><button class="pill close-dialog" type="button" autofocus>
+          Close <svg aria-hidden="true"><use href="#close" /></svg>
+        </button>
+      </div>
+      <div class="dossier-grid">
+        <div class="dossier-copy">
+          <h2 id="scheduled-title">Less to<br /><em>remember.</em></h2>
+          <p class="dossier-claim" id="scheduled-claim">
+            Put recurring work on a schedule you choose.
+          </p>
+          <ul>
+            <li>Choose a regular time for repeatable tasks.</li>
+            <li>
+              Let the next update come to you, instead of remembering to ask.
+            </li>
+            <li>Keep background work within your spending boundaries.</li>
+          </ul>
+        </div>
+        <div class="dossier-visual schedule-visual">
+          <span class="visual-caption"
+            >Illustrative preview · example schedule</span
+          >
+          <div class="mock-card">
+            <div class="mock-card-header">
+              <span class="status-dot"></span>A rhythm of your own
+            </div>
+            <div class="clock" aria-hidden="true">
+              <span class="clock-hand"></span><span class="clock-center"></span
+              ><span class="clock-time">09:00</span>
+            </div>
+            <h3>Your morning brief.</h3>
+            <div class="schedule-days">
+              <span>Mon</span><span>Wed</span><span>Fri</span>
+            </div>
+            <p>Example schedule · within your spend cap</p>
+          </div>
+        </div>
+      </div>
+      <div class="dialog-bottom">
+        <p>A routine, with room for you.</p>
+        <a
+          class="pill primary dashboard-link"
+          href="https://kelp-demo.netlify.app/mobile/"
+          >Open Kelp demo
+          <svg aria-hidden="true"><use href="#arrow" /></svg></a
+        >
+      </div>
+    </dialog>
+
+    <dialog class="privacy-dialog" id="privacy" aria-labelledby="privacy-title">
+      <div class="dialog-top">
+        <span>Site notice</span
+        ><button class="pill close-dialog" type="button" autofocus>
+          Close <svg aria-hidden="true"><use href="#close" /></svg>
+        </button>
+      </div>
+      <div class="privacy-copy">
+        <h2 id="privacy-title">Privacy on this preview.</h2>
+        <p>
+          This landing page contains interactive examples. The Kelp demo opens
+          separately and uses its own sign-in.
+        </p>
+        <p>
+          Prompts and example decisions stay in this page’s memory. Voice and
+          file uploads are unavailable in the preview. Dismissing the storage
+          notice saves a preference in local storage.
+        </p>
+        <p>
+          Fonts load from Google Fonts and animation scripts from jsDelivr.
+          Those providers receive standard network request information.
+        </p>
+      </div>
+    </dialog>
+  </body>
+</html>

@@ -1,0 +1,31 @@
+/* Effects layer (f). Load after e-fx.css; f-fx.js builds the canvas.
+   Additive only: one rule for one element this layer creates itself, and no
+   rule hides content. Without WebGL the layer never appears and layer (d)'s
+   canvas grain is the background, exactly as before. */
+
+/* 1 · Frosted glass mosaic --------------------------------------------------
+   A background, not a widget: fixed, edge to edge, behind content, and never
+   a pointer target, so text selection, scrolling and links all pass through.
+   f-fx.js paints the page's existing dither field back through it and frosts
+   the tiles inside a disc that follows the pointer. The canvas is opaque, so
+   it is what shows the grain; layer (d) keeps painting underneath, out of
+   sight, as this layer's texture. */
+#f-fx-glass {
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  display: block;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+/* Reduced motion: one still frame, no follow. The canvas is still a
+   background, so nothing here needs to move for the page to read. */
+@media (prefers-reduced-motion: reduce) {
+  #f-fx-glass {
+    pointer-events: none;
+  }
+}

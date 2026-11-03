@@ -1,0 +1,73 @@
+/* Optional scroll layer. Load after styles.css; nothing is hidden by default. */
+:root {
+  --ease-out: cubic-bezier(0.23, 1, 0.32, 1);
+  --b-scroll-duration: 720ms;
+  --b-scroll-distance: 12px;
+}
+
+.conversation > .stage,
+.proof-list > li:nth-child(2),
+.trust-strip > article:nth-child(2),
+.closing-actions {
+  --b-scroll-delay: 70ms;
+}
+
+.proof-list > li:nth-child(3),
+.trust-strip > article:nth-child(3),
+.closing > .destination-note {
+  --b-scroll-delay: 140ms;
+}
+
+/* A quiet reading-progress cue, without scroll handlers or extra markup.
+   Browsers without scroll timelines simply omit it. No space is consumed. */
+@supports (animation-timeline: scroll()) {
+  @media (prefers-reduced-motion: no-preference) {
+    body::before {
+      content: "";
+      position: fixed;
+      inset: 0 0 auto;
+      height: 2px;
+      z-index: 19;
+      pointer-events: none;
+      background: var(--sage);
+      transform: scaleX(0);
+      transform-origin: left;
+      animation: b-reading-progress auto linear both;
+      animation-timeline: scroll(root block);
+    }
+
+    body.motion-paused::before {
+      content: none;
+    }
+  }
+}
+
+@keyframes b-reading-progress {
+  to {
+    transform: scaleX(1);
+  }
+}
+
+/* The JS also cancels its animations immediately when preferences change.
+   These rules cover the interval before the preference listener runs. */
+@media (prefers-reduced-motion: reduce) {
+  .hero-art {
+    transform: none !important;
+  }
+
+  :is(
+    .conversation-intro,
+    .conversation > .stage,
+    .possibilities-heading,
+    .proof-list > li,
+    .trust-heading,
+    .trust-strip > article,
+    .closing > h2,
+    .closing-actions,
+    .closing > .destination-note,
+    .footer-main
+  ) {
+    opacity: 1 !important;
+    transform: none !important;
+  }
+}
