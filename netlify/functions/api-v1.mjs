@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { addEvent, database, encryptProviderKey, ensureSchema, fail, ok, validateOpenRouter, verifyIdentity } from './demo-core.mjs';
+import { addEvent, database, encryptProviderKey, ensureSchema, fail, json, ok, validateOpenRouter, verifyIdentity } from './demo-core.mjs';
 
 const terminal = new Set(['completed', 'failed', 'cancelled', 'rejected', 'expired', 'interrupted']);
 const approvalMinutes = 10;
@@ -94,7 +94,10 @@ export async function handler(event) {
         if (created) await addEvent(client, createdTask.id, 'queued', { state: 'queued' });
         await client.query('COMMIT');
       } catch (error) { await client.query('ROLLBACK').catch(() => {}); throw error; } finally { client.release(); }
-      if (created || createdTask.state === 'queued') void dispatchPrepare().catch(() => {});
+      if (created || createdTask.state === 'queued') {
+        const dispatchFailure = await dispatchTask(db, createdTask.id, 'prepare', dispatchPrepare);
+        if (dispatchFailure) return dispatchFailure;
+      }
       return ok({ task_id: createdTask.id, state: createdTask.state }, 202);
     }
 
@@ -139,7 +142,10 @@ export async function handler(event) {
           if (current.decision_id === body.client_decision_id) {
             if (current.decision !== body.decision || current.candidate_digest !== body.candidate_digest) { await client.query('ROLLBACK'); return fail(409, 'idempotency_conflict', 'Decision id was already used with a different payload'); }
             await client.query('COMMIT');
-            if (current.decision === 'approve' && current.state === 'publishing') void dispatchPublish(taskId, current.candidate_digest).catch(() => {});
+            if (current.decision === 'approve' && current.state === 'publishing') {
+              const dispatchFailure = await dispatchTask(db, taskId, 'publish', () => dispatchPublish(taskId, current.candidate_digest));
+              if (dispatchFailure) return dispatchFailure;
+            }
             return ok({ task_id: taskId, state: current.state, decision: current.decision });
           }
           if (current.state !== 'awaiting_approval' || current.candidate_digest !== body.candidate_digest) { await client.query('ROLLBACK'); return fail(409, 'approval_consumed', 'This approval is no longer pending'); }
@@ -152,7 +158,10 @@ export async function handler(event) {
           await client.query('UPDATE demo_tasks SET state=$2,decision=$3,decision_id=$4,updated_at=now() WHERE id=$1', [taskId, newState, body.decision, body.client_decision_id]);
           await addEvent(client, taskId, body.decision, { state: newState });
           await client.query('COMMIT');
-          if (body.decision === 'approve') void dispatchPublish(taskId, current.candidate_digest).catch(() => {});
+          if (body.decision === 'approve') {
+            const dispatchFailure = await dispatchTask(db, taskId, 'publish', () => dispatchPublish(taskId, current.candidate_digest));
+            if (dispatchFailure) return dispatchFailure;
+          }
           return ok({ task_id: taskId, state: newState, decision: body.decision });
         } catch (error) { await client.query('ROLLBACK').catch(() => {}); throw error; } finally { client.release(); }
       }
@@ -188,6 +197,19 @@ function workspaceMetadata() {
   return { backend_kind: 'github_actions', repo: owner && repo ? { owner, name: repo, full_name: `${owner}/${repo}` } : null,
     capabilities: ['prepare', 'tests', 'review_candidate', 'approval_gated_publish'] };
 }
+export async function dispatchTask(db, taskId, action, dispatch) {
+  try {
+    await dispatch();
+    await db.query('INSERT INTO demo_events(task_id,seq,type,data) SELECT $1,COALESCE(MAX(seq),0)+1,$2,$3 FROM demo_events WHERE task_id=$1',
+      [taskId, 'dispatch_requested', JSON.stringify({ action, state: 'dispatch_requested' })]);
+    return null;
+  } catch (error) {
+    const status = Number.isInteger(error?.status) ? error.status : null;
+    await db.query('INSERT INTO demo_events(task_id,seq,type,data) SELECT $1,COALESCE(MAX(seq),0)+1,$2,$3 FROM demo_events WHERE task_id=$1',
+      [taskId, 'dispatch_failed', JSON.stringify({ action, state: 'dispatch_failed', retryable: true, status })]);
+    return json(503, { ok: false, task_id: taskId, error: { code: 'dispatch_failed', message: 'Worker dispatch failed; retry the request', retryable: true } });
+  }
+}
 async function dispatchPublish(taskId, candidateDigest) {
   const token = process.env.GITHUB_DISPATCH_TOKEN;
   const repository = process.env.GITHUB_REPOSITORY;
@@ -196,7 +218,7 @@ async function dispatchPublish(taskId, candidateDigest) {
   const response = await fetch(`https://api.github.com/repos/${owner}/${repo}/dispatches`, { method: 'POST',
     headers: { Authorization: `Bearer ${token}`, Accept: 'application/vnd.github+json', 'X-GitHub-Api-Version': '2022-11-28', 'Content-Type': 'application/json' },
     body: JSON.stringify({ event_type: 'kelp-demo-publish', client_payload: { task_id: taskId, candidate_digest: candidateDigest } }) });
-  if (!response.ok) throw new Error(`GitHub dispatch failed (${response.status})`);
+  if (!response.ok) throw Object.assign(new Error('GitHub dispatch failed'), { status: response.status });
 }
 async function dispatchPrepare() {
   const token = process.env.GITHUB_DISPATCH_TOKEN;
@@ -206,5 +228,5 @@ async function dispatchPrepare() {
   const response = await fetch(`https://api.github.com/repos/${owner}/${repo}/dispatches`, { method: 'POST',
     headers: { Authorization: `Bearer ${token}`, Accept: 'application/vnd.github+json', 'X-GitHub-Api-Version': '2022-11-28', 'Content-Type': 'application/json' },
     body: JSON.stringify({ event_type: 'kelp-demo-prepare' }) });
-  if (!response.ok) throw new Error(`GitHub dispatch failed (${response.status})`);
+  if (!response.ok) throw Object.assign(new Error('GitHub dispatch failed'), { status: response.status });
 }

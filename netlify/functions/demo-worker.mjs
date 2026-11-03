@@ -13,6 +13,7 @@ function canonical(value) {
   return JSON.stringify(value);
 }
 function payloadDigest(candidate) { return createHash('sha256').update(canonical(candidate)).digest('hex'); }
+export function isGitCommitSha(value) { return typeof value === 'string' && /^[0-9a-f]{40}$/.test(value); }
 function cleanCandidate(candidate) {
   if (!candidate || typeof candidate !== 'object' || !Array.isArray(candidate.files) || candidate.files.length > 200) return false;
   const serialized = JSON.stringify(candidate);
@@ -86,7 +87,7 @@ export async function handler(event) {
 
     if (action === 'candidate') {
       const candidate = body.candidate;
-      if (!cleanCandidate(candidate) || !body.task_id || !body.worker_id || !/^[0-9a-f]{64}$/.test(body.base_sha || '')) return fail(400, 'invalid_candidate', 'Candidate must contain safe files and a pinned base SHA');
+      if (!cleanCandidate(candidate) || !body.task_id || !body.worker_id || !isGitCommitSha(body.base_sha)) return fail(400, 'invalid_candidate', 'Candidate must contain safe files and a pinned base SHA');
       const calculated = payloadDigest(candidate);
       if (!safeEqual(calculated, body.candidate_digest)) return fail(400, 'digest_mismatch', 'Candidate digest did not match');
       const client = await db.connect();

@@ -3,8 +3,33 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { handler as apiHandler } from '../../netlify/functions/api-v1.mjs';
-import { handler as workerHandler } from '../../netlify/functions/demo-worker.mjs';
+import { dispatchTask, handler as apiHandler } from '../../netlify/functions/api-v1.mjs';
+import { handler as workerHandler, isGitCommitSha } from '../../netlify/functions/demo-worker.mjs';
+
+test('candidate base is a real Git SHA-1 and remains distinct from the SHA-256 payload digest', () => {
+  assert.equal(isGitCommitSha('a'.repeat(40)), true);
+  assert.equal(isGitCommitSha('a'.repeat(64)), false);
+  assert.equal(isGitCommitSha('a'.repeat(40).toUpperCase()), false);
+});
+
+test('dispatch failures are persisted as observable, retryable task events', async () => {
+  const queries = [];
+  const db = { query: async (...args) => { queries.push(args); return { rows: [] }; } };
+  const response = await dispatchTask(db, 'task-123', 'publish', async () => {
+    throw Object.assign(new Error('private token must not be exposed'), { status: 502 });
+  });
+  assert.equal(response.statusCode, 503);
+  const body = JSON.parse(response.body);
+  assert.equal(body.error.code, 'dispatch_failed');
+  assert.equal(body.error.retryable, true);
+  assert.equal(body.task_id, 'task-123');
+  assert.doesNotMatch(response.body, /private token/);
+  assert.equal(queries.length, 1);
+  assert.equal(queries[0][1][1], 'dispatch_failed');
+  assert.deepEqual(JSON.parse(queries[0][1][2]), {
+    action: 'publish', state: 'dispatch_failed', retryable: true, status: 502,
+  });
+});
 
 test('the frozen v1 user facade is routed to Netlify Functions', async () => {
   const toml = await readFile(new URL('../../netlify.toml', import.meta.url), 'utf8');
