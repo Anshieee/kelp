@@ -3,8 +3,9 @@
 This backend lets a trusted cloud-browser worker pause on a login or secret
 form, ask the owner through an authenticated app, privately fill the form, and
 optionally save those values in an encrypted local vault. The browser may ask
-again for a verification code as a new request. No mobile or desktop UI is
-included. No credentials belong in chat messages, tool arguments, or model prompts.
+again for a verification code as a new request. The owner inbox is available at
+`/credential-requests` in the server's same-origin web view and in the Tauri
+desktop app. No credentials belong in chat messages, tool arguments, or model prompts.
 
 ## Components and trust
 
@@ -85,6 +86,14 @@ save a password step separately from the later OTP step.
 succeeded. The owner or a later non-secret page check must establish success.
 For SMS or mobile approval, request the site code first using the browser, then
 create a new handoff for the visible code field. Never persist an OTP.
+
+The phone-friendly same-origin page uses the owner session cookie and the
+existing per-session CSRF token for mutations. It shows origin, requested field
+labels, fill/submit intent, expiry, and status. Inputs are password controls
+regardless of field role; values are posted only to `/submit`, cleared after
+submission or denial, and never copied to chat, diagnostics, or receipts. The
+Tauri desktop screen follows the same display and mutation rules. Approval is
+single-use and does not bypass server-side origin/form binding or expiry checks.
 
 ## Worker contract
 
