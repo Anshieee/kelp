@@ -82,6 +82,15 @@ never raw arguments or content.
 
 Denials leave no side effect. The decision itself is audited.
 
+The `github.write` skill uses this chat approval lifecycle before entering its
+handler. Its manifest limits network egress to `api.github.com` and repository
+`Anshieee/kelp`; the one-use approval is consumed before the handler starts, so
+denial, expiry, cancellation, and replay do not issue GitHub requests. Once
+approved, it may create a branch/commit and open a pull request, with each API
+request recorded by the shared egress ledger. This capability is network access,
+not local execution: `chat.cards.EXEC_AVAILABLE` stays `False` and `ExecGate` is
+not wired into the server.
+
 ## 3. Exec gate
 
 ```python

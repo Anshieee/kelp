@@ -34,6 +34,7 @@ from urllib.parse import parse_qs, unquote, urlsplit
 from openshell.egress_ledger import recipient_for_host
 
 from .artifacts import ArtifactError, MAX_UPLOAD_BYTES
+from . import phone as phone_routes
 from .credentials import CredentialBroker
 from .errors import ChatError
 from .logging import (
@@ -1377,9 +1378,17 @@ class ChatAPI:
         share_max_ttl: float | None = None,
         share_max_snapshot_bytes: int | None = None,
         credentials: CredentialBroker | None = None,
+        wallet_api: Any | None = None,
+        checkout_api: Any | None = None,
+        phone_root: Path | None = None,
     ):
         self.service = service
         self.credentials = credentials
+        self.wallet_api = wallet_api
+        self.checkout_api = checkout_api
+        # The phone app's static mount (chat/phone.py); None defers to the
+        # default root resolution inside phone_response.
+        self.phone_root = phone_root
         self.auth_token = auth_token
         self.csrf_token = csrf_token
         self.stream_idle = stream_idle
@@ -1547,8 +1556,20 @@ class ChatAPI:
             # POST) is answered 405 without ever reaching ``_authorize``.
             if len(segments) >= 2 and segments[:2] == ["api", "credential-worker"]:
                 return credential_routes.credentials(self, request, segments[2:], worker=True)
+            # Razorpay's server-to-server callback authenticates the signed raw
+            # body itself. It is the only payment route outside owner auth/CSRF.
+            if (
+                request.method.upper() == "POST"
+                and segments == ["api", "wallet", "checkout", "webhook"]
+                and self.checkout_api is not None
+            ):
+                return self.checkout_api.handle(request)
             if len(segments) >= 2 and segments[0] == "api" and segments[1] == "shared":
                 return share_routes._shared(self, request, segments[2:])
+            # The phone app's static shell: public, read-only, traversal-safe
+            # (chat/phone.py). Its /api calls keep the normal auth and CSRF.
+            if segments and segments[0] == phone_routes.PHONE_PATH_PREFIX:
+                return phone_routes.phone_response(self, request, segments[1:])
             method = request.method.upper()
             if method not in _SUPPORTED_METHODS:
                 return _method_not_allowed_response("GET, POST, PATCH, DELETE")
@@ -1609,6 +1630,12 @@ class ChatAPI:
         head = segments[0]
         method = request.method.upper()
 
+        if head == "wallet" and len(segments) >= 2 and segments[1] == "checkout":
+            if self.checkout_api is not None:
+                return self.checkout_api.handle(request)
+            raise ChatError("not_found", status=404, message="Unknown endpoint.")
+        if head == "wallet" and self.wallet_api is not None:
+            return self.wallet_api.handle(request)
         if head == "credential-requests":
             return credential_routes.credentials(self, request, segments[1:])
         if head == "auth":

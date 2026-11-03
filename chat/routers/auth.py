@@ -113,6 +113,8 @@ def _classify_route(method: str, segments: list[str]) -> str:
         return "admin" if head in {"metrics", "readyz"} else "read"
     if head == "attachments":
         return "upload"
+    if head == "wallet":
+        return "read" if verb == "GET" else "chat"
     if head in {"threads", "turns", "approvals"}:
         return "chat"
     return "read"

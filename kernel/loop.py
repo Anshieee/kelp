@@ -11,13 +11,19 @@ Contract highlights (KEL-6 / P0-1):
 
 from __future__ import annotations
 
+import asyncio
+import hashlib
 import json
 import threading
 import time
 import uuid
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING, Any, AsyncIterator, Awaitable, Callable, Mapping, Protocol, Sequence
+
+from skills import cli as skill_cli
+from skills.context import ApprovalRequest
+from skills.loader import find_pinned_plugin, plugin_review_warnings
 
 from . import events
 from .config import KernelConfig, estimate_cost, pricing_for
@@ -139,6 +145,27 @@ class RegistryToolExecutor:
         self._waits.pop(call.call_id, None)
         self._active_call = call.call_id
         try:
+            has_skill_lookup = callable(getattr(self._registry, "__contains__", None))
+            if (
+                has_skill_lookup
+                and call.name not in self._registry
+                and self._approval is not None
+            ):
+                installed = await self._install_requested_skill(call)
+                if installed is False:
+                    return {
+                        "ok": False,
+                        "skill": call.name,
+                        "tool": call.name,
+                        "error": {
+                            "code": "approval_denied",
+                            "message": "Skill installation was not approved.",
+                            "retryable": False,
+                            "user_fixable": False,
+                        },
+                    }
+                if installed:
+                    self._registry = self._registry.reload()
             return await self._registry.invoke(
                 call.name,
                 dict(call.arguments),
@@ -151,6 +178,78 @@ class RegistryToolExecutor:
             )
         finally:
             self._active_call = None
+
+    async def _install_requested_skill(self, call: ToolCall) -> bool | None:
+        """Install a locally pinned candidate only after explicit approval."""
+
+        package = find_pinned_plugin(call.name)
+        if package is None:
+            return None
+        plugin_root = self._registry.plugin_root
+        if plugin_root is None:
+            return None
+        while True:
+            warnings = plugin_review_warnings(package)
+            flagged_imports = [
+                warning for warning in warnings if warning.startswith("flagged import:")
+            ]
+            args = {
+                "skill": package.name,
+                "version": package.version,
+                "digest": package.digest,
+                "source": str(package.source),
+                "warnings": list(warnings),
+                "enable_flagged_imports": bool(flagged_imports),
+            }
+            canonical = json.dumps(args, sort_keys=True, separators=(",", ":"))
+            now = datetime.now(timezone.utc)
+            request = ApprovalRequest(
+                skill="skill.install",
+                tool="skill.install",
+                arguments=args,
+                argument_hash="sha256:" + hashlib.sha256(canonical.encode("utf-8")).hexdigest(),
+                effects=("write",),
+                scopes={"paths": (str(plugin_root),), "hosts": (), "repos": ()},
+                manifest_version="1.0",
+                requested_at=now.isoformat().replace("+00:00", "Z"),
+                expires_at=(now + timedelta(minutes=10)).isoformat().replace("+00:00", "Z"),
+            )
+            started = self._time()
+            try:
+                allowed = await self._approval(request)  # type: ignore[misc]
+            except Exception:  # fail closed, matching the skill approval gate
+                allowed = False
+            call_id = self._active_call
+            if call_id is not None:
+                self._waits[call_id] = self._waits.get(call_id, 0) + _elapsed_ms(
+                    started, self._time()
+                )
+            if not allowed:
+                return False
+
+            # Approval is tied to the reviewed digest. If the store now contains
+            # a different pinned image, discard this approval and show a fresh
+            # request rather than silently approving the replacement.
+            current = find_pinned_plugin(call.name)
+            if current is None:
+                return False
+            if (
+                current.digest != package.digest
+                or current.version != package.version
+                or current.source != package.source
+            ):
+                package = current
+                continue
+            await asyncio.to_thread(
+                skill_cli.install_registered,
+                package.name,
+                root=plugin_root,
+                expected_digest=package.digest,
+                expected_version=package.version,
+                # Approving this reviewed request is the explicit enablement.
+                allow_flagged_imports=bool(flagged_imports),
+            )
+            return True
 
     async def _gate(self, request: Any) -> bool:
         assert self._approval is not None  # only wired when an approval exists

@@ -9,13 +9,16 @@
 - **What this does not do:** change boot behavior, add a `signature` field to
   any pin, or introduce a crypto dependency. Those are team decisions, listed
   as follow-ups below.
-- **Crypto honesty:** the venv has only `jsonschema` and `httpx`. The spike
-  uses a small pure-Python RFC 8032 Ed25519 implementation, isolated behind
-  two internal functions (`_sign_raw`, `_verify_raw`). It is **not
-  constant-time** and not audited. The intended production dependency is
-  `cryptography` (`Ed25519PrivateKey`/`Ed25519PublicKey`) or PyNaCl
-  (`nacl.signing.SigningKey`); both speak the same 64-byte detached-signature
-  format, so the swap is a two-function change.
+- **Crypto honesty (updated after the swap):** the spike first shipped a small
+  pure-Python RFC 8032 Ed25519 sketch because the venv had no crypto library.
+  The credential-vault work (PR #20) then made `cryptography` a core
+  dependency, so the backend is now `cryptography`'s Ed25519
+  (`Ed25519PrivateKey`/`Ed25519PublicKey`) — Rust-backed, constant-time,
+  audited — behind the same two internal functions (`_sign_raw`,
+  `_verify_raw`). Signatures are the standard 64-byte detached form, pinned
+  against the RFC 8032 §7.1 test vectors, so attestations signed by the
+  original sketch still verify. The hex-text key file format is unchanged;
+  PEM/PKCS#8 remains the production-hardening step.
 
 ---
 
@@ -170,15 +173,16 @@ exactly two new files: `skills/signing.py` and this document.
 
 ## 7. Prototype status
 
-- `skills/signing.py` — pure-Python Ed25519 (RFC 8032) behind
-  `_sign_raw`/`_verify_raw`; hex-text key files; `sign_package` /
+- `skills/signing.py` — Ed25519 via `cryptography` (constant-time, Rust-backed)
+  behind `_sign_raw`/`_verify_raw`; hex-text key files; `sign_package` /
   `verify_package` round-trip over the real `package_digest` string;
   `load_public_key_from_env` fails closed on a missing variable, file, or
-  malformed key.
-- Not production-grade: no constant-time arithmetic, no side-channel
-  hardening, no PEM/PKCS#8, no key IDs, no audit trail of who signed what.
-  Each of those is a reason the production version wants `cryptography` (or
-  PyNaCl) plus the key-provisioning runbook in §4 — not a reason to keep the
-  pure-Python backend.
+  malformed key. Interop with any RFC 8032 implementation is pinned by the
+  published test vectors in `tests/test_signing.py`.
+- Still spike-scoped, by design: no enforcement at boot, no PEM/PKCS#8, no key
+  IDs, no audit trail of who signed what, and no trusted-boot anchor for the
+  public key itself. Those are the remaining follow-ups in §5, not crypto
+  weaknesses — the signature arithmetic is now production grade.
 - Checks on this spike: `ruff check skills/signing.py` clean, `mypy
-  skills/signing.py` clean, full suite 1045 passed (unchanged from `main`).
+  skills/signing.py` clean, `tests/test_signing.py` 8 passed, full suite green
+  (unchanged behavior everywhere else).

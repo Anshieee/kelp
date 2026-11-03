@@ -54,6 +54,7 @@ These are not built yet either, and KEL-8 acceptance depends on them:
 | `docs.answer` handler | stub (`SkillNotImplementedError`) | No real PDF/CSV artifact until a handler exists. The demo path needs a fixture-backed handler or a recorded model fixture. |
 | `web.search` handler | stub (`SkillNotImplementedError`) | No live results or web source chips. The demo path needs a fixture-backed handler or a recorded success envelope; a failed stub yields only the failed-search chip (§9.1). |
 | `github.read` handler | stub (`SkillNotImplementedError`) | No real sweeps or GitHub source chips. Same fixture requirement: a recorded envelope must satisfy the manifest output schema and the §6.1 card shape. |
+| `github.write` handler | implemented with manifest-level approval | Creates a scoped branch, commit, and pull request only after the existing skill approval hook returns true; denied or missing approval runs no handler. |
 | Cancellation in `run_turn` | absent | "Stop" needs the kernel delta in §14.1 |
 | Approval wait vs. wall-clock budget | approval wait counts against `max_wall_seconds` | A 10-minute approval can never finish inside a 120 s budget; see §14.2 |
 | Durable chat store | absent (KEL-6 persists usage only) | Resume and non-duplication need §13 |

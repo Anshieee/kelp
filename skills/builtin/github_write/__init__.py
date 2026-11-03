@@ -1,0 +1,1 @@
+"""Approved GitHub write skill."""

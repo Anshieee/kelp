@@ -454,7 +454,7 @@ def test_unconfigured_wallet_reports_503(gateway: FakeGateway) -> None:
     response = call(api, "POST", "/api/wallet/setup-intent")
 
     assert response.status == 503
-    assert payload(response)["error"]["code"] == "not_configured"
+    assert payload(response)["error"]["code"] == "wallet_not_configured"
 
 
 def test_malformed_json_is_a_400(api: WalletAPI) -> None:

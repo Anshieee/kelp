@@ -417,5 +417,5 @@ def test_unconfigured_checkout_returns_503() -> None:
     )
 
     assert response.status == 503
-    assert payload(response)["error"]["code"] == "not_configured"
+    assert payload(response)["error"]["code"] == "wallet_not_configured"
     assert TEST_SECRET not in response.body.decode("utf-8")

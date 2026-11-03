@@ -1,6 +1,6 @@
 # SDLC mind map — Always-On Private Assistant
 
-Snapshot: 2 November 2026
+Snapshot: 3 November 2026
 Program target: **30 October 2026** for M0 through M4
 Tracker site: [`netlify/index.html`](../netlify/index.html)
 
@@ -11,8 +11,8 @@ that goes with it is [`sdlc-mindmap.svg`](sdlc-mindmap.svg), with a PNG fallback
 site embeds a copy of the SVG directly in the page, so every box there can be clicked; that copy
 and these two files must be updated together.
 
-What this snapshot rests on: `main` is at `cfeaea4` (the tracker-sync snapshot itself follows it),
-and the suite is **1071 tests, all passing**, with the repository public. KEL-5 through KEL-10 are merged,
+What this snapshot rests on: `main` is at `b6d8226` (PR #39, skill-import review), and the suite
+collects **1132 tests: 1128 pass and 4 skip**. The repository is public. KEL-5 through KEL-10 are merged,
 reviewed, and done; KEL-11, KEL-12, KEL-13, KEL-14, KEL-15, and KEL-16 are merged and reviewed too,
 and close M2. KEL-17, KEL-18, KEL-20, KEL-21, KEL-19, and
 KEL-22 then carried M3 to completion and are merged and reviewed: abuse resistance, spend ceilings,
@@ -141,9 +141,49 @@ snapshot date.
 **LATER** on the last M4 leaf means outside this round; KEL-23, KEL-24, KEL-25, and KEL-26 are DONE,
 KEL-27 and KEL-28 are both DONE, so no work item is left open.
 
+## Recent integration merges — 2–3 November 2026
+
+Eight application follow-ups are recorded here: PR #33 had been missed in the previous integration
+list, and PRs #38 and #39 landed after tracker PR #37. They improve setup guidance, approval clarity,
+and plugin-import review without changing the milestone or KEL-5–KEL-29 status. The tracker sync in
+PR #37 covered through PR #36; it is the baseline for this refresh, not an application change:
+
+1. **Minimal setup guide** — PR [#33](https://github.com/Anshieee/kelp/pull/33) merged as
+   [`b319def`](https://github.com/Anshieee/kelp/commit/b319def). It adds a README quick start for
+   Docker Compose and Python, environment setup, a first-turn API smoke test, and a repository map.
+2. **Private browser credential handoff and encrypted vault** — PR #20 merged as `33e6d9a`.
+   `chat/credential_browser.py` and `chat/credentials.py` implement the browser handoff and encrypted
+   storage; the HTTP routes, configuration examples, privacy notes, and credential tests landed with
+   them. The handoff keeps the working credential out of browser-visible responses and logs.
+3. **Flake fix** — PR #25 merged as `80f1eec`. The share API test now uses a stable public-ID casing
+   assertion, removing an order-dependent test failure without changing application behavior.
+4. **Wallet and Checkout server mount** — merged as `f17661b`. The wallet and Checkout routes are
+   mounted in the server app, with route-level coverage in `tests/test_payment_server_routes.py`.
+   The main suite at that merge collected 1106 tests: 1102 passed and 4 skipped.
+5. **Approval-gated local skill-store install** — PR [#35](https://github.com/Anshieee/kelp/pull/35)
+   merged as [`d6a5424`](https://github.com/Anshieee/kelp/commit/d6a5424). It adds digest-pinned
+   local skill-store discovery and an approval-gated install path. The suite then collected 1113
+   tests: 1109 passed and 4 skipped. All required CI checks passed: pytest, Ruff, mypy, secret scan,
+   and dependency audit.
+6. **Approval summaries and stop-race fix** — PR [#36](https://github.com/Anshieee/kelp/pull/36)
+   merged as [`5e2123b`](https://github.com/Anshieee/kelp/commit/5e2123b). It fixes approval file
+   summaries and adds coverage for the stop race. The current suite collects 1121 tests: 1117 passed
+    and 4 skipped. All required CI checks passed: pytest, Ruff, mypy, secret scan, and dependency audit.
+7. **Scoped approval-card clarity** — PR [#38](https://github.com/Anshieee/kelp/pull/38) merged as
+   [`3f75979`](https://github.com/Anshieee/kelp/commit/3f75979). Approval cards now state the exact
+   effects and available scopes, monetary amounts and expiry, and disclose truncated request details.
+8. **Reviewed skill imports** — PR [#39](https://github.com/Anshieee/kelp/pull/39) merged as
+   [`b6d8226`](https://github.com/Anshieee/kelp/commit/b6d8226). Plugin installs display static
+   import-review warnings, recognize aliased dynamic-import forms, require explicit approval for
+   flagged imports, and repeat approval if the pinned package changes during review. Computed or
+   indirect dynamic imports are disclosed as a limitation of static review.
+
+The full suite on this snapshot collects **1132 tests: 1128 passed and 4 skipped** (`python -m pytest`).
+All required CI checks passed for PRs #38 and #39.
+
 ## The map
 
-![Mind map of the delivery: milestones M0 to M4, work items KEL-5 to KEL-28 plus the KEL-29 gap sweep, product surfaces, payments, and design.](sdlc-mindmap.svg)
+![Mind map of the delivery: milestones M0 to M4, work items KEL-5 to KEL-28 plus the KEL-29 gap sweep, recent integration merges, product surfaces, payments, and design.](sdlc-mindmap.svg)
 
 The same map in words, in case the image does not load:
 
@@ -155,6 +195,7 @@ The same map in words, in case the image does not load:
 - **Surfaces** — where you talk to the assistant: dashboard first, Telegram next, WhatsApp and voice memos later.
 - **Money** — saved cards through Stripe and hosted Checkout through Razorpay, both merged and closed out; an in-app balance later.
 - **Design** — the screen plan is written, and so is the chat spec. The chat surface code is merged; the drawing file and the browser screen are next.
+- **Integration** — README setup guide (PR #33, `b319def`), private credential handoff (PR #20), deterministic share-ID test fix (PR #25), wallet/Checkout mounting (`f17661b`), skill-store install (PR #35), approval-routing fix (PR #36), clearer approval scope (PR #38), and reviewed plugin imports (PR #39) are merged. Main collects 1132 tests: 1128 pass and 4 skip.
 
 On the tracker site ([`netlify/index.html`](../netlify/index.html)) the same SVG is embedded
 inside the page rather than loaded as a picture. Each box is a link: activating it opens the
@@ -1401,7 +1442,7 @@ explicit revoke routes are the only kill switch. And a revoke cannot recall a co
 ### GitHub
 
 - Repository (public): https://github.com/Anshieee/kelp
-- Shared copy of the code: https://github.com/Anshieee/kelp/tree/main — head `cfeaea4`
+- Shared copy of the code: https://github.com/Anshieee/kelp/tree/main — head `f17661b`
 - All branches: https://github.com/Anshieee/kelp/branches
   - `kel-5` — merged (`b8de92f`)
   - `kel-6` — merged at `d3c763e`; branch head `4c72afc`
@@ -1437,9 +1478,12 @@ explicit revoke routes are the only kill switch. And a revoke cannot recall a co
   - `kel-29-plugin-signing` — merged via pull request #9 (2026-11-02)
   - `kel-29-provider-change` — merged via pull request #10 (2026-11-02)
   - `kel-29-dev-deps` — merged via pull request #4 (2026-11-02)
+  - `feat/secure-credential-handoff` — merged via pull request #20 at `33e6d9a` (2026-11-02)
+  - `kel-30-flake-fix` — merged via pull request #25 at `80f1eec` (2026-11-02)
+  - `kel-30-wallet-checkout-server` — merged at `f17661b` (2026-11-02)
 - Change history: https://github.com/Anshieee/kelp/commits/main
 - Pull requests: https://github.com/Anshieee/kelp/pulls
-- Tests: 1071 pass (`python -m pytest`); `make demo` plays all six beats, `make eval` passes offline
+- Tests: 1102 pass, 4 skipped (`python -m pytest`; 1106 collected); `make demo` plays all six beats, `make eval` passes offline
   with the network blocked, and `make audit` finds no known vulnerability in a declared dependency
 
 ### Linear

@@ -91,6 +91,18 @@ def _route_label(path: str) -> str:
     if len(segments) == 1:
         return "/api"
     head = segments[1]
+    if head == "wallet":
+        if len(segments) == 2:
+            return "/api/wallet"
+        if len(segments) == 3 and segments[2] in {
+            "cards", "setup-intent", "attach", "limits", "propose", "approve", "checkout"
+        }:
+            return f"/api/wallet/{segments[2]}"
+        if len(segments) == 4 and segments[2] == "checkout" and segments[3] in {
+            "confirm", "webhook"
+        }:
+            return f"/api/wallet/checkout/{segments[3]}"
+        return "/api/other"
     if head in _STATIC_ROUTE_HEADS:
         return f"/api/{head}" if len(segments) == 2 else "/api/other"
     if head in _DYNAMIC_ROUTE_HEADS:
@@ -430,4 +442,3 @@ def guarded_stream(
             lease.release()
 
     return guarded()
-

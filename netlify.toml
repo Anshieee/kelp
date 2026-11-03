@@ -10,6 +10,12 @@
   # are not an error: the page falls back to its written-in-words version.
   command = "sh -c 'mkdir -p netlify/assets; for f in svg png; do cp \"docs/sdlc-mindmap.$f\" \"netlify/assets/sdlc-mindmap.$f\" 2>/dev/null; done; exit 0'"
 
+[[redirects]]
+  from = "/api/v1/*"
+  to = "/.netlify/functions/api-v1/:splat"
+  status = 200
+  force = true
+
 [[headers]]
   for = "/*"
 
