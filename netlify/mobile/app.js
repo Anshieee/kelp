@@ -34,8 +34,7 @@
     const el = $('connection');
     el.className = `connection ${state}`;
     el.textContent = text;
-  }
-  function safeJson(value) { try { return JSON.parse(value); } catch { return []; } }
+  }  function safeJson(value) { try { return JSON.parse(value); } catch { return []; } }
   function taskHistory() {
     const ids = safeJson(sessionStorage.getItem(TASKS_KEY) || '[]');
     return Array.isArray(ids) ? [...new Set(ids.filter((id) => typeof id === 'string'))].slice(0, 20) : [];
@@ -111,9 +110,14 @@
       return;
     }
     list.replaceChildren();
-    for (const id of ids) {
-      let task;
-      try { task = (await api(`/tasks/${encodeURIComponent(id)}`)).task; } catch { continue; }
+    // One round trip per task, in parallel; a task that no longer exists
+    // (purged, or not ours) drops out of the list silently.
+    const results = await Promise.all(ids.map(async (id) => {
+      try { return [id, (await api(`/tasks/${encodeURIComponent(id)}`)).task]; }
+      catch { return [id, null]; }
+    }));
+    for (const [id, task] of results) {
+      if (!task) continue;
       const row = document.createElement('li');
       const button = document.createElement('button');
       const left = document.createElement('span');
@@ -189,9 +193,15 @@
     }
   }
   async function loadCandidate() {
+    // Render each candidate digest once; re-rendering the diff on every poll
+    // rewrites the node the user is reading. A new digest (a new candidate)
+    // re-renders; the same digest does not.
+    const digest = currentTask?.approval?.candidate_digest;
+    if (digest && candidate && candidate.__digest === digest) return;
     try {
       const response = await api(`/tasks/${encodeURIComponent(taskId)}/candidate`);
       candidate = response.candidate;
+      candidate.__digest = digest;
       $('open-review').hidden = false;
       renderCandidate();
     } catch (error) { notice('task-message', error.message, true); }
@@ -299,27 +309,49 @@
     if (window.netlifyIdentity) window.netlifyIdentity.open('login');
     else notice('auth-message', 'Sign-in is unavailable. Please try again later.', true);
   });
+  function isAuthError(message) {
+    return /sign in|session expired|not enabled for the demo/i.test(String(message));
+  }
+  async function connect() {
+    // Shared by the identity init event and the welcome screen's Retry
+    // button. Auth problems send the user to sign in; server or network
+    // problems keep the session and offer a retry — the pill and the
+    // message must not claim the sign-in died when it did not.
+    setConnection('', 'Loading workspace');
+    try {
+      const requestedTask = new URL(location.href).searchParams.get('task');
+      if (requestedTask && /^[0-9a-f-]{36}$/i.test(requestedTask)) {
+        const who = await api('/me');
+        me = who;
+        if (!who.entitlement?.enabled) throw new Error('This sign-in is not enabled for the demo.');
+        if (!who.onboarding?.complete) { await refreshMe(); return; }
+        rememberTask(requestedTask); await openTask(requestedTask);
+      } else await refreshMe();
+      setConnection('online', 'Connected');
+      clearNotice('auth-message');
+      $('retry-connect').hidden = true;
+    } catch (error) {
+      if (isAuthError(error.message)) {
+        identity = null;
+        setConnection('', 'Sign in required');
+        $('retry-connect').hidden = true;
+      } else {
+        setConnection('error', 'Server unreachable');
+        $('retry-connect').hidden = false;
+      }
+      notice('auth-message', error.message, true);
+      show('welcome');
+    }
+  }
+  $('retry-connect').addEventListener('click', () => {
+    $('retry-connect').hidden = true;
+    connect().catch(() => {});
+  });
   if (window.netlifyIdentity) {
     window.netlifyIdentity.on('init', async (user) => {
       identity = user;
       if (!user) { setConnection(navigator.onLine ? '' : 'offline', navigator.onLine ? 'Sign in required' : 'Offline'); show('welcome'); return; }
-      setConnection('', 'Loading workspace');
-      try {
-        const requestedTask = new URL(location.href).searchParams.get('task');
-        if (requestedTask && /^[0-9a-f-]{36}$/i.test(requestedTask)) {
-          const who = await api('/me');
-          me = who;
-          if (!who.entitlement?.enabled) throw new Error('This sign-in is not enabled for the demo.');
-          if (!who.onboarding?.complete) { await refreshMe(); return; }
-          rememberTask(requestedTask); await openTask(requestedTask);
-        } else await refreshMe();
-        setConnection('online', 'Connected');
-      } catch (error) {
-        setConnection('', 'Sign in required');
-        notice('auth-message', error.message, true);
-        if (error.message.includes('Sign in') || error.message.includes('session expired')) { identity = null; show('welcome'); }
-        else show('welcome');
-      }
+      connect();
     });
     window.netlifyIdentity.on('login', (user) => { identity = user; window.netlifyIdentity.close(); refreshMe().then(() => setConnection('online', 'Connected')).catch((error) => notice('auth-message', error.message, true)); });
     window.netlifyIdentity.on('logout', () => { identity = null; token = null; me = null; stopPolling(); show('welcome'); setConnection('', 'Sign in required'); });
