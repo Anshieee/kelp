@@ -69,7 +69,13 @@ export default function App() {
 
   switch (route.screen) {
     case "chat":
-      return <Chat threadId={route.threadId} onBack={() => navigate({ screen: "threads" })} />;
+      return (
+        <Chat
+          threadId={route.threadId}
+          onBack={() => navigate({ screen: "threads" })}
+          onOpenThread={(id) => navigate({ screen: "chat", threadId: id })}
+        />
+      );
     case "settings":
       return <Settings onBack={() => navigate({ screen: "threads" })} onSignedOut={() => setSessionState(null)} />;
     default:

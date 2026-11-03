@@ -6,6 +6,7 @@ import { useCallback, useEffect, useState } from "react";
 import { ApiError, listDevices, revokeDevice, signOut } from "../api";
 import { getSession, setSession } from "../state";
 import StreamGlance from "../components/StreamGlance";
+import ThemeToggle from "../components/ThemeToggle";
 
 interface SettingsProps {
   onBack: () => void;
@@ -64,6 +65,14 @@ export default function Settings({ onBack, onSignedOut }: SettingsProps) {
         </button>
         <h1>Settings</h1>
       </header>
+
+      <section className="settings-section" aria-labelledby="appearance-heading">
+        <h2 id="appearance-heading">Appearance</h2>
+        <p className="settings-note">Midnight is the default. Meadow is a light theme.</p>
+        <div className="appearance-card">
+          <ThemeToggle />
+        </div>
+      </section>
 
       <section className="settings-section">
         <h2>Install</h2>
