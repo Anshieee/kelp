@@ -5,8 +5,16 @@ const { Pool } = pg;
 let pool;
 let schemaReady;
 
+export class ConfigurationError extends Error {
+  constructor(setting) {
+    super(`The demo server is missing ${setting}. Contact the demo owner.`);
+    this.name = 'ConfigurationError';
+    this.setting = setting;
+  }
+}
+
 export function database() {
-  if (!process.env.DATABASE_URL) throw new Error('DATABASE_URL is not configured');
+  if (!process.env.DATABASE_URL) throw new ConfigurationError('DATABASE_URL');
   if (!pool) pool = new Pool({ connectionString: process.env.DATABASE_URL, max: 4, ssl: process.env.DATABASE_SSL === 'disable' ? false : { rejectUnauthorized: true } });
   return pool;
 }
@@ -90,8 +98,6 @@ export async function verifyIdentity(event) {
     token = cookie.split(';').map((part) => part.trim()).find((part) => part.startsWith('nf_jwt='))?.slice(7) || '';
   }
   if (!token) return null;
-  const secret = process.env.NETLIFY_IDENTITY_JWT_SECRET;
-  if (!secret) throw new Error('Netlify Identity verification is not configured');
   const [head, body, signature, ...rest] = token.split('.');
   if (!head || !body || !signature || rest.length) return null;
   let headerObj; let claims;
@@ -99,7 +105,9 @@ export async function verifyIdentity(event) {
   if (headerObj.alg !== 'HS256' || typeof claims.sub !== 'string' || !claims.sub || typeof claims.exp !== 'number' || claims.exp <= Date.now() / 1000 ||
       (typeof claims.nbf === 'number' && claims.nbf > Date.now() / 1000) ||
       (claims.iss && process.env.NETLIFY_IDENTITY_ISSUER && claims.iss !== process.env.NETLIFY_IDENTITY_ISSUER)) return null;
-  // Netlify Identity signs access tokens with the site's configured HS256 secret.
+  const secret = process.env.NETLIFY_IDENTITY_JWT_SECRET;
+  if (!secret) throw new ConfigurationError('NETLIFY_IDENTITY_JWT_SECRET');
+  // Direct event-handler tests use an explicitly supplied local HS256 secret.
   const { createHmac } = await import('node:crypto');
   const actual = createHmac('sha256', secret).update(`${head}.${body}`).digest();
   if (Buffer.from(signature, 'base64url').length !== actual.length || !timingSafeEqual(Buffer.from(signature, 'base64url'), actual)) return null;

@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
-import { addEvent, database, encryptProviderKey, ensureSchema, fail, json, ok, validateOpenRouter, verifyIdentity } from './demo-core.mjs';
+import { getUser } from '@netlify/identity';
+import { addEvent, ConfigurationError, database, encryptProviderKey, ensureSchema, fail, json, ok, validateOpenRouter, verifyIdentity } from './demo-core.mjs';
 
 const terminal = new Set(['completed', 'failed', 'cancelled', 'rejected', 'expired', 'interrupted']);
 const approvalMinutes = 10;
@@ -30,13 +31,19 @@ async function ownedTask(db, owner, id) {
   return result.rows[0] || null;
 }
 
-export async function handler(event) {
+export async function handler(event, verifiedIdentity) {
+  let stage = 'identity';
   try {
-    const identity = await verifyIdentity(event);
+    // The deployed v2 entrypoint supplies the platform-verified Identity user.
+    // Direct event callers retain signature verification for local contract tests.
+    const identity = verifiedIdentity === undefined ? await verifyIdentity(event) : verifiedIdentity;
     if (!identity) return fail(401, 'unauthorized', 'A valid Netlify Identity session is required');
     if (!csrfOk(event, identity)) return fail(403, 'csrf_failed', 'CSRF verification failed');
+    stage = 'database';
     const db = database();
+    stage = 'schema';
     await ensureSchema(db);
+    stage = 'request';
     await db.query('INSERT INTO demo_users(subject) VALUES($1) ON CONFLICT(subject) DO NOTHING', [identity.subject]);
     const path = pathInfo(event);
     const method = event.httpMethod;
@@ -183,9 +190,26 @@ export async function handler(event) {
     }
     return fail(404, 'not_found', 'Endpoint not found');
   } catch (error) {
-    console.error('demo API request failed', { name: error?.name || 'Error' });
+    const configuration = error instanceof ConfigurationError;
+    console.error('demo API request failed', { name: error?.name || 'Error', stage, ...(configuration ? { setting: error.setting } : {}) });
+    if (configuration) return fail(503, 'configuration_missing', error.message);
     return fail(500, 'internal_error', 'The request could not be completed', true);
   }
+}
+
+export default async function api(request) {
+  const user = await getUser();
+  const identity = typeof user?.id === 'string' && user.id ? {
+    subject: user.id, email: user.email || null,
+    cookieAuth: !request.headers.get('authorization')?.startsWith('Bearer '),
+  } : null;
+  const result = await handler({
+    httpMethod: request.method, rawUrl: request.url,
+    path: new URL(request.url).pathname,
+    headers: Object.fromEntries(request.headers),
+    body: ['GET', 'HEAD'].includes(request.method) ? null : await request.text(),
+  }, identity);
+  return new Response(result.body, { status: result.statusCode, headers: result.headers });
 }
 
 function isEntitled(subject) {

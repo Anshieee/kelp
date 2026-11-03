@@ -1,6 +1,6 @@
 # Kelp demo Plan B backend
 
-This implements the frozen `/api/v1` facade with Netlify Functions, PostgreSQL-backed transactional state, Netlify Identity HS256 verification, and repository-dispatch GitHub Actions workers. Provider keys are AES-256-GCM encrypted at rest and only returned to an authenticated worker claim over HTTPS with `Cache-Control: no-store`.
+This implements the frozen `/api/v1` facade with Netlify Functions, PostgreSQL-backed transactional state, managed Netlify Identity verification, and repository-dispatch GitHub Actions workers. The user API uses a modern function entrypoint and `@netlify/identity`'s server-side `getUser()`. It does not require the owner to extract the managed Identity signing secret. Provider keys are AES-256-GCM encrypted at rest and only returned to an authenticated worker claim over HTTPS with `Cache-Control: no-store`.
 
 ## Required configuration
 
@@ -9,7 +9,6 @@ Set these in Netlify site environment settings and GitHub repository settings; n
 | Setting | Where | Purpose |
 | --- | --- | --- |
 | `DATABASE_URL` | Netlify | PostgreSQL connection string with TLS enabled |
-| `NETLIFY_IDENTITY_JWT_SECRET` | Netlify | Netlify Identity token-signing secret |
 | `DEMO_KEY_ENCRYPTION_SECRET` | Netlify | Base64-encoded random 32-byte AES-256 key |
 | `DEMO_WORKER_TOKEN` | Netlify + GitHub Actions secret | Independent random worker-only bearer token (at least 32 characters) |
 | `GITHUB_REPOSITORY` | Netlify | Exact `owner/repo` for the demo repository |
@@ -21,6 +20,8 @@ Set these in Netlify site environment settings and GitHub repository settings; n
 | `DEMO_REPO_TOKEN` | GitHub Actions secret | Fine-grained repo token for publish branch/commit/pull-request operations |
 
 Enable Netlify Identity and provision the PostgreSQL database before deploying. Use separate read and publish GitHub tokens. Configure the GitHub default branch as `main`, or update `DEMO_PUBLISH_BASE` in the workflow to the selected base branch. Configure the Netlify SPA/login to send bearer tokens; cookie-based mutations must include a matching `csrf_token` cookie and `X-CSRF-Token` header.
+
+Use the Identity dashboard at `https://app.netlify.com/projects/kelp-demo/identity`. Do not obtain signing secrets through undocumented APIs or substitute the visitor-access JWT secret. The old `NETLIFY_IDENTITY_JWT_SECRET` verifier remains only for direct local event-handler contract tests, not the deployed v2 entrypoint. Set required runtime variables with the Functions scope and Production context at `https://app.netlify.com/projects/kelp-demo/configuration/env`, then redeploy because function variables are captured per deploy. Missing required settings return `503 configuration_missing` with the setting name, never its value. Safe function logs distinguish `identity`, `database`, `schema`, and `request` stages.
 
 The schema is created idempotently at function startup. PostgreSQL transactions and row locks serialize workspace claims, approval consumption, event sequence assignment, and publish completion. The first migration must run under a DB role allowed to create these tables.
 
