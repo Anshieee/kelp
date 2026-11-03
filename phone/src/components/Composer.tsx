@@ -63,8 +63,8 @@ export default function Composer({ disabled, onSend, onStop }: ComposerProps) {
           aria-label="Message"
         />
         {disabled ? (
-          <button type="button" className="btn btn-stop" onClick={onStop} aria-label="Stop answering">
-            ■
+          <button type="button" className="btn btn-stop" onClick={onStop}>
+            Stop
           </button>
         ) : (
           <button
@@ -74,7 +74,7 @@ export default function Composer({ disabled, onSend, onStop }: ComposerProps) {
             onClick={() => void submit()}
             aria-label="Send message"
           >
-            {sending ? "…" : "↑"}
+            {sending ? "…" : "Send"}
           </button>
         )}
       </div>

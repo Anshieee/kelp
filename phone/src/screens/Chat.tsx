@@ -19,34 +19,21 @@ import { initialChatState, reduceChat, type ChatState } from "../chatState";
 import { ThreadStream, type StreamState } from "../stream";
 import ApprovalCard from "../components/ApprovalCard";
 import Composer from "../components/Composer";
-import ConversationDrawer from "../components/ConversationDrawer";
 import MessageList from "../components/MessageList";
-import ThemeToggle from "../components/ThemeToggle";
-import { AccountChip, ThreadListView, useThreadsList } from "../components/ThreadList";
 
 interface ChatProps {
   threadId: string;
   onBack: () => void;
-  onOpenThread: (threadId: string) => void;
 }
 
-export default function Chat({ threadId, onBack, onOpenThread }: ChatProps) {
+export default function Chat({ threadId, onBack }: ChatProps) {
   const [state, setState] = useState<ChatState | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [streamState, setStreamState] = useState<StreamState>("connecting");
   const [actionError, setActionError] = useState<string | null>(null);
-  const [drawerOpen, setDrawerOpen] = useState(false);
   const streamRef = useRef<ThreadStream | null>(null);
   const stateRef = useRef<ChatState | null>(null);
   stateRef.current = state;
-
-  const threadsList = useThreadsList(useCallback((id: string) => onOpenThread(id), [onOpenThread]));
-
-  // A new thread id on the same mounted screen means the user picked a
-  // different conversation from the drawer: close it over the fresh thread.
-  useEffect(() => {
-    setDrawerOpen(false);
-  }, [threadId]);
 
   useEffect(() => {
     let cancelled = false;
@@ -197,23 +184,10 @@ export default function Chat({ threadId, onBack, onOpenThread }: ChatProps) {
     [state],
   );
 
-  const drawer = (
-    <ConversationDrawer open={drawerOpen} onClose={() => setDrawerOpen(false)}>
-      <div className="drawer-scroll">
-        <ThreadListView list={threadsList} onOpenThread={onOpenThread} />
-      </div>
-      <div className="drawer-bottom">
-        <ThemeToggle />
-        <AccountChip label={threadsList.deviceLabel} />
-      </div>
-    </ConversationDrawer>
-  );
-
   if (loadError) {
     return (
       <main className="screen chat-screen">
-        <ChatHeader title="Conversation" streamState={streamState} onBack={onBack} onOpenDrawer={() => setDrawerOpen(true)} drawerOpen={drawerOpen} />
-        {drawer}
+        <ChatHeader title="Conversation" onBack={onBack} />
         <div className="empty-state">
           <p>{loadError}</p>
           <button type="button" className="btn" onClick={onBack}>
@@ -227,8 +201,7 @@ export default function Chat({ threadId, onBack, onOpenThread }: ChatProps) {
   if (!state) {
     return (
       <main className="screen chat-screen">
-        <ChatHeader title="Loading…" streamState={streamState} onBack={onBack} onOpenDrawer={() => setDrawerOpen(true)} drawerOpen={drawerOpen} />
-        {drawer}
+        <ChatHeader title="Loading…" onBack={onBack} />
         <p className="empty-note">Loading…</p>
       </main>
     );
@@ -236,8 +209,7 @@ export default function Chat({ threadId, onBack, onOpenThread }: ChatProps) {
 
   return (
     <main className="screen chat-screen">
-      <ChatHeader title={state.threadTitle ?? "Conversation"} streamState={streamState} onBack={onBack} onOpenDrawer={() => setDrawerOpen(true)} drawerOpen={drawerOpen} />
-      {drawer}
+      <ChatHeader title={state.threadTitle ?? "Conversation"} onBack={onBack} />
       {streamState !== "live" && (
         <div className="stream-banner" role="status">
           {streamState === "reconnecting" ? "Reconnecting…" : "Connecting…"}
@@ -270,49 +242,15 @@ export default function Chat({ threadId, onBack, onOpenThread }: ChatProps) {
   );
 }
 
-function ChatHeader({
-  title,
-  streamState,
-  onBack,
-  onOpenDrawer,
-  drawerOpen,
-}: {
-  title: string;
-  streamState: StreamState;
-  onBack: () => void;
-  onOpenDrawer: () => void;
-  drawerOpen: boolean;
-}) {
-  const live = streamState === "live";
+function ChatHeader({ title, onBack }: { title: string; onBack: () => void }) {
   return (
     <header className="top-bar chat-top-bar">
-      <button
-        type="button"
-        className="icon-btn"
-        aria-label="Open conversations"
-        aria-expanded={drawerOpen}
-        aria-controls="conv-drawer"
-        onClick={onOpenDrawer}
-      >
-        <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true">
-          <path d="M4 7h16M4 12h16M4 17h16" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
-        </svg>
-      </button>
       <button type="button" className="icon-btn" aria-label="Back to threads" onClick={onBack}>
         <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true">
           <path d="M15.5 4.5 8 12l7.5 7.5" stroke="currentColor" strokeWidth="2" fill="none" strokeLinecap="round" />
         </svg>
       </button>
-      <div className="chat-identity">
-        <span className="kelp-avatar small" aria-hidden="true">
-          <i />
-          <i />
-        </span>
-        <h1 className="chat-title">{title}</h1>
-      </div>
-      <span className={`connection ${live ? "online" : "offline"}`} role="status">
-        {live ? "Live" : streamState === "reconnecting" ? "Retrying" : "Connecting"}
-      </span>
+      <h1 className="chat-title">{title}</h1>
     </header>
   );
 }
