@@ -1,0 +1,807 @@
+/* e-fx.css — content pass.
+   Owns: the examples player’s finished controls, the “Kelp in action” video
+   placeholder, the comparison table, the desktop-pet identity, and the phone
+   section. Type, colour and pill language come from styles.css. */
+
+/* ---------- 1. Examples player ------------------------------------------- */
+
+/* The four dots share one indicator. It slides between their centres on a
+   transform, stretching mid-flight, so consecutive examples read as the dots
+   morphing into one another rather than as separate lights switching on. The
+   dot it lands on fades out underneath it. */
+.e-player .c-example-dots {
+  position: relative;
+}
+
+.e-player .c-example-dots button {
+  position: relative;
+  z-index: 1;
+  border-radius: 9999px;
+}
+
+.e-player .c-example-dots button > span {
+  transform: translateX(var(--pull, 0px));
+  transition:
+    opacity 0.28s var(--ease-out, ease),
+    transform 0.44s var(--ease-out, ease);
+}
+
+.e-player .c-example-dots [aria-pressed="true"] > span {
+  opacity: 0;
+}
+
+.e-player .c-example-pill {
+  position: absolute;
+  top: 50%;
+  left: 0;
+  z-index: 2;
+  width: 9px;
+  height: 9px;
+  margin: -4.5px 0 0 -4.5px;
+  border: 0;
+  pointer-events: none;
+  transform: translate3d(var(--pill-x, 22px), 0, 0);
+  transition: transform var(--pill-dur, 460ms) var(--ease-out, ease);
+}
+
+.e-player .c-example-pill::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: 9999px;
+  background: var(--strong);
+  transform: scaleX(2.6667); /* 24px capsule from a 9px base */
+  transform-origin: 50% 50%;
+}
+
+.e-player .c-example-pill.is-travelling::after {
+  animation: e-pill-morph var(--pill-dur, 460ms) var(--ease-out, ease);
+}
+
+@keyframes e-pill-morph {
+  0% {
+    transform: scaleX(2.6667); /* 24px capsule from a 9px base */
+  }
+  38% {
+    transform: scaleX(4.45); /* stretch at the midpoint of the flight */
+  }
+  100% {
+    transform: scaleX(2.6667); /* 24px capsule from a 9px base */
+  }
+}
+
+.e-player .c-example-pause {
+  min-width: 128px;
+}
+
+/* ---------- 2. “Kelp in action” video placeholder ------------------------ */
+
+.e-video {
+  margin: 0;
+  display: grid;
+  gap: 16px;
+}
+
+.e-video-frame {
+  position: relative;
+  aspect-ratio: 16 / 9;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 28px;
+  background: var(--canvas);
+  box-shadow: 0 18px 70px rgba(69, 67, 63, 0.055);
+  isolation: isolate;
+}
+
+.e-video-poster {
+  display: block;
+  width: 100%;
+  height: 100%;
+  /* The dither is square; the frame is 16:9, so cover the crop. */
+  object-fit: cover;
+}
+
+.e-play {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  display: grid;
+  place-items: center;
+  width: 76px;
+  height: 76px;
+  padding: 0;
+  transform: translate(-50%, -50%);
+  border: 1px solid rgba(255, 255, 255, 0.9);
+  border-radius: 9999px;
+  background: rgba(255, 255, 255, 0.78);
+  box-shadow: 0 10px 34px rgba(69, 67, 63, 0.12);
+  color: var(--strong);
+  cursor: pointer;
+  -webkit-appearance: none;
+  appearance: none;
+}
+
+.e-play:focus-visible {
+  outline: 2px solid var(--strong);
+  outline-offset: 3px;
+}
+
+/* The film itself: hidden until the play button asks for it, then it fills
+   the frame. `preload="none"` keeps the 16 MB file off the wire until then. */
+.e-video-player {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  border-radius: inherit;
+  background: #050506;
+  object-fit: contain;
+}
+
+.e-video-player[hidden] {
+  display: none;
+}
+
+.e-video-frame.is-playing .e-video-poster,
+.e-video-frame.is-playing .e-play {
+  display: none;
+}
+
+.e-play svg {
+  width: 26px;
+  height: 26px;
+  margin-left: 3px;
+  stroke-width: 1.4;
+}
+
+.e-video figcaption {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 4px 18px;
+  padding: 0 4px;
+}
+
+.e-video figcaption strong {
+  font: 400 21px/1.3 var(--serif);
+  letter-spacing: -0.02em;
+}
+
+.e-video figcaption span {
+  font-size: 14px;
+  color: var(--body);
+}
+
+/* Inert hooks for the retired prompt preview (see index.html). */
+.e-legacy-hooks[hidden] {
+  display: none;
+}
+
+/* ---------- 3. The pointer that aims at the examples player -------------- */
+
+/* It used to sit under the prompt demo, pointing down at it. The rotating
+   player is the thing to look at now, so the note lives under the player and
+   points back up at it. */
+.e-handwritten {
+  /* styles.css hides the old note below 1200px; the player is the thing to
+     look at, so it stays. */
+  display: block;
+  margin: 18px 0 0;
+  text-align: right;
+  transform: rotate(-5deg);
+}
+
+.e-handwritten span {
+  display: inline-block;
+  padding-left: 0;
+  margin-left: 10px;
+  font-size: 34px;
+  line-height: 0.9;
+  vertical-align: -0.14em;
+}
+
+/* ---------- 4. Comparison table ----------------------------------------- */
+
+.e-compare-wrap {
+  margin-top: 4px;
+}
+
+.e-compare {
+  width: 100%;
+  table-layout: fixed;
+  border-collapse: separate;
+  border-spacing: 0;
+}
+
+.e-compare th,
+.e-compare td {
+  text-align: left;
+  vertical-align: top;
+  padding: 20px 18px;
+  font-size: 16px;
+  font-weight: 400;
+  line-height: 1.55;
+  color: var(--body);
+}
+
+.e-compare thead th,
+.e-compare thead .e-compare-corner {
+  padding-bottom: 16px;
+  border-bottom: 1px solid var(--strong);
+}
+
+.e-compare thead th {
+  font: 400 clamp(22px, 1.75vw, 27px)/1.14 var(--serif);
+  letter-spacing: -0.02em;
+  color: var(--strong);
+}
+
+.e-compare thead th small {
+  display: block;
+  margin-top: 5px;
+  font: 400 14px/1.4 var(--sans);
+  letter-spacing: 0;
+  color: var(--body);
+}
+
+.e-compare .e-compare-corner,
+.e-compare tbody th {
+  width: 19%;
+}
+
+.e-compare tbody th {
+  font-size: 15px;
+  font-weight: 500;
+  color: var(--strong);
+}
+
+.e-compare tbody tr + tr th,
+.e-compare tbody tr + tr td {
+  border-top: 1px solid var(--line);
+}
+
+.e-compare .e-kelp-col {
+  background: rgba(214, 232, 216, 0.5);
+}
+
+.e-compare thead .e-kelp-col {
+  border-radius: 18px 18px 0 0;
+  background: var(--sage);
+}
+
+.e-compare tbody tr:last-child .e-kelp-col {
+  border-radius: 0 0 18px 18px;
+}
+
+/* Real text, shown only where the column headers are folded away. */
+.e-cell-label {
+  display: none;
+}
+
+@media (max-width: 900px) {
+  .e-compare,
+  .e-compare tbody,
+  .e-compare tr,
+  .e-compare th,
+  .e-compare td {
+    display: block;
+    width: auto;
+  }
+
+  .e-compare thead {
+    display: none;
+  }
+
+  .e-compare tbody tr {
+    padding: 20px 0;
+    border-top: 1px solid var(--line);
+  }
+
+  .e-compare tbody tr:first-child {
+    border-top: 0;
+    padding-top: 4px;
+  }
+
+  .e-compare tbody th {
+    width: auto;
+    padding: 0 0 12px;
+    border-top: 0;
+    font: 400 27px/1.15 var(--serif);
+    letter-spacing: -0.02em;
+  }
+
+  .e-compare td {
+    padding: 8px 0;
+    border-top: 0;
+  }
+
+  .e-compare td.e-kelp-col {
+    margin-top: 6px;
+    padding: 12px 14px;
+    border-radius: 16px;
+    background: rgba(214, 232, 216, 0.6);
+  }
+
+  .e-cell-label {
+    display: block;
+    margin-bottom: 2px;
+    font: 500 13px/1.4 var(--sans);
+    color: var(--body);
+  }
+}
+
+/* ---------- 5. Desktop pet — one orb, no labels -------------------------- */
+
+.c-companion-art {
+  border-bottom: 0;
+  min-height: 0;
+}
+
+.e-pet {
+  display: grid;
+  place-items: center;
+  width: 100%;
+}
+
+/* The orb holds two interchangeable faces in one box: the WebGL one the
+   script switches on, and a CSS face that is the still frame — for no WebGL,
+   for reduced motion, and for the moment a GL context is lost. The CSS face is
+   what ships in the markup, so a page without JavaScript still shows a face. */
+.e-orb {
+  position: relative;
+  display: grid;
+  place-items: center;
+  width: min(300px, 58vw);
+  aspect-ratio: 1;
+}
+
+.e-orb-canvas {
+  display: none;
+  width: 100%;
+  height: 100%;
+  filter: drop-shadow(0 26px 32px rgba(25, 24, 23, 0.18));
+}
+
+.e-orb--webgl .e-orb-canvas {
+  display: block;
+}
+
+.e-orb--webgl .e-orb-face {
+  display: none;
+}
+
+.e-orb-face {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12%;
+  width: 82%;
+  padding-bottom: 6%;
+  aspect-ratio: 1;
+  border-radius: 9999px;
+  /* One flat jade disc, no gradient: the same constant wash as the shader,
+     lifted 20% to match. Only the page shadow keeps it off the canvas. */
+  background: #57b486;
+  box-shadow: 0 24px 34px -18px rgba(25, 24, 23, 0.42);
+}
+
+.e-orb-eye {
+  /* Width first, then the aspect ratio: a percentage height against the flex
+     line would collapse to nothing. */
+  flex: 0 0 auto;
+  width: 19%;
+  aspect-ratio: 19 / 12;
+  border-radius: 9999px;
+  background: #101614;
+  box-shadow: inset 0 1px 0 rgba(251, 249, 245, 0.16);
+  animation: e-orb-blink 6.4s ease-in-out infinite;
+}
+
+.e-orb-eye + .e-orb-eye {
+  animation-delay: 40ms;
+}
+
+@keyframes e-orb-blink {
+  0%,
+  92%,
+  100% {
+    transform: scaleY(1);
+  }
+  95% {
+    transform: scaleY(0.12);
+  }
+  98% {
+    transform: scaleY(1);
+  }
+}
+
+/* ---------- 6. Phone ----------------------------------------------------- */
+
+.e-phone-section {
+  display: grid;
+  grid-template-columns: minmax(0, 1.15fr) minmax(0, 0.85fr);
+  align-items: center;
+  gap: 5%;
+  /* The spin turns on the Y axis; keep its overhang from adding a scrollbar
+     without clipping the frame's shadow vertically. */
+  overflow-x: clip;
+}
+
+.e-phone-copy h2 {
+  font-size: clamp(46px, 4.5vw, 68px);
+  letter-spacing: -0.045em;
+}
+
+.e-phone-copy > p {
+  max-width: 470px;
+  margin-top: 24px;
+  font-size: 17px;
+  color: var(--body);
+}
+
+.e-phone-copy > .e-phone-note {
+  margin-top: 14px;
+  font: italic 20px/1.5 var(--serif);
+  color: var(--strong);
+}
+
+.e-phone-copy .c-scope-note {
+  max-width: 470px;
+}
+
+.e-phone {
+  margin: 0;
+  display: grid;
+  justify-items: center;
+  gap: 16px;
+}
+
+/* iPhone X, in pure CSS: deep-black bezel, 54px corner radius, notch, side
+   keys, and a glass sheen over an ivory screen. 13px of padding is the bezel. */
+.phone-shell {
+  position: relative;
+  width: min(268px, 64vw);
+  aspect-ratio: 9 / 18.5;
+  padding: 13px;
+  border-radius: 54px;
+  background:
+    linear-gradient(150deg, #34343a 0%, #17171a 24%, #050506 58%, #101013 100%);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.24),
+    inset 0 0 0 1px rgba(0, 0, 0, 0.9),
+    0 0 0 1px rgba(25, 24, 23, 0.16),
+    0 36px 62px -26px rgba(25, 24, 23, 0.45),
+    0 14px 24px -16px rgba(25, 24, 23, 0.32);
+  transform-origin: 50% 50%;
+  isolation: isolate;
+}
+
+/* A hairline of light along the bezel's outer edge. */
+.phone-shell::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  box-shadow:
+    inset 0 0 0 1px rgba(255, 255, 255, 0.12),
+    inset 0 2px 1px -1px rgba(255, 255, 255, 0.22);
+  pointer-events: none;
+}
+
+.phone-screen {
+  position: relative;
+  height: 100%;
+  overflow: hidden;
+  border-radius: 41px;
+  background: var(--canvas);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.05);
+}
+
+.phone-notch {
+  position: absolute;
+  z-index: 2;
+  top: 0;
+  left: 50%;
+  width: 38%;
+  height: 22px;
+  transform: translateX(-50%);
+  border-radius: 0 0 14px 14px;
+  background: #050506;
+}
+
+/* The speaker slit, a hair lighter than the notch. */
+.phone-notch::after {
+  content: "";
+  position: absolute;
+  top: 9px;
+  left: 50%;
+  width: 26px;
+  height: 2px;
+  transform: translateX(-50%);
+  border-radius: 1px;
+  background: rgba(251, 249, 245, 0.16);
+}
+
+.phone-status {
+  position: absolute;
+  top: 0;
+  right: 0;
+  left: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  height: 30px;
+  padding: 0 17px;
+  font: 500 10px/1 var(--sans);
+  color: var(--strong);
+}
+
+.phone-time {
+  padding-top: 5px;
+  letter-spacing: 0.01em;
+}
+
+.phone-reception {
+  display: inline-flex;
+  align-items: flex-end;
+  gap: 2px;
+  padding-top: 5px;
+}
+
+.phone-reception i {
+  width: 2.5px;
+  border-radius: 1px;
+  background: var(--strong);
+}
+
+.phone-reception i:nth-child(1) {
+  height: 3px;
+}
+
+.phone-reception i:nth-child(2) {
+  height: 5px;
+}
+
+.phone-reception i:nth-child(3) {
+  height: 7px;
+}
+
+.phone-reception i:nth-child(4) {
+  height: 9px;
+}
+
+.phone-reception b {
+  position: relative;
+  width: 16px;
+  height: 8px;
+  margin-left: 5px;
+  border: 1px solid var(--strong);
+  border-radius: 2.5px;
+}
+
+.phone-reception b::before {
+  content: "";
+  position: absolute;
+  inset: 1.5px;
+  border-radius: 1.5px;
+  background: var(--strong);
+}
+
+/* Glass: one diagonal band of light, plus a soft sheen at the top corner. */
+.phone-screen::after {
+  content: "";
+  position: absolute;
+  right: -30%;
+  bottom: -8%;
+  left: -30%;
+  height: 62%;
+  border-radius: 50%;
+  background: radial-gradient(
+    closest-side,
+    rgba(214, 232, 216, 0.9),
+    rgba(214, 232, 216, 0) 72%
+  );
+  opacity: 0.85;
+  pointer-events: none;
+}
+
+.phone-glare {
+  position: absolute;
+  z-index: 1;
+  inset: 0;
+  border-radius: inherit;
+  background:
+    linear-gradient(
+      116deg,
+      rgba(255, 255, 255, 0.42) 0%,
+      rgba(255, 255, 255, 0.12) 17%,
+      rgba(255, 255, 255, 0) 34%,
+      rgba(255, 255, 255, 0) 62%,
+      rgba(255, 255, 255, 0.08) 84%,
+      rgba(255, 255, 255, 0.22) 100%
+    ),
+    radial-gradient(
+      120% 60% at 16% -10%,
+      rgba(255, 255, 255, 0.5),
+      transparent 58%
+    );
+  mix-blend-mode: screen;
+  pointer-events: none;
+}
+
+.phone-home {
+  position: absolute;
+  bottom: 10px;
+  left: 50%;
+  z-index: 2;
+  width: 34%;
+  height: 4px;
+  transform: translateX(-50%);
+  border-radius: 9999px;
+  background: rgba(25, 24, 23, 0.24);
+}
+
+.phone-key {
+  position: absolute;
+  width: 3px;
+  border-radius: 2px;
+  background: linear-gradient(180deg, #2b2b30, #0b0b0d 55%, #2b2b30);
+}
+
+.phone-key--silent {
+  top: 15.5%;
+  left: -2px;
+  height: 3.2%;
+  border-radius: 2px 0 0 2px;
+}
+
+.phone-key--volume-up {
+  top: 23%;
+  left: -2px;
+  height: 7.4%;
+  border-radius: 2px 0 0 2px;
+}
+
+.phone-key--volume-down {
+  top: 32.4%;
+  left: -2px;
+  height: 7.4%;
+  border-radius: 2px 0 0 2px;
+}
+
+.phone-key--power {
+  top: 25%;
+  right: -2px;
+  height: 10.5%;
+  border-radius: 0 2px 2px 0;
+}
+
+.e-phone figcaption {
+  font-size: 14px;
+  color: var(--body);
+}
+
+/* Scroll-linked 3D handset (g-phone.js): canvas takes the CSS shell's box. */
+.g-phone-canvas {
+  width: min(268px, 64vw);
+  aspect-ratio: 9 / 18.5;
+  display: block;
+}
+
+@media (max-width: 991px) {
+  .e-handwritten {
+    display: block;
+  }
+
+  .e-phone-section {
+    grid-template-columns: 1fr;
+    gap: 38px;
+  }
+}
+
+@media (max-width: 600px) {
+  .e-play {
+    width: 62px;
+    height: 62px;
+  }
+
+  .e-play svg {
+    width: 22px;
+    height: 22px;
+  }
+
+  .e-video figcaption strong {
+    font-size: 19px;
+  }
+
+  .e-handwritten {
+    display: block;
+    margin: 16px 0 0;
+    font-size: 22px;
+  }
+
+  /* Read the section title before the artwork when the two columns stack. */
+  .c-companion-copy {
+    order: -1;
+  }
+
+  .e-handwritten span {
+    font-size: 26px;
+  }
+
+  .e-phone-section {
+    padding-block: 60px;
+  }
+
+  .e-phone-copy h2 {
+    font-size: clamp(38px, 11.4vw, 52px);
+  }
+
+  .phone-shell {
+    width: min(232px, 62vw);
+    padding: 10px;
+    border-radius: 46px;
+  }
+
+  .g-phone-canvas {
+    width: min(232px, 62vw);
+  }
+
+  .phone-screen {
+    border-radius: 37px;
+  }
+
+  .phone-notch {
+    width: 40%;
+    height: 19px;
+  }
+
+  .phone-notch::after {
+    top: 8px;
+    width: 22px;
+  }
+
+  .phone-status {
+    height: 26px;
+    padding: 0 14px;
+  }
+
+  .phone-key {
+    width: 2.5px;
+  }
+
+  .phone-key--silent,
+  .phone-key--volume-up,
+  .phone-key--volume-down {
+    left: -2px;
+  }
+
+  .phone-key--power {
+    right: -2px;
+  }
+
+  .e-orb {
+    width: min(240px, 58vw);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .e-player .c-example-dots button > span,
+  .e-player .c-example-pill,
+  .e-player .c-example-pill::after,
+  .e-player .c-example-copy p {
+    transition: none;
+    animation: none;
+  }
+
+  /* One still frame: the CSS face, no shader, no spin. */
+  .phone-shell {
+    transform: none !important;
+    will-change: auto !important;
+  }
+
+  .e-orb-eye {
+    animation: none;
+  }
+}
