@@ -16,6 +16,7 @@ import threading
 import time
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from typing import Any, Awaitable, Callable, Mapping, Sequence
 
 from kernel import (
@@ -45,6 +46,7 @@ from .artifacts import (
     PREVIEW_ROWS_DEFAULT,
     ArtifactError,
     ArtifactRegistry,
+    tenant_workspace_root,
 )
 from .errors import ChatError
 from .logging import current_request_id, log
@@ -61,7 +63,6 @@ from .stream import EventBus
 from .tenancy import (
     OWNER_TENANT_ID,
     TenantContext,
-    TenantMismatchError,
     current_tenant,
     tenant_for,
 )
@@ -166,12 +167,10 @@ class _TurnState:
 class _ScopedArtifacts:
     """Tenant check in front of :class:`ArtifactRegistry`.
 
-    The registry is tenant-blind: its store lookups use the owner default and
-    its write path creates an owner row. This wrapper checks the caller's
-    tenant before delegating, so a handle from another tenant is the same
-    ``artifact_not_found`` as an unknown one. It also lets the existing router
-    modules (which call ``service.artifacts`` directly) stay unchanged: they get
-    the tenant bound by the API for the current request.
+    The registry now resolves storage per tenant; this wrapper keeps the
+    router-facing surface unchanged and makes a foreign handle the same
+    ``artifact_not_found`` as an unknown one. It also binds the request tenant
+    (or an explicit one) into every registry call.
     """
 
     def __init__(self, registry: ArtifactRegistry, store: ChatStore):
@@ -202,8 +201,10 @@ class _ScopedArtifacts:
         thread_id: str | None = None,
         tenant: TenantContext | str | None = None,
     ) -> dict[str, Any]:
-        self._owned(handle, tenant)
-        return self._registry.get(handle, thread_id=thread_id)
+        context = self._owned(handle, tenant)
+        return self._registry.get(
+            handle, thread_id=thread_id, tenant=context
+        )
 
     def card(
         self,
@@ -213,8 +214,10 @@ class _ScopedArtifacts:
         rows: int = PREVIEW_ROWS_DEFAULT,
         tenant: TenantContext | str | None = None,
     ) -> dict[str, Any]:
-        self._owned(handle, tenant)
-        return self._registry.card(handle, thread_id=thread_id, rows=rows)
+        context = self._owned(handle, tenant)
+        return self._registry.card(
+            handle, thread_id=thread_id, rows=rows, tenant=context
+        )
 
     def claim(
         self,
@@ -223,8 +226,8 @@ class _ScopedArtifacts:
         *,
         tenant: TenantContext | str | None = None,
     ) -> dict[str, Any]:
-        self._owned(handle, tenant)
-        return self._registry.claim(handle, thread_id)
+        context = self._owned(handle, tenant)
+        return self._registry.claim(handle, thread_id, tenant=context)
 
     def preview(
         self,
@@ -234,8 +237,10 @@ class _ScopedArtifacts:
         thread_id: str | None = None,
         tenant: TenantContext | str | None = None,
     ) -> dict[str, Any]:
-        self._owned(handle, tenant)
-        return self._registry.preview(handle, rows=rows, thread_id=thread_id)
+        context = self._owned(handle, tenant)
+        return self._registry.preview(
+            handle, rows=rows, thread_id=thread_id, tenant=context
+        )
 
     def content(
         self,
@@ -246,12 +251,13 @@ class _ScopedArtifacts:
         range_header: str | None = None,
         tenant: TenantContext | str | None = None,
     ) -> Any:
-        self._owned(handle, tenant)
+        context = self._owned(handle, tenant)
         return self._registry.content(
             handle,
             thread_id=thread_id,
             download=download,
             range_header=range_header,
+            tenant=context,
         )
 
     def save_upload(
@@ -262,11 +268,7 @@ class _ScopedArtifacts:
         tenant: TenantContext | str | None = None,
     ) -> dict[str, Any]:
         context = self._context(tenant)
-        if context.tenant_id != OWNER_TENANT_ID:
-            # The registry cannot write a non-owner row yet. Refusing before
-            # the write keeps the failure from leaving an unscoped upload.
-            raise TenantMismatchError()
-        return self._registry.save_upload(filename, data)
+        return self._registry.save_upload(filename, data, tenant=context)
 
 
 class ChatService:
@@ -1021,7 +1023,9 @@ class ChatService:
                 return
 
             approval_hook = self._approval_hook(state)
-            executor = self._make_executor(approval_hook, turn_id=turn_id)
+            executor = self._make_executor(
+                approval_hook, turn_id=turn_id, tenant=state.tenant
+            )
             loop = AgentLoop(
                 provider=self._provider,
                 config=self._config,
@@ -1100,15 +1104,40 @@ class ChatService:
             )
             self.bus.publish(state.thread_id)
 
-    def _make_executor(self, approval_hook: Any, *, turn_id: str | None = None) -> Any:
+    def _tenant_workspace(self, tenant_id: str) -> str | None:
+        """Tool file scope for one tenant; the owner keeps the configured root.
+
+        A non-owner tenant needs a workspace. The service's configured root is
+        preferred; otherwise the database's parent directory is the same
+        default layout the artifact registry already assumes.
+        """
+
+        if tenant_id == OWNER_TENANT_ID:
+            return self._workspace_root
+        base = self._workspace_root
+        if base is None:
+            store_path = getattr(self.store, "path", None)
+            if store_path is None:
+                return None
+            base = str(Path(store_path).parent.parent)
+        return str(tenant_workspace_root(base, tenant_id))
+
+    def _make_executor(
+        self,
+        approval_hook: Any,
+        *,
+        turn_id: str | None = None,
+        tenant: TenantContext | str | None = None,
+    ) -> Any:
         if self._tool_executor_factory is not None:
             return self._tool_executor_factory(approval_hook)
         if self._registry is not None:
+            context = self._ctx(tenant)
             return RegistryToolExecutor(
                 self._registry,
                 approval=approval_hook,
                 secrets=self._secrets,
-                workspace_root=self._workspace_root,
+                workspace_root=self._tenant_workspace(context.tenant_id),
                 # KEL-20: the registry writes one ``skill_invoked`` line per
                 # call, attributed to the turn that made it.
                 audit=self._audit,

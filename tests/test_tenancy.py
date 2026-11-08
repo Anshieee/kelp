@@ -665,8 +665,14 @@ def test_artifact_reads_are_scoped_to_the_bound_tenant(tmp_path: Path) -> None:
         acme = TenantContext(tenant_id="acme")
         with pytest.raises(ArtifactError):
             service.artifacts.card(meta["handle"], tenant=acme)
-        with pytest.raises(TenantMismatchError):
-            service.artifacts.save_upload("rows.csv", b"a,b\n1,2\n", tenant=acme)
+        # A non-owner tenant can upload, but the bytes and row are its own.
+        own = service.artifacts.save_upload(
+            "rows.csv", b"a,b\n1,2\n", tenant=acme
+        )
+        assert own["tenant_id"] == "acme"
+        assert service.artifacts.card(own["handle"], tenant=acme)["handle"] == own["handle"]
+        with pytest.raises(ArtifactError):
+            service.artifacts.card(own["handle"])
 
         _acme_thread(store)
         store.create_artifact(
@@ -685,6 +691,134 @@ def test_artifact_reads_are_scoped_to_the_bound_tenant(tmp_path: Path) -> None:
             service.artifacts.card("artifact:acmefile01")
     finally:
         store.close()
+
+
+# -- P2-3: per-tenant filesystem roots ------------------------------------
+
+
+def _tenant_service(
+    tmp_path: Path,
+) -> tuple[ChatService, ChatStore, Path]:
+    store = make_store(tmp_path)
+    workspace = tmp_path / "workspace"
+    service = ChatService(store=store, workspace_root=str(workspace))
+    return service, store, workspace
+
+
+def test_owner_artifacts_stay_at_the_legacy_root(tmp_path: Path) -> None:
+    service, store, workspace = _tenant_service(tmp_path)
+    try:
+        meta = service.artifacts.save_upload("rows.csv", b"a,b\n1,2\n")
+        assert meta["tenant_id"] == OWNER_TENANT_ID
+        # Legacy shape: a bare filename directly inside the configured root.
+        assert "/" not in meta["storage_path"]
+        legacy = service.artifacts.root / meta["storage_path"]
+        assert legacy.is_file()
+        assert legacy.parent == service.artifacts.root
+        assert not (workspace / "tenants").exists()
+    finally:
+        store.close()
+
+
+def test_non_owner_artifacts_live_under_the_tenant_root_and_stay_hidden(
+    tmp_path: Path,
+) -> None:
+    service, store, workspace = _tenant_service(tmp_path)
+    try:
+        acme = TenantContext(tenant_id="acme")
+        meta = service.artifacts.save_upload(
+            "rows.csv", b"a,b\n1,2\n", tenant=acme
+        )
+        assert meta["tenant_id"] == "acme"
+        filename = meta["storage_path"].rsplit("/", 1)[-1]
+        assert meta["storage_path"] == f"tenants/acme/{filename}"
+        tenant_file = (
+            workspace / "tenants" / "acme" / "var" / "artifacts" / filename
+        )
+        assert tenant_file.is_file()
+        assert not (service.artifacts.root / filename).exists()
+
+        assert (
+            service.artifacts.card(meta["handle"], tenant=acme)["handle"]
+            == meta["handle"]
+        )
+        assert (
+            service.artifacts.content(meta["handle"], tenant=acme).status == 200
+        )
+        with pytest.raises(ArtifactError):
+            service.artifacts.card(meta["handle"])
+        with pytest.raises(ArtifactError):
+            service.artifacts.card(
+                meta["handle"], tenant=TenantContext(tenant_id="globex")
+            )
+    finally:
+        store.close()
+
+
+def test_artifact_tenant_paths_reject_evil_slugs_and_traversal(
+    tmp_path: Path,
+) -> None:
+    service, store, workspace = _tenant_service(tmp_path)
+    try:
+        for evil in ("../acme", "acme/../owner", "Owner", "acme_1", "..", ""):
+            with pytest.raises(TenantIdError):
+                service.artifacts.save_upload(
+                    "rows.csv", b"a,b\n1,2\n", tenant=evil
+                )
+
+        acme = TenantContext(tenant_id="acme")
+        forged_paths = (
+            "tenants/../escape.csv",
+            "tenants/acme/../../escape.csv",
+            "tenants/acme/nested/data.csv",
+            "acme.pdf",  # an owner-shaped path on a tenant row
+        )
+        for index, storage_path in enumerate(forged_paths):
+            handle = f"artifact:forged{index:04d}"
+            store.create_artifact(
+                {
+                    "handle": handle,
+                    "name": "forged.csv",
+                    "kind": "csv",
+                    "mime": "text/csv; charset=utf-8",
+                    "size_bytes": 1,
+                    "sha256": "abc",
+                    "storage_path": storage_path,
+                },
+                tenant_id="acme",
+            )
+            with pytest.raises(ArtifactError):
+                service.artifacts.get(handle, tenant=acme)
+
+        # Nothing escaped into the workspace or the owner root.
+        assert not (workspace / "escape.csv").exists()
+        assert not (workspace / "acme.pdf").exists()
+    finally:
+        store.close()
+
+
+def test_schedule_roots_are_per_tenant_while_owner_stays_legacy(
+    tmp_path: Path,
+) -> None:
+    from chat.scheduler import ScheduleStore
+
+    workspace = tmp_path / "workspace"
+    owner = ScheduleStore(workspace)
+    assert owner.root == workspace / "var" / "scheduler"
+
+    acme = ScheduleStore(workspace, tenant_id="acme")
+    assert acme.root == workspace / "tenants" / "acme" / "var" / "scheduler"
+    task = acme.create_task(
+        title="tenant task",
+        prompt="p",
+        expr="* * * * *",
+        timezone="UTC",
+    )
+    assert (acme.root / f"{task['task_id']}.json").is_file()
+    assert not owner.root.exists()
+
+    with pytest.raises(TenantIdError):
+        ScheduleStore(workspace, tenant_id="../acme")
 
 
 # -- P2-2: API gate --------------------------------------------------------

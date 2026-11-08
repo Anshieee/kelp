@@ -73,6 +73,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from openshell.audit import AuditLog
 
 from .logging import log
+from .tenancy import OWNER_TENANT_ID, validate_tenant_id
 
 __all__ = [
     "Cron",
@@ -814,16 +815,28 @@ class ScheduleStore:
     ``task_<id>.json`` is the only document that may define ``<id>``. The store
     never rewrites a file it did not just write, and it never follows a
     ``task_id`` containing a path separator.
+
+    Scheduling is per tenant (P2-3). ``owner`` keeps ``var/scheduler`` exactly
+    where it always was; any other tenant gets
+    ``<workspace>/tenants/<tenant>/var/scheduler``. The tenant id is validated
+    before it becomes a path segment.
     """
 
     def __init__(
         self,
         workspace_root: str | Path,
         *,
+        tenant_id: str = OWNER_TENANT_ID,
         now: Callable[[], datetime] | None = None,
         max_tasks: int | None = None,
     ):
-        self.workspace_root = Path(workspace_root)
+        self.tenant_id = validate_tenant_id(tenant_id)
+        base = Path(workspace_root)
+        self.workspace_root = (
+            base
+            if self.tenant_id == OWNER_TENANT_ID
+            else base / "tenants" / self.tenant_id
+        )
         self.root = self.workspace_root / "var" / "scheduler"
         self.max_tasks = _env_int(MAX_TASKS_ENV, DEFAULT_MAX_TASKS, minimum=1) if max_tasks is None else max_tasks
         self._now = now or utc_now
@@ -1476,12 +1489,15 @@ def _tick_lock(root: Path) -> Iterator[bool]:
 def load_tasks(
     workspace_root: str | Path,
     *,
+    tenant_id: str = OWNER_TENANT_ID,
     now: datetime | None = None,
     max_tasks: int | None = None,
 ) -> list[dict[str, Any]]:
     """Convenience wrapper for a one-shot, validated scan (boot or tests)."""
 
-    store = ScheduleStore(workspace_root, max_tasks=max_tasks)
+    store = ScheduleStore(
+        workspace_root, tenant_id=tenant_id, max_tasks=max_tasks
+    )
     return store.load_tasks(now=now)
 
 
@@ -1496,13 +1512,16 @@ def create_task(
     start_at: Any = None,
     end_at: Any = None,
     created_by: str = "agent",
+    tenant_id: str = OWNER_TENANT_ID,
     now: datetime | None = None,
     audit: AuditLog | None = None,
     max_tasks: int | None = None,
 ) -> dict[str, Any]:
     """Convenience wrapper around :meth:`ScheduleStore.create_task`."""
 
-    store = ScheduleStore(workspace_root, max_tasks=max_tasks)
+    store = ScheduleStore(
+        workspace_root, tenant_id=tenant_id, max_tasks=max_tasks
+    )
     return store.create_task(
         title=title,
         prompt=prompt,

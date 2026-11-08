@@ -4,6 +4,13 @@ Uploads are validated by magic/UTF-8, stored under opaque ids inside
 ``var/artifacts``, and resolved by registry lookup only. User-supplied names
 never become paths, so traversal cannot be expressed. Access is scoped to the
 thread that claimed the upload.
+
+Storage roots are per tenant (P2-3). ``owner`` keeps the deployment's original
+``var/artifacts`` directory and bare ``storage_path`` values, so every existing
+file stays exactly where it is. Any other tenant stores bytes under
+``<workspace>/tenants/<tenant>/var/artifacts`` and its rows carry a qualified
+``tenants/<tenant>/<file>`` path. The tenant id is always a validated slug, and
+a row whose tenant and path disagree is treated as missing rather than trusted.
 """
 
 from __future__ import annotations
@@ -22,6 +29,7 @@ from typing import Any, Mapping, Sequence
 
 from .cards import artifact_card
 from .store import ChatStore, iso_now
+from .tenancy import OWNER_TENANT_ID, is_valid_tenant_id, tenant_for, validate_tenant_id
 
 __all__ = [
     "ArtifactError",
@@ -30,6 +38,7 @@ __all__ = [
     "HANDLE_RE",
     "MAX_UPLOAD_BYTES",
     "sanitize_filename",
+    "tenant_workspace_root",
 ]
 
 HANDLE_RE = re.compile(r"^artifact:[A-Za-z0-9_-]{8,128}$")
@@ -80,6 +89,24 @@ def sanitize_filename(name: str, *, fallback: str = "download") -> str:
 def _split_extension(name: str) -> str:
     suffix = Path(name).suffix.lower().lstrip(".")
     return suffix if suffix in {"pdf", "csv"} else ""
+
+
+def tenant_workspace_root(
+    workspace_root: str | Path, tenant_id: str = OWNER_TENANT_ID
+) -> Path:
+    """The mutable workspace for one tenant.
+
+    ``owner`` keeps the deployment's original root unchanged. Every other
+    tenant gets ``<workspace>/tenants/<tenant>``; a caller creates whatever
+    subdirectory it needs on demand. The id is validated first, so a tenant
+    cannot contribute a path segment that escapes the workspace.
+    """
+
+    base = Path(workspace_root)
+    tid = validate_tenant_id(tenant_id)
+    if tid == OWNER_TENANT_ID:
+        return base
+    return base / "tenants" / tid
 
 
 def _count_pdf_pages(data: bytes) -> int | None:
@@ -154,13 +181,99 @@ class ArtifactRegistry:
 
         if self._workspace_root is not None:
             return self._workspace_root
-        if self._root.name == "artifacts" and self._root.parent.name == "var":
-            return self._root.parent.parent
+        if self._root.name == "artifacts":
+            parent = self._root.parent
+            return parent.parent if parent.name == "var" else parent
         return None
+
+    # -- tenant roots ------------------------------------------------------
+
+    @staticmethod
+    def _tenant(tenant: Any | None) -> str:
+        """Validate a tenant argument (or the request-bound one) as a slug."""
+
+        return tenant_for(tenant).tenant_id
+
+    def _workspace_for(self, tenant_id: str) -> Path | None:
+        """The workspace that owns ``tenant_id``'s derived files, or ``None``."""
+
+        if not is_valid_tenant_id(tenant_id):
+            return None
+        if tenant_id == OWNER_TENANT_ID:
+            return self._workspace()
+        workspace = self._workspace()
+        if workspace is None:
+            return None
+        return tenant_workspace_root(workspace, tenant_id)
+
+    def _root_for(self, tenant_id: str, *, create: bool = True) -> Path:
+        """The artifact directory for one tenant, created on demand.
+
+        The owner returns the configured root untouched. A non-owner tenant
+        needs a known workspace; without one the registry fails closed instead
+        of falling back to the shared directory.
+        """
+
+        tid = validate_tenant_id(tenant_id)
+        if tid == OWNER_TENANT_ID:
+            return self._root
+        workspace = self._workspace()
+        if workspace is None:
+            raise ArtifactError(
+                "storage_unavailable",
+                "Tenant storage is not configured.",
+                status=500,
+            )
+        base = tenant_workspace_root(workspace, tid)
+        root = base / "var" / "artifacts"
+        if create:
+            root.mkdir(parents=True, exist_ok=True)
+            for directory in (base, base / "var", root):
+                try:
+                    os.chmod(directory, 0o700)
+                except OSError:  # pragma: no cover - platform dependent
+                    pass
+        return root
+
+    @staticmethod
+    def _storage_path_for(tenant_id: str, storage_name: str) -> str:
+        """Owner rows keep the bare filename; tenants are path-qualified."""
+
+        if tenant_id == OWNER_TENANT_ID:
+            return storage_name
+        return f"tenants/{tenant_id}/{storage_name}"
+
+    @staticmethod
+    def _parse_storage_path(raw_value: Any) -> tuple[str, str] | None:
+        """Return ``(tenant_id, filename)`` or ``None`` for an unsafe value.
+
+        A bare filename is the legacy owner layout. A qualified value must be
+        exactly ``tenants/<valid-slug>/<filename>``; anything else (traversal,
+        an extra segment, a foreign prefix) is unusable and treated as missing.
+        """
+
+        raw = str(raw_value or "")
+        if not raw or "\x00" in raw or "\\" in raw:
+            return None
+        if raw.startswith("tenants/"):
+            parts = raw.split("/")
+            if len(parts) != 3:
+                return None
+            _, tenant_id, filename = parts
+            if not is_valid_tenant_id(tenant_id):
+                return None
+            if not filename or filename in {".", ".."} or "/" in filename:
+                return None
+            return str(tenant_id), filename
+        if "/" in raw or raw in {".", ".."}:
+            return None
+        return OWNER_TENANT_ID, raw
 
     # -- upload ------------------------------------------------------------
 
-    def save_upload(self, filename: str, data: bytes) -> dict[str, Any]:
+    def save_upload(
+        self, filename: str, data: bytes, *, tenant: Any | None = None
+    ) -> dict[str, Any]:
         if not data:
             raise ArtifactError("empty_file", "The uploaded file is empty.", status=400)
         if len(data) > MAX_UPLOAD_BYTES:
@@ -169,12 +282,14 @@ class ArtifactRegistry:
                 f"The file is larger than {MAX_UPLOAD_BYTES // (1024 * 1024)} MB.",
                 status=413,
             )
+        tenant_id = self._tenant(tenant)
+        root = self._root_for(tenant_id)
         display = sanitize_filename(filename, fallback="upload")
         kind = self._detect_kind(display, data)
         token = secrets.token_urlsafe(12)
         handle = f"artifact:{token}"
         storage_name = f"{token}.{kind}"
-        path = self._root / storage_name
+        path = root / storage_name
         if path.exists():  # pragma: no cover - 96 bits of collision space
             raise ArtifactError("conflict", "Could not allocate storage.", status=500)
         digest = hashlib.sha256(data).hexdigest()
@@ -203,11 +318,12 @@ class ArtifactRegistry:
                 "mime": _CONTENT_TYPES[kind],
                 "size_bytes": len(data),
                 "sha256": digest,
-                "storage_path": storage_name,
+                "storage_path": self._storage_path_for(tenant_id, storage_name),
                 "created_at": self._now(),
                 "pages": pages,
                 "rows": rows,
-            }
+            },
+            tenant_id=tenant_id,
         )
         if columns:
             meta["columns"] = columns
@@ -240,57 +356,77 @@ class ArtifactRegistry:
     # -- lookup ------------------------------------------------------------
 
     def get(
-        self, handle: str, *, thread_id: str | None = None
+        self,
+        handle: str,
+        *,
+        thread_id: str | None = None,
+        tenant: Any | None = None,
     ) -> dict[str, Any]:
-        """Resolve a handle, enforcing thread scope for bound artifacts.
+        """Resolve a handle, enforcing thread and tenant scope.
 
         An unbound upload (``thread_id IS NULL``, before it is attached to a
         turn) is readable so the composer can preview it. Once a turn has
         claimed it, the same thread must be supplied: a bound handle without a
         matching ``thread_id`` is indistinguishable from an unknown one, so a
-        guessed handle cannot be read from another thread.
+        guessed handle cannot be read from another thread. A handle from
+        another tenant never matches at all.
         """
 
-        meta = self._lookup(handle)
+        tenant_id = self._tenant(tenant)
+        meta = self._lookup(handle, tenant_id=tenant_id)
         owner = meta.get("thread_id")
         if owner is not None:
             if owner != thread_id:
                 raise ArtifactError("artifact_not_found", "That file isn't available any more.")
-            if self._store.get_thread(owner) is None:
+            if self._store.get_thread(owner, tenant_id=tenant_id) is None:
                 raise ArtifactError("artifact_not_found", "That file isn't available any more.")
-        self._resolve_path(meta)
+        self._resolve_path(meta, tenant_id=tenant_id)
         return meta
 
-    def _lookup(self, handle: str) -> dict[str, Any]:
-        """Unscoped store lookup for internal flows (claim, upload card)."""
+    def _lookup(
+        self, handle: str, *, tenant_id: str = OWNER_TENANT_ID
+    ) -> dict[str, Any]:
+        """Scoped store lookup for internal flows (claim, upload card)."""
 
         if not isinstance(handle, str) or not HANDLE_RE.match(handle):
             raise ArtifactError("artifact_not_found", "That file isn't available any more.")
-        meta = self._store.get_artifact(handle)
+        meta = self._store.get_artifact(handle, tenant_id=validate_tenant_id(tenant_id))
         if meta is None:
             raise ArtifactError("artifact_not_found", "That file isn't available any more.")
         return meta
 
     def card(
-        self, handle: str, *, thread_id: str | None = None, rows: int = PREVIEW_ROWS_DEFAULT
+        self,
+        handle: str,
+        *,
+        thread_id: str | None = None,
+        rows: int = PREVIEW_ROWS_DEFAULT,
+        tenant: Any | None = None,
     ) -> dict[str, Any]:
-        meta = self.get(handle, thread_id=thread_id)
+        meta = self.get(handle, thread_id=thread_id, tenant=tenant)
         if meta["kind"] == "csv":
             try:
-                preview = self.preview(handle, rows=rows, thread_id=thread_id)
+                preview = self.preview(
+                    handle, rows=rows, thread_id=thread_id, tenant=tenant
+                )
                 meta = dict(meta)
                 meta["table"] = preview
             except ArtifactError:
                 pass
         return artifact_card(meta)
 
-    def claim(self, handle: str, thread_id: str) -> dict[str, Any]:
+    def claim(
+        self, handle: str, thread_id: str, *, tenant: Any | None = None
+    ) -> dict[str, Any]:
         """Bind an uploaded artifact to the turn's thread exactly once."""
 
-        existing = self._lookup(handle)
+        tenant_id = self._tenant(tenant)
+        existing = self._lookup(handle, tenant_id=tenant_id)
         if existing.get("thread_id") is None:
-            if not self._store.bind_artifact(handle, thread_id):
-                existing = self._lookup(handle)
+            if not self._store.bind_artifact(
+                handle, thread_id, tenant_id=tenant_id
+            ):
+                existing = self._lookup(handle, tenant_id=tenant_id)
                 if existing.get("thread_id") != thread_id:
                     raise ArtifactError(
                         "artifact_not_found", "That file isn't available any more."
@@ -299,7 +435,7 @@ class ArtifactRegistry:
             raise ArtifactError(
                 "artifact_not_found", "That file isn't available any more."
             )
-        return self.get(handle, thread_id=thread_id)
+        return self.get(handle, thread_id=thread_id, tenant=tenant)
 
     # -- deletion ----------------------------------------------------------
 
@@ -317,9 +453,9 @@ class ArtifactRegistry:
         files_missing = 0
         indexes_removed = 0
         errors = 0
-        workspace = self._workspace()
         for meta in artifacts:
-            path = self._storage_path_for_unlink(meta.get("storage_path"))
+            tenant_id = str(meta.get("tenant_id") or OWNER_TENANT_ID)
+            path = self._storage_path_for_unlink(meta, tenant_id=tenant_id)
             if path is None:
                 errors += 1
             else:
@@ -331,6 +467,7 @@ class ArtifactRegistry:
                 except OSError:
                     errors += 1
             handle = meta.get("handle")
+            workspace = self._workspace_for(tenant_id)
             if workspace is not None and isinstance(handle, str):
                 try:
                     if _remove_index(workspace, handle):
@@ -381,40 +518,53 @@ class ArtifactRegistry:
 
         # Files that never got a registry row (crash between write and insert,
         # or a delete interrupted after the row went). Only age-eligible ones
-        # are candidates; a symlink is unlinked, never followed.
-        referenced = self._store.artifact_storage_paths()
+        # are candidates; a symlink is unlinked, never followed. Sweep every
+        # storage root: the owner directory and each existing tenant directory.
+        referenced: dict[str, set[str]] = {}
+        for raw_path in self._store.artifact_storage_paths():
+            parsed = self._parse_storage_path(raw_path)
+            if parsed is None:
+                continue
+            path_tenant, filename = parsed
+            referenced.setdefault(path_tenant, set()).add(filename)
         orphan_files = 0
-        try:
-            entries = list(self._root.iterdir())
-        except OSError:
-            entries = []
-        for entry in entries:
-            if entry.name in referenced:
-                continue
+        roots = self._storage_roots()
+        for root_tenant, root in roots:
             try:
-                if entry.is_dir() and not entry.is_symlink():
-                    continue
-                if entry.stat(follow_symlinks=False).st_mtime >= cutoff_ts:
-                    continue
-                entry.unlink()
+                entries = list(root.iterdir())
             except OSError:
-                purged["errors"] += 1
-                continue
-            orphan_files += 1
-            token = entry.name.split(".", 1)[0]
-            workspace = self._workspace()
-            if workspace is not None and _STORAGE_TOKEN_RE.fullmatch(token):
+                entries = []
+            for entry in entries:
+                if entry.name in referenced.get(root_tenant, set()):
+                    continue
                 try:
-                    if _remove_index(workspace, f"artifact:{token}"):
-                        purged["indexes_removed"] += 1
-                except (OSError, ValueError):
+                    if entry.is_dir() and not entry.is_symlink():
+                        continue
+                    if entry.stat(follow_symlinks=False).st_mtime >= cutoff_ts:
+                        continue
+                    entry.unlink()
+                except OSError:
                     purged["errors"] += 1
+                    continue
+                orphan_files += 1
+                token = entry.name.split(".", 1)[0]
+                workspace = self._workspace_for(root_tenant)
+                if workspace is not None and _STORAGE_TOKEN_RE.fullmatch(token):
+                    try:
+                        if _remove_index(workspace, f"artifact:{token}"):
+                            purged["indexes_removed"] += 1
+                    except (OSError, ValueError):
+                        purged["errors"] += 1
 
         # Index directories whose artifact row is already gone. This catches a
         # crash between the registry delete and eager remove_index.
         orphan_indexes = 0
-        workspace = self._workspace()
-        if workspace is not None:
+        workspaces: list[Path] = []
+        for root_tenant, _root in roots:
+            workspace = self._workspace_for(root_tenant)
+            if workspace is not None and workspace not in workspaces:
+                workspaces.append(workspace)
+        for workspace in workspaces:
             live = self._store.artifact_handles()
             live_tokens = {
                 handle.split(":", 1)[1]
@@ -460,9 +610,11 @@ class ArtifactRegistry:
         thread_id: str | None = None,
         download: bool = False,
         range_header: str | None = None,
+        tenant: Any | None = None,
     ) -> ContentResult:
-        meta = self.get(handle, thread_id=thread_id)
-        path = self._resolve_path(meta)
+        tenant_id = self._tenant(tenant)
+        meta = self.get(handle, thread_id=thread_id, tenant=tenant_id)
+        path = self._resolve_path(meta, tenant_id=tenant_id)
         data = path.read_bytes()
         total = len(data)
         filename = sanitize_filename(meta["name"])
@@ -500,15 +652,21 @@ class ArtifactRegistry:
     # -- preview -----------------------------------------------------------
 
     def preview(
-        self, handle: str, *, rows: int = PREVIEW_ROWS_DEFAULT, thread_id: str | None = None
+        self,
+        handle: str,
+        *,
+        rows: int = PREVIEW_ROWS_DEFAULT,
+        thread_id: str | None = None,
+        tenant: Any | None = None,
     ) -> dict[str, Any]:
-        meta = self.get(handle, thread_id=thread_id)
+        tenant_id = self._tenant(tenant)
+        meta = self.get(handle, thread_id=thread_id, tenant=tenant_id)
         if meta["kind"] != "csv":
             raise ArtifactError(
                 "preview_unavailable", "Previews are only available for CSV files.", status=415
             )
         limit = max(1, min(int(rows or PREVIEW_ROWS_DEFAULT), PREVIEW_ROWS_MAX))
-        path = self._resolve_path(meta)
+        path = self._resolve_path(meta, tenant_id=tenant_id)
         header, body, total = _parse_csv(path.read_bytes())
         shown = body[:limit]
         return {
@@ -521,19 +679,63 @@ class ArtifactRegistry:
 
     # -- internals ---------------------------------------------------------
 
-    def _storage_path_for_unlink(self, raw_value: Any) -> Path | None:
-        """A direct child of the artifact root, or ``None`` when unusable.
+    def _storage_roots(self) -> list[tuple[str, Path]]:
+        """Existing artifact roots: the owner directory plus tenant dirs.
 
-        Deletion accepts a missing file (idempotent second delete) but never a
-        path with separators, a directory, or anything outside the root. A
-        symlink is returned so the link itself is removed, not its target.
+        Only directories that already exist are returned, and a tenant name is
+        used only when it is a valid slug and not a symlink. That keeps the
+        sweep from creating anything or following a redirected path.
         """
 
-        raw = str(raw_value or "")
-        if not raw or "/" in raw or "\\" in raw or raw in {".", ".."}:
+        roots: list[tuple[str, Path]] = [(OWNER_TENANT_ID, self._root)]
+        workspace = self._workspace()
+        if workspace is None:
+            return roots
+        tenants_dir = workspace / "tenants"
+        try:
+            entries = list(tenants_dir.iterdir())
+        except OSError:
+            entries = []
+        for entry in entries:
+            if not is_valid_tenant_id(entry.name) or entry.name == OWNER_TENANT_ID:
+                continue
+            try:
+                if entry.is_symlink() or not entry.is_dir():
+                    continue
+            except OSError:
+                continue
+            root = entry / "var" / "artifacts"
+            try:
+                if root.is_dir() and not root.is_symlink():
+                    roots.append((entry.name, root))
+            except OSError:
+                continue
+        return roots
+
+    def _storage_path_for_unlink(
+        self, meta: Mapping[str, Any], *, tenant_id: str
+    ) -> Path | None:
+        """A direct child of the owning tenant's artifact root, or ``None``.
+
+        Deletion accepts a missing file (idempotent second delete) but never a
+        path with separators beyond the tenant qualifier, a directory, a
+        tenant-qualified path that disagrees with the row's tenant, or anything
+        outside the root. A symlink is returned so the link itself is removed,
+        not its target.
+        """
+
+        parsed = self._parse_storage_path(meta.get("storage_path"))
+        if parsed is None:
             return None
-        path = self._root / raw
-        if path.parent != self._root:
+        path_tenant, filename = parsed
+        if path_tenant != tenant_id:
+            return None
+        try:
+            root = self._root_for(path_tenant, create=False)
+        except ArtifactError:
+            return None
+        path = root / filename
+        if path.parent != root:
             return None
         try:
             if path.is_dir() and not path.is_symlink():
@@ -542,21 +744,35 @@ class ArtifactRegistry:
             return None
         return path
 
-    def _resolve_path(self, meta: Mapping[str, Any]) -> Path:
-        raw = str(meta.get("storage_path") or "")
-        if not raw or "/" in raw or "\\" in raw or raw in {".", ".."}:
+    def _resolve_path(
+        self, meta: Mapping[str, Any], *, tenant_id: str | None = None
+    ) -> Path:
+        parsed = self._parse_storage_path(meta.get("storage_path"))
+        if parsed is None:
             raise ArtifactError("artifact_not_found", "That file isn't available any more.")
-        path = self._root / raw
+        path_tenant, filename = parsed
+        row_tenant = str(meta.get("tenant_id") or OWNER_TENANT_ID)
+        if path_tenant != row_tenant:
+            raise ArtifactError("artifact_not_found", "That file isn't available any more.")
+        if tenant_id is not None and path_tenant != tenant_id:
+            raise ArtifactError("artifact_not_found", "That file isn't available any more.")
+        try:
+            root = self._root_for(path_tenant, create=False)
+        except ArtifactError:
+            raise ArtifactError(
+                "artifact_not_found", "That file isn't available any more."
+            ) from None
+        path = root / filename
         if path.is_symlink():
             raise ArtifactError("artifact_not_found", "That file isn't available any more.")
         try:
             resolved = path.resolve(strict=True)
-            root = self._root.resolve(strict=True)
+            root_resolved = root.resolve(strict=True)
         except (OSError, RuntimeError):
             raise ArtifactError(
                 "artifact_not_found", "That file isn't available any more."
             ) from None
-        if not resolved.is_relative_to(root):
+        if not resolved.is_relative_to(root_resolved):
             raise ArtifactError("artifact_not_found", "That file isn't available any more.")
         if not resolved.is_file():
             raise ArtifactError("artifact_not_found", "That file isn't available any more.")
