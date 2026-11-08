@@ -244,15 +244,18 @@ class ServerConfig:
         except ValueError as exc:
             raise ConfigError("invalid_credential_config", str(exc)) from None
 
-        api_key = _text(source, API_KEY_ENV)
-        if not api_key:
+        try:
+            kernel = KernelConfig.from_env(source)
+        except ValueError as exc:
+            raise ConfigError("invalid_config", str(exc)) from None
+
+        if not kernel.api_key:
             raise ConfigError(
                 "missing_api_key",
                 f"{API_KEY_ENV} is required; the server will not start without it.",
             )
 
-        base_url = _text(source, BASE_URL_ENV)
-        if not base_url:
+        if not kernel.base_url:
             raise ConfigError(
                 "missing_base_url",
                 f"{BASE_URL_ENV} is required; the server will not start without "
@@ -273,7 +276,6 @@ class ServerConfig:
             raise ConfigError("invalid_config", f"{HOST_ENV} must be a hostname or IP.")
 
         port = _parse_port(_text(source, PORT_ENV))
-        kernel = KernelConfig.from_env(source)
         try:
             spend_caps = SpendCaps.from_env(source)
         except ValueError as exc:
@@ -608,7 +610,17 @@ def build_app(
         # client and every skill's egress client.
         egress = EgressLedger(audit)
         if runtime_provider is None:
-            runtime_provider = build_provider(config.kernel, factory=ProviderClient)
+            # The service config is authoritative: pass its key, environ, and
+            # tenant explicitly so build_provider never has to guess from the
+            # process environment. ``factory`` keeps the module-level
+            # ``ProviderClient`` seam a one-argument callable.
+            runtime_provider = build_provider(
+                config.kernel,
+                factory=ProviderClient,
+                api_key=config.kernel.api_key,
+                environ=source,
+                tenant_id=config.kernel.tenant_id,
+            )
             # Attach after construction on purpose: ``ProviderClient(config)``
             # stays a one-argument call, which the serve harness relies on.
             try:

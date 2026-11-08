@@ -130,6 +130,7 @@ baked into the image; the process refuses to start without all three, exit `2`.
 
 | Variable | Required | Default in image | Secret | What it does |
 |---|---|---|---|---|
+| `KELP_PROVIDER` | no | `openai-compatible` | no | Provider id used in records and admin rows. The wire protocol is OpenAI-compatible; a second provider changes this id and the endpoint, not the code |
 | `KELP_PROVIDER_API_KEY` | **yes** | — | **yes** | Model provider key, server-side only |
 | `KELP_AUTH_TOKEN` | **yes** | — | **yes** | Root owner bearer token for every `/api/*` call except `/api/healthz`; also the credential that mints a browser session |
 | `KELP_CSRF_TOKEN` | no | unset | **yes** | Static header token for **bearer** mutations. Session cookies use a per-session double-submit pair instead (§11.1) |
@@ -141,9 +142,10 @@ baked into the image; the process refuses to start without all three, exit `2`.
 | `KELP_AUTH_LOCKOUT_SECONDS` | no | `300` | no | Lockout duration; emitted as `Retry-After` |
 | `KELP_AUTH_FAILURE_IDLE_SECONDS` | no | `300` | no | Idle-out for an auth-failure record |
 | `KELP_AUTH_FAILURE_MAX_KEYS` | no | `4096` | no | Bound on the hashed auth-failure map |
-| `KELP_PROVIDER_BASE_URL` | **yes** | — | no | OpenAI-compatible provider endpoint, e.g. `https://openrouter.ai/api/v1` |
-| `KELP_PRIMARY_MODEL` | no | `nvidia/nemotron-3.5-super-vl` | no | Conversational model |
-| `KELP_BACKGROUND_MODEL` | no | `nvidia/nemotron-3.5-lightning` | no | Titles, summaries, compaction |
+| `KELP_PROVIDER_BASE_URL` | **yes** | — | no | OpenAI-compatible provider endpoint, e.g. `https://openrouter.ai/api/v1`. No vendor host is baked in: empty is a typed `missing_base_url`, never a default request |
+| `KELP_PRIMARY_MODEL` | no | example: `nvidia/nemotron-3.5-super-vl` | no | Conversational model; the id is provider-specific |
+| `KELP_BACKGROUND_MODEL` | no | example: `nvidia/nemotron-3.5-lightning` | no | Titles, summaries, compaction; the id is provider-specific |
+| `KELP_PRICING_JSON` | no | example rows in `kernel/providers/presets.py` | no | Optional USD-per-million price overrides, merged over the example table. An unpriced model keeps cost unknown and fails closed under a spend cap |
 | `KELP_HOST` | no | `0.0.0.0` | no | Bind address inside the container |
 | `KELP_PORT` | no | `8765` | no | Bind port |
 | `KELP_DB_PATH` | no | `/data/chat.db` | no | SQLite database |
@@ -189,6 +191,14 @@ baked into the image; the process refuses to start without all three, exit `2`.
 | `KELP_SHARE_MAX_TTL_SECONDS` | no | `2592000` | no | Hard ceiling for a requested TTL (30 days); minimum `60` |
 | `KELP_SHARE_MAX_SNAPSHOT_BYTES` | no | `4194304` | no | Share snapshot cap; a larger thread is refused, not truncated; minimum `1024` |
 | `KELP_VERSION` / `KELP_GIT_COMMIT` | no | build args | no | Echoed by `/api/healthz`, `/api/readyz`, `/metrics` |
+
+The provider settings are generic: `KELP_PROVIDER` names it, `KELP_PROVIDER_BASE_URL`
+and `KELP_PROVIDER_API_KEY` reach it, and the model ids are whatever that endpoint
+serves. The empty base URL is deliberate; the server refuses to start rather than
+falling back to a vendor host. For compatibility, `NEBIUS_BASE_URL` /
+`NEBIUS_API_BASE_URL`, `NEBIUS_API_KEY`, `NEBIUS_PRIMARY_MODEL`, and
+`NEBIUS_BACKGROUND_MODEL` are read only when the matching `KELP_*` value is
+blank. They are aliases, not defaults, and the canonical name always wins.
 
 Rate-limit rejections are `429` JSON with `error.code = "rate_limited"` and a
 `Retry-After` header in whole seconds. They are never a `5xx`: an internal

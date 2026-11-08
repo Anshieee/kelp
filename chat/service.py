@@ -190,7 +190,10 @@ class ChatService:
         self._metrics = metrics or get_metrics()
         self._spend = spend_guard
         self._budget = budget or TurnBudget()
-        self._model = model or (config or KernelConfig.from_env()).primary_model
+        # One authoritative config for this service: the model, pricing, and
+        # provider wiring all come from it rather than a fresh KernelConfig().
+        self._config = config or KernelConfig.from_env()
+        self._model = model or self._config.primary_model
         self._secrets = dict(secrets or {})
         self._secret_values = tuple(
             value for value in self._secrets.values() if isinstance(value, str) and len(value) >= 4
@@ -810,7 +813,7 @@ class ChatService:
             executor = self._make_executor(approval_hook, turn_id=turn_id)
             loop = AgentLoop(
                 provider=self._provider,
-                config=KernelConfig(),
+                config=self._config,
                 tool_executor=executor,
                 budget=self._budget,
                 usage_store=self._usage_store,

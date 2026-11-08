@@ -37,6 +37,12 @@ recipient named here that the code no longer knows.
 | What records exist? | Chat content until the owner deletes the thread; audit and usage records on a stated clock; a content-free egress ledger inside the audit trail; a device row per signed-in browser with a short label and timestamps, no credential |
 | Can I audit what left? | Yes: one `egress` line per outbound call — recipient, purpose, byte counts, outcome, no content |
 
+The provider key is read from `KELP_PROVIDER_API_KEY`; `NEBIUS_API_KEY` is
+accepted only as a legacy alias when the canonical name is blank, and its value
+is scrubbed from logs and audit lines exactly like the canonical one. The
+endpoint itself comes from `KELP_PROVIDER_BASE_URL` (or its legacy alias), so no
+vendor host is implicit.
+
 ---
 
 ## 2. Every outbound recipient
