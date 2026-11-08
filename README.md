@@ -2,6 +2,25 @@
 
 Kelp is a private, always-on assistant for chat, approval-gated work, scheduled tasks, and spend caps. Saved-card payment flows are present in the codebase but are not wired into the running service yet. Kelp stores chat and working data locally; model requests go to the provider configured by the operator. The documented provider endpoint is OpenRouter.
 
+## Current status
+
+Kelp is live as a single-owner, single-provider service. Today it provides:
+
+- an authenticated chat API with streaming turns,
+- an approval-gated shell that reviews actions before they run,
+- a scheduler for timed work,
+- spend caps that stop calls before the provider sees them when budget runs out,
+- offline and provider-backed evaluations.
+
+The phone and landing demos are live. The browser chat UI and the dashboard page at `/` are not built yet; the API is the interface.
+
+What just landed: **P0-1 froze the service control layer's contract** (2026-11-09). This is a design freeze, not a runtime change — no code behavior changed. The frozen shapes cover the single owner tenant, the provider stream contract, the `TaskRun` record, the gate order (auth → tenant → entitlement → spend → provider), and the admin read model. Read them at:
+
+- [`docs/SERVICE_CONTRACT.md`](docs/SERVICE_CONTRACT.md) — the frozen contract (normative)
+- [`docs/adr/0003-service-control-layer.md`](docs/adr/0003-service-control-layer.md) — the decision record
+
+The contract is machine-checked by `tests/test_service_contract.py`, which is green (13 tests).
+
 ## Quick start
 
 Choose Docker Compose or Python. Both need an OpenRouter API key and an owner token; the owner token keeps the API private.
@@ -116,6 +135,41 @@ python -m pytest
 ```
 
 Run the deterministic offline evaluations with `python -m evals`.
+
+## Roadmap
+
+The control-layer contract (P0-1) is the foundation the work below builds on. Each item implements against the frozen shapes in [`docs/SERVICE_CONTRACT.md`](docs/SERVICE_CONTRACT.md).
+
+- **P1** — provider neutrality and bring-your-own model keys: routes model calls through a provider-agnostic seam so the operator's own keys and endpoints work, not just OpenRouter.
+- **P2** — tenant isolation boundaries: harden the single-tenant model into explicit per-tenant scope so a later second tenant cannot read another tenant's data.
+- **P3** — task-run records and API: persist each run's identity, gate decisions, and outcome in the `TaskRun` shape and expose them over the API.
+- **P4** — per-tenant secrets: store provider credentials and tokens per tenant instead of one shared credential.
+- **P5** — entitlements and billing hooks: wire plan limits and windows into the gates and emit billing events at the seams.
+- **P6** — admin visibility and support runbook: expose the admin read model and publish a runbook for diagnosing incidents.
+
+Boat and Steel infrastructure pilots come only after the bot control layer is built; they are not a prerequisite for the work above.
+
+## How to contribute
+
+1. Pick an item from [Good first pickups](#good-first-pickups) or from a P1–P6 roadmap item.
+2. Create a branch from `origin/main` and do the work there.
+3. Keep the test suite green: run `python -m pytest -q` before you consider the work done. The contract tests must keep passing.
+4. Open a pull request for review. Merge happens only after green CI and an approving review.
+5. Never commit secrets or credentials. Keys live in untracked env files (`.env`, `deploy/kelp.env`), not in commits, chat, logs, or arguments.
+6. Keep tests honest: for a behavior change, write the test first, watch it fail, then implement.
+
+The repo rules: no force-push, no remote deletions, plain merges only.
+
+## Good first pickups
+
+These are small, self-contained items for a first contribution. All of them assume you have read the frozen contract first: [`docs/SERVICE_CONTRACT.md`](docs/SERVICE_CONTRACT.md).
+
+- **P1-2 config/env generalization** — move provider config (base URL, key) behind a general env scheme so a second provider can be configured without forking the code.
+- **Tenant slug validation tests** — add tests that tenant ids are valid URL-safe slugs, matching the contract's slug rule (ADR 0003 §3).
+- **TaskRun recorder** — a minimal module that writes run records in the frozen `TaskRun` shape, covered by tests.
+- **Secret-presence admin endpoint** — an admin-only check that reports whether a secret is present without revealing it.
+- **Support runbook triage entries** — draft triage steps in the support runbook for the gate failures the contract defines (auth, tenant, entitlement, spend, provider).
+- **Extra eval scenarios** — add offline evaluation cases that exercise the frozen contract's edge cases, keeping `python -m evals` deterministic.
 
 ## More
 
