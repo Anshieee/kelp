@@ -85,10 +85,9 @@ with the status on a rejection — a failing probe is never filed as a success.
 
 - No analytics, metrics exporter, crash reporter, or log shipper. Metrics are
   served locally at `/api/metrics`; nothing pushes them anywhere.
-- No external fonts, scripts, or images. The tracker page in `netlify/` is static
-  and links out only; it loads no third-party asset.
-- The evaluation harness (`evals/`) and the demo fixtures replays recorded turns
-  with the network blocked (`evals/offline.py`); they are not recipients.
+- No external fonts, scripts, or images.
+- The evaluation harness (`evals/`) replays recorded turns with the network
+  blocked (`evals/offline.py`); it is not a recipient.
 - Local embeddings for document search run in-process. They are not an egress
   path.
 
@@ -303,9 +302,6 @@ does.
 - **Payments are not wired.** When they are, `stripe` and `razorpay` become live
   recipients; the ledger ids already exist so that change shows up in the audit
   trail on day one, but §2 will need its "Wired today?" column updated with it.
-- **The static tracker page** in `netlify/` links out to Linear and GitHub when a
-  reader clicks. That is a browser navigation, not a server egress, and it loads
-  no third-party asset.
 - **A shared thread is deliberately readable by a stranger.** Once the share
   surface ships, the owner can hand a URL to one thread and the holder can read it
   with no account. That is the feature, not a leak: the content is still the owner's,

@@ -110,7 +110,7 @@ with urllib.request.urlopen(request, timeout=90) as response:
 PY
 ```
 
-The service and API listen at `http://127.0.0.1:8765`. There is no dashboard page at `/` yet. `netlify/` contains the project tracker, not the assistant UI.
+The service and API listen at `http://127.0.0.1:8765`. There is no dashboard page at `/` yet. `netlify/` holds the Netlify Functions backend and the mobile demo build, not the assistant UI.
 
 ## Repository map
 
@@ -176,4 +176,3 @@ These are small, self-contained items for a first contribution. All of them assu
 - [Deployment guide](docs/DEPLOY.md)
 - [Privacy review](docs/PRIVACY.md)
 - [Chat and authentication spec](docs/CHAT_SPEC.md#12-security-and-privacy)
-- [Project tracker](netlify/index.html)

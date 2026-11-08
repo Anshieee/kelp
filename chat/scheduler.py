@@ -29,7 +29,7 @@ directory:
   :meth:`SchedulerRuntime.stop` joins it. The server calls ``start`` after boot
   recovery has settled interrupted turns and calls ``stop`` before the chat
   store is closed. ``KELP_SCHEDULER_ENABLED=0`` makes both a no-op and keeps
-  ``tick`` from touching files, which is what tests and the offline demo use.
+  ``tick`` from touching files, which is what the tests use.
 
 The module is stdlib-only. It does not import the chat store, the skill loader,
 or a provider, so the skill handler can share the cron parser without a cycle.

@@ -119,8 +119,7 @@ spot.
 What it is. A server relies on many third-party libraries, the building blocks
 other people wrote. Ansh added a script, `tools/audit_deps.py`, and a CI job
 that runs a tool called `pip-audit` against the declared libraries on every
-push and proposed change. It also added a `Makefile` hook and tests that keep
-the project tracker in sync.
+push and proposed change. It also added a `Makefile` hook.
 
 Why it matters. Libraries sometimes get known security holes. This check finds
 those known holes before the change is merged, using the latest advisory data.
@@ -235,13 +234,6 @@ store. Ansh reads from it for his work, for example to count unpriced records
 for the readiness check, but he must never change its behavior or the model
 loop's semantics. If he changed it, Aakarsh's engine tests would break.
 
-The tracker, five files that must always agree. The project's progress is told
-in five places that must be kept in sync in every pull request:
-`docs/SDLC_MINDMAP.md`, `docs/sdlc-mindmap.gv`, `docs/sdlc-mindmap.svg`,
-`docs/sdlc-mindmap.png`, and `netlify/index.html`. Each person syncs the
-tracker in their own pull requests. The `.gv` file is the source; the pictures
-are rendered from it, and the website embeds a copy of the SVG picture.
-
 ### 4.2 The merge order
 
 The people merge in a fixed order each cycle: Aakarsh (A) first, then Ansh
@@ -256,8 +248,6 @@ sits on top of a working engine.
 - If Ansh changes a public name in `chat/api.py` or the shape of a route or a
   metric name, Akshat's screen, which consumes those addresses and names,
   breaks.
-- If Akshat changes the tracker website without updating all five tracker files,
-  the tracker drifts and stops telling one story.
 - If Ansh changes the metric names that Akshat's desktop app parses, the
   desktop app loses its spending figures.
 
@@ -311,6 +301,5 @@ A short list of every technical word used in this document, in plain words.
 - Secret scan. Checking that no passwords or keys were committed.
 - Session. A saved sign-in on one browser or device.
 - Test suite. The full set of automated tests for the project.
-- Tracker. The five files recording the project's status.
 - Type check. A check that catches mistakes without running the program.
 - 429. The code the server returns when it refuses a request as too fast.
