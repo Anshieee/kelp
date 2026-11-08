@@ -5,8 +5,10 @@
 - **Scope:** the server process in `chat/`, `kernel/`, `skills/`, `openshell/`, and `payments/`
 - **Companions:** the retention rule ([`docs/DEPLOY.md`](DEPLOY.md) §8.1, `chat/retention.py`),
   the policy gate ([`docs/OPENSHELL.md`](OPENSHELL.md)), the chat spec
-  ([`docs/CHAT_SPEC.md`](CHAT_SPEC.md) §12), and the sharing decision
-  ([ADR 0002](adr/0002-sharing-and-identity.md))
+  ([`docs/CHAT_SPEC.md`](CHAT_SPEC.md) §12), the sharing decision
+  ([ADR 0002](adr/0002-sharing-and-identity.md)), and the control-layer
+  contract ([`docs/SERVICE_CONTRACT.md`](SERVICE_CONTRACT.md),
+  [ADR 0003](adr/0003-service-control-layer.md))
 - **Enforced by:** `openshell/egress_ledger.py` (the ledger) and
   `tests/test_privacy.py` (recipient, ledger, and exec-boundary checks)
 
@@ -346,6 +348,9 @@ review references that table rather than restating it.
 - Chat surface, approvals, and the security section: [`docs/CHAT_SPEC.md`](CHAT_SPEC.md) §12
 - Sharing and identity, including what a share link does and does not do:
   [`docs/adr/0002-sharing-and-identity.md`](adr/0002-sharing-and-identity.md)
+- Control-layer contract (tenants, provider seam, run records, gate order, and
+  admin read-model exclusions): [`docs/SERVICE_CONTRACT.md`](SERVICE_CONTRACT.md)
+  and [`docs/adr/0003-service-control-layer.md`](adr/0003-service-control-layer.md)
 - Skill contract and the `execute` prohibition: [`docs/SKILL_SPEC.md`](SKILL_SPEC.md)
 - Egress ledger: [`openshell/egress_ledger.py`](../openshell/egress_ledger.py)
 - Exec gate: [`openshell/exec_gate.py`](../openshell/exec_gate.py)
