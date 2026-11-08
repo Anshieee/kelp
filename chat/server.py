@@ -70,6 +70,7 @@ from .scheduler import (
 from .credentials import CredentialBroker, validate_env as validate_credential_env
 from .service import ChatService
 from .store import ChatStore
+from .tenancy import OWNER_TENANT_ID, StaticTenantResolver
 from .wallet import WalletAPI
 from payments.razorpay_checkout import RazorpayCheckout
 from payments.razorpay_gateway import RazorpayWallet
@@ -504,6 +505,27 @@ class Application:
         self.close()
 
 
+class _TenantAudit:
+    """Audit facade for work that runs outside a request.
+
+    Boot recovery and the scheduler have no credential, but their rows must
+    still name a tenant. This adapter supplies the tenant resolved at boot
+    (the owner today) unless the caller already supplied one. Everything else
+    delegates to the real log, so rotation, scrubbing, and reads are unchanged.
+    """
+
+    def __init__(self, audit: AuditLog, tenant_id: str = OWNER_TENANT_ID):
+        self._audit = audit
+        self._tenant_id = tenant_id
+
+    def record(self, event: str, **fields: Any) -> dict[str, Any]:
+        fields.setdefault("tenant_id", self._tenant_id)
+        return self._audit.record(event, **fields)
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._audit, name)
+
+
 def _tool_specs(registry: SkillRegistry) -> tuple[dict[str, Any], ...]:
     """Model-facing tool list derived from manifests, in stable order."""
 
@@ -602,6 +624,10 @@ def build_app(
         )
         metrics = Metrics(scrubber=SecretScrubber(secret_values))
         audit = AuditLog(config.audit_path, secret_values=secret_values)
+        # Work outside a request (boot recovery, the scheduler) has no
+        # credential to resolve; this facade names the owner tenant explicitly
+        # instead of relying on the log's default.
+        boot_audit = _TenantAudit(audit, OWNER_TENANT_ID)
         # KEL-29: the store shares the process audit trail, so session mint
         # and revoke land in the same scrubbed JSONL as every other decision.
         store = ChatStore(config.db_path, audit=audit)
@@ -658,7 +684,7 @@ def build_app(
         # from the records on disk, so a restart shows the real total.
         service.refresh_spend_metrics()
         # Exactly one recovery pass, before the API can accept a request.
-        recovery = settle_interrupted(service, store, audit)
+        recovery = settle_interrupted(service, store, boot_audit)
         recovered = len(recovery.closed_turns) + len(recovery.expired_approvals)
         if recovered:
             metrics.add_recoveries(recovered)
@@ -705,6 +731,10 @@ def build_app(
             checkout_api=checkout_api,
             auth_token=config.auth_token,
             csrf_token=config.csrf_token,
+            # One resolver for the process: the configured root token maps to
+            # the owner tenant, exactly as the direct ``auth_token=`` check
+            # always has. Session rows are minted under that same tenant.
+            tenant_resolver=StaticTenantResolver(config.auth_token),
             health=HealthProbe.from_service(service, audit=audit),
             metrics=metrics,
             # Sessions persist in the chat database (KEL-24): several devices
@@ -712,7 +742,10 @@ def build_app(
             # The CSRF half is derived from KELP_SESSION_SECRET, falling back
             # to the root token so a restart keeps existing pairs valid.
             sessions=SessionStore.from_env(
-                source, store=store, fallback_secret=config.auth_token
+                source,
+                store=store,
+                fallback_secret=config.auth_token,
+                tenant_id=OWNER_TENANT_ID,
             ),
             auth_failures=AuthFailureTracker.from_env(source),
             cookie_secure=_flag(source, SESSION_SECURE_ENV, True),
@@ -730,7 +763,7 @@ def build_app(
             service=service,
             store=store,
             schedule_store=schedule_store,
-            audit=audit,
+            audit=boot_audit,
             runner=api.runner,
             config=proactive_config,
         )

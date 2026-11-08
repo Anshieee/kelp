@@ -12,15 +12,18 @@ P2-1 only makes the tenant explicit in storage and at the boundary.
 
 from __future__ import annotations
 
+import contextvars
 import hmac
 import re
+from contextlib import contextmanager
 from dataclasses import dataclass
-from typing import Final
+from typing import Final, Iterator
 
 __all__ = [
     "ACTOR_IDS",
     "OWNER_TENANT_ID",
     "ROLES",
+    "SHARE_TOKEN_MODEL",
     "SURFACES",
     "TENANT_MISMATCH",
     "TENANT_SLUG_PATTERN",
@@ -29,8 +32,12 @@ __all__ = [
     "TenantContext",
     "TenantIdError",
     "TenantMismatchError",
+    "bind_tenant",
+    "current_tenant",
     "ensure_tenant",
     "is_valid_tenant_id",
+    "share_read_tenant",
+    "tenant_for",
     "validate_tenant_id",
 ]
 
@@ -52,6 +59,19 @@ SURFACES: Final = ("web", "desktop", "mobile", "telegram", "cli", "scheduler")
 
 #: The contract's typed tenant failure.
 TENANT_MISMATCH: Final = "tenant_mismatch"
+
+#: How a public share read resolves its tenant.
+#:
+#: ``tenant_scoped_token`` means the link carries the tenant that created it:
+#: the lookup key is the token hash *and* the tenant, and a row belonging to a
+#: different tenant is indistinguishable from an unknown link (404). That is
+#: the same fails-closed shape the owner-scoped store lookup already has, and
+#: it keeps a public reader from learning whether another tenant exists.
+#:
+#: The alternative (a tenant-neutral capability looked up unscoped, then
+#: checked) needs a store-level unscoped live lookup. P2-2 does not add that,
+#: so the documented choice is the scoped token below.
+SHARE_TOKEN_MODEL: Final = "tenant_scoped_token"
 
 
 class TenantIdError(ValueError):
@@ -128,6 +148,72 @@ class TenantContext:
 #: can use the wording its own layer prefers without a second type.
 Principal = TenantContext
 
+#: Request-scoped context. The API binds the authenticated principal here so a
+#: route module that does not take a ``TenantContext`` argument (the existing
+#: router split) still resolves the same tenant its service call uses. The
+#: default is ``None`` rather than a shared owner object so a test can tell
+#: "nothing bound" from "explicitly bound to owner".
+_REQUEST_TENANT: Final[contextvars.ContextVar[TenantContext | None]] = (
+    contextvars.ContextVar("kelp_request_tenant", default=None)
+)
+
+
+def current_tenant() -> TenantContext:
+    """The tenant bound to this request/task, or the owner when none is bound."""
+
+    return _REQUEST_TENANT.get() or TenantContext()
+
+
+@contextmanager
+def bind_tenant(context: TenantContext) -> Iterator[TenantContext]:
+    """Bind ``context`` for the current request and every task it creates.
+
+    ``asyncio.create_task`` copies the context, so a turn started inside the
+    request keeps the same tenant. The token is reset in ``finally`` even when
+    the route raises.
+    """
+
+    token = _REQUEST_TENANT.set(context)
+    try:
+        yield context
+    finally:
+        _REQUEST_TENANT.reset(token)
+
+
+def tenant_for(tenant: TenantContext | str | None = None) -> TenantContext:
+    """Coerce an explicit tenant argument, else use the bound one.
+
+    ``None`` means "whatever this request resolved", so existing callers that
+    pass no tenant keep the owner default through :func:`current_tenant`.
+    A bare string is accepted for tests and headless callers and keeps the
+    bound actor/role/surface.
+    """
+
+    if tenant is None:
+        return current_tenant()
+    if isinstance(tenant, TenantContext):
+        return tenant
+    bound = current_tenant()
+    return TenantContext(
+        tenant_id=validate_tenant_id(tenant),
+        actor_id=bound.actor_id,
+        role=bound.role,
+        surface=bound.surface,
+    )
+
+
+def share_read_tenant(
+    record_tenant_id: str, *, served_tenant_id: str = OWNER_TENANT_ID
+) -> str:
+    """The tenant a public share read may resolve, or a typed mismatch.
+
+    The store already scopes ``share_get`` by tenant, so this helper states the
+    decision next to the model constant instead of leaving it implicit in a
+    default argument. A row from another tenant is treated as unknown.
+    """
+
+    return ensure_tenant(validate_tenant_id(record_tenant_id), served_tenant_id)
+
 
 class StaticTenantResolver:
     """Map the current owner credential to the owner tenant.
@@ -175,6 +261,25 @@ class StaticTenantResolver:
             presented = "" if token is None else str(token)
             if not hmac.compare_digest(presented, self._owner_token):
                 raise TenantMismatchError()
+        return self.context_for(
+            actor_id=actor_id, role=role, surface=surface
+        )
+
+    def context_for(
+        self,
+        *,
+        actor_id: str | None = None,
+        role: str | None = None,
+        surface: str | None = None,
+    ) -> TenantContext:
+        """Map an already-authenticated credential to this resolver's tenant.
+
+        The caller has just compared the credential with the process's current
+        owner token (which a test or a hot reload may have replaced), so this
+        does not repeat the comparison. It still never invents a tenant: the id
+        is the one this resolver was built with.
+        """
+
         return TenantContext(
             tenant_id=self._tenant_id,
             actor_id=self._actor_id if actor_id is None else actor_id,

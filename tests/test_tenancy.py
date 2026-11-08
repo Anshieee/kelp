@@ -8,28 +8,42 @@ missing, a leak shows up here as a populated result rather than a schema diff.
 
 from __future__ import annotations
 
+import asyncio
 import dataclasses
+import json
 import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Any, Mapping
 
 import pytest
 
-from chat.store import ChatStore, ThreadGoneError
+from chat import ChatAPI, ChatService, ChatStore, Request
+from chat.api import SessionStore
+from chat.errors import ChatError
+from chat.artifacts import ArtifactError
+from chat.store import ThreadGoneError
 from chat.tenancy import (
     OWNER_TENANT_ID,
     Principal,
+    SHARE_TOKEN_MODEL,
     StaticTenantResolver,
     TENANT_MISMATCH,
     TenantContext,
     TenantIdError,
     TenantMismatchError,
+    bind_tenant,
+    current_tenant,
     ensure_tenant,
     is_valid_tenant_id,
+    share_read_tenant,
+    tenant_for,
     validate_tenant_id,
 )
 from kernel.usage import UsageRecord
 from openshell.audit import AuditLog
+
+from .chatkit import MODEL, StubProvider, text_script
 
 
 def make_store(tmp_path: Path) -> ChatStore:
@@ -486,3 +500,387 @@ def test_usage_and_audit_records_carry_tenant_id_by_default(tmp_path: Path) -> N
     entry = audit.record("tenant_check")
     assert entry["tenant_id"] == "owner"
     assert audit.entries(event="tenant_check")[0]["tenant_id"] == "owner"
+
+
+# -- P2-2: the tenant travels with the service call ------------------------
+
+
+def _acme_thread(store: ChatStore, thread_id: str = "ses_acme") -> dict[str, Any]:
+    return store.create_thread(
+        thread_id=thread_id, tenant_id="acme", title="acme"
+    )
+
+
+def _acme_turn(store: ChatStore, thread_id: str = "ses_acme") -> dict[str, Any]:
+    return store.create_turn(
+        thread_id=thread_id,
+        user_message_id="msg_acme_user",
+        assistant_message_id="msg_acme_assistant",
+        client_turn_id="ct-acme",
+        budget={},
+    )
+
+
+def _pending_approval(
+    store: ChatStore,
+    *,
+    approval_id: str = "apr_acme",
+    thread_id: str = "ses_acme",
+    tenant_id: str = "acme",
+) -> dict[str, Any]:
+    card = {
+        "id": approval_id,
+        "thread_id": thread_id,
+        "turn_id": None,
+        "call_id": None,
+        "source": "skill",
+        "status": "pending",
+        "tool": "shell.exec",
+        "requested_at": "2026-11-09T09:00:00Z",
+        "expires_at": "2099-01-01T00:00:00Z",
+    }
+    store.save_approval(card, tenant_id=tenant_id)
+    return card
+
+
+def test_bound_tenant_defaults_to_owner_and_is_reset() -> None:
+    assert current_tenant() == TenantContext()
+    assert tenant_for(None) == TenantContext()
+    acme = TenantContext(tenant_id="acme")
+    with bind_tenant(acme):
+        assert current_tenant() == acme
+        assert tenant_for(None) == acme
+    assert current_tenant() == TenantContext()
+
+    assert tenant_for("owner").tenant_id == "owner"
+    assert SHARE_TOKEN_MODEL == "tenant_scoped_token"
+    assert share_read_tenant("owner") == "owner"
+    with pytest.raises(TenantMismatchError):
+        share_read_tenant("acme")
+
+
+def test_service_denies_foreign_thread_turn_and_approval_ids(
+    tmp_path: Path,
+) -> None:
+    store = make_store(tmp_path)
+    service = ChatService(store=store)
+    try:
+        _acme_thread(store)
+        _acme_turn(store)
+        _pending_approval(store)
+
+        with pytest.raises(ChatError) as thread_error:
+            service.get_thread("ses_acme")
+        assert thread_error.value.code == "unknown_thread"
+        assert service.list_threads() == ([], None)
+        with pytest.raises(ChatError):
+            service.rename_thread("ses_acme", "hijacked")
+
+        with pytest.raises(ChatError) as stop_error:
+            asyncio.run(service.stop("turn_acme"))
+        assert stop_error.value.code == "unknown_turn"
+        with pytest.raises(ChatError) as retry_error:
+            asyncio.run(service.retry("turn_acme"))
+        assert retry_error.value.code == "unknown_turn"
+
+        assert service.list_approvals() == []
+        with pytest.raises(ChatError) as approval_error:
+            service.get_approval("apr_acme")
+        assert approval_error.value.code == "unknown_approval"
+        with pytest.raises(ChatError):
+            service.decide("apr_acme", "approve")
+
+        # The same calls with the owning context still work, so the denial is
+        # scoping rather than a missing feature.
+        acme = TenantContext(tenant_id="acme")
+        assert service.get_thread("ses_acme", tenant=acme)["thread"]["id"] == "ses_acme"
+        assert [row["id"] for row in service.list_threads(tenant=acme)[0]] == [
+            "ses_acme"
+        ]
+        assert service.get_approval("apr_acme", tenant=acme)["status"] == "pending"
+        decided = service.decide("apr_acme", "approve", tenant=acme)
+        assert decided["approval"]["status"] == "approved"
+        assert store.get_approval("apr_acme", tenant_id="acme")["status"] == "approved"
+    finally:
+        store.close()
+
+
+def test_service_send_refuses_a_foreign_thread_before_creating_rows(
+    tmp_path: Path,
+) -> None:
+    store = make_store(tmp_path)
+    service = ChatService(store=store)
+    try:
+        _acme_thread(store)
+        with pytest.raises(ChatError) as excinfo:
+            asyncio.run(
+                service.send(
+                    "ses_acme",
+                    text="secret",
+                    client_turn_id="ct-owner",
+                )
+            )
+        assert excinfo.value.code == "unknown_thread"
+        assert store.list_messages("ses_acme") == ([], False)
+        assert store.latest_turn("ses_acme") is None
+    finally:
+        store.close()
+
+
+def test_exec_approval_is_created_under_the_thread_tenant(tmp_path: Path) -> None:
+    store = make_store(tmp_path)
+    service = ChatService(store=store)
+    try:
+        _acme_thread(store)
+        card = service.open_exec_approval(
+            thread_id="ses_acme",
+            turn_id=None,
+            call_id=None,
+            tool="shell.exec",
+            command=["true"],
+            tenant=TenantContext(tenant_id="acme"),
+        )
+        assert store.get_approval(card["id"], tenant_id="acme") is not None
+        assert store.get_approval(card["id"], tenant_id="owner") is None
+
+        with pytest.raises(ChatError):
+            service.open_exec_approval(
+                thread_id="ses_acme",
+                turn_id=None,
+                call_id=None,
+                tool="shell.exec",
+                command=["true"],
+            )
+    finally:
+        store.close()
+
+
+def test_artifact_reads_are_scoped_to_the_bound_tenant(tmp_path: Path) -> None:
+    store = make_store(tmp_path)
+    service = ChatService(store=store)
+    try:
+        meta = service.artifacts.save_upload("rows.csv", b"a,b\n1,2\n")
+        assert service.artifacts.card(meta["handle"])["handle"] == meta["handle"]
+
+        acme = TenantContext(tenant_id="acme")
+        with pytest.raises(ArtifactError):
+            service.artifacts.card(meta["handle"], tenant=acme)
+        with pytest.raises(TenantMismatchError):
+            service.artifacts.save_upload("rows.csv", b"a,b\n1,2\n", tenant=acme)
+
+        _acme_thread(store)
+        store.create_artifact(
+            {
+                "handle": "artifact:acmefile01",
+                "name": "acme.pdf",
+                "kind": "pdf",
+                "mime": "application/pdf",
+                "size_bytes": 1,
+                "sha256": "abc",
+                "storage_path": "acme.pdf",
+            },
+            tenant_id="acme",
+        )
+        with pytest.raises(ArtifactError):
+            service.artifacts.card("artifact:acmefile01")
+    finally:
+        store.close()
+
+
+# -- P2-2: API gate --------------------------------------------------------
+
+
+AUTH = {"authorization": "Bearer tok"}
+CSRF = {"x-csrf-token": "csrf"}
+
+
+def make_api(tmp_path: Path, **service_kwargs: Any) -> tuple[ChatAPI, ChatService, ChatStore]:
+    store = ChatStore(tmp_path / "chat.db")
+    service = ChatService(
+        store=store,
+        provider=StubProvider([text_script("Hello")]),
+        model=MODEL,
+        **service_kwargs,
+    )
+    api = ChatAPI(service, auth_token="tok", csrf_token="csrf")
+    return api, service, store
+
+
+def api_call(
+    api: ChatAPI,
+    method: str,
+    path: str,
+    body: Mapping[str, Any] | None = None,
+    *,
+    auth: bool = True,
+    csrf: bool = True,
+) -> Any:
+    headers: dict[str, str] = {}
+    if auth:
+        headers.update(AUTH)
+    if csrf and method.upper() in {"POST", "PATCH", "DELETE"}:
+        headers.update(CSRF)
+    if body is not None:
+        headers["content-type"] = "application/json"
+    raw = json.dumps(body).encode() if body is not None else b""
+    return api.handle(Request(method, path, {}, headers, raw))
+
+
+def response_body(response: Any) -> dict[str, Any]:
+    return json.loads(response.body)
+
+
+def test_body_tenant_that_disagrees_is_typed_before_any_run(
+    tmp_path: Path,
+) -> None:
+    api, _service, store = make_api(tmp_path)
+    try:
+        denied = api_call(
+            api,
+            "POST",
+            "/api/threads",
+            {"title": "acme", "tenant_id": "acme"},
+        )
+        assert denied.status == 403
+        assert response_body(denied)["error"]["code"] == TENANT_MISMATCH
+        assert store.list_threads(tenant_id="owner")[0] == []
+
+        created = api_call(api, "POST", "/api/threads", {"title": "ok"})
+        assert created.status == 201
+        thread = response_body(created)["thread"]
+
+        rejected_send = api_call(
+            api,
+            "POST",
+            f"/api/threads/{thread['id']}/turns",
+            {
+                "client_turn_id": "ct-tenant-1",
+                "text": "hello",
+                "tenant": "acme",
+            },
+        )
+        assert rejected_send.status == 403
+        assert response_body(rejected_send)["error"]["code"] == TENANT_MISMATCH
+        assert store.list_messages(thread["id"]) == ([], False)
+        assert store.latest_turn(thread["id"]) is None
+
+        own_tenant = api_call(
+            api,
+            "POST",
+            "/api/threads",
+            {"title": "owner", "tenant_id": "owner"},
+        )
+        assert own_tenant.status == 201
+    finally:
+        api.close()
+        store.close()
+
+
+def test_public_share_token_is_scoped_to_the_tenant_that_minted_it(
+    tmp_path: Path,
+) -> None:
+    import hashlib
+
+    api, _service, store = make_api(tmp_path)
+    try:
+        created = api_call(api, "POST", "/api/threads", {"title": "shared"})
+        thread = response_body(created)["thread"]
+        share = api_call(api, "POST", f"/api/threads/{thread['id']}/share", {})
+        assert share.status == 201
+        token = response_body(share)["share"]["token"]
+
+        public = api_call(api, "GET", f"/api/shared/{token}", auth=False)
+        assert public.status == 200
+        assert response_body(public)["share"]["title"] == "shared"
+
+        # A row owned by another tenant is not a live capability for this
+        # deployment: the token carries its tenant and the lookup is scoped.
+        _acme_thread(store, thread_id="ses_acme_share")
+        acme_token = "acme-share-token"
+        acme_hash = hashlib.sha256(acme_token.encode()).hexdigest()
+        store.share_create(
+            token_hash=acme_hash,
+            thread_id="ses_acme_share",
+            snapshot={"title": "acme", "messages": []},
+            ttl_seconds=3600,
+            tenant_id="acme",
+        )
+        foreign = api_call(api, "GET", f"/api/shared/{acme_token}", auth=False)
+        assert foreign.status == 404
+        assert store.share_get(acme_hash) is None
+        assert store.share_get(acme_hash, tenant_id="acme") is not None
+    finally:
+        api.close()
+        store.close()
+
+
+def test_audit_rows_carry_the_acting_tenant(tmp_path: Path) -> None:
+    store = make_store(tmp_path)
+    audit = AuditLog(tmp_path / "audit.jsonl")
+    service = ChatService(store=store, audit=audit)
+    try:
+        _acme_thread(store)
+        _pending_approval(store)
+        service.decide(
+            "apr_acme", "approve", tenant=TenantContext(tenant_id="acme")
+        )
+
+        store.create_thread(thread_id="ses_owner", title="owner")
+        _pending_approval(
+            store,
+            approval_id="apr_owner",
+            thread_id="ses_owner",
+            tenant_id="owner",
+        )
+        service.decide("apr_owner", "approve")
+
+        rows = audit.entries(event="approval_resolved")
+        assert [row["tenant_id"] for row in rows] == ["acme", "owner"]
+        assert all(row["actor"] == "owner" for row in rows)
+    finally:
+        store.close()
+
+
+def test_cookie_session_carries_the_owner_tenant(tmp_path: Path) -> None:
+    store = ChatStore(tmp_path / "chat.db")
+    service = ChatService(
+        store=store,
+        provider=StubProvider([text_script("Hello")]),
+        model=MODEL,
+    )
+    sessions = SessionStore(store=store)
+    api = ChatAPI(
+        service,
+        auth_token="tok",
+        csrf_token="csrf",
+        sessions=sessions,
+    )
+    try:
+        sign_in = api.handle(
+            Request(
+                "POST",
+                "/api/auth/session",
+                {},
+                {"authorization": "Bearer tok"},
+                b"",
+            )
+        )
+        assert sign_in.status == 201
+        cookie = next(
+            value.split(";", 1)[0]
+            for value in sign_in.cookies
+            if value.startswith("session=")
+        )
+        listed = api.handle(
+            Request("GET", "/api/threads", {}, {"cookie": cookie}, b"")
+        )
+        assert listed.status == 200
+
+        # The row was minted with a tenant even though the cookie lookup runs
+        # before any request tenant is known.
+        rows = store.session_list(now=sessions.now(), tenant_id="owner")
+        assert rows and rows[0]["tenant_id"] == OWNER_TENANT_ID
+        assert store.session_list(now=sessions.now(), tenant_id="acme") == []
+    finally:
+        api.close()
+        store.close()

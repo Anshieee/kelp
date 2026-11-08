@@ -16,6 +16,7 @@ import base64
 import hashlib
 import hmac
 import inspect
+import json
 import math
 import os
 import re
@@ -80,6 +81,29 @@ from .routers.shared import (
 from .service import ChatService
 from .store import ChatStore
 from .stream import IDLE_SECONDS, sse_frames
+from .tenancy import (
+    OWNER_TENANT_ID,
+    Principal,
+    StaticTenantResolver,
+    TenantContext,
+    TenantMismatchError,
+    bind_tenant,
+    validate_tenant_id,
+)
+
+
+def validate_session_tenant(requested: str | None, configured: str) -> str:
+    """A session is minted only inside this store's tenant.
+
+    The cookie has no tenant field; the row's tenant is the one the store was
+    configured with. Refusing a mismatch keeps a future second tenant from
+    writing a session row this process would then be unable to resolve.
+    """
+
+    configured = validate_tenant_id(configured)
+    if requested is None or requested == configured:
+        return configured
+    raise TenantMismatchError()
 
 __all__ = [
     "AuthFailureTracker",
@@ -955,6 +979,10 @@ class _Session:
     created_at: float = 0.0
     last_seen: float = 0.0
     expires_at: float = 0.0
+    #: The tenant that minted this session. The row is looked up by its hashed
+    #: id before a request tenant is known, so the resolved session carries the
+    #: tenant forward. Today every row is ``owner``.
+    tenant_id: str = OWNER_TENANT_ID
 
 
 class SessionStore:
@@ -980,6 +1008,7 @@ class SessionStore:
         clock: Callable[[], float] | None = None,
         store: ChatStore | None = None,
         secret: str | bytes | None = None,
+        tenant_id: str = OWNER_TENANT_ID,
     ):
         self.ttl = max(60.0, float(ttl))
         self.max_entries = max(1, int(max_entries))
@@ -990,6 +1019,10 @@ class SessionStore:
         self._lock = threading.Lock()
         self._store = store
         self._secret = _session_key(secret)
+        #: The tenant this store mints under. A session row records the same id
+        #: so a cookie keeps working even though it is looked up before any
+        #: request tenant is resolved.
+        self.tenant_id = tenant_id
 
     @classmethod
     def from_env(
@@ -998,6 +1031,7 @@ class SessionStore:
         *,
         store: ChatStore | None = None,
         fallback_secret: str | None = None,
+        tenant_id: str = OWNER_TENANT_ID,
     ) -> "SessionStore":
         env = os.environ if source is None else source
         secret = (env.get(SESSION_SECRET_ENV) or "").strip() or fallback_secret
@@ -1006,6 +1040,7 @@ class SessionStore:
             max_entries=_env_int(env, SESSION_MAX_ENV, _DEFAULT_SESSION_MAX, minimum=1),
             store=store,
             secret=secret,
+            tenant_id=tenant_id,
         )
 
     def now(self) -> float:
@@ -1024,11 +1059,15 @@ class SessionStore:
             created_at=float(row["created_at"]),
             last_seen=float(row["last_seen"]),
             expires_at=float(row["expires_at"]),
+            tenant_id=str(row.get("tenant_id") or self.tenant_id),
         )
 
-    def create(self, *, label: str | None = None) -> tuple[str, str, _Session]:
+    def create(
+        self, *, label: str | None = None, tenant_id: str | None = None
+    ) -> tuple[str, str, _Session]:
         """Mint a session and return ``(session_id, csrf_token, record)``."""
 
+        tenant = validate_session_tenant(tenant_id, self.tenant_id)
         now = self._clock()
         session_id = secrets.token_urlsafe(32)
         clean_label = scrub_device_label(label)
@@ -1038,6 +1077,7 @@ class SessionStore:
             created_at=now,
             last_seen=now,
             expires_at=now + self.ttl,
+            tenant_id=tenant,
         )
         if self._store is not None:
             self._store.session_prune(
@@ -1049,8 +1089,11 @@ class SessionStore:
                 record.created_at,
                 record.last_seen,
                 record.expires_at,
+                tenant_id=tenant,
             )
-            self._store.session_enforce_max(self.max_entries, now=now)
+            self._store.session_enforce_max(
+                self.max_entries, now=now, tenant_id=tenant
+            )
         else:
             with self._lock:
                 self._prune_locked(now)
@@ -1068,7 +1111,9 @@ class SessionStore:
         if self._store is not None:
             # Read-through keeps a revoke or expiry visible to the stream's
             # fresh auth check even when another device performed it.
-            row = self._store.session_get(key, now=moment)
+            row = self._store.session_get(
+                key, now=moment, tenant_id=self.tenant_id
+            )
             return self._record(row) if row is not None else None
         with self._lock:
             record = self._sessions.get(key)
@@ -1085,7 +1130,10 @@ class SessionStore:
         moment = self._clock() if now is None else now
         if self._store is not None:
             ok = self._store.session_touch(
-                record.id_hash, last_seen=moment, expires_at=moment + self.ttl
+                record.id_hash,
+                last_seen=moment,
+                expires_at=moment + self.ttl,
+                tenant_id=record.tenant_id,
             )
             if not ok:
                 return None
@@ -1095,6 +1143,7 @@ class SessionStore:
                 created_at=record.created_at,
                 last_seen=moment,
                 expires_at=moment + self.ttl,
+                tenant_id=record.tenant_id,
             )
         with self._lock:
             current = self._sessions.get(record.id_hash)
@@ -1122,13 +1171,17 @@ class SessionStore:
             return False
         key = _secret_hash(session_id)
         if self._store is not None:
-            return self._store.session_revoke(key, revoked_at=self._clock())
+            return self._store.session_revoke(
+                key, revoked_at=self._clock(), tenant_id=self.tenant_id
+            )
         with self._lock:
             return self._sessions.pop(key, None) is not None
 
     def revoke_all(self) -> int:
         if self._store is not None:
-            return self._store.session_revoke_all(revoked_at=self._clock())
+            return self._store.session_revoke_all(
+                revoked_at=self._clock(), tenant_id=self.tenant_id
+            )
         with self._lock:
             count = len(self._sessions)
             self._sessions.clear()
@@ -1145,7 +1198,7 @@ class SessionStore:
 
         moment = self._clock() if now is None else now
         if self._store is not None:
-            rows = self._store.session_list(now=moment)
+            rows = self._store.session_list(now=moment, tenant_id=self.tenant_id)
         else:
             with self._lock:
                 rows = [
@@ -1183,11 +1236,15 @@ class SessionStore:
             return None
         moment = self._clock() if now is None else now
         if self._store is not None:
-            row = self._store.session_find_prefix(id_short, now=moment)
+            row = self._store.session_find_prefix(
+                id_short, now=moment, tenant_id=self.tenant_id
+            )
             if row is None:
                 return None
             record = self._record(row)
-            if not self._store.session_revoke(record.id_hash, revoked_at=moment):
+            if not self._store.session_revoke(
+                record.id_hash, revoked_at=moment, tenant_id=record.tenant_id
+            ):
                 return None
             return record
         with self._lock:
@@ -1226,7 +1283,9 @@ class SessionStore:
 
     def __len__(self) -> int:
         if self._store is not None:
-            return self._store.session_count(now=self._clock())
+            return self._store.session_count(
+                now=self._clock(), tenant_id=self.tenant_id
+            )
         self.prune()
         return len(self._sessions)
 
@@ -1373,6 +1432,7 @@ class ChatAPI:
         max_share_streams: int | None = None,
         sessions: SessionStore | None = None,
         auth_failures: AuthFailureTracker | None = None,
+        tenant_resolver: StaticTenantResolver | None = None,
         cookie_secure: bool | None = None,
         share_ttl: float | None = None,
         share_max_ttl: float | None = None,
@@ -1391,6 +1451,11 @@ class ChatAPI:
         self.phone_root = phone_root
         self.auth_token = auth_token
         self.csrf_token = csrf_token
+        # One resolver for the process: the root bearer token maps to the owner
+        # tenant, and with auth disabled every caller is that owner. A session
+        # cookie is resolved from the session row instead (it was minted by
+        # this deployment), so an existing cookie keeps working unchanged.
+        self.tenant_resolver = tenant_resolver or StaticTenantResolver(auth_token)
         self.stream_idle = stream_idle
         self.max_upload = max_upload
         self.health = health or HealthProbe.from_service(service)
@@ -1476,6 +1541,59 @@ class ChatAPI:
             self.credentials.close()
         if self._owns_runner:
             self.runner.close()
+
+    # -- tenant resolution -------------------------------------------------
+
+    def _tenant_context(self, request: "Request") -> Principal:
+        """The tenant this authenticated request acts for.
+
+        This is the only place the control layer turns a credential into a
+        tenant. It never reads a body field: a caller-supplied tenant is checked
+        against this result and can only fail, never widen scope.
+        """
+
+        cached = getattr(request, "_kelp_tenant", None)
+        if isinstance(cached, TenantContext):
+            return cached
+        auth = auth_routes._authenticate(self, request)
+        if not auth.ok:
+            # Dispatch only asks for a tenant after ``_authorize`` succeeded;
+            # reaching here meant the credential changed mid-request.
+            raise TenantMismatchError()
+        if auth.session is not None:
+            context = TenantContext(tenant_id=auth.session.tenant_id)
+        else:
+            # ``_authenticate`` already compared the bearer (or the deployment
+            # runs with auth disabled), so this maps the proven credential to
+            # its tenant without comparing a second, possibly stale copy.
+            context = self.tenant_resolver.context_for()
+        request._kelp_tenant = context  # type: ignore[attr-defined]
+        return context
+
+    @staticmethod
+    def _reject_foreign_body_tenant(
+        request: "Request", context: Principal
+    ) -> None:
+        """A body may name a tenant only if it is the one the credential bound.
+
+        The field is not consumed by any route; it exists so a future caller
+        cannot smuggle a tenant past the gate. Malformed JSON is left to the
+        route, which already owns its error shape.
+        """
+
+        if request.method.upper() not in _SUPPORTED_METHODS or not request.body:
+            return
+        try:
+            payload = json.loads(request.body.decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError):
+            return
+        if not isinstance(payload, Mapping):
+            return
+        named = payload.get("tenant_id", payload.get("tenant"))
+        if named is None:
+            return
+        if named != context.tenant_id:
+            raise TenantMismatchError()
 
     # -- dispatch ----------------------------------------------------------
 
@@ -1565,7 +1683,13 @@ class ChatAPI:
             ):
                 return self.checkout_api.handle(request)
             if len(segments) >= 2 and segments[0] == "api" and segments[1] == "shared":
-                return share_routes._shared(self, request, segments[2:])
+                # P2-2 share decision: the token carries its tenant. The store
+                # lookup in the share route is scoped by the deployment's tenant
+                # (owner today), so a link minted by another tenant is the same
+                # 404 as an unknown one. The binding below only labels the
+                # content-free view audit row with the acting principal.
+                with bind_tenant(Principal(actor_id="share")):
+                    return share_routes._shared(self, request, segments[2:])
             # The phone app's static shell: public, read-only, traversal-safe
             # (chat/phone.py). Its /api calls keep the normal auth and CSRF.
             if segments and segments[0] == phone_routes.PHONE_PATH_PREFIX:
@@ -1582,13 +1706,36 @@ class ChatAPI:
                 auth_routes._authorize(self, request)
             if len(segments) < 1 or segments[0] != "api":
                 raise ChatError("not_found", status=404, message="Unknown endpoint.")
-            return self._route(request, segments[1:])
+            if self._is_public(request, segments):
+                # Liveness carries no principal and no tenant-scoped work.
+                return self._route(request, segments[1:])
+            # Auth has run, so the credential can be mapped to exactly one
+            # tenant. Bind it for the route (and for any task the route starts)
+            # and reject a body that names a different one before any work.
+            tenant = self._tenant_context(request)
+            self._reject_foreign_body_tenant(request, tenant)
+            with bind_tenant(tenant):
+                return self._route(request, segments[1:])
         except _AuthLocked as exc:
             return _rate_limited_response(
                 exc.retry_after,
                 class_name="auth",
                 reason="locked",
                 metrics=self.metrics,
+            )
+        except TenantMismatchError as exc:
+            # The contract's typed tenant failure: 403, no tenant id echoed.
+            return _json_response(
+                exc.status,
+                {
+                    "ok": False,
+                    "error": {
+                        "code": exc.code,
+                        "message": str(exc),
+                        "retryable": False,
+                        "user_fixable": False,
+                    },
+                },
             )
         except ChatError as exc:
             return _json_response(exc.status, exc.to_body())
