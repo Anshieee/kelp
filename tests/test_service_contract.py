@@ -1,12 +1,15 @@
-"""Contract tests for the frozen bot control layer (P0-1).
+"""Contract tests for the frozen bot control layer (P0-1, tightened by P1-1).
 
-These tests bind the documents to the code that exists today. P0-1 changes no
-runtime module: the schema freezes ``ChatRequest.tenant_id`` as the P1 target
-while asserting that the current dataclass still has exactly five fields.
+These tests bind the documents to the code. P0-1 froze the shapes with
+``ChatRequest.tenant_id`` as the P1 target; P1-1 ships that sixth field and the
+provider-neutral seam, so the assertions below now check the six-field dataclass,
+the typed ``StreamEnd``/failure union, and the tenant-binding guard rather than
+the five-field P0 preview.
 """
 
 from __future__ import annotations
 
+import asyncio
 import dataclasses
 import inspect
 import json
@@ -14,9 +17,12 @@ import re
 import typing
 from pathlib import Path
 
+import httpx
+
 import chat.server
 import chat.service
 import kernel.provider
+import kernel.providers
 
 ROOT = Path(__file__).resolve().parents[1]
 CONTRACT = ROOT / "docs" / "SERVICE_CONTRACT.md"
@@ -97,6 +103,8 @@ EXPECTED_ERROR_CODES = [
     "entitlement_denied",
     "entitlement_exhausted",
     "spend_cap_exceeded",
+    "missing_base_url",
+    "missing_api_key",
     "provider_auth",
     "provider_model_not_found",
     "provider_timeout",
@@ -176,7 +184,7 @@ def test_provider_contract_and_name_agnostic_seam() -> None:
     assert "value never appears" in spec["secret_rule"]
 
 
-def test_chat_request_fields_are_ordered_and_tenant_id_is_the_p1_target() -> None:
+def test_chat_request_fields_are_ordered_and_tenant_id_is_last() -> None:
     schema = load_schema()
     chat_request = schema["ChatRequest"]
     assert chat_request["field_order"] == EXPECTED_CHAT_REQUEST
@@ -185,9 +193,16 @@ def test_chat_request_fields_are_ordered_and_tenant_id_is_the_p1_target() -> Non
     assert chat_request["required"] == ["model", "messages"]
     assert chat_request["properties"]["tenant_id"]["default"] == "owner"
     assert chat_request["properties"]["tenant_id"]["since"] == "P1"
+    assert chat_request["field_order"][-1] == "tenant_id"
     assert chat_request["field_order"] == (
         chat_request["p0_present_field_order"] + ["tenant_id"]
     )
+
+    fields = dataclasses.fields(kernel.provider.ChatRequest)
+    assert [field.name for field in fields] == EXPECTED_CHAT_REQUEST
+    tenant_field = next(field for field in fields if field.name == "tenant_id")
+    assert tenant_field.default == "owner"
+    assert kernel.provider.ChatRequest.__dataclass_params__.frozen is True
 
 
 def test_tenant_context_fields() -> None:
@@ -283,15 +298,87 @@ def test_admin_read_model_excludes_prompt_text_secrets_and_cross_tenant_data() -
     assert any("no prompt" in rule for rule in admin["rules"])
     assert any("no API-key" in rule for rule in admin["rules"])
     assert any("tenant-scoped" in rule for rule in admin["rules"])
+    # A run with no chat turn (scheduled, plugin, or system work) omits
+    # ``turn_id`` rather than inventing one; the admin read model follows the
+    # same rule, so the field is listed but never required.
+    assert "turn_id" in fields
+    assert "turn_id" not in schema["TaskRun"]["required"]
 
 
-def test_today_chat_request_has_exactly_five_fields() -> None:
-    current = [field.name for field in dataclasses.fields(kernel.provider.ChatRequest)]
+def test_chat_request_is_frozen_with_six_field_order() -> None:
     schema = load_schema()
-    assert current == EXPECTED_CHAT_REQUEST_P0
-    assert current == schema["ChatRequest"]["p0_present_field_order"]
-    assert "tenant_id" not in current
+    current = [field.name for field in dataclasses.fields(kernel.provider.ChatRequest)]
+    assert current == schema["ChatRequest"]["field_order"]
+    assert current == EXPECTED_CHAT_REQUEST
     assert kernel.provider.ChatRequest.__dataclass_params__.frozen is True
+
+
+def test_compat_shim_agrees_with_kernel_and_the_providers_package() -> None:
+    for name in kernel.provider.__all__:
+        assert hasattr(kernel, name), f"kernel.{name} is missing"
+        assert getattr(kernel, name) is getattr(kernel.provider, name), name
+    assert kernel.provider.TokenFactoryClient is kernel.provider.ProviderClient
+    assert kernel.provider.ProviderEvent is kernel.providers.ProviderEvent
+
+
+def test_seam_stream_is_annotated_with_the_typed_event_iterator() -> None:
+    symbol = getattr(chat.server, "ProviderClient")
+    hints = typing.get_type_hints(symbol.stream)
+    assert hints["return"] == typing.AsyncIterator[kernel.providers.ProviderEvent]
+
+
+def _drain(client: typing.Any, request: typing.Any) -> list[typing.Any]:
+    async def run() -> list[typing.Any]:
+        async with client:
+            return [event async for event in client.stream(request)]
+
+    return asyncio.run(run())
+
+
+def test_chat_request_tenant_id_is_never_written_upstream() -> None:
+    captured: dict[str, typing.Any] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured["body"] = json.loads(request.content)
+        return httpx.Response(200, text="data: [DONE]\n\n")
+
+    client = kernel.provider.ProviderClient(
+        kernel.KernelConfig(
+            base_url="https://provider.example.test/v1", api_key="test-key"
+        ),
+        client=httpx.AsyncClient(transport=httpx.MockTransport(handler)),
+    )
+    _drain(
+        client,
+        kernel.provider.ChatRequest(model="m", messages=[], tenant_id="owner"),
+    )
+    body = captured["body"]
+    assert isinstance(body, dict)
+    assert "tenant_id" not in body
+
+
+def test_chat_request_tenant_mismatch_is_typed_and_makes_no_call() -> None:
+    calls: list[object] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:  # pragma: no cover
+        calls.append(request)
+        raise AssertionError("a mismatched tenant must not reach the network")
+
+    client = kernel.provider.ProviderClient(
+        kernel.KernelConfig(
+            base_url="https://provider.example.test/v1", api_key="test-key"
+        ),
+        client=httpx.AsyncClient(transport=httpx.MockTransport(handler)),
+    )
+    events = _drain(
+        client,
+        kernel.provider.ChatRequest(model="m", messages=[], tenant_id="other"),
+    )
+    assert len(events) == 1
+    assert isinstance(events[0], kernel.provider.ProviderFailure)
+    assert events[0].code == "tenant_mismatch"
+    assert events[0].retryable is False
+    assert calls == []
 
 
 def test_today_provider_seam_is_one_patchable_symbol_and_provider_keyword() -> None:

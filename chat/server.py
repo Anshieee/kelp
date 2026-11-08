@@ -32,8 +32,9 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
-from kernel import JsonlUsageStore, KernelConfig, ProviderClient
+from kernel import JsonlUsageStore, KernelConfig
 from kernel.config import API_KEY_ENV, BASE_URL_ENV
+from kernel.providers import OpenAICompatibleClient, build_provider
 from kernel.usage import SpendCaps, SpendGuard
 from openshell.approvals import ApprovalStore
 from openshell.audit import AuditLog, SecretScrubber
@@ -109,6 +110,11 @@ _AUDIT_FILENAME = "audit.jsonl"
 _USAGE_FILENAME = "usage.jsonl"
 # Generous enough for approval unwinding, short enough to never hang a stop.
 _TURN_SHUTDOWN_SECONDS = 10.0
+
+#: The one module-level patchable provider symbol the service contract names.
+#: Replacing this class changes the default runtime provider; ``build_app``'s
+#: ``provider=`` keyword remains the per-call injection point.
+ProviderClient = OpenAICompatibleClient
 
 
 class ServerError(Exception):
@@ -602,7 +608,7 @@ def build_app(
         # client and every skill's egress client.
         egress = EgressLedger(audit)
         if runtime_provider is None:
-            runtime_provider = ProviderClient(config.kernel)
+            runtime_provider = build_provider(config.kernel, factory=ProviderClient)
             # Attach after construction on purpose: ``ProviderClient(config)``
             # stays a one-argument call, which the serve harness relies on.
             try:

@@ -60,12 +60,12 @@ Field order is `model`, `messages`, `tools`, `temperature`, `max_tokens`,
 | `tools` | array | `[]` | present today |
 | `temperature` | number | `0.2` | present today |
 | `max_tokens` | integer or null | `null` | present today |
-| `tenant_id` | string | `"owner"` | **P1 target**, not present today |
+| `tenant_id` | string | `"owner"` | added in P1-1 |
 
-On this branch `kernel.provider.ChatRequest` has exactly the five present fields
-and no `tenant_id`. P0 forbids runtime changes, so the contract marks the sixth
-field as the P1 target. A P1 change adds it with the default `"owner"`; it does
-not reorder the five existing fields.
+P1-1 adds `tenant_id` with the default `"owner"` and does not reorder the five
+existing fields. A provider instance is bound to one tenant; a request whose
+`tenant_id` differs yields the typed `tenant_mismatch` failure before any call,
+and the field is never serialized into the upstream request body.
 
 ### 2.2 ProviderSpec
 
@@ -185,6 +185,8 @@ Frozen error codes:
 | `entitlement_denied` | `entitlement` |
 | `entitlement_exhausted` | `entitlement` |
 | `spend_cap_exceeded` | `spend` |
+| `missing_base_url` | `provider` configuration, before any call |
+| `missing_api_key` | `provider` configuration, before any call |
 | `provider_auth` | `provider` |
 | `provider_model_not_found` | `provider` |
 | `provider_timeout` | `provider` |
@@ -198,7 +200,9 @@ Frozen error codes:
 
 The provider codes match `kernel.provider.classify_status`; `internal_error` is a
 fixed value so an unexpected exception never leaks a message or a secret into a
-record.
+record. `missing_base_url` and `missing_api_key` are the exception: they describe
+configuration, are produced before any network call, and therefore have no HTTP
+status to classify. Either one means the request never reached a provider.
 
 ## 6. Admin read model
 
@@ -208,6 +212,10 @@ The admin view may expose the operational fields below:
 `created_at`, `updated_at`, `started_at`, `finished_at`, `model`, `provider`,
 `input_tokens`, `output_tokens`, `total_tokens`, `cost_usd`, `steps`,
 `tool_calls`, `approvals`, `error_code`, `retry_of`, `idempotency_key`.
+
+`turn_id` is internal and optional. A run with no chat turn — scheduled,
+plugin, or system work — omits it rather than inventing a placeholder, and an
+admin row for that run omits it too. `run_id` remains the external identifier.
 
 It must not expose:
 
@@ -225,11 +233,12 @@ ledger follows.
 
 ## 7. Compatibility and change control
 
-- **P0 is documentation plus one test.** No runtime module changes. The
-  compatibility assertions in `tests/test_service_contract.py` describe the code
-  that exists today: `kernel.provider.ChatRequest` has five fields, the provider
-  seam is one patchable module-level symbol plus `provider=`, and no
-  `TokenFactoryClient` is required on this line.
+- **P0 is documentation plus one test.** No runtime module changed in P0. P1-1
+  implements the P1 targets the contract declared: `kernel.provider.ChatRequest`
+  has six fields with `tenant_id` last, the provider implementation lives in
+  `kernel.providers`, `kernel.provider` is a thin compatibility shim, the
+  provider seam is one patchable module-level symbol plus `provider=`, and
+  `TokenFactoryClient` is an alias rather than a required second name.
 - **Additive changes only inside a major version.** Adding an optional field at
   the end of `TaskRun` is a minor version; reordering a field list, deleting a
   status, changing a gate's position, or renaming an error code is a new contract
@@ -294,7 +303,7 @@ ledger follows.
   },
   "ChatRequest": {
     "type": "object",
-    "status": "P0 shape has five fields; tenant_id is the P1 target",
+    "status": "six fields; tenant_id added in P1-1 and always last",
     "field_order": ["model", "messages", "tools", "temperature", "max_tokens", "tenant_id"],
     "p0_present_field_order": ["model", "messages", "tools", "temperature", "max_tokens"],
     "p1_additions": ["tenant_id"],
@@ -378,6 +387,8 @@ ledger follows.
     "entitlement_denied",
     "entitlement_exhausted",
     "spend_cap_exceeded",
+    "missing_base_url",
+    "missing_api_key",
     "provider_auth",
     "provider_model_not_found",
     "provider_timeout",
