@@ -1,10 +1,7 @@
 DEMO_STATE ?= var/demo
 EVAL_ARGS ?=
 
-.PHONY: demo serve check-serve test audit eval clean-demo phone
-
-demo:
-	python -m demo --state "$(DEMO_STATE)"
+.PHONY: serve check-serve test audit eval clean-demo phone
 
 # One command to run the server. Loads .env when present; every value stays
 # server-side. Use `make check-serve` to validate configuration without

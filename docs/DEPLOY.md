@@ -8,7 +8,7 @@
 - **Tests:** `tests/test_deploy_healthcheck.py` (25 cases) and
   `tests/test_deploy_assets.py` (40 cases); full suite **1045** passed on
   `main`
-- **Not in scope:** evals, chat/turn logic, payments, the tracker site, and any
+- **Not in scope:** evals, chat/turn logic, payments, and any
   actual server. Nothing here was deployed to a hosted VM; every command below
   was executed locally against this image and is reported with its measured
   time.

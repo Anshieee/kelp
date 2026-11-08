@@ -149,7 +149,7 @@ class ArtifactRegistry:
 
         The server passes it explicitly. A default layout
         (``<workspace>/var/artifacts``) is recognised so embedders such as the
-        demo and the test harness get eager index removal without extra wiring.
+        test harness get eager index removal without extra wiring.
         """
 
         if self._workspace_root is not None:

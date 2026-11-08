@@ -36,9 +36,8 @@ logs/
 data/
 backups/
 
-# Tests, fixtures, evals, and demos are not part of the runtime image
+# Tests, fixtures, and evals are not part of the runtime image
 tests/
-demo/
 evals/
 pytest.ini
 .pytest_cache/
@@ -48,7 +47,7 @@ htmlcov/
 **/__pycache__/
 **/*.py[cod]
 
-# Docs and the published tracker site
+# Docs and the Netlify demo deployment
 docs/
 netlify/
 README.md
