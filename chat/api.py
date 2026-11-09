@@ -35,6 +35,7 @@ from urllib.parse import parse_qs, unquote, urlsplit
 from openshell.egress_ledger import recipient_for_host
 
 from .artifacts import ArtifactError, MAX_UPLOAD_BYTES
+from . import admin as admin_routes
 from . import phone as phone_routes
 from .credentials import CredentialBroker
 from .errors import ChatError
@@ -1883,7 +1884,9 @@ class ChatAPI:
             # Liveness is the one unauthenticated route: a supervisor must be
             # able to tell "process alive" from "owner token missing".
             if not self._is_public(request, segments):
-                limited = auth_routes._limit(self, request, segments)
+                limited = auth_routes._limit(
+                    self, request, admin_routes.limit_segments(segments)
+                )
                 if limited is not None:
                     return limited
                 auth_routes._authorize(self, request)
@@ -1976,6 +1979,8 @@ class ChatAPI:
             )
         if head == "runs":
             return _runs_route(self, request, method, segments[1:])
+        if head == "admin":
+            return admin_routes.admin_route(self, request, method, segments[1:])
         if head == "turns":
             return turn_routes._turns(self, request, method, segments[1:])
         if head == "approvals":
