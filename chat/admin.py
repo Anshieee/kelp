@@ -36,7 +36,7 @@ total.
 from __future__ import annotations
 
 from datetime import datetime, timezone
-from typing import Any, Mapping
+from typing import Any, Mapping, Sequence
 
 from .errors import ChatError
 from .logging import current_request_id
@@ -362,10 +362,13 @@ def _run_rows(api: Any, tenant_id: str) -> list[dict[str, Any]]:
         rows = store.list_runs(tenant_id=tenant_id, limit=RUN_WINDOW)
     except Exception:  # noqa: BLE001 - a read surface reports empty, not 500
         return []
-    return [row for row in rows if isinstance(row, Mapping)]
+    rows_out: list[dict[str, Any]] = [
+        dict(row) for row in rows if isinstance(row, Mapping)
+    ]
+    return rows_out
 
 
-def _run_counts(rows: list[Mapping[str, Any]]) -> dict[str, Any]:
+def _run_counts(rows: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
     by_status = {status: 0 for status in RUN_STATUSES}
     by_task_type: dict[str, int] = {}
     by_surface: dict[str, int] = {}
@@ -418,7 +421,7 @@ def _usage_rows(api: Any, tenant_id: str) -> list[dict[str, Any]]:
     return rows
 
 
-def _usage_totals(rows: list[Mapping[str, Any]]) -> dict[str, Any]:
+def _usage_totals(rows: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
     input_tokens = 0
     output_tokens = 0
     total_tokens = 0
@@ -444,7 +447,7 @@ def _usage_totals(rows: list[Mapping[str, Any]]) -> dict[str, Any]:
 
 
 def _spend_totals(
-    rows: list[Mapping[str, Any]],
+    rows: Sequence[Mapping[str, Any]],
     caps: Mapping[str, float | None],
     now: datetime,
 ) -> dict[str, Any]:
@@ -457,7 +460,7 @@ def _spend_totals(
 
 
 def _window_totals(
-    rows: list[Mapping[str, Any]], start: datetime, limit: float | None
+    rows: Sequence[Mapping[str, Any]], start: datetime, limit: float | None
 ) -> dict[str, Any]:
     used = 0.0
     unknown = 0

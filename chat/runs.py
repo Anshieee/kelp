@@ -46,7 +46,6 @@ from .store import (
     OWNER_TENANT_ID,
     RUN_TERMINAL_STATUSES,
     RUN_STATUSES,
-    iso_now,
 )
 from .tenancy import SURFACES, tenant_for, validate_tenant_id
 
