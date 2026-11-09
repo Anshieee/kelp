@@ -67,11 +67,14 @@ def _resolve_key(
 ) -> str | None:
     """Resolve one key without ever consulting the process environment implicitly.
 
-    Precedence is explicit argument, then resolver, then the caller's explicit
-    mapping. A resolver miss is deliberately swallowed: the provider already has
-    a typed ``missing_api_key`` path, and raising here would turn a per-request
-    failure into a boot crash for a caller that expects lazy failure. The
-    server performs its own fail-fast check at boot.
+    Precedence is the explicit argument, then a supplied resolver. When no
+    resolver is supplied, the caller's explicit mapping is consulted. A
+    resolver miss is deliberately swallowed and becomes ``None`` rather than
+    falling through to another source: a per-tenant resolver must fail closed,
+    never silently borrow a process-wide key. The provider already has a typed
+    ``missing_api_key`` path, and raising here would turn a per-request failure
+    into a boot crash for a caller that expects lazy failure. The server
+    performs its own fail-fast check at boot.
     """
 
     if api_key is not None:
@@ -129,9 +132,13 @@ def build_provider(
     ``ledger``, and ``tenant_id``.
 
     ``resolver`` is the credential seam. The server passes a resolver built from
-    its boot configuration; when it is absent, only the config's existing key
-    and the caller's explicit ``environ`` mapping are consulted — never
-    :data:`os.environ`.
+    its boot configuration. When a resolver is present it is authoritative: its
+    value wins over the source config's existing key, and a miss fails closed
+    with ``api_key=None`` instead of falling back to that key or to
+    :data:`os.environ`. When it is absent, a ``ProviderSpec`` resolves the
+    explicit ``api_key`` argument and then its ``api_key_env`` name from the
+    caller's explicit ``environ`` mapping; a ``KernelConfig`` uses the explicit
+    ``api_key`` argument and then its own key.
     """
 
     if isinstance(source, ProviderSpec):
@@ -143,12 +150,15 @@ def build_provider(
         )
     else:
         config = source
-        key = api_key if api_key is not None else config.api_key
-        if key is None and resolver is not None:
+        if api_key is not None:
+            key = api_key
+        elif resolver is not None:
             try:
                 key = resolver.resolve(API_KEY_ENV)
             except MissingSecret:
                 key = None
+        else:
+            key = config.api_key
         if key != config.api_key:
             config = replace(config, api_key=key)
 

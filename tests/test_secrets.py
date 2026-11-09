@@ -213,6 +213,24 @@ def test_provider_spec_resolves_through_the_passed_resolver() -> None:
     assert FAKE_ENV not in repr(config)
 
 
+def test_provider_spec_resolver_miss_does_not_fall_back_to_environ() -> None:
+    """A resolver miss is final even when the caller supplied a mapping."""
+
+    captured: dict[str, KernelConfig] = {}
+
+    def factory(config: KernelConfig) -> object:
+        captured["config"] = config
+        return object()
+
+    build_provider(
+        _spec(),
+        factory=factory,
+        resolver=EnvSecretResolver({}),
+        environ={PROVIDER_KEY: FAKE_ENV},
+    )
+    assert captured["config"].api_key is None
+
+
 def test_kernel_config_resolves_through_the_passed_resolver() -> None:
     captured: dict[str, KernelConfig] = {}
 
@@ -226,6 +244,52 @@ def test_kernel_config_resolves_through_the_passed_resolver() -> None:
         resolver=EnvSecretResolver({PROVIDER_KEY: FAKE_ENV}),
     )
     assert captured["config"].api_key == FAKE_ENV
+
+
+def test_tenant_resolver_wins_over_the_config_key(tmp_path: Path) -> None:
+    """A supplied resolver is authoritative over an ambient config key.
+
+    The server passes ``api_key=None`` when a tenant secrets file is configured,
+    but a ``KernelConfig`` built from the environment still carries that key.
+    The resolver must win, or the tenant file would be silently bypassed.
+    """
+
+    path = _write_secret_file(tmp_path, {"owner": {PROVIDER_KEY: FAKE_A}})
+    resolver = TenantSecretResolver(path, tenant_id="owner")
+    captured: dict[str, KernelConfig] = {}
+
+    def factory(config: KernelConfig) -> object:
+        captured["config"] = config
+        return object()
+
+    build_provider(
+        KernelConfig(base_url=BASE_URL, api_key=FAKE_ENV),
+        factory=factory,
+        resolver=resolver,
+    )
+    assert captured["config"].api_key == FAKE_A
+    assert FAKE_ENV not in repr(captured["config"])
+
+
+def test_resolver_miss_does_not_fall_back_to_the_config_key(
+    tmp_path: Path,
+) -> None:
+    """A resolver that cannot answer fails closed, not to the ambient key."""
+
+    path = _write_secret_file(tmp_path, {"owner": {}})
+    resolver = TenantSecretResolver(path, tenant_id="owner")
+    captured: dict[str, KernelConfig] = {}
+
+    def factory(config: KernelConfig) -> object:
+        captured["config"] = config
+        return object()
+
+    build_provider(
+        KernelConfig(base_url=BASE_URL, api_key=FAKE_ENV),
+        factory=factory,
+        resolver=resolver,
+    )
+    assert captured["config"].api_key is None
 
 
 def test_missing_key_is_typed_and_makes_no_network_call() -> None:
