@@ -51,6 +51,7 @@ from .artifacts import (
 from .errors import ChatError
 from .logging import current_request_id, log
 from .metrics import Metrics, get_metrics
+from .runs import RunError, RunRecorder, RunStatus
 from .store import (
     APPROVAL_TRANSITIONS,
     LIVE_TURN_STATES,
@@ -62,6 +63,7 @@ from .store import (
 from .stream import EventBus
 from .tenancy import (
     OWNER_TENANT_ID,
+    SURFACES,
     TenantContext,
     current_tenant,
     tenant_for,
@@ -79,6 +81,18 @@ MESSAGE_STATUS_BY_REASON = {
 }
 
 _TERMINAL_RETRY_REASONS = frozenset({"error", "stopped", "interrupted"})
+
+#: P3-1: how a finished chat turn settles its run. ``stop`` and ``length`` are
+#: normal completions; a budget stop and a crash are failures; a client Stop is
+#: ``cancelled`` and a shutdown is ``interrupted``.
+_RUN_STATUS_BY_REASON = {
+    "stop": RunStatus.COMPLETED,
+    "length": RunStatus.COMPLETED,
+    "budget": RunStatus.FAILED,
+    "error": RunStatus.FAILED,
+    "cancelled": RunStatus.CANCELLED,
+    "interrupted": RunStatus.INTERRUPTED,
+}
 _MAX_TEXT_CHARS = 8000
 _MAX_ATTACHMENTS = 5
 _MAX_DECISION_NOTE = 200
@@ -147,6 +161,7 @@ class _TurnState:
     assistant_id: str
     model: str
     tenant: TenantContext = field(default_factory=TenantContext)
+    run_id: str | None = None
     blocks: list[dict[str, Any]] = field(default_factory=list)
     sources: list[dict[str, Any]] = field(default_factory=list)
     sources_total: int = 0
@@ -293,10 +308,12 @@ class ChatService:
         audit: AuditLog | None = None,
         metrics: Metrics | None = None,
         spend_guard: SpendGuard | None = None,
+        runs: RunRecorder | None = None,
     ):
         self.store = store
         self.bus = EventBus()
         self._now = now or (lambda: datetime.now(timezone.utc))
+        self._runs = runs or RunRecorder(store, now=self._now)
         self.approvals = approvals or ApprovalStore()
         self.artifacts = _ScopedArtifacts(
             artifacts
@@ -667,10 +684,20 @@ class ChatService:
         client_turn_id: str | None = None,
         attachment_handles: Sequence[str] = (),
         tenant: TenantContext | str | None = None,
+        surface: str | None = None,
+        task_type: str | None = None,
     ) -> tuple[dict[str, Any], bool]:
-        """Accept a user message and start a turn. Returns ``(payload, created)``."""
+        """Accept a user message and start a turn. Returns ``(payload, created)``.
+
+        ``surface``/``task_type`` let a non-interactive caller (the proactive
+        runner) label its run without inventing a second send path. They are
+        absent from every existing call site and default to the bound tenant's
+        surface and ``chat``.
+        """
 
         context = self._ctx(tenant)
+        run_surface = surface if surface in SURFACES else context.surface
+        run_task_type = task_type or "chat"
         thread = self.store.get_thread(thread_id, tenant_id=context.tenant_id)
         if thread is None:
             raise ChatError("unknown_thread", status=404)
@@ -682,7 +709,18 @@ class ChatService:
             if existing is not None:
                 stored = self.store.get_message(existing["user_message_id"])
                 accepted = _message_text(stored) if stored is not None else text
-                return self._send_payload(existing, accepted, idempotent=True), False
+                run = self.store.get_run_by_turn(
+                    existing["id"], tenant_id=context.tenant_id
+                )
+                return (
+                    self._send_payload(
+                        existing,
+                        accepted,
+                        idempotent=True,
+                        run_id=str(run["run_id"]) if run is not None else None,
+                    ),
+                    False,
+                )
 
         message = text.strip() if isinstance(text, str) else ""
         if not 1 <= len(message) <= _MAX_TEXT_CHARS:
@@ -773,6 +811,20 @@ class ChatService:
                 budget=self._budget_dict(),
                 turn_id=turn_id,
             )
+            # P3-1: the run is created with the turn in one transaction, so a
+            # replay either sees both or neither. The idempotency key is the
+            # client turn id; a replay returns this same run.
+            run = self._runs.create(
+                tenant_id=context.tenant_id,
+                thread_id=thread_id,
+                turn_id=turn_id,
+                surface=run_surface,
+                task_type=run_task_type,
+                model=self._model,
+                provider=self._config.provider,
+                idempotency_key=client_turn_id,
+                plan=self._plan_snapshot(context),
+            )
             self.store.update_turn(turn_id, state="queued")
             self._emit(
                 thread_id,
@@ -812,15 +864,25 @@ class ChatService:
         self.bus.publish(thread_id)
         self._done[turn_id] = asyncio.Event()
         self._cancel[turn_id] = CancelToken()
-        task = asyncio.create_task(self._run_turn(turn_id, message, context))
+        task = asyncio.create_task(
+            self._run_turn(turn_id, message, context, run_id=run.run_id)
+        )
         self._tasks[turn_id] = task
         task.add_done_callback(lambda finished: self._consume_task_error(finished))
-        return self._send_payload(turn, message, idempotent=False), True
+        return (
+            self._send_payload(turn, message, idempotent=False, run_id=run.run_id),
+            True,
+        )
 
     def _send_payload(
-        self, turn: Mapping[str, Any], text: str, *, idempotent: bool
+        self,
+        turn: Mapping[str, Any],
+        text: str,
+        *,
+        idempotent: bool,
+        run_id: str | None = None,
     ) -> dict[str, Any]:
-        return {
+        payload = {
             "turn_id": turn["id"],
             "user_message_id": turn["user_message_id"],
             "assistant_message_id": turn["assistant_message_id"],
@@ -828,6 +890,9 @@ class ChatService:
             "text": text.strip() if isinstance(text, str) else text,
             "idempotent": idempotent,
         }
+        if run_id is not None:
+            payload["run_id"] = run_id
+        return payload
 
     async def stop(
         self, turn_id: str, *, tenant: TenantContext | str | None = None
@@ -852,6 +917,11 @@ class ChatService:
         if task is not None and not task.done():
             self._arm_hard_cancel(turn_id, task)
         self.store.update_turn(turn_id, state="stopping")
+        # P3-1: ``stopping`` is not terminal; the run still settles once as
+        # ``cancelled`` (client Stop) or ``interrupted`` (shutdown).
+        self._transition_run_for_turn(
+            turn_id, context.tenant_id, RunStatus.STOPPING
+        )
         return {"turn_id": turn_id, "status": "stopping"}
 
     def _arm_hard_cancel(
@@ -911,6 +981,9 @@ class ChatService:
         thread_id = turn["thread_id"]
         new_turn_id = new_id("turn")
         assistant_id = new_id("msg")
+        previous_run = self.store.get_run_by_turn(
+            turn_id, tenant_id=context.tenant_id
+        )
         with self.store.transaction():
             self.store.create_message(
                 thread_id=thread_id,
@@ -929,6 +1002,31 @@ class ChatService:
                 retry_of=turn_id,
                 turn_id=new_turn_id,
             )
+            # P3-1: a retry is new work, so it opens a new run. ``retry_of``
+            # points at the run it replaces, not at the turn.
+            run = self._runs.create(
+                tenant_id=context.tenant_id,
+                thread_id=thread_id,
+                turn_id=new_turn_id,
+                surface=(
+                    str(previous_run["surface"])
+                    if previous_run is not None
+                    else context.surface
+                ),
+                task_type=(
+                    str(previous_run["task_type"])
+                    if previous_run is not None
+                    else "chat"
+                ),
+                model=self._model,
+                provider=self._config.provider,
+                retry_of=(
+                    str(previous_run["run_id"])
+                    if previous_run is not None
+                    else None
+                ),
+                plan=self._plan_snapshot(context),
+            )
             self.store.update_turn(new_turn_id, state="queued")
             self.store.update_message(
                 turn["assistant_message_id"], superseded_by=new_turn_id
@@ -946,10 +1044,17 @@ class ChatService:
         self.bus.publish(thread_id)
         self._done[new_turn_id] = asyncio.Event()
         self._cancel[new_turn_id] = CancelToken()
-        task = asyncio.create_task(self._run_turn(new_turn_id, text, context))
+        task = asyncio.create_task(
+            self._run_turn(new_turn_id, text, context, run_id=run.run_id)
+        )
         self._tasks[new_turn_id] = task
         task.add_done_callback(lambda finished: self._consume_task_error(finished))
-        return {"turn_id": new_turn_id, "retry_of": turn_id}
+        return {
+            "turn_id": new_turn_id,
+            "retry_of": turn_id,
+            "run_id": run.run_id,
+            "retry_of_run": run.retry_of,
+        }
 
     async def wait_for_turn(self, turn_id: str, timeout: float = 10.0) -> None:
         event = self._done.get(turn_id)
@@ -992,7 +1097,12 @@ class ChatService:
     # -- turn runner -------------------------------------------------------
 
     async def _run_turn(
-        self, turn_id: str, text: str, tenant: TenantContext | None = None
+        self,
+        turn_id: str,
+        text: str,
+        tenant: TenantContext | None = None,
+        *,
+        run_id: str | None = None,
     ) -> None:
         context = self._ctx(tenant)
         turn = self.store.get_turn(turn_id)
@@ -1005,10 +1115,12 @@ class ChatService:
             assistant_id=turn["assistant_message_id"],
             model=self._model,
             tenant=context,
+            run_id=run_id,
         )
         state.started_mono = time.monotonic()
         self._live_blocks[state.assistant_id] = state.blocks
         self.store.update_turn(turn_id, state="running", started_at=iso_now(self._now()))
+        self._transition_run(state, RunStatus.RUNNING)
         self.store.update_message(state.user_id, status="complete")
         try:
             if self._provider is None:
@@ -1590,6 +1702,9 @@ class ChatService:
             finished_at=iso_now(self._now()),
             usage=usage,
         )
+        # P3-1: settle the run with the same terminal outcome as the turn. A
+        # late or duplicate writer loses at the store's terminal guard.
+        self._close_run(state, reason, code)
         request_id = current_request_id()
         self._metrics.observe_turn(reason, max(0.0, duration_ms / 1000.0))
         self._metrics.add_tokens("input", state.model, state.input_tokens)
@@ -2291,18 +2406,23 @@ class ChatService:
     ) -> list[str]:
         """Close turns left running by a previous process (§10.4).
 
-        Recovery is a boot/shutdown pass, not a request, so it resolves the
-        bound tenant (owner at boot). A future multi-tenant boot pass iterates
-        tenants here rather than leaving the query unscoped.
+        Recovery is a boot/shutdown pass, not a request. With no explicit
+        tenant it settles every tenant's orphaned turns, deriving ownership
+        from each turn's parent thread (the P2-3 debt: the store no longer
+        assumes the constructor's tenant). A caller that names a tenant — the
+        thread-delete path — only closes that tenant's turns.
         """
 
-        context = self._ctx(tenant)
+        explicit = None if tenant is None else self._ctx(tenant)
         closed: list[str] = []
         for turn in self.store.running_turns():
             if turn["id"] in self._tasks:
                 continue
+            turn_tenant = str(turn.get("tenant_id") or OWNER_TENANT_ID)
+            if explicit is not None and turn_tenant != explicit.tenant_id:
+                continue
             if self.store.get_thread(
-                turn["thread_id"], tenant_id=context.tenant_id
+                turn["thread_id"], tenant_id=turn_tenant
             ) is None:
                 continue
             message_id = turn["assistant_message_id"]
@@ -2314,6 +2434,15 @@ class ChatService:
                 reason="interrupted",
                 finished_at=iso_now(self._now()),
                 usage=usage,
+            )
+            # P3-1: a crash never leaves a run ``running``. It closes as
+            # ``interrupted`` — never as a success — and a second boot finds
+            # it terminal and does nothing.
+            self._transition_run_for_turn(
+                turn["id"],
+                turn_tenant,
+                RunStatus.INTERRUPTED,
+                finished_at=iso_now(self._now()),
             )
             self._emit(
                 turn["thread_id"],
@@ -2336,6 +2465,100 @@ class ChatService:
         return closed
 
     # -- helpers -----------------------------------------------------------
+
+    def _plan_snapshot(
+        self, tenant: TenantContext | str | None = None
+    ) -> Mapping[str, Any] | None:
+        """P5 plan snapshot seam; P3-1 deliberately carries no entitlement data.
+
+        The frozen run schema has no plan column, so the recorder accepts this
+        placeholder and does not persist it. P5 replaces the body with the
+        decision it already made for this request.
+        """
+
+        del tenant
+        return None
+
+    def _transition_run(
+        self, state: _TurnState, status: RunStatus, **fields: Any
+    ) -> None:
+        """Advance a run without ever letting run bookkeeping fail a turn."""
+
+        if not state.run_id:
+            return
+        try:
+            self._runs.transition(
+                state.run_id,
+                status,
+                tenant_id=state.tenant.tenant_id,
+                **fields,
+            )
+        except RunError:
+            # A terminal row (another writer won) or a vanished run is not a
+            # reason to fail the turn; the turn write is the authority.
+            return
+
+    def _transition_run_for_turn(
+        self,
+        turn_id: str,
+        tenant_id: str,
+        status: RunStatus,
+        **fields: Any,
+    ) -> None:
+        run = self.store.get_run_by_turn(turn_id, tenant_id=tenant_id)
+        if run is None:
+            return
+        try:
+            self._runs.transition(
+                str(run["run_id"]), status, tenant_id=tenant_id, **fields
+            )
+        except RunError:
+            return
+
+    def _close_run(self, state: _TurnState, reason: str, error_code: str | None) -> None:
+        status = _RUN_STATUS_BY_REASON.get(reason, RunStatus.FAILED)
+        self._transition_run(
+            state,
+            status,
+            finished_at=iso_now(self._now()),
+            model=state.model,
+            provider=self._config.provider,
+            input_tokens=state.input_tokens,
+            output_tokens=state.output_tokens,
+            total_tokens=state.input_tokens + state.output_tokens,
+            cost_usd=(
+                state.estimated_cost_usd
+                if state.estimated_cost_usd is not None
+                else 0.0
+            ),
+            steps=state.steps,
+            tool_calls=state.tool_calls,
+            approvals=self._approval_count(state),
+            error_code=error_code,
+        )
+
+    def _approval_count(self, state: _TurnState) -> int:
+        """Approval decisions attached to this turn, from the store's rows.
+
+        Counted at settle time so a decision made through the API (a different
+        call path) is included. Only ids, status, and ``turn_id`` are read.
+        """
+
+        try:
+            cards = self.store.list_approvals(
+                thread_id=state.thread_id,
+                limit=200,
+                tenant_id=state.tenant.tenant_id,
+            )
+        except Exception:  # noqa: BLE001 - a count must not fail the close
+            return 0
+        decided = {"approved", "denied", "expired", "consumed"}
+        return sum(
+            1
+            for card in cards
+            if str(card.get("turn_id") or "") == state.turn["id"]
+            and str(card.get("status")) in decided
+        )
 
     def _budget_dict(self) -> dict[str, Any]:
         return {

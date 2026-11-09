@@ -64,7 +64,7 @@ from openshell.audit import AuditLog
 from .errors import ChatError
 from .logging import log
 from .scheduler import MAX_SKIPS, RUNNABLE_STATES, ScheduleStore, tick_lock, utc_now
-from .tenancy import OWNER_TENANT_ID, validate_tenant_id
+from .tenancy import OWNER_TENANT_ID, TenantContext, validate_tenant_id
 from .service import ChatService
 from .store import ChatStore
 
@@ -456,6 +456,22 @@ class ProactiveRunner:
             return submit(coro)
         return self._runner.run(coro)
 
+    def _tenant_context(self) -> TenantContext:
+        """The principal a scheduled fire acts as.
+
+        The run record needs a concrete tenant and surface. The scheduler is a
+        non-human actor on the ``scheduler`` surface; the tenant is the one
+        this runner was built for, so the run carries explicit ownership rather
+        than relying on the scheduler store's directory to imply it.
+        """
+
+        return TenantContext(
+            tenant_id=self._tenant_id or OWNER_TENANT_ID,
+            actor_id=SCHEDULE_ORIGIN,
+            role="owner",
+            surface="scheduler",
+        )
+
     # -- one turn ----------------------------------------------------------
 
     async def _execute(self, run: _ActiveRun, task: Mapping[str, Any]) -> None:
@@ -471,7 +487,9 @@ class ProactiveRunner:
                 thread_id,
                 text=prompt,
                 client_turn_id=f"schedule:{run.schedule_id}:{run.scheduled_iso}",
-                tenant=self._tenant_id,
+                tenant=self._tenant_context(),
+                surface="scheduler",
+                task_type="scheduled",
             )
             turn_id = str(payload["turn_id"])
             # The send above did not yield: the turn task starts only when this

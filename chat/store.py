@@ -31,6 +31,8 @@ __all__ = [
     "APPROVAL_TRANSITIONS",
     "ChatStore",
     "LIVE_TURN_STATES",
+    "RUN_STATUSES",
+    "RUN_TERMINAL_STATUSES",
     "SHARE_ID_LENGTH",
     "ThreadBusyError",
     "ThreadGoneError",
@@ -107,6 +109,45 @@ CREATE UNIQUE INDEX IF NOT EXISTS turns_client
     ON turns (thread_id, client_turn_id)
     WHERE client_turn_id IS NOT NULL;
 CREATE INDEX IF NOT EXISTS turns_thread ON turns (thread_id, created_at, id);
+
+-- P3-1: the operational run record. It holds counters and ids only; prompt
+-- text, message text, tool arguments/results, artifact bytes, and secret
+-- values never have a column here.
+CREATE TABLE IF NOT EXISTS runs (
+    run_id TEXT PRIMARY KEY,
+    tenant_id TEXT NOT NULL DEFAULT 'owner',
+    thread_id TEXT,
+    turn_id TEXT,
+    surface TEXT NOT NULL,
+    task_type TEXT NOT NULL,
+    status TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    started_at TEXT,
+    finished_at TEXT,
+    model TEXT NOT NULL DEFAULT '',
+    provider TEXT NOT NULL DEFAULT '',
+    input_tokens INTEGER NOT NULL DEFAULT 0,
+    output_tokens INTEGER NOT NULL DEFAULT 0,
+    total_tokens INTEGER NOT NULL DEFAULT 0,
+    cost_usd REAL NOT NULL DEFAULT 0,
+    steps INTEGER NOT NULL DEFAULT 0,
+    tool_calls INTEGER NOT NULL DEFAULT 0,
+    approvals INTEGER NOT NULL DEFAULT 0,
+    error_code TEXT,
+    retry_of TEXT,
+    idempotency_key TEXT
+);
+CREATE INDEX IF NOT EXISTS runs_tenant ON runs (tenant_id, created_at);
+CREATE INDEX IF NOT EXISTS runs_thread ON runs (thread_id, created_at);
+-- One run per chat turn; a retry opens a new turn and therefore a new run.
+CREATE UNIQUE INDEX IF NOT EXISTS runs_turn
+    ON runs (turn_id) WHERE turn_id IS NOT NULL;
+-- A replayed idempotency key returns the existing run. The key is scoped to
+-- the tenant and thread because a client turn id is per thread.
+CREATE UNIQUE INDEX IF NOT EXISTS runs_idempotency
+    ON runs (tenant_id, COALESCE(thread_id, ''), idempotency_key)
+    WHERE idempotency_key IS NOT NULL;
 
 CREATE TABLE IF NOT EXISTS approvals (
     id TEXT PRIMARY KEY,
@@ -242,6 +283,88 @@ def _load(value: str | None, default: Any) -> Any:
 
 LIVE_TURN_STATES = ("queued", "running", "stopping")
 
+#: P3-1: the frozen status vocabulary (contract §3). Non-terminal statuses are
+#: ``queued``, ``running``, ``awaiting_approval``, and ``stopping``; a run has
+#: exactly one terminal record.
+RUN_STATUSES = (
+    "queued",
+    "running",
+    "awaiting_approval",
+    "stopping",
+    "completed",
+    "failed",
+    "cancelled",
+    "interrupted",
+)
+RUN_TERMINAL_STATUSES = frozenset(
+    {"completed", "failed", "cancelled", "interrupted"}
+)
+
+#: The run columns, in the contract's field order. Every read and write below
+#: uses this list, so no content field can be added by accident.
+_RUN_COLUMNS = (
+    "run_id",
+    "tenant_id",
+    "thread_id",
+    "turn_id",
+    "surface",
+    "task_type",
+    "status",
+    "created_at",
+    "updated_at",
+    "started_at",
+    "finished_at",
+    "model",
+    "provider",
+    "input_tokens",
+    "output_tokens",
+    "total_tokens",
+    "cost_usd",
+    "steps",
+    "tool_calls",
+    "approvals",
+    "error_code",
+    "retry_of",
+    "idempotency_key",
+)
+
+#: Columns a transition may write. The identity of a run (id, tenant, thread,
+#: turn) and ``created_at`` are immutable; only execution state changes here.
+_RUN_UPDATE_COLUMNS = tuple(
+    column
+    for column in _RUN_COLUMNS
+    if column not in {"run_id", "tenant_id", "thread_id", "turn_id", "created_at"}
+)
+
+_RUN_INT_COLUMNS = (
+    "input_tokens",
+    "output_tokens",
+    "total_tokens",
+    "steps",
+    "tool_calls",
+    "approvals",
+)
+
+#: A caller that tries to put conversation content into a run is refused rather
+#: than silently stripped: the read model's exclusions are structural.
+_RUN_FORBIDDEN_KEYS = frozenset(
+    {
+        "prompt",
+        "prompt_text",
+        "text",
+        "message_text",
+        "messages",
+        "blocks",
+        "tool_arguments",
+        "tool_results",
+        "provider_response_body",
+        "api_key",
+        "secret_values",
+        "headers",
+        "cookies",
+    }
+)
+
 #: Tables that carry the tenant boundary. They are created with the column in
 #: ``_SCHEMA``; existing databases get it through the additive migration below.
 _TENANT_TABLES = ("threads", "artifacts", "shares", "sessions")
@@ -304,6 +427,7 @@ class ChatStore:
         self._conn.execute("PRAGMA foreign_keys=ON")
         self._conn.executescript(_SCHEMA)
         self._migrate_tenant_columns()
+        self._migrate_runs_table()
         try:
             os.chmod(self.path, 0o600)
         except OSError:  # pragma: no cover - platform dependent
@@ -357,6 +481,56 @@ class ChatStore:
         self._conn.execute(
             "INSERT OR IGNORE INTO tenants (id, created_at) VALUES (?, ?)",
             (OWNER_TENANT_ID, self._now_iso()),
+        )
+
+    def _migrate_runs_table(self) -> None:
+        """Bring a pre-P3-1 database's ``runs`` table to the frozen shape.
+
+        ``CREATE TABLE IF NOT EXISTS`` never changes an existing table. The
+        table is new in P3-1, so a normal database already has every column;
+        this pass only repairs a partially-created development table and is a
+        no-op afterwards. Only additive columns are possible: removing or
+        reordering a column is a contract change.
+        """
+
+        definitions: dict[str, str] = {
+            "run_id": "TEXT",
+            "tenant_id": "TEXT NOT NULL DEFAULT 'owner'",
+            "thread_id": "TEXT",
+            "turn_id": "TEXT",
+            "surface": "TEXT NOT NULL DEFAULT 'web'",
+            "task_type": "TEXT NOT NULL DEFAULT 'chat'",
+            "status": "TEXT NOT NULL DEFAULT 'queued'",
+            "created_at": "TEXT NOT NULL DEFAULT ''",
+            "updated_at": "TEXT NOT NULL DEFAULT ''",
+            "started_at": "TEXT",
+            "finished_at": "TEXT",
+            "model": "TEXT NOT NULL DEFAULT ''",
+            "provider": "TEXT NOT NULL DEFAULT ''",
+            "input_tokens": "INTEGER NOT NULL DEFAULT 0",
+            "output_tokens": "INTEGER NOT NULL DEFAULT 0",
+            "total_tokens": "INTEGER NOT NULL DEFAULT 0",
+            "cost_usd": "REAL NOT NULL DEFAULT 0",
+            "steps": "INTEGER NOT NULL DEFAULT 0",
+            "tool_calls": "INTEGER NOT NULL DEFAULT 0",
+            "approvals": "INTEGER NOT NULL DEFAULT 0",
+            "error_code": "TEXT",
+            "retry_of": "TEXT",
+            "idempotency_key": "TEXT",
+        }
+        columns = {
+            str(row["name"])
+            for row in self._conn.execute("PRAGMA table_info(runs)")
+        }
+        for column in _RUN_COLUMNS:
+            if column not in columns:
+                self._conn.execute(
+                    f"ALTER TABLE runs ADD COLUMN {column} {definitions[column]}"
+                )
+        self._conn.execute(
+            "UPDATE runs SET tenant_id = ? "
+            "WHERE tenant_id IS NULL OR tenant_id = ''",
+            (OWNER_TENANT_ID,),
         )
 
     # -- lifecycle ---------------------------------------------------------
@@ -837,12 +1011,242 @@ class ChatStore:
             )
 
     def running_turns(self) -> list[dict[str, Any]]:
+        """Live turns across every tenant, each carrying its owner.
+
+        Recovery is a boot-wide pass (P2-3 debt): it must settle every orphaned
+        turn, not only the owner's, so the tenant is read from the parent thread
+        rather than assumed from the store's constructor.
+        """
+
         with self._lock:
             rows = self._conn.execute(
-                "SELECT * FROM turns WHERE state IN ('queued', 'running', 'stopping') "
-                "ORDER BY created_at"
+                "SELECT turns.*, threads.tenant_id AS owner_tenant_id FROM turns "
+                "LEFT JOIN threads ON threads.id = turns.thread_id "
+                "WHERE turns.state IN ('queued', 'running', 'stopping') "
+                "ORDER BY turns.created_at"
             ).fetchall()
-        return [self._turn_record(row) for row in rows]
+        records: list[dict[str, Any]] = []
+        for row in rows:
+            record = self._turn_record(row)
+            record["tenant_id"] = row["owner_tenant_id"] or OWNER_TENANT_ID
+            records.append(record)
+        return records
+
+    # -- runs (P3-1) -------------------------------------------------------
+
+    def _run_value(self, column: str, value: Any) -> Any:
+        if column in _RUN_INT_COLUMNS:
+            if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+                return 0
+            return int(value)
+        if column == "cost_usd":
+            if isinstance(value, bool) or not isinstance(value, (int, float)):
+                return 0.0
+            return max(0.0, float(value))
+        if column in {"thread_id", "turn_id", "started_at", "finished_at",
+                      "error_code", "retry_of", "idempotency_key"}:
+            if value is None:
+                return None
+            return str(value)
+        return "" if value is None else str(value)
+
+    def _run_record(self, row: sqlite3.Row) -> dict[str, Any]:
+        return {column: row[column] for column in _RUN_COLUMNS}
+
+    def create_run(self, record: Mapping[str, Any]) -> dict[str, Any]:
+        """Insert one metadata-only run row; a duplicate id is idempotent.
+
+        Conversation content is not storable here by construction: only
+        :data:`_RUN_COLUMNS` are read from ``record``. A caller that names a
+        forbidden content key is refused instead of being silently stripped, so
+        a future writer cannot believe it persisted a prompt.
+        """
+
+        extra = set(record) - set(_RUN_COLUMNS)
+        forbidden = extra & _RUN_FORBIDDEN_KEYS
+        if forbidden:
+            raise ValueError(
+                "run records hold metadata only; refusing content field(s): "
+                + ", ".join(sorted(forbidden))
+            )
+        now = self._now_iso()
+        data = {
+            column: self._run_value(column, record.get(column))
+            for column in _RUN_COLUMNS
+        }
+        tenant = validate_tenant_id(str(data.get("tenant_id") or OWNER_TENANT_ID))
+        data["tenant_id"] = tenant
+        data["run_id"] = str(data.get("run_id") or new_id("run"))
+        status = getattr(record.get("status"), "value", record.get("status"))
+        status = str(status or "queued")
+        if status not in RUN_STATUSES:
+            raise ValueError(f"unknown run status {status!r}")
+        data["status"] = status
+        data["surface"] = str(record.get("surface") or "web")
+        data["task_type"] = str(record.get("task_type") or "chat")
+        data["created_at"] = str(record.get("created_at") or now)
+        data["updated_at"] = str(record.get("updated_at") or data["created_at"])
+
+        columns = ", ".join(_RUN_COLUMNS)
+        placeholders = ", ".join("?" for _ in _RUN_COLUMNS)
+        values = tuple(data[column] for column in _RUN_COLUMNS)
+        with self.transaction():
+            self._conn.execute(
+                f"INSERT INTO runs ({columns}) VALUES ({placeholders}) "
+                "ON CONFLICT(run_id) DO NOTHING",
+                values,
+            )
+            row = self._conn.execute(
+                "SELECT * FROM runs WHERE run_id = ? AND tenant_id = ?",
+                (data["run_id"], tenant),
+            ).fetchone()
+        if row is None:
+            raise ValueError(
+                f"run {data['run_id']} already exists for another tenant"
+            )
+        return self._run_record(row)
+
+    def get_run(
+        self, run_id: str, *, tenant_id: str = OWNER_TENANT_ID
+    ) -> dict[str, Any] | None:
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT * FROM runs WHERE run_id = ? AND tenant_id = ?",
+                (run_id, tenant_id),
+            ).fetchone()
+        return self._run_record(row) if row is not None else None
+
+    def get_run_by_turn(
+        self, turn_id: str, *, tenant_id: str | None = None
+    ) -> dict[str, Any] | None:
+        """The single run for a chat turn, optionally scoped to one tenant."""
+
+        with self._lock:
+            if tenant_id is None:
+                row = self._conn.execute(
+                    "SELECT * FROM runs WHERE turn_id = ? "
+                    "ORDER BY created_at, run_id LIMIT 1",
+                    (turn_id,),
+                ).fetchone()
+            else:
+                row = self._conn.execute(
+                    "SELECT * FROM runs WHERE turn_id = ? AND tenant_id = ? "
+                    "ORDER BY created_at, run_id LIMIT 1",
+                    (turn_id, tenant_id),
+                ).fetchone()
+        return self._run_record(row) if row is not None else None
+
+    def find_run_by_idempotency(
+        self,
+        idempotency_key: str,
+        *,
+        tenant_id: str = OWNER_TENANT_ID,
+        thread_id: str | None = None,
+    ) -> dict[str, Any] | None:
+        """The run a replayed key already owns, scoped like the submission."""
+
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT * FROM runs WHERE tenant_id = ? AND idempotency_key = ? "
+                "AND ((thread_id IS NULL AND ? IS NULL) OR thread_id = ?) "
+                "ORDER BY created_at, run_id LIMIT 1",
+                (tenant_id, idempotency_key, thread_id, thread_id),
+            ).fetchone()
+        return self._run_record(row) if row is not None else None
+
+    def update_run(
+        self,
+        run_id: str,
+        *,
+        tenant_id: str = OWNER_TENANT_ID,
+        status: str | None = None,
+        updated_at: str | None = None,
+        **fields: Any,
+    ) -> dict[str, Any] | None:
+        """Write one transition unless the row is already terminal.
+
+        The terminal guard is part of the SQL predicate, so two concurrent
+        writers cannot both produce a terminal record: the loser's UPDATE
+        matches no row and returns ``None``.
+        """
+
+        changes: list[str] = ["updated_at = ?"]
+        values: list[Any] = [updated_at or self._now_iso()]
+        supplied = {column: fields[column] for column in _RUN_UPDATE_COLUMNS
+                    if column in fields}
+        if status is not None:
+            status = getattr(status, "value", status)
+            if status not in RUN_STATUSES:
+                raise ValueError(f"unknown run status {status!r}")
+            supplied["status"] = status
+        for column, value in supplied.items():
+            if column == "updated_at":
+                continue
+            changes.append(f"{column} = ?")
+            values.append(self._run_value(column, value))
+        terminal = tuple(sorted(RUN_TERMINAL_STATUSES))
+        placeholders = ", ".join("?" for _ in terminal)
+        values.extend([run_id, tenant_id, *terminal])
+        with self.transaction():
+            cursor = self._conn.execute(
+                f"UPDATE runs SET {', '.join(changes)} "
+                f"WHERE run_id = ? AND tenant_id = ? "
+                f"AND status NOT IN ({placeholders})",
+                values,
+            )
+            if cursor.rowcount == 0:
+                return None
+            row = self._conn.execute(
+                "SELECT * FROM runs WHERE run_id = ? AND tenant_id = ?",
+                (run_id, tenant_id),
+            ).fetchone()
+        return self._run_record(row) if row is not None else None
+
+    def list_runs(
+        self,
+        *,
+        tenant_id: str = OWNER_TENANT_ID,
+        thread_id: str | None = None,
+        status: str | None = None,
+        limit: int = 100,
+    ) -> list[dict[str, Any]]:
+        clauses = ["tenant_id = ?"]
+        params: list[Any] = [tenant_id]
+        if thread_id is not None:
+            clauses.append("thread_id = ?")
+            params.append(thread_id)
+        if status is not None:
+            clauses.append("status = ?")
+            params.append(status)
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT * FROM runs WHERE " + " AND ".join(clauses) +
+                " ORDER BY created_at DESC, run_id DESC LIMIT ?",
+                (*params, max(1, min(int(limit), 500))),
+            ).fetchall()
+        return [self._run_record(row) for row in rows]
+
+    def running_runs(
+        self, *, tenant_id: str | None = None
+    ) -> list[dict[str, Any]]:
+        """Runs still in a non-terminal state, optionally one tenant's."""
+
+        non_terminal = tuple(
+            status for status in RUN_STATUSES if status not in RUN_TERMINAL_STATUSES
+        )
+        placeholders = ", ".join("?" for _ in non_terminal)
+        clauses = [f"status IN ({placeholders})"]
+        params: list[Any] = list(non_terminal)
+        if tenant_id is not None:
+            clauses.append("tenant_id = ?")
+            params.append(tenant_id)
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT * FROM runs WHERE " + " AND ".join(clauses) +
+                " ORDER BY created_at, run_id",
+                params,
+            ).fetchall()
+        return [self._run_record(row) for row in rows]
 
     # -- events ------------------------------------------------------------
 
