@@ -63,21 +63,25 @@ from .routers._util import (
     _DEFAULT_DEVICE_LABEL,
     _DEVICE_ID_SHORT_RE,
     _RATE_LIMITED_FALLBACK_RETRY,
+    _busy_response,
+    _int_param,
     _json_response,
     _method_not_allowed_response,
     _rate_limited_response,
     _route_label,
     _secret_hash,
+    _segment,
     scrub_device_label,
 )
 from .routers.auth import _AuthLocked
-from .routers.body import _BodyRejected, _body_rejection_response
+from .routers.body import _BodyRejected, _body_rejection_response, _json_body
 from .routers.shared import (
     _SHARE_STREAM_TICK,
     _apply_share_headers,
     _is_share_path,
     _is_share_request,
 )
+from .runs import RUN_STATUSES, TaskRun, TaskRunner
 from .service import ChatService
 from .store import ChatStore
 from .stream import IDLE_SECONDS, sse_frames
@@ -88,6 +92,7 @@ from .tenancy import (
     TenantContext,
     TenantMismatchError,
     bind_tenant,
+    current_tenant,
     validate_tenant_id,
 )
 
@@ -1414,6 +1419,183 @@ class AuthFailureTracker:
         with self._lock:
             return len(self._records)
 
+# -- task runs (P3-2) ------------------------------------------------------
+#
+# ``POST /api/runs`` is the transport-neutral submission boundary. Auth and
+# tenant already ran in ``_dispatch_inner``; this module then runs the
+# entitlement gate, and ``ChatService.send`` owns the spend gate and the
+# provider call, so the contract's auth -> tenant -> entitlement -> spend ->
+# provider order holds. Reads are tenant-scoped and project the admin row only,
+# so a prompt or a provider payload cannot appear in a response body.
+
+#: One page at a time, matching the interactive thread listing's ceiling.
+_RUN_PAGE_MAX = 200
+#: The store's ``list_runs`` returns at most 500 newest-first rows per query;
+#: ``offset`` pages inside that window.
+_RUN_PAGE_WINDOW = 500
+#: Body fields a submission may carry; every one is a string when present.
+_RUN_BODY_FIELDS = (
+    "text",
+    "prompt",
+    "thread_id",
+    "idempotency_key",
+    "surface",
+    "task_type",
+)
+
+
+def _entitlement_gate(context: TenantContext, task_type: str) -> None:
+    """The entitlement gate (contract §5 step 3) - a P5 seam.
+
+    P3-2 has no plan store: P5 builds it. Contract §4 says a missing decision is
+    not an ``allow``, so this placeholder admits only the one tenant and role
+    this deployment serves and denies everything else. P5 replaces the body with
+    a real :class:`EntitlementDecision` lookup and must keep this position:
+    after auth and tenant, before spend and any provider call.
+    """
+
+    del task_type  # P5: the decision is keyed by task type
+    if context.role == "owner" and context.tenant_id == OWNER_TENANT_ID:
+        return
+    raise ChatError(
+        "entitlement_denied",
+        status=403,
+        message="This task type is not available on the current plan.",
+    )
+
+
+def _runs_route(
+    api: "ChatAPI", request: "Request", method: str, rest: list[str]
+) -> "Response":
+    if not rest:
+        if method == "POST":
+            return _start_run(api, request)
+        if method == "GET":
+            return _list_runs(api, request)
+        raise ChatError("not_found", status=404, message="Unknown endpoint.")
+    if len(rest) == 1 and method == "GET":
+        return _get_run(api, _segment(rest[0]))
+    raise ChatError("not_found", status=404, message="Unknown endpoint.")
+
+
+def _start_run(api: "ChatAPI", request: "Request") -> "Response":
+    """Create one run (202) or return the run an idempotent replay owns."""
+
+    context = current_tenant()
+    body = _json_body(api, request, optional=True)
+    for name in _RUN_BODY_FIELDS:
+        value = body.get(name)
+        if value is not None and not isinstance(value, str):
+            raise ChatError(
+                "invalid_request",
+                status=400,
+                message=f"{name} must be a string.",
+                field=f"/{name}",
+                user_fixable=True,
+            )
+
+    # Gate order: auth and tenant are done; entitlement runs before any write
+    # (which is when a thread would be minted), spend runs inside the send.
+    _entitlement_gate(context, body.get("task_type") or "chat")
+
+    if not api._turn_slots.acquire():
+        return _busy_response(
+            class_name="turns",
+            reason="turn_capacity",
+            limit=api._turn_slots.limit,
+            metrics=api.metrics,
+        )
+    try:
+        run = api.runner.run(
+            api.task_runner.start(
+                text=body.get("text"),
+                prompt=body.get("prompt"),
+                thread_id=body.get("thread_id"),
+                idempotency_key=body.get("idempotency_key"),
+                surface=body.get("surface"),
+                task_type=body.get("task_type"),
+                tenant=context,
+            )
+        )
+    except BaseException:
+        # Nothing started, so the slot goes back now.
+        api._turn_slots.release()
+        raise
+    if run.terminal or run.turn_id is None:
+        # A replayed run owns no new work; a run without a turn never streams.
+        api._turn_slots.release()
+    else:
+        turn_routes._release_turn_slot_when_done(api, run.turn_id)
+    return _json_response(202, {"ok": True, "run": _run_envelope(run)})
+
+
+def _get_run(api: "ChatAPI", run_id: str) -> "Response":
+    """One run in the caller's tenant; a foreign id is the same 404 as missing."""
+
+    context = current_tenant()
+    run = api.task_runner.get(run_id, tenant_id=context.tenant_id)
+    if run is None:
+        raise ChatError("unknown_run", status=404, message="Unknown run.")
+    return _json_response(200, {"ok": True, "run": run.to_admin_row()})
+
+
+def _list_runs(api: "ChatAPI", request: "Request") -> "Response":
+    """One page of the caller's tenant runs, newest first."""
+
+    context = current_tenant()
+    limit = _int_param(request, "limit", 50, 1, _RUN_PAGE_MAX)
+    offset = _int_param(request, "offset", 0, 0, _RUN_PAGE_WINDOW)
+    # ``thread`` is accepted as the short spelling the envelope uses.
+    thread_id = request.query_one("thread_id") or request.query_one("thread")
+    status = request.query_one("status") or None
+    if status is not None and status not in RUN_STATUSES:
+        raise ChatError(
+            "invalid_request",
+            status=400,
+            message=f"status must be one of {', '.join(RUN_STATUSES)}.",
+            user_fixable=True,
+        )
+    # One extra row tells the caller whether another page exists without the
+    # store exposing a count or a cursor.
+    page = api.task_runner.list(
+        tenant_id=context.tenant_id,
+        thread_id=thread_id or None,
+        status=status,
+        limit=limit + 1,
+        offset=offset,
+    )
+    has_more = len(page) > limit
+    runs = page[:limit]
+    return _json_response(
+        200,
+        {
+            "ok": True,
+            "runs": [run.to_admin_row() for run in runs],
+            "next_offset": (offset + len(runs)) if has_more else None,
+        },
+    )
+
+
+def _run_envelope(run: TaskRun) -> dict[str, Any]:
+    """The 202 envelope: identifiers and links, never prompt or provider text."""
+
+    thread_id = run.thread_id
+    links: dict[str, str | None] = {"self": f"/api/runs/{run.run_id}"}
+    if thread_id:
+        links["thread"] = f"/api/threads/{thread_id}"
+        links["stream"] = f"/api/threads/{thread_id}/stream"
+    else:
+        links["thread"] = None
+        links["stream"] = None
+    return {
+        "run_id": run.run_id,
+        "status": run.status.value,
+        "tenant": run.tenant_id,
+        "thread": thread_id,
+        "links": links,
+    }
+
+
 class ChatAPI:
     def __init__(
         self,
@@ -1441,8 +1623,13 @@ class ChatAPI:
         wallet_api: Any | None = None,
         checkout_api: Any | None = None,
         phone_root: Path | None = None,
+        task_runner: TaskRunner | None = None,
     ):
         self.service = service
+        # P3-2: the submission boundary behind ``/api/runs``. It shares the
+        # service's recorder, so a terminal hook installed on the service also
+        # sees runs started from this surface.
+        self.task_runner = task_runner or TaskRunner(service)
         self.credentials = credentials
         self.wallet_api = wallet_api
         self.checkout_api = checkout_api
@@ -1791,6 +1978,8 @@ class ChatAPI:
             return thread_routes._threads(
                 self, request, method, segments[1:], frames_fn=sse_frames
             )
+        if head == "runs":
+            return _runs_route(self, request, method, segments[1:])
         if head == "turns":
             return turn_routes._turns(self, request, method, segments[1:])
         if head == "approvals":

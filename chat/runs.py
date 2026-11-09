@@ -1,4 +1,4 @@
-"""TaskRun recorder (P3-1).
+"""TaskRun recorder and runner (P3-1, P3-2).
 
 ``docs/SERVICE_CONTRACT.md`` §3 freezes the operational record of one unit of
 work: :class:`TaskRun`. It is durable execution metadata, never a copy of the
@@ -16,23 +16,31 @@ Rules enforced here (not by the caller):
   creating a second one.
 * The terminal hook is the seam a later slice uses to emit a billing event. P3-1
   deliberately contains no billing code.
+
+P3-2 adds :class:`TaskRunner`, the submission boundary for ``POST /api/runs``.
+It creates a thread when the caller names none, hands the prompt to
+:meth:`ChatService.send`, and returns the :class:`TaskRun`. The prompt is passed
+through and dropped: neither the recorder, the run row, nor any read method here
+can carry it back out.
 """
 
 from __future__ import annotations
 
+import re
 import uuid
 from dataclasses import dataclass, fields
 from datetime import datetime, timezone
 from enum import Enum
 from typing import Any, Callable, Mapping
 
+from .errors import ChatError
 from .store import (
     OWNER_TENANT_ID,
     RUN_TERMINAL_STATUSES,
     RUN_STATUSES,
     iso_now,
 )
-from .tenancy import validate_tenant_id
+from .tenancy import SURFACES, tenant_for, validate_tenant_id
 
 __all__ = [
     "RUN_STATUSES",
@@ -44,7 +52,24 @@ __all__ = [
     "RunStatusError",
     "RunTerminalError",
     "TaskRun",
+    "TaskRunner",
 ]
+
+#: ``chat.service._MAX_TEXT_CHARS``. Duplicated rather than imported because the
+#: service imports this module; the two must stay in step for a prompt to reach
+#: the provider with the same bound the interactive send applies.
+_PROMPT_MAX_CHARS = 8000
+
+#: A caller-supplied idempotency key becomes ``client_turn_id`` on the send, so
+#: it shares that field's alphabet (see ``chat.routers._util._CLIENT_TURN_RE``).
+_IDEMPOTENCY_KEY_RE = re.compile(r"^[A-Za-z0-9_-]{1,100}$")
+
+#: A controlled task label: lowercase, short, and free of path or log syntax.
+_TASK_TYPE_RE = re.compile(r"^[a-z][a-z0-9_]{0,31}$")
+
+#: The store's ``list_runs`` caps one query at 500 rows. A replay lookup that
+#: has no thread to scope it reads the same newest-first window.
+_RUN_WINDOW = 500
 
 
 class RunStatus(str, Enum):
@@ -361,4 +386,256 @@ class RunRecorder:
                 status=status,
                 limit=limit,
             )
+        ]
+
+
+def _prompt_text(text: str | None, prompt: str | None) -> str:
+    """The one prompt value a submission carries, validated before any write.
+
+    ``text`` and ``prompt`` are two spellings of the same field, so a caller may
+    send either but not two different bodies. Validation happens here - before
+    a thread is minted - so a malformed submission cannot leave an empty thread
+    behind.
+    """
+
+    if text is not None and prompt is not None and text != prompt:
+        raise ChatError(
+            "invalid_request",
+            status=400,
+            message="Give either text or prompt, not both.",
+            field="/text",
+            user_fixable=True,
+        )
+    value = text if text is not None else prompt
+    if not isinstance(value, str):
+        raise ChatError(
+            "invalid_message",
+            status=400,
+            message="A run needs text.",
+            field="/text",
+            user_fixable=True,
+        )
+    message = value.strip()
+    if not 1 <= len(message) <= _PROMPT_MAX_CHARS:
+        raise ChatError(
+            "invalid_message",
+            status=400,
+            message=(
+                f"A message is 1-{_PROMPT_MAX_CHARS} characters after trimming."
+            ),
+            field="/text",
+            user_fixable=True,
+        )
+    return message
+
+
+def _idempotency_key(value: Any) -> str | None:
+    if value is None:
+        return None
+    if not isinstance(value, str) or not _IDEMPOTENCY_KEY_RE.match(value):
+        raise ChatError(
+            "invalid_request",
+            status=400,
+            message=(
+                "idempotency_key must be 1-100 letters, digits, underscores, "
+                "or hyphens."
+            ),
+            field="/idempotency_key",
+            user_fixable=True,
+        )
+    return value
+
+
+def _surface(value: Any, default: str) -> str:
+    surface = default if value is None else value
+    if not isinstance(surface, str) or surface not in SURFACES:
+        raise ChatError(
+            "invalid_request",
+            status=400,
+            message=f"surface must be one of {', '.join(SURFACES)}.",
+            field="/surface",
+            user_fixable=True,
+        )
+    return surface
+
+
+def _task_type(value: Any) -> str:
+    label = "chat" if value is None else value
+    if not isinstance(label, str) or not _TASK_TYPE_RE.match(label):
+        raise ChatError(
+            "invalid_request",
+            status=400,
+            message=(
+                "task_type must be lowercase letters, digits, or underscores "
+                "(max 32 characters)."
+            ),
+            field="/task_type",
+            user_fixable=True,
+        )
+    return label
+
+
+class TaskRunner:
+    """Submit one task run and read runs back (P3-2).
+
+    ``start`` is the submission path behind ``POST /api/runs``: it reuses the
+    thread the caller named or mints one, then calls :meth:`ChatService.send`,
+    which owns the turn, the spend gate, and the provider call. Everything this
+    class returns is run state; the prompt is an argument and is never stored on
+    or read back from a :class:`TaskRun`.
+
+    Idempotency keeps the P3-1 scope, ``tenant + thread``. When the caller names
+    no thread, the replay lookup first asks the store's indexed lookup for a run
+    without a thread and then scans the tenant's newest :data:`_RUN_WINDOW`
+    rows; that is what lets a replayed ``POST /api/runs`` return the original
+    run and thread instead of minting a second one. Two *concurrent* first
+    submissions with the same key can still mint two threads, because each
+    thread is a distinct idempotency scope - the same rule a repeated client
+    turn id on a new thread already follows.
+    """
+
+    def __init__(self, service: Any, *, recorder: RunRecorder | None = None):
+        self.service = service
+        # ``ChatService`` builds the recorder its own sends write through, so a
+        # terminal hook installed there is shared with runs started here.
+        self.recorder = recorder or getattr(service, "_runs", None) or RunRecorder(
+            getattr(service, "store")
+        )
+        self.store = getattr(service, "store", None) or self.recorder.store
+
+    # -- submission --------------------------------------------------------
+
+    async def start(
+        self,
+        *,
+        text: str | None = None,
+        prompt: str | None = None,
+        thread_id: str | None = None,
+        idempotency_key: str | None = None,
+        surface: str | None = None,
+        task_type: str | None = None,
+        tenant: Any = None,
+    ) -> TaskRun:
+        """Start one run, or return the run a replayed key already owns."""
+
+        context = tenant_for(tenant)
+        tenant_id = context.tenant_id
+        message = _prompt_text(text, prompt)
+        key = _idempotency_key(idempotency_key)
+        label = _task_type(task_type)
+        run_surface = _surface(surface, context.surface)
+
+        if thread_id is not None and (
+            not isinstance(thread_id, str) or not thread_id.strip()
+        ):
+            raise ChatError(
+                "invalid_request",
+                status=400,
+                message="thread_id must be a non-empty string.",
+                field="/thread_id",
+                user_fixable=True,
+            )
+
+        if key is not None:
+            replay = self._find_replay(key, tenant_id=tenant_id, thread_id=thread_id)
+            if replay is not None:
+                return replay
+
+        target_thread = thread_id or str(
+            self.service.create_thread(tenant=context)["id"]
+        )
+        payload, _created = await self.service.send(
+            target_thread,
+            text=message,
+            client_turn_id=key,
+            tenant=context,
+            surface=run_surface,
+            task_type=label,
+        )
+        run_id = payload.get("run_id")
+        run = (
+            self.recorder.get(str(run_id), tenant_id=tenant_id)
+            if run_id is not None
+            else None
+        )
+        if run is None:
+            run = self.recorder.for_turn(
+                str(payload.get("turn_id", "")), tenant_id=tenant_id
+            )
+        if run is None:
+            # ``send`` created a turn but its run row is missing: an invariant
+            # break, reported as a generic failure and never retried blindly.
+            raise RunError("the turn started but its run row is missing")
+        return run
+
+    def _find_replay(
+        self, key: str, *, tenant_id: str, thread_id: str | None
+    ) -> TaskRun | None:
+        if thread_id is not None:
+            return self.recorder.find_by_idempotency(
+                key, tenant_id=tenant_id, thread_id=thread_id
+            )
+        exact = self.recorder.find_by_idempotency(key, tenant_id=tenant_id)
+        if exact is not None:
+            return exact
+        for record in self.store.list_runs(tenant_id=tenant_id, limit=_RUN_WINDOW):
+            if str(record.get("idempotency_key") or "") == key:
+                return TaskRun.from_record(record)
+        return None
+
+    # -- reads -------------------------------------------------------------
+
+    def get(self, run_id: str, *, tenant_id: str = OWNER_TENANT_ID) -> TaskRun | None:
+        """The run, only when it belongs to the caller's tenant."""
+
+        return self.recorder.get(run_id, tenant_id=validate_tenant_id(tenant_id))
+
+    def list(
+        self,
+        *,
+        tenant_id: str = OWNER_TENANT_ID,
+        thread_id: str | None = None,
+        status: str | None = None,
+        limit: int = 100,
+        offset: int = 0,
+    ) -> list[TaskRun]:
+        """One page of a tenant's runs, newest first.
+
+        ``offset`` pages through the store's bounded newest-first window rather
+        than a cursor: ``runs`` has a created-at index but no pagination key, and
+        the window is the same 500 rows the replay lookup reads.
+        """
+
+        tenant = validate_tenant_id(tenant_id)
+        target: RunStatus | None = None
+        if status is not None:
+            try:
+                target = _coerce_status(status)
+            except RunStatusError:
+                raise ChatError(
+                    "invalid_request",
+                    status=400,
+                    message=f"status must be one of {', '.join(RUN_STATUSES)}.",
+                    field="/status",
+                    user_fixable=True,
+                ) from None
+        try:
+            window = max(1, int(limit))
+        except (TypeError, ValueError):
+            window = 100
+        window = min(window, _RUN_WINDOW)
+        try:
+            start = max(0, int(offset))
+        except (TypeError, ValueError):
+            start = 0
+        fetch = min(_RUN_WINDOW, start + window)
+        records = self.store.list_runs(
+            tenant_id=tenant,
+            thread_id=thread_id,
+            status=target.value if target is not None else None,
+            limit=fetch,
+        )
+        return [
+            TaskRun.from_record(record)
+            for record in records[start : start + window]
         ]

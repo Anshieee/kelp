@@ -8,12 +8,13 @@ import json
 import sqlite3
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Mapping
 
 import pytest
 
-from chat import ChatService, ChatStore
+from chat import ChatAPI, ChatService, ChatStore, Request
 from chat.api import LoopRunner
+from chat.errors import ChatError
 from chat.proactive import ProactiveRunner
 from chat.runs import (
     RUN_STATUSES,
@@ -23,6 +24,7 @@ from chat.runs import (
     RunStatus,
     RunTerminalError,
     TaskRun,
+    TaskRunner,
 )
 from chat.scheduler import ScheduleStore, SchedulerRuntime
 from openshell.audit import AuditLog
@@ -65,6 +67,42 @@ CONTRACT_FIELD_ORDER = [
 
 BASE = datetime(2026, 10, 30, 12, 0, tzinfo=timezone.utc)
 DUE = BASE + timedelta(seconds=60)
+
+AUTH = {"authorization": "Bearer tok"}
+CSRF = {"x-csrf-token": "csrf"}
+
+
+def _make_api(
+    tmp_path: Path, scripts: list[list[Any]] | None = None
+) -> tuple[ChatAPI, ChatService, ChatStore, StubProvider]:
+    """A one-owner API over a real store, with the service's stub provider."""
+
+    store = ChatStore(tmp_path / "chat.db")
+    provider = StubProvider(scripts or [text_script("Hello")])
+    service = ChatService(store=store, provider=provider, model=MODEL)
+    api = ChatAPI(service, auth_token="tok", csrf_token="csrf")
+    return api, service, store, provider
+
+
+def _api_call(
+    api: ChatAPI,
+    method: str,
+    path: str,
+    body: Mapping[str, Any] | None = None,
+    *,
+    query: Mapping[str, list[str]] | None = None,
+    auth: bool = True,
+    csrf: bool = True,
+) -> Any:
+    headers: dict[str, str] = {}
+    if auth:
+        headers.update(AUTH)
+    if csrf and method.upper() in {"POST", "PATCH", "DELETE"}:
+        headers.update(CSRF)
+    if body is not None:
+        headers["content-type"] = "application/json"
+    raw = json.dumps(body).encode() if body is not None else b""
+    return api.handle(Request(method, path, query or {}, headers, raw))
 
 
 class FailingProvider:
@@ -513,4 +551,287 @@ def test_scheduled_turn_creates_a_scheduler_run(tmp_path: Path) -> None:
             pass
         proactive.close(5.0)
         runner.close()
+        store.close()
+
+
+# -- task-run API (P3-2) ---------------------------------------------------
+
+
+def test_task_runner_starts_a_run_and_replays_its_key(tmp_path: Path) -> None:
+    service, store, provider = make_service(tmp_path, [text_script("Hello")])
+    runner = TaskRunner(service)
+    try:
+
+        async def scenario() -> None:
+            run = await runner.start(text="hi", idempotency_key="run-key-1")
+            assert isinstance(run, TaskRun)
+            assert run.run_id.startswith("run_")
+            assert run.thread_id is not None
+            assert run.turn_id is not None
+            assert run.surface == "web"
+            assert run.task_type == "chat"
+            await service.wait_for_turn(run.turn_id, timeout=5.0)
+            assert runner.get(run.run_id).status is RunStatus.COMPLETED
+
+            # The replay returns the same run and reaches no provider.
+            replay = await runner.start(text="hi", idempotency_key="run-key-1")
+            assert replay.run_id == run.run_id
+            assert len(provider.requests) == 1
+            assert len(store.list_runs(tenant_id="owner")) == 1
+
+            # A named thread is reused rather than replaced.
+            again = await runner.start(
+                prompt="again",
+                thread_id=run.thread_id,
+                idempotency_key="run-key-2",
+                surface="cli",
+                task_type="plugin",
+            )
+            assert again.thread_id == run.thread_id
+            assert again.surface == "cli"
+            assert again.task_type == "plugin"
+            await service.wait_for_turn(again.turn_id, timeout=5.0)
+
+            listed = runner.list(tenant_id="owner")
+            assert {item.run_id for item in listed} == {run.run_id, again.run_id}
+            assert runner.list(tenant_id="acme") == []
+            assert runner.get(run.run_id, tenant_id="acme") is None
+
+        asyncio.run(scenario())
+    finally:
+        store.close()
+
+
+def test_task_runner_validates_before_minting_a_thread(tmp_path: Path) -> None:
+    service, store, _provider = make_service(tmp_path, [text_script("Hello")])
+    runner = TaskRunner(service)
+    try:
+
+        async def scenario() -> None:
+            with pytest.raises(ChatError):
+                await runner.start(prompt="   ")
+            with pytest.raises(ChatError):
+                await runner.start(text="a", prompt="b")
+            with pytest.raises(ChatError):
+                await runner.start(text="hi", idempotency_key="not valid!")
+            with pytest.raises(ChatError):
+                await runner.start(text="hi", surface="telepathy")
+            with pytest.raises(ChatError):
+                await runner.start(text="hi", task_type="Chat Bot")
+            # Nothing malformed cost a thread or a turn.
+            threads, _cursor = store.list_threads(tenant_id="owner")
+            assert threads == []
+            assert store.list_runs(tenant_id="owner") == []
+
+        asyncio.run(scenario())
+    finally:
+        store.close()
+
+
+def test_api_run_create_get_and_list_expose_state_only(tmp_path: Path) -> None:
+    api, service, store, _provider = _make_api(tmp_path)
+    try:
+        created = _api_call(
+            api,
+            "POST",
+            "/api/runs",
+            {"text": "super-secret-prompt", "idempotency_key": "api-key-1"},
+        )
+        assert created.status == 202, created.body
+        envelope = json.loads(created.body)["run"]
+        assert envelope["run_id"].startswith("run_")
+        assert envelope["status"] in RUN_STATUSES
+        assert envelope["tenant"] == "owner"
+        stored = store.get_run(envelope["run_id"], tenant_id="owner")
+        assert envelope["thread"] == stored["thread_id"]
+        assert envelope["links"] == {
+            "self": f"/api/runs/{envelope['run_id']}",
+            "thread": f"/api/threads/{stored['thread_id']}",
+            "stream": f"/api/threads/{stored['thread_id']}/stream",
+        }
+        assert b"super-secret-prompt" not in created.body
+
+        api.runner.run(service.wait_for_turn(stored["turn_id"], timeout=5.0))
+
+        fetched = _api_call(api, "GET", f"/api/runs/{envelope['run_id']}")
+        assert fetched.status == 200, fetched.body
+        row = json.loads(fetched.body)["run"]
+        assert row["run_id"] == envelope["run_id"]
+        assert row["status"] == "completed"
+        assert row["turn_id"] == stored["turn_id"]
+        assert "prompt_text" not in row
+        assert b"super-secret-prompt" not in fetched.body
+
+        listed = _api_call(api, "GET", "/api/runs", query={"status": ["completed"]})
+        assert listed.status == 200
+        payload = json.loads(listed.body)
+        assert [item["run_id"] for item in payload["runs"]] == [envelope["run_id"]]
+        assert payload["next_offset"] is None
+        assert b"super-secret-prompt" not in listed.body
+    finally:
+        api.close()
+        store.close()
+
+
+def test_api_run_post_replay_returns_the_same_run_without_new_work(
+    tmp_path: Path,
+) -> None:
+    api, service, store, provider = _make_api(tmp_path, [text_script("once")])
+    try:
+        submission = {"text": "hi", "idempotency_key": "replay-key-1"}
+        first = _api_call(api, "POST", "/api/runs", submission)
+        assert first.status == 202, first.body
+        original = json.loads(first.body)["run"]
+        turn_id = store.get_run(original["run_id"], tenant_id="owner")["turn_id"]
+        api.runner.run(service.wait_for_turn(turn_id, timeout=5.0))
+
+        second = _api_call(api, "POST", "/api/runs", submission)
+        assert second.status == 202, second.body
+        replay = json.loads(second.body)["run"]
+        assert replay["run_id"] == original["run_id"]
+        assert replay["thread"] == original["thread"]
+        assert replay["status"] == "completed"
+        assert len(provider.requests) == 1
+        assert len(store.list_runs(tenant_id="owner")) == 1
+        threads, _cursor = store.list_threads(tenant_id="owner")
+        assert len(threads) == 1
+    finally:
+        api.close()
+        store.close()
+
+
+def test_api_run_reads_are_tenant_scoped_and_foreign_ids_look_missing(
+    tmp_path: Path,
+) -> None:
+    api, _service, store, _provider = _make_api(tmp_path)
+    recorder = RunRecorder(store)
+    try:
+        foreign = recorder.create(
+            tenant_id="acme",
+            thread_id="ses_acme",
+            turn_id="turn_acme",
+            idempotency_key="acme-key",
+        )
+        foreign_response = _api_call(api, "GET", f"/api/runs/{foreign.run_id}")
+        missing_response = _api_call(api, "GET", "/api/runs/run_missing")
+        assert foreign_response.status == 404
+        assert missing_response.status == 404
+        # The two answers are byte-for-byte the same: existence is not an oracle.
+        assert foreign_response.body == missing_response.body
+
+        listed = _api_call(
+            api, "GET", "/api/runs", query={"thread_id": ["ses_acme"]}
+        )
+        assert json.loads(listed.body)["runs"] == []
+
+        denied = _api_call(
+            api, "POST", "/api/runs", {"text": "hi", "tenant_id": "acme"}
+        )
+        assert denied.status == 403
+        assert json.loads(denied.body)["error"]["code"] == "tenant_mismatch"
+
+        # The ordinary boundary still stands in front of the run routes.
+        assert _api_call(api, "GET", "/api/runs", auth=False).status == 401
+        no_csrf = _api_call(api, "POST", "/api/runs", {"text": "hi"}, csrf=False)
+        assert no_csrf.status == 403
+    finally:
+        api.close()
+        store.close()
+
+
+def test_api_run_list_filters_and_paginates(tmp_path: Path) -> None:
+    api, _service, store, _provider = _make_api(tmp_path)
+    recorder = RunRecorder(store)
+    try:
+        older = recorder.create(
+            tenant_id="owner",
+            thread_id="ses_a",
+            turn_id="turn_1",
+            created_at="2026-10-30T12:00:00Z",
+        )
+        newer = recorder.create(
+            tenant_id="owner",
+            thread_id="ses_a",
+            turn_id="turn_2",
+            status=RunStatus.COMPLETED,
+            created_at="2026-10-30T12:01:00Z",
+        )
+        other_thread = recorder.create(
+            tenant_id="owner",
+            thread_id="ses_b",
+            turn_id="turn_3",
+            created_at="2026-10-30T12:02:00Z",
+        )
+
+        # Newest first, one row per page, with an honest next offset.
+        page = json.loads(
+            _api_call(api, "GET", "/api/runs", query={"limit": ["2"]}).body
+        )
+        assert [item["run_id"] for item in page["runs"]] == [
+            other_thread.run_id,
+            newer.run_id,
+        ]
+        assert page["next_offset"] == 2
+
+        page2 = json.loads(
+            _api_call(
+                api,
+                "GET",
+                "/api/runs",
+                query={"limit": ["2"], "offset": ["2"]},
+            ).body
+        )
+        assert [item["run_id"] for item in page2["runs"]] == [older.run_id]
+        assert page2["next_offset"] is None
+
+        filtered = json.loads(
+            _api_call(
+                api,
+                "GET",
+                "/api/runs",
+                query={"thread_id": ["ses_a"], "status": ["completed"]},
+            ).body
+        )
+        assert [item["run_id"] for item in filtered["runs"]] == [newer.run_id]
+
+        short = json.loads(
+            _api_call(api, "GET", "/api/runs", query={"thread": ["ses_b"]}).body
+        )
+        assert [item["run_id"] for item in short["runs"]] == [other_thread.run_id]
+    finally:
+        api.close()
+        store.close()
+
+
+def test_api_run_route_rejects_bad_input_without_creating_work(
+    tmp_path: Path,
+) -> None:
+    api, _service, store, _provider = _make_api(tmp_path)
+    try:
+        empty = _api_call(api, "POST", "/api/runs", {})
+        assert empty.status == 400
+        assert json.loads(empty.body)["error"]["code"] == "invalid_message"
+
+        both = _api_call(api, "POST", "/api/runs", {"text": "a", "prompt": "b"})
+        assert both.status == 400
+        assert json.loads(both.body)["error"]["code"] == "invalid_request"
+
+        bad_surface = _api_call(
+            api, "POST", "/api/runs", {"text": "hi", "surface": "telepathy"}
+        )
+        assert bad_surface.status == 400
+
+        bad_status = _api_call(
+            api, "GET", "/api/runs", query={"status": ["zombie"]}
+        )
+        assert bad_status.status == 400
+        assert json.loads(bad_status.body)["error"]["code"] == "invalid_request"
+
+        assert (
+            _api_call(api, "DELETE", "/api/runs/run_nope").status == 404
+        )
+        assert store.list_threads(tenant_id="owner")[0] == []
+        assert store.list_runs(tenant_id="owner") == []
+    finally:
+        api.close()
         store.close()
