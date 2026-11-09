@@ -33,8 +33,14 @@ from pathlib import Path
 from typing import Any, Mapping, Sequence
 
 from kernel import JsonlUsageStore, KernelConfig
-from kernel.config import API_KEY_ENV, BASE_URL_ENV
+from kernel.config import API_KEY_ENV, BASE_URL_ENV, TENANT_SECRETS_FILE_ENV
 from kernel.providers import OpenAICompatibleClient, build_provider
+from kernel.secrets import (
+    EnvSecretResolver,
+    MissingSecret,
+    SecretFileError,
+    TenantSecretResolver,
+)
 from kernel.usage import SpendCaps, SpendGuard
 from openshell.approvals import ApprovalStore
 from openshell.audit import AuditLog, SecretScrubber
@@ -250,7 +256,7 @@ class ServerConfig:
         except ValueError as exc:
             raise ConfigError("invalid_config", str(exc)) from None
 
-        if not kernel.api_key:
+        if not kernel.api_key and not kernel.tenant_secrets_file:
             raise ConfigError(
                 "missing_api_key",
                 f"{API_KEY_ENV} is required; the server will not start without it.",
@@ -336,6 +342,19 @@ class ServerConfig:
                     "invalid_config",
                     f"{directory} exists but is not a directory.",
                 )
+        if self.kernel.tenant_secrets_file:
+            # Validate the mode and JSON shape without printing anything from
+            # the file. ``--check`` must not report a green boot for a secrets
+            # file the server would refuse a second later.
+            resolver = _secret_resolver(self, os.environ)
+            try:
+                resolver.resolve(API_KEY_ENV)
+            except MissingSecret:
+                raise ConfigError(
+                    "missing_api_key",
+                    f"{API_KEY_ENV} is not present for tenant "
+                    f"{self.kernel.tenant_id!r} in {TENANT_SECRETS_FILE_ENV}.",
+                ) from None
 
     def _state_directories(self) -> tuple[Path, ...]:
         return (
@@ -369,10 +388,35 @@ class ServerConfig:
             f"host={self.host!r}, port={self.port}, "
             "auth_token_configured=True, "
             f"csrf_token_configured={self.csrf_token is not None}, "
+            "tenant_secrets_file_configured="
+            f"{self.kernel.tenant_secrets_file is not None}, "
             f"api_key_configured={self.kernel.api_key_configured})"
         )
 
     __str__ = __repr__
+
+
+def _secret_resolver(
+    config: ServerConfig, source: Mapping[str, str]
+) -> EnvSecretResolver | TenantSecretResolver:
+    """Build the boot resolver: per-tenant file when configured, else the env.
+
+    ``KELP_TENANT_SECRETS_FILE`` is optional. When it is unset the explicit
+    environment mapping is authoritative, so single-tenant behaviour is
+    unchanged. A bad file (wrong mode, malformed JSON, missing path) becomes a
+    one-line configuration error that names the path and never echoes content.
+    """
+
+    path_text = config.kernel.tenant_secrets_file
+    if not path_text:
+        return EnvSecretResolver(source)
+    try:
+        return TenantSecretResolver(
+            Path(path_text).expanduser().resolve(),
+            tenant_id=config.kernel.tenant_id,
+        )
+    except SecretFileError as exc:
+        raise ConfigError("invalid_secret_file", str(exc)) from None
 
 
 class DatabaseLock:
@@ -611,8 +655,16 @@ def build_app(
     runtime_provider = provider
     try:
         registry = SkillRegistry.load(config.skill_root)
+        # P4-1: one resolver for the process. A tenant file resolves this
+        # tenant's provider key; otherwise the explicit boot mapping does,
+        # preserving the single-tenant path. Values never leave this scope
+        # except as the provider client's private key field and the scrubber
+        # set below.
+        secret_resolver = _secret_resolver(config, source)
         secrets = _service_secrets(registry, config, source)
-        secret_values = tuple(dict.fromkeys([*secrets.values(), *[
+        resolver_values = getattr(secret_resolver, "secret_values", None)
+        tenant_values = resolver_values() if callable(resolver_values) else ()
+        secret_values = tuple(dict.fromkeys([*secrets.values(), *tenant_values, *[
             source[name] for name in ("KELP_VAULT_KEY", "KELP_BROWSER_WORKER_TOKEN")
             if source.get(name)
         ]]))
@@ -636,14 +688,22 @@ def build_app(
         # client and every skill's egress client.
         egress = EgressLedger(audit)
         if runtime_provider is None:
-            # The service config is authoritative: pass its key, environ, and
-            # tenant explicitly so build_provider never has to guess from the
-            # process environment. ``factory`` keeps the module-level
-            # ``ProviderClient`` seam a one-argument callable.
+            # The service config is authoritative: pass its key, environ,
+            # resolver, and tenant explicitly so build_provider never has to
+            # guess from the process environment. When a tenant secrets file is
+            # configured its resolver is the key source; otherwise the boot
+            # environment's key is passed directly, unchanged from P1-2.
+            # ``factory`` keeps the module-level ``ProviderClient`` seam a
+            # one-argument callable.
             runtime_provider = build_provider(
                 config.kernel,
                 factory=ProviderClient,
-                api_key=config.kernel.api_key,
+                api_key=(
+                    None
+                    if config.kernel.tenant_secrets_file
+                    else config.kernel.api_key
+                ),
+                resolver=secret_resolver,
                 environ=source,
                 tenant_id=config.kernel.tenant_id,
             )

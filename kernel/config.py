@@ -26,6 +26,8 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Mapping
 
+from .secrets import TENANT_SECRETS_FILE_ENV
+
 __all__ = [
     "API_KEY_ENV",
     "BACKGROUND_MODEL_ENV",
@@ -42,6 +44,7 @@ __all__ = [
     "PRICING_JSON_ENV",
     "PRIMARY_MODEL_ENV",
     "PROVIDER_ENV",
+    "TENANT_SECRETS_FILE_ENV",
 ]
 
 PROVIDER_ENV = "KELP_PROVIDER"
@@ -187,6 +190,7 @@ class KernelConfig:
     read_timeout_s: float = 90.0
     request_write_timeout_s: float = 15.0
     tenant_id: str = DEFAULT_TENANT_ID
+    tenant_secrets_file: str | None = field(default=None, repr=False)
     pricing: Mapping[str, ModelPricing] = field(
         default_factory=lambda: DEFAULT_PRICING, repr=False
     )
@@ -203,6 +207,7 @@ class KernelConfig:
                 _text(source, BACKGROUND_MODEL_ENV) or DEFAULT_BACKGROUND_MODEL
             ),
             api_key=_secret(source, API_KEY_ENV),
+            tenant_secrets_file=_text(source, TENANT_SECRETS_FILE_ENV) or None,
             pricing=_pricing_table(_text(source, PRICING_JSON_ENV)),
         )
 
@@ -240,6 +245,7 @@ class KernelConfig:
             f"base_url={self.base_url!r}, "
             f"primary_model={self.primary_model!r}, "
             f"background_model={self.background_model!r}, "
+            f"tenant_secrets_file_configured={self.tenant_secrets_file is not None}, "
             f"api_key_configured={self.api_key_configured})"
         )
 
