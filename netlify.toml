@@ -1,14 +1,10 @@
-# Netlify configuration for the SDLC tracker.
+# Netlify configuration for the Kelp demo deployment.
 #
-# The site is one static page: netlify/index.html, no framework, no bundler.
-# The page is plain HTML with inline CSS, so nothing has to be compiled.
+# Serves the Netlify Functions backend (/api/v1/*) and the mobile PWA in
+# netlify/mobile/. No framework, no bundler, nothing to compile.
 
 [build]
   publish = "netlify"
-  # The mind map image lives in docs/. Copy it next to the page so production
-  # serves it even though docs/ sits above the publish directory. Missing files
-  # are not an error: the page falls back to its written-in-words version.
-  command = "sh -c 'mkdir -p netlify/assets; for f in svg png; do cp \"docs/sdlc-mindmap.$f\" \"netlify/assets/sdlc-mindmap.$f\" 2>/dev/null; done; exit 0'"
 
 [[redirects]]
   from = "/api/v1/*"

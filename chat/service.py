@@ -16,6 +16,7 @@ import threading
 import time
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from typing import Any, Awaitable, Callable, Mapping, Sequence
 
 from kernel import (
@@ -36,14 +37,27 @@ from openshell.errors import (
     ApprovalNotGranted,
     ApprovalNotFound,
 )
+from payments.billing import BillingSink, CountingBillingSink
+from payments.entitlements import (
+    EntitlementDecision,
+    EntitlementStore,
+    StaticEntitlementStore,
+)
 from skills.context import ApprovalRequest as SkillApprovalRequest
 from skills.loader import SkillRegistry
 
 from . import cards
-from .artifacts import HANDLE_RE, ArtifactError, ArtifactRegistry
+from .artifacts import (
+    HANDLE_RE,
+    PREVIEW_ROWS_DEFAULT,
+    ArtifactError,
+    ArtifactRegistry,
+    tenant_workspace_root,
+)
 from .errors import ChatError
 from .logging import current_request_id, log
 from .metrics import Metrics, get_metrics
+from .runs import RunError, RunRecorder, RunStatus
 from .store import (
     APPROVAL_TRANSITIONS,
     LIVE_TURN_STATES,
@@ -53,6 +67,13 @@ from .store import (
     new_id,
 )
 from .stream import EventBus
+from .tenancy import (
+    OWNER_TENANT_ID,
+    SURFACES,
+    TenantContext,
+    current_tenant,
+    tenant_for,
+)
 
 __all__ = ["ChatService", "MESSAGE_STATUS_BY_REASON", "TurnBudget"]
 
@@ -66,6 +87,18 @@ MESSAGE_STATUS_BY_REASON = {
 }
 
 _TERMINAL_RETRY_REASONS = frozenset({"error", "stopped", "interrupted"})
+
+#: P3-1: how a finished chat turn settles its run. ``stop`` and ``length`` are
+#: normal completions; a budget stop and a crash are failures; a client Stop is
+#: ``cancelled`` and a shutdown is ``interrupted``.
+_RUN_STATUS_BY_REASON = {
+    "stop": RunStatus.COMPLETED,
+    "length": RunStatus.COMPLETED,
+    "budget": RunStatus.FAILED,
+    "error": RunStatus.FAILED,
+    "cancelled": RunStatus.CANCELLED,
+    "interrupted": RunStatus.INTERRUPTED,
+}
 _MAX_TEXT_CHARS = 8000
 _MAX_ATTACHMENTS = 5
 _MAX_DECISION_NOTE = 200
@@ -133,6 +166,8 @@ class _TurnState:
     user_id: str
     assistant_id: str
     model: str
+    tenant: TenantContext = field(default_factory=TenantContext)
+    run_id: str | None = None
     blocks: list[dict[str, Any]] = field(default_factory=list)
     sources: list[dict[str, Any]] = field(default_factory=list)
     sources_total: int = 0
@@ -148,6 +183,113 @@ class _TurnState:
     #: Last kernel or executor error code seen for this turn, used only for
     #: logs and audit (never for a metric label).
     error_code: str | None = None
+
+
+class _ScopedArtifacts:
+    """Tenant check in front of :class:`ArtifactRegistry`.
+
+    The registry now resolves storage per tenant; this wrapper keeps the
+    router-facing surface unchanged and makes a foreign handle the same
+    ``artifact_not_found`` as an unknown one. It also binds the request tenant
+    (or an explicit one) into every registry call.
+    """
+
+    def __init__(self, registry: ArtifactRegistry, store: ChatStore):
+        self._registry = registry
+        self._store = store
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._registry, name)
+
+    @staticmethod
+    def _context(tenant: TenantContext | str | None) -> TenantContext:
+        return tenant_for(tenant)
+
+    def _owned(
+        self, handle: str, tenant: TenantContext | str | None
+    ) -> TenantContext:
+        context = self._context(tenant)
+        if self._store.get_artifact(handle, tenant_id=context.tenant_id) is None:
+            raise ArtifactError(
+                "artifact_not_found", "That file isn't available any more."
+            )
+        return context
+
+    def get(
+        self,
+        handle: str,
+        *,
+        thread_id: str | None = None,
+        tenant: TenantContext | str | None = None,
+    ) -> dict[str, Any]:
+        context = self._owned(handle, tenant)
+        return self._registry.get(
+            handle, thread_id=thread_id, tenant=context
+        )
+
+    def card(
+        self,
+        handle: str,
+        *,
+        thread_id: str | None = None,
+        rows: int = PREVIEW_ROWS_DEFAULT,
+        tenant: TenantContext | str | None = None,
+    ) -> dict[str, Any]:
+        context = self._owned(handle, tenant)
+        return self._registry.card(
+            handle, thread_id=thread_id, rows=rows, tenant=context
+        )
+
+    def claim(
+        self,
+        handle: str,
+        thread_id: str,
+        *,
+        tenant: TenantContext | str | None = None,
+    ) -> dict[str, Any]:
+        context = self._owned(handle, tenant)
+        return self._registry.claim(handle, thread_id, tenant=context)
+
+    def preview(
+        self,
+        handle: str,
+        *,
+        rows: int = PREVIEW_ROWS_DEFAULT,
+        thread_id: str | None = None,
+        tenant: TenantContext | str | None = None,
+    ) -> dict[str, Any]:
+        context = self._owned(handle, tenant)
+        return self._registry.preview(
+            handle, rows=rows, thread_id=thread_id, tenant=context
+        )
+
+    def content(
+        self,
+        handle: str,
+        *,
+        thread_id: str | None = None,
+        download: bool = False,
+        range_header: str | None = None,
+        tenant: TenantContext | str | None = None,
+    ) -> Any:
+        context = self._owned(handle, tenant)
+        return self._registry.content(
+            handle,
+            thread_id=thread_id,
+            download=download,
+            range_header=range_header,
+            tenant=context,
+        )
+
+    def save_upload(
+        self,
+        filename: str,
+        data: bytes,
+        *,
+        tenant: TenantContext | str | None = None,
+    ) -> dict[str, Any]:
+        context = self._context(tenant)
+        return self._registry.save_upload(filename, data, tenant=context)
 
 
 class ChatService:
@@ -172,16 +314,32 @@ class ChatService:
         audit: AuditLog | None = None,
         metrics: Metrics | None = None,
         spend_guard: SpendGuard | None = None,
+        runs: RunRecorder | None = None,
+        entitlements: EntitlementStore | None = None,
+        billing: BillingSink | None = None,
     ):
         self.store = store
         self.bus = EventBus()
         self._now = now or (lambda: datetime.now(timezone.utc))
+        # P5: the plan store and terminal billing hook. The owner default is an
+        # explicit unlimited plan; a configured plan can still deny or exhaust.
+        self.entitlements = entitlements or StaticEntitlementStore.from_env()
+        self.billing = billing or CountingBillingSink()
+        self._runs = runs or RunRecorder(
+            store, now=self._now, billing=self.billing
+        )
+        if runs is not None and billing is not None:
+            runs.attach_billing(billing)
         self.approvals = approvals or ApprovalStore()
-        self.artifacts = artifacts or ArtifactRegistry(
+        self.artifacts = _ScopedArtifacts(
+            artifacts
+            or ArtifactRegistry(
+                store,
+                store.path.parent / "artifacts",
+                now=lambda: iso_now(self._now()),
+                workspace_root=workspace_root,
+            ),
             store,
-            store.path.parent / "artifacts",
-            now=lambda: iso_now(self._now()),
-            workspace_root=workspace_root,
         )
         self._provider = provider
         self._registry = registry
@@ -190,7 +348,10 @@ class ChatService:
         self._metrics = metrics or get_metrics()
         self._spend = spend_guard
         self._budget = budget or TurnBudget()
-        self._model = model or (config or KernelConfig.from_env()).primary_model
+        # One authoritative config for this service: the model, pricing, and
+        # provider wiring all come from it rather than a fresh KernelConfig().
+        self._config = config or KernelConfig.from_env()
+        self._model = model or self._config.primary_model
         self._secrets = dict(secrets or {})
         self._secret_values = tuple(
             value for value in self._secrets.values() if isinstance(value, str) and len(value) >= 4
@@ -219,15 +380,117 @@ class ChatService:
 
     # -- audit -------------------------------------------------------------
 
-    def _record_audit(self, event: str, **fields: Any) -> None:
-        """Audit without ever failing a turn: accounting is not traffic."""
+    @staticmethod
+    def _ctx(tenant: TenantContext | str | None = None) -> TenantContext:
+        """The tenant this call is acting for (explicit, else request-bound)."""
+
+        return tenant_for(tenant)
+
+    def _record_audit(
+        self,
+        event: str,
+        *,
+        tenant_id: str | None = None,
+        **fields: Any,
+    ) -> None:
+        """Audit without ever failing a turn: accounting is not traffic.
+
+        Every row names the tenant that acted. A caller passes it explicitly;
+        the bound request context is the fallback, and the owner default is
+        last, so a new call site cannot silently omit the label.
+        """
 
         if self._audit is None:
             return
+        if tenant_id is None:
+            tenant_id = current_tenant().tenant_id
         try:
-            self._audit.record(event, **fields)
+            self._audit.record(event, tenant_id=tenant_id, **fields)
         except Exception:  # noqa: BLE001 - a full disk must not end a turn
             return
+
+    # -- entitlement gate --------------------------------------------------
+
+    def decide_entitlement(
+        self,
+        tenant: TenantContext | str | None = None,
+        *,
+        task_type: str = "chat",
+        surface: str | None = None,
+    ) -> EntitlementDecision:
+        """Ask the plan store for this request's total decision.
+
+        Any store fault becomes ``internal_error``: a missing decision is not an
+        allow (contract §4), and the frozen code never carries a raw exception
+        message. The allowed/denied check is counted with fixed labels only.
+        """
+
+        context = self._ctx(tenant)
+        try:
+            decision = self.entitlements.decide(
+                tenant_id=context.tenant_id,
+                task_type=task_type,
+                actor_id=context.actor_id,
+                role=context.role,
+                surface=surface or context.surface,
+            )
+        except Exception:  # noqa: BLE001 - a missing decision fails closed
+            raise ChatError(
+                "internal_error",
+                status=500,
+                message="The plan check failed, so the request was refused.",
+            ) from None
+        if not isinstance(decision, EntitlementDecision) or not decision.code:
+            raise ChatError(
+                "internal_error",
+                status=500,
+                message="The plan check returned no decision, so the request was refused.",
+            )
+        try:
+            self._metrics.inc_entitlement_check(decision.decision, decision.code)
+        except Exception:  # noqa: BLE001 - a metric must not block a decision
+            pass
+        return decision
+
+    def authorize_entitlement(
+        self,
+        tenant: TenantContext | str | None = None,
+        *,
+        task_type: str = "chat",
+        surface: str | None = None,
+    ) -> EntitlementDecision:
+        """The entitlement gate itself: allow, or raise the frozen code."""
+
+        decision = self.decide_entitlement(
+            tenant, task_type=task_type, surface=surface
+        )
+        if decision.allowed:
+            return decision
+        code = (
+            decision.code
+            if decision.code in {"entitlement_denied", "entitlement_exhausted"}
+            else "entitlement_denied"
+        )
+        if code == "entitlement_exhausted":
+            message = (
+                "The plan's limit for this window is reached. New work resumes "
+                "when the window resets."
+            )
+            status = 429
+        else:
+            message = "This task type is not available on the current plan."
+            status = 403
+        raise ChatError(
+            code,
+            status=status,
+            message=message,
+            retryable=False,
+            details={
+                "plan_id": decision.plan_id,
+                "limit": decision.limit,
+                "window": decision.window,
+            },
+        )
 
     # -- spend guardrail ---------------------------------------------------
 
@@ -259,7 +522,9 @@ class ChatService:
         except Exception:  # noqa: BLE001 - accounting is not traffic
             return None
 
-    def _refuse_if_over_spend(self, *, action: str) -> None:
+    def _refuse_if_over_spend(
+        self, *, action: str, tenant: TenantContext | str | None = None
+    ) -> None:
         """Gate a new turn on the persisted day/month spend.
 
         Runs before a turn row or message exists, so a refused request leaves
@@ -270,6 +535,7 @@ class ChatService:
 
         if self._spend is None:
             return
+        context = self._ctx(tenant)
         state = self.refresh_spend_metrics()
         if state is None:  # pragma: no cover - only when no guard is wired
             return
@@ -289,6 +555,7 @@ class ChatService:
                 )
                 self._record_audit(
                     "spend_cap_warning",
+                    tenant_id=context.tenant_id,
                     request_id=request_id,
                     outcome="warning",
                     extra={
@@ -318,6 +585,7 @@ class ChatService:
         )
         self._record_audit(
             "spend_cap_blocked",
+            tenant_id=context.tenant_id,
             request_id=request_id,
             outcome="blocked",
             extra={
@@ -374,22 +642,43 @@ class ChatService:
 
     # -- threads -----------------------------------------------------------
 
-    def create_thread(self, title: str | None = None) -> dict[str, Any]:
+    def create_thread(
+        self, title: str | None = None, *, tenant: TenantContext | str | None = None
+    ) -> dict[str, Any]:
+        context = self._ctx(tenant)
         source = "user" if title and title.strip() else "auto"
         return self.store.create_thread(
-            title=(title or "").strip() or "New chat", title_source=source
+            title=(title or "").strip() or "New chat",
+            title_source=source,
+            tenant_id=context.tenant_id,
         )
 
     def list_threads(
-        self, *, limit: int = 50, cursor: str | None = None
+        self,
+        *,
+        limit: int = 50,
+        cursor: str | None = None,
+        tenant: TenantContext | str | None = None,
     ) -> tuple[list[dict[str, Any]], str | None]:
-        return self.store.list_threads(limit=limit, cursor=cursor)
+        context = self._ctx(tenant)
+        return self.store.list_threads(
+            limit=limit, cursor=cursor, tenant_id=context.tenant_id
+        )
 
     def get_thread(
-        self, thread_id: str, *, limit: int = 50, before: str | None = None
+        self,
+        thread_id: str,
+        *,
+        limit: int = 50,
+        before: str | None = None,
+        tenant: TenantContext | str | None = None,
     ) -> dict[str, Any]:
+        context = self._ctx(tenant)
         thread, messages, last_seq, has_more = self.store.snapshot(
-            thread_id, limit=limit, before=before
+            thread_id,
+            limit=limit,
+            before=before,
+            tenant_id=context.tenant_id,
         )
         if thread is None:
             raise ChatError("unknown_thread", status=404)
@@ -400,7 +689,14 @@ class ChatService:
             "has_more": has_more,
         }
 
-    def rename_thread(self, thread_id: str, title: str) -> dict[str, Any]:
+    def rename_thread(
+        self,
+        thread_id: str,
+        title: str,
+        *,
+        tenant: TenantContext | str | None = None,
+    ) -> dict[str, Any]:
+        context = self._ctx(tenant)
         clean = title.strip() if isinstance(title, str) else ""
         if not 1 <= len(clean) <= 80:
             raise ChatError(
@@ -410,7 +706,9 @@ class ChatService:
                 user_fixable=True,
                 field="/title",
             )
-        thread = self.store.rename_thread(thread_id, clean)
+        thread = self.store.rename_thread(
+            thread_id, clean, tenant_id=context.tenant_id
+        )
         if thread is None:
             raise ChatError("unknown_thread", status=404)
         self._emit(
@@ -424,15 +722,18 @@ class ChatService:
         )
         return thread
 
-    async def delete_thread(self, thread_id: str) -> dict[str, Any]:
-        thread = self.store.get_thread(thread_id)
+    async def delete_thread(
+        self, thread_id: str, *, tenant: TenantContext | str | None = None
+    ) -> dict[str, Any]:
+        context = self._ctx(tenant)
+        thread = self.store.get_thread(thread_id, tenant_id=context.tenant_id)
         if thread is None:
             raise ChatError("unknown_thread", status=404)
         active = thread.get("active_turn_id")
         if active:
             task = self._tasks.get(active)
             try:
-                await self.stop(active)
+                await self.stop(active, tenant=context)
                 if task is not None:
                     await self.wait_for_turn(active, timeout=2.0)
             except (ChatError, asyncio.TimeoutError):
@@ -452,11 +753,12 @@ class ChatService:
                 # No live task: the turn is a leftover from a crash or a Stop
                 # that never resumed. Settle it the way boot recovery does, so
                 # a dead turn cannot make its thread undeletable.
-                self.recover_interrupted()
+                self.recover_interrupted(tenant=context)
         try:
             result = self.store.purge_thread(
                 thread_id,
                 on_artifacts=self.artifacts.purge,
+                tenant_id=context.tenant_id,
             )
         except ThreadBusyError as exc:
             # The store re-checks inside the delete transaction. Reaching this
@@ -480,19 +782,44 @@ class ChatService:
         text: str,
         client_turn_id: str | None = None,
         attachment_handles: Sequence[str] = (),
+        tenant: TenantContext | str | None = None,
+        surface: str | None = None,
+        task_type: str | None = None,
     ) -> tuple[dict[str, Any], bool]:
-        """Accept a user message and start a turn. Returns ``(payload, created)``."""
+        """Accept a user message and start a turn. Returns ``(payload, created)``.
 
-        thread = self.store.get_thread(thread_id)
+        ``surface``/``task_type`` let a non-interactive caller (the proactive
+        runner) label its run without inventing a second send path. They are
+        absent from every existing call site and default to the bound tenant's
+        surface and ``chat``.
+        """
+
+        context = self._ctx(tenant)
+        run_surface = surface if surface in SURFACES else context.surface
+        run_task_type = task_type or "chat"
+        thread = self.store.get_thread(thread_id, tenant_id=context.tenant_id)
         if thread is None:
             raise ChatError("unknown_thread", status=404)
 
         if client_turn_id:
-            existing = self.store.find_turn_by_client_id(thread_id, client_turn_id)
+            existing = self.store.find_turn_by_client_id(
+                thread_id, client_turn_id, tenant_id=context.tenant_id
+            )
             if existing is not None:
                 stored = self.store.get_message(existing["user_message_id"])
                 accepted = _message_text(stored) if stored is not None else text
-                return self._send_payload(existing, accepted, idempotent=True), False
+                run = self.store.get_run_by_turn(
+                    existing["id"], tenant_id=context.tenant_id
+                )
+                return (
+                    self._send_payload(
+                        existing,
+                        accepted,
+                        idempotent=True,
+                        run_id=str(run["run_id"]) if run is not None else None,
+                    ),
+                    False,
+                )
 
         message = text.strip() if isinstance(text, str) else ""
         if not 1 <= len(message) <= _MAX_TEXT_CHARS:
@@ -523,7 +850,9 @@ class ChatService:
                     field="/attachment_handles",
                 )
             try:
-                meta = self.artifacts.get(handle, thread_id=thread_id)
+                meta = self.artifacts.get(
+                    handle, thread_id=thread_id, tenant=context
+                )
             except ArtifactError:
                 raise ChatError(
                     "invalid_message",
@@ -541,9 +870,15 @@ class ChatService:
                 details={"active_turn_id": thread["active_turn_id"]},
             )
 
+        # Gate order: tenant is resolved above; entitlement runs before spend,
+        # so a denied plan never reaches the spend guard or the provider.
+        entitlement = self.authorize_entitlement(
+            context, task_type=run_task_type, surface=run_surface
+        )
+
         # Before a turn or a message exists: a capped request leaves the
         # thread untouched and never reaches the provider.
-        self._refuse_if_over_spend(action="send")
+        self._refuse_if_over_spend(action="send", tenant=context)
 
         turn_id = new_id("turn")
         user_id = new_id("msg")
@@ -556,7 +891,7 @@ class ChatService:
         with self.store.transaction():
             for meta in attachment_cards:
                 if meta.get("thread_id") is None:
-                    self.artifacts.claim(meta["handle"], thread_id)
+                    self.artifacts.claim(meta["handle"], thread_id, tenant=context)
             self.store.create_message(
                 thread_id=thread_id,
                 turn_id=turn_id,
@@ -581,6 +916,20 @@ class ChatService:
                 budget=self._budget_dict(),
                 turn_id=turn_id,
             )
+            # P3-1: the run is created with the turn in one transaction, so a
+            # replay either sees both or neither. The idempotency key is the
+            # client turn id; a replay returns this same run.
+            run = self._runs.create(
+                tenant_id=context.tenant_id,
+                thread_id=thread_id,
+                turn_id=turn_id,
+                surface=run_surface,
+                task_type=run_task_type,
+                model=self._model,
+                provider=self._config.provider,
+                idempotency_key=client_turn_id,
+                plan=entitlement.limits,
+            )
             self.store.update_turn(turn_id, state="queued")
             self._emit(
                 thread_id,
@@ -592,12 +941,18 @@ class ChatService:
                 "message_created",
                 {"turn_id": turn_id, "message": self.store.get_message(assistant_id)},
             )
-            thread_record = self.store.get_thread(thread_id)
+            thread_record = self.store.get_thread(
+                thread_id, tenant_id=context.tenant_id
+            )
             if thread_record and thread_record["title_source"] == "auto":
                 title = " ".join(message.split())[:60]
                 if thread_record["message_count"] <= 2 and title:
-                    if self.store.set_auto_title(thread_id, title):
-                        updated = self.store.get_thread(thread_id)
+                    if self.store.set_auto_title(
+                        thread_id, title, tenant_id=context.tenant_id
+                    ):
+                        updated = self.store.get_thread(
+                            thread_id, tenant_id=context.tenant_id
+                        )
                         self._emit(
                             thread_id,
                             "thread_updated",
@@ -607,22 +962,32 @@ class ChatService:
                                 "updated_at": updated["updated_at"],
                             },
                         )
-            self.store.touch_thread(thread_id)
+            self.store.touch_thread(thread_id, tenant_id=context.tenant_id)
 
         # Publish only after the transaction commits: a tailing stream that
         # wakes early re-reads the log and waits for the next signal.
         self.bus.publish(thread_id)
         self._done[turn_id] = asyncio.Event()
         self._cancel[turn_id] = CancelToken()
-        task = asyncio.create_task(self._run_turn(turn_id, message))
+        task = asyncio.create_task(
+            self._run_turn(turn_id, message, context, run_id=run.run_id)
+        )
         self._tasks[turn_id] = task
         task.add_done_callback(lambda finished: self._consume_task_error(finished))
-        return self._send_payload(turn, message, idempotent=False), True
+        return (
+            self._send_payload(turn, message, idempotent=False, run_id=run.run_id),
+            True,
+        )
 
     def _send_payload(
-        self, turn: Mapping[str, Any], text: str, *, idempotent: bool
+        self,
+        turn: Mapping[str, Any],
+        text: str,
+        *,
+        idempotent: bool,
+        run_id: str | None = None,
     ) -> dict[str, Any]:
-        return {
+        payload = {
             "turn_id": turn["id"],
             "user_message_id": turn["user_message_id"],
             "assistant_message_id": turn["assistant_message_id"],
@@ -630,10 +995,22 @@ class ChatService:
             "text": text.strip() if isinstance(text, str) else text,
             "idempotent": idempotent,
         }
+        if run_id is not None:
+            payload["run_id"] = run_id
+        return payload
 
-    async def stop(self, turn_id: str) -> dict[str, Any]:
+    async def stop(
+        self, turn_id: str, *, tenant: TenantContext | str | None = None
+    ) -> dict[str, Any]:
+        context = self._ctx(tenant)
         turn = self.store.get_turn(turn_id)
         if turn is None:
+            raise ChatError("unknown_turn", status=404)
+        if self.store.get_thread(
+            turn["thread_id"], tenant_id=context.tenant_id
+        ) is None:
+            # A turn id from another tenant is an unknown turn, not a 403 that
+            # would confirm the id exists.
             raise ChatError("unknown_turn", status=404)
         if turn["state"] not in {"queued", "running", "stopping"}:
             raise ChatError("turn_not_running", status=409)
@@ -645,6 +1022,11 @@ class ChatService:
         if task is not None and not task.done():
             self._arm_hard_cancel(turn_id, task)
         self.store.update_turn(turn_id, state="stopping")
+        # P3-1: ``stopping`` is not terminal; the run still settles once as
+        # ``cancelled`` (client Stop) or ``interrupted`` (shutdown).
+        self._transition_run_for_turn(
+            turn_id, context.tenant_id, RunStatus.STOPPING
+        )
         return {"turn_id": turn_id, "status": "stopping"}
 
     def _arm_hard_cancel(
@@ -677,11 +1059,16 @@ class ChatService:
 
         loop.call_later(_HARD_CANCEL_DELAY, fire)
 
-    async def retry(self, turn_id: str) -> dict[str, Any]:
+    async def retry(
+        self, turn_id: str, *, tenant: TenantContext | str | None = None
+    ) -> dict[str, Any]:
+        context = self._ctx(tenant)
         turn = self.store.get_turn(turn_id)
         if turn is None:
             raise ChatError("unknown_turn", status=404)
         thread_id = turn["thread_id"]
+        if self.store.get_thread(thread_id, tenant_id=context.tenant_id) is None:
+            raise ChatError("unknown_turn", status=404)
         latest = self.store.latest_turn(thread_id)
         if latest is None or latest["id"] != turn_id:
             raise ChatError("not_latest_turn", status=409)
@@ -692,8 +1079,24 @@ class ChatService:
         if user_message is None:  # pragma: no cover - internal invariant
             raise ChatError("unknown_turn", status=404)
         text = _message_text(user_message)
+        previous_run = self.store.get_run_by_turn(
+            turn_id, tenant_id=context.tenant_id
+        )
+        retry_task_type = (
+            str(previous_run["task_type"]) if previous_run is not None else "chat"
+        )
+        retry_surface = (
+            str(previous_run["surface"])
+            if previous_run is not None
+            else context.surface
+        )
+        # A retry is new work: it passes the entitlement gate before the spend
+        # gate, and a denial leaves the old turn exactly as it was.
+        entitlement = self.authorize_entitlement(
+            context, task_type=retry_task_type, surface=retry_surface
+        )
         # A retry opens a new turn, so it is a new spend decision too.
-        self._refuse_if_over_spend(action="retry")
+        self._refuse_if_over_spend(action="retry", tenant=context)
         # A retry never duplicates the user message: it opens a new assistant
         # message and a new turn over the same question (§5.4).
         thread_id = turn["thread_id"]
@@ -717,6 +1120,23 @@ class ChatService:
                 retry_of=turn_id,
                 turn_id=new_turn_id,
             )
+            # P3-1: a retry is new work, so it opens a new run. ``retry_of``
+            # points at the run it replaces, not at the turn.
+            run = self._runs.create(
+                tenant_id=context.tenant_id,
+                thread_id=thread_id,
+                turn_id=new_turn_id,
+                surface=retry_surface,
+                task_type=retry_task_type,
+                model=self._model,
+                provider=self._config.provider,
+                retry_of=(
+                    str(previous_run["run_id"])
+                    if previous_run is not None
+                    else None
+                ),
+                plan=entitlement.limits,
+            )
             self.store.update_turn(new_turn_id, state="queued")
             self.store.update_message(
                 turn["assistant_message_id"], superseded_by=new_turn_id
@@ -729,15 +1149,22 @@ class ChatService:
                     "message": self.store.get_message(assistant_id),
                 },
             )
-            self.store.touch_thread(thread_id)
+            self.store.touch_thread(thread_id, tenant_id=context.tenant_id)
 
         self.bus.publish(thread_id)
         self._done[new_turn_id] = asyncio.Event()
         self._cancel[new_turn_id] = CancelToken()
-        task = asyncio.create_task(self._run_turn(new_turn_id, text))
+        task = asyncio.create_task(
+            self._run_turn(new_turn_id, text, context, run_id=run.run_id)
+        )
         self._tasks[new_turn_id] = task
         task.add_done_callback(lambda finished: self._consume_task_error(finished))
-        return {"turn_id": new_turn_id, "retry_of": turn_id}
+        return {
+            "turn_id": new_turn_id,
+            "retry_of": turn_id,
+            "run_id": run.run_id,
+            "retry_of_run": run.retry_of,
+        }
 
     async def wait_for_turn(self, turn_id: str, timeout: float = 10.0) -> None:
         event = self._done.get(turn_id)
@@ -779,7 +1206,15 @@ class ChatService:
 
     # -- turn runner -------------------------------------------------------
 
-    async def _run_turn(self, turn_id: str, text: str) -> None:
+    async def _run_turn(
+        self,
+        turn_id: str,
+        text: str,
+        tenant: TenantContext | None = None,
+        *,
+        run_id: str | None = None,
+    ) -> None:
+        context = self._ctx(tenant)
         turn = self.store.get_turn(turn_id)
         if turn is None:  # pragma: no cover - internal invariant
             return
@@ -789,10 +1224,13 @@ class ChatService:
             user_id=turn["user_message_id"],
             assistant_id=turn["assistant_message_id"],
             model=self._model,
+            tenant=context,
+            run_id=run_id,
         )
         state.started_mono = time.monotonic()
         self._live_blocks[state.assistant_id] = state.blocks
         self.store.update_turn(turn_id, state="running", started_at=iso_now(self._now()))
+        self._transition_run(state, RunStatus.RUNNING)
         self.store.update_message(state.user_id, status="complete")
         try:
             if self._provider is None:
@@ -807,10 +1245,12 @@ class ChatService:
                 return
 
             approval_hook = self._approval_hook(state)
-            executor = self._make_executor(approval_hook, turn_id=turn_id)
+            executor = self._make_executor(
+                approval_hook, turn_id=turn_id, tenant=state.tenant
+            )
             loop = AgentLoop(
                 provider=self._provider,
-                config=KernelConfig(),
+                config=self._config,
                 tool_executor=executor,
                 budget=self._budget,
                 usage_store=self._usage_store,
@@ -826,7 +1266,9 @@ class ChatService:
                 model=self._model,
                 cancel=token,
             ):
-                if self.store.get_thread(state.thread_id) is None:
+                if self.store.get_thread(
+                    state.thread_id, tenant_id=state.tenant.tenant_id
+                ) is None:
                     break
                 self._handle_kernel_event(state, event)
             if not state.finished:
@@ -879,18 +1321,45 @@ class ChatService:
             done = self._done.get(turn_id)
             if done is not None:
                 done.set()
-            self.store.touch_thread(state.thread_id)
+            self.store.touch_thread(
+                state.thread_id, tenant_id=state.tenant.tenant_id
+            )
             self.bus.publish(state.thread_id)
 
-    def _make_executor(self, approval_hook: Any, *, turn_id: str | None = None) -> Any:
+    def _tenant_workspace(self, tenant_id: str) -> str | None:
+        """Tool file scope for one tenant; the owner keeps the configured root.
+
+        A non-owner tenant needs a workspace. The service's configured root is
+        preferred; otherwise the database's parent directory is the same
+        default layout the artifact registry already assumes.
+        """
+
+        if tenant_id == OWNER_TENANT_ID:
+            return self._workspace_root
+        base = self._workspace_root
+        if base is None:
+            store_path = getattr(self.store, "path", None)
+            if store_path is None:
+                return None
+            base = str(Path(store_path).parent.parent)
+        return str(tenant_workspace_root(base, tenant_id))
+
+    def _make_executor(
+        self,
+        approval_hook: Any,
+        *,
+        turn_id: str | None = None,
+        tenant: TenantContext | str | None = None,
+    ) -> Any:
         if self._tool_executor_factory is not None:
             return self._tool_executor_factory(approval_hook)
         if self._registry is not None:
+            context = self._ctx(tenant)
             return RegistryToolExecutor(
                 self._registry,
                 approval=approval_hook,
                 secrets=self._secrets,
-                workspace_root=self._workspace_root,
+                workspace_root=self._tenant_workspace(context.tenant_id),
                 # KEL-20: the registry writes one ``skill_invoked`` line per
                 # call, attributed to the turn that made it.
                 audit=self._audit,
@@ -1023,7 +1492,9 @@ class ChatService:
                     block["status"] = "expired"
                 approval_id = block.get("approval_id")
                 if approval_id:
-                    approval = self.store.get_approval(str(approval_id))
+                    approval = self.store.get_approval(
+                        str(approval_id), tenant_id=state.tenant.tenant_id
+                    )
                     if approval is not None and approval["status"] == "expired":
                         block["status"] = "expired"
                     elif approval is not None and approval["status"] == "denied":
@@ -1084,6 +1555,7 @@ class ChatService:
                 audit_extra["error_code"] = error_code
             self._record_audit(
                 "tool_call",
+                tenant_id=state.tenant.tenant_id,
                 turn_id=state.turn["id"],
                 request_id=request_id,
                 tool=tool_name,
@@ -1206,7 +1678,9 @@ class ChatService:
             )
             return None
         try:
-            return self.artifacts.get(handle, thread_id=state.thread_id)
+            return self.artifacts.get(
+                handle, thread_id=state.thread_id, tenant=state.tenant
+            )
         except ArtifactError:
             self._emit_error(
                 state, "artifact_not_found", retryable=False, details=None, step=state.steps
@@ -1228,7 +1702,9 @@ class ChatService:
 
     def _emit_artifact(self, state: _TurnState, meta: Mapping[str, Any]) -> None:
         try:
-            card = self.artifacts.card(str(meta["handle"]), thread_id=state.thread_id)
+            card = self.artifacts.card(
+                str(meta["handle"]), thread_id=state.thread_id, tenant=state.tenant
+            )
         except ArtifactError:  # pragma: no cover - meta was just resolved
             return
         state.blocks.append({"type": "artifact", "artifact": card})
@@ -1276,6 +1752,7 @@ class ChatService:
             audit_extra["error_code"] = error_code
         self._record_audit(
             "turn_error",
+            tenant_id=state.tenant.tenant_id,
             turn_id=state.turn["id"],
             request_id=request_id,
             outcome="error",
@@ -1335,6 +1812,9 @@ class ChatService:
             finished_at=iso_now(self._now()),
             usage=usage,
         )
+        # P3-1: settle the run with the same terminal outcome as the turn. A
+        # late or duplicate writer loses at the store's terminal guard.
+        self._close_run(state, reason, code)
         request_id = current_request_id()
         self._metrics.observe_turn(reason, max(0.0, duration_ms / 1000.0))
         self._metrics.add_tokens("input", state.model, state.input_tokens)
@@ -1361,6 +1841,7 @@ class ChatService:
             audit_extra["error_code"] = code
         self._record_audit(
             "turn_finished",
+            tenant_id=state.tenant.tenant_id,
             turn_id=state.turn["id"],
             request_id=request_id,
             outcome=reason,
@@ -1418,7 +1899,7 @@ class ChatService:
             title=_approval_title(request.tool),
             secrets=self._secret_values,
         )
-        self.store.save_approval(card)
+        self.store.save_approval(card, tenant_id=state.tenant.tenant_id)
         self._attach_approval(state, card)
         request_id = current_request_id()
         log(
@@ -1432,6 +1913,7 @@ class ChatService:
         )
         self._record_audit(
             "approval_requested",
+            tenant_id=state.tenant.tenant_id,
             turn_id=state.turn["id"],
             request_id=request_id,
             tool=request.tool,
@@ -1465,7 +1947,9 @@ class ChatService:
             self._abandon_approval(state, approval_id)
             return False
         with self._approval_lock:
-            current = self.store.get_approval(approval_id)
+            current = self.store.get_approval(
+                approval_id, tenant_id=state.tenant.tenant_id
+            )
             token = self._cancel.get(state.turn["id"])
             if token is not None and token.cancelled:
                 self._abandon_approval(state, approval_id)
@@ -1537,7 +2021,11 @@ class ChatService:
     def _abandon_turn_approvals(self, state: _TurnState) -> None:
         """Close approvals a stopped turn can no longer honour."""
 
-        for card in self.store.list_approvals(thread_id=state.thread_id, limit=200):
+        for card in self.store.list_approvals(
+            thread_id=state.thread_id,
+            limit=200,
+            tenant_id=state.tenant.tenant_id,
+        ):
             if card.get("turn_id") != state.turn["id"]:
                 continue
             self._abandon_approval(state, str(card["id"]))
@@ -1550,7 +2038,9 @@ class ChatService:
         that never happens. Both are closed here, without executing anything.
         """
 
-        card = self.store.get_approval(approval_id)
+        card = self.store.get_approval(
+            approval_id, tenant_id=state.tenant.tenant_id
+        )
         if card is None or card.get("source") == "openshell":
             return
         if card.get("status") == "pending":
@@ -1589,24 +2079,43 @@ class ChatService:
             },
         )
 
-    def get_approval(self, approval_id: str) -> dict[str, Any]:
-        card = self.store.get_approval(approval_id)
+    def get_approval(
+        self, approval_id: str, *, tenant: TenantContext | str | None = None
+    ) -> dict[str, Any]:
+        context = self._ctx(tenant)
+        card = self.store.get_approval(
+            approval_id, tenant_id=context.tenant_id
+        )
         if card is None:
             raise ChatError("unknown_approval", status=404)
-        if self.store.get_thread(str(card.get("thread_id") or "")) is None:
+        if self.store.get_thread(
+            str(card.get("thread_id") or ""), tenant_id=context.tenant_id
+        ) is None:
             raise ChatError("unknown_approval", status=404)
         return card
 
     def list_approvals(
-        self, *, status: str | None = None, thread_id: str | None = None, limit: int = 50
+        self,
+        *,
+        status: str | None = None,
+        thread_id: str | None = None,
+        limit: int = 50,
+        tenant: TenantContext | str | None = None,
     ) -> list[dict[str, Any]]:
+        context = self._ctx(tenant)
         cards = self.store.list_approvals(
-            status=status, thread_id=thread_id, limit=limit
+            status=status,
+            thread_id=thread_id,
+            limit=limit,
+            tenant_id=context.tenant_id,
         )
         return [
             card
             for card in cards
-            if self.store.get_thread(str(card.get("thread_id") or "")) is not None
+            if self.store.get_thread(
+                str(card.get("thread_id") or ""), tenant_id=context.tenant_id
+            )
+            is not None
         ]
 
     def decide(
@@ -1616,7 +2125,9 @@ class ChatService:
         note: str | None = None,
         *,
         actor: str = "owner",
+        tenant: TenantContext | str | None = None,
     ) -> dict[str, Any]:
+        context = self._ctx(tenant)
         # ``actor`` is internal attribution, never a client field: the HTTP
         # layer calls this with the default. The proactive runner passes
         # ``"schedule"`` so a headless denial is not recorded as the owner's.
@@ -1636,18 +2147,24 @@ class ChatService:
                 user_fixable=True,
                 field="/note",
             )
-        card = self.store.get_approval(approval_id)
+        card = self.store.get_approval(
+            approval_id, tenant_id=context.tenant_id
+        )
         if card is None:
             raise ChatError("unknown_approval", status=404)
-        if self.store.get_thread(str(card.get("thread_id") or "")) is None:
+        if self.store.get_thread(
+            str(card.get("thread_id") or ""), tenant_id=context.tenant_id
+        ) is None:
             raise ChatError("unknown_approval", status=404)
         status = "approved" if decision == "approve" else "denied"
         if card.get("source") == "openshell":
-            return self._decide_exec(card, decision, status, actor=actor)
+            return self._decide_exec(
+                card, decision, status, actor=actor, tenant=context
+            )
         replay = self._replay_decision(card, status)
         if replay is not None:
             return replay
-        return self._decide_card(card, status, actor=actor)
+        return self._decide_card(card, status, actor=actor, tenant=context)
 
     def _replay_decision(
         self, card: Mapping[str, Any], status: str
@@ -1671,10 +2188,16 @@ class ChatService:
         return None
 
     def _decide_card(
-        self, card: Mapping[str, Any], status: str, *, actor: str = "owner"
+        self,
+        card: Mapping[str, Any],
+        status: str,
+        *,
+        actor: str = "owner",
+        tenant: TenantContext | str | None = None,
     ) -> dict[str, Any]:
         """Decide a skill-runtime approval: the guarded UPDATE is the authority."""
 
+        context = self._ctx(tenant)
         approval_id = str(card["id"])
         now = self._now()
         expires = _as_aware(
@@ -1682,7 +2205,12 @@ class ChatService:
         )
         if now >= expires:
             self._record_resolution(
-                None, approval_id, "expired", executed=False, actor=actor
+                None,
+                approval_id,
+                "expired",
+                executed=False,
+                actor=actor,
+                tenant=context,
             )
             raise ChatError("expired", status=409)
         updated, applied = self._record_resolution(
@@ -1693,6 +2221,7 @@ class ChatService:
             decided_at=iso_now(now),
             allowed_from=("pending",),
             actor=actor,
+            tenant=context,
         )
         if not applied:
             replay = self._replay_decision(updated, status)
@@ -1713,9 +2242,11 @@ class ChatService:
         status: str,
         *,
         actor: str = "owner",
+        tenant: TenantContext | str | None = None,
     ) -> dict[str, Any]:
         """Decide an exec approval through KEL-7, whose store owns single use."""
 
+        context = self._ctx(tenant)
         approval_id = str(card["id"])
         try:
             if decision == "approve":
@@ -1724,7 +2255,12 @@ class ChatService:
                 self.approvals.deny(approval_id)
         except ApprovalExpired:
             self._record_resolution(
-                None, approval_id, "expired", executed=False, actor=actor
+                None,
+                approval_id,
+                "expired",
+                executed=False,
+                actor=actor,
+                tenant=context,
             )
             raise ChatError("expired", status=409) from None
         except ApprovalAlreadyUsed:
@@ -1742,6 +2278,7 @@ class ChatService:
             decided_at=iso_now(self._now()),
             allowed_from=("pending",),
             actor=actor,
+            tenant=context,
         )
         if not applied:
             # A concurrent decision mirrored first: report as a replay so both
@@ -1767,6 +2304,7 @@ class ChatService:
         decided_at: str | None = None,
         allowed_from: Sequence[str] | None = None,
         actor: str = "owner",
+        tenant: TenantContext | str | None = None,
     ) -> tuple[dict[str, Any], bool]:
         """Record a status change atomically; announce it only when we won.
 
@@ -1775,7 +2313,12 @@ class ChatService:
         pressing Approve must not produce.
         """
 
-        card = self.store.get_approval(approval_id)
+        context = (
+            state.tenant if state is not None and tenant is None else self._ctx(tenant)
+        )
+        card = self.store.get_approval(
+            approval_id, tenant_id=context.tenant_id
+        )
         if card is None:  # pragma: no cover - callers check first
             raise ChatError("unknown_approval", status=404)
         decided = decided_at or iso_now(self._now())
@@ -1790,9 +2333,15 @@ class ChatService:
             allowed_from=source,
             decided_at=decided if status in {"approved", "denied", "expired"} else None,
             consumed_at=decided if status == "consumed" else None,
+            tenant_id=context.tenant_id,
         )
         if updated is None:
-            current = self.store.get_approval(approval_id) or card
+            current = (
+                self.store.get_approval(
+                    approval_id, tenant_id=context.tenant_id
+                )
+                or card
+            )
             return current, False
 
         tool_status = {
@@ -1847,6 +2396,7 @@ class ChatService:
         )
         self._record_audit(
             "approval_resolved",
+            tenant_id=context.tenant_id,
             turn_id=(
                 str(updated["turn_id"])
                 if updated.get("turn_id") is not None
@@ -1892,7 +2442,9 @@ class ChatService:
     def _settle_approval(
         self, state: _TurnState, approval_id: str, *, executed: bool
     ) -> None:
-        card = self.store.get_approval(approval_id)
+        card = self.store.get_approval(
+            approval_id, tenant_id=state.tenant.tenant_id
+        )
         if card is None or card.get("source") == "openshell":
             return
         if card.get("status") != "approved":
@@ -1916,10 +2468,14 @@ class ChatService:
         effects: Sequence[str] = ("execute",),
         blast_radius: Sequence[str] = (),
         metadata: Mapping[str, Any] | None = None,
+        tenant: TenantContext | str | None = None,
     ) -> dict[str, Any]:
         """Create a card for a KEL-7 gate request, preserving its id/expiry."""
 
-        if self.store.get_thread(thread_id) is None:
+        context = self._ctx(tenant)
+        if self.store.get_thread(
+            thread_id, tenant_id=context.tenant_id
+        ) is None:
             raise ChatError("unknown_thread", status=404)
         request = self.approvals.create(
             tool=tool,
@@ -1945,7 +2501,7 @@ class ChatService:
             title="Run a command",
             secrets=self._secret_values,
         )
-        self.store.save_approval(card)
+        self.store.save_approval(card, tenant_id=context.tenant_id)
         self._emit(
             thread_id,
             "approval_requested",
@@ -1955,14 +2511,29 @@ class ChatService:
 
     # -- recovery ----------------------------------------------------------
 
-    def recover_interrupted(self) -> list[str]:
-        """Close turns left running by a previous process (§10.4)."""
+    def recover_interrupted(
+        self, *, tenant: TenantContext | str | None = None
+    ) -> list[str]:
+        """Close turns left running by a previous process (§10.4).
 
+        Recovery is a boot/shutdown pass, not a request. With no explicit
+        tenant it settles every tenant's orphaned turns, deriving ownership
+        from each turn's parent thread (the P2-3 debt: the store no longer
+        assumes the constructor's tenant). A caller that names a tenant — the
+        thread-delete path — only closes that tenant's turns.
+        """
+
+        explicit = None if tenant is None else self._ctx(tenant)
         closed: list[str] = []
         for turn in self.store.running_turns():
             if turn["id"] in self._tasks:
                 continue
-            if self.store.get_thread(turn["thread_id"]) is None:
+            turn_tenant = str(turn.get("tenant_id") or OWNER_TENANT_ID)
+            if explicit is not None and turn_tenant != explicit.tenant_id:
+                continue
+            if self.store.get_thread(
+                turn["thread_id"], tenant_id=turn_tenant
+            ) is None:
                 continue
             message_id = turn["assistant_message_id"]
             self.store.update_message(message_id, status="interrupted")
@@ -1973,6 +2544,15 @@ class ChatService:
                 reason="interrupted",
                 finished_at=iso_now(self._now()),
                 usage=usage,
+            )
+            # P3-1: a crash never leaves a run ``running``. It closes as
+            # ``interrupted`` — never as a success — and a second boot finds
+            # it terminal and does nothing.
+            self._transition_run_for_turn(
+                turn["id"],
+                turn_tenant,
+                RunStatus.INTERRUPTED,
+                finished_at=iso_now(self._now()),
             )
             self._emit(
                 turn["thread_id"],
@@ -1995,6 +2575,87 @@ class ChatService:
         return closed
 
     # -- helpers -----------------------------------------------------------
+
+    def _transition_run(
+        self, state: _TurnState, status: RunStatus, **fields: Any
+    ) -> None:
+        """Advance a run without ever letting run bookkeeping fail a turn."""
+
+        if not state.run_id:
+            return
+        try:
+            self._runs.transition(
+                state.run_id,
+                status,
+                tenant_id=state.tenant.tenant_id,
+                **fields,
+            )
+        except RunError:
+            # A terminal row (another writer won) or a vanished run is not a
+            # reason to fail the turn; the turn write is the authority.
+            return
+
+    def _transition_run_for_turn(
+        self,
+        turn_id: str,
+        tenant_id: str,
+        status: RunStatus,
+        **fields: Any,
+    ) -> None:
+        run = self.store.get_run_by_turn(turn_id, tenant_id=tenant_id)
+        if run is None:
+            return
+        try:
+            self._runs.transition(
+                str(run["run_id"]), status, tenant_id=tenant_id, **fields
+            )
+        except RunError:
+            return
+
+    def _close_run(self, state: _TurnState, reason: str, error_code: str | None) -> None:
+        status = _RUN_STATUS_BY_REASON.get(reason, RunStatus.FAILED)
+        self._transition_run(
+            state,
+            status,
+            finished_at=iso_now(self._now()),
+            model=state.model,
+            provider=self._config.provider,
+            input_tokens=state.input_tokens,
+            output_tokens=state.output_tokens,
+            total_tokens=state.input_tokens + state.output_tokens,
+            cost_usd=(
+                state.estimated_cost_usd
+                if state.estimated_cost_usd is not None
+                else 0.0
+            ),
+            steps=state.steps,
+            tool_calls=state.tool_calls,
+            approvals=self._approval_count(state),
+            error_code=error_code,
+        )
+
+    def _approval_count(self, state: _TurnState) -> int:
+        """Approval decisions attached to this turn, from the store's rows.
+
+        Counted at settle time so a decision made through the API (a different
+        call path) is included. Only ids, status, and ``turn_id`` are read.
+        """
+
+        try:
+            cards = self.store.list_approvals(
+                thread_id=state.thread_id,
+                limit=200,
+                tenant_id=state.tenant.tenant_id,
+            )
+        except Exception:  # noqa: BLE001 - a count must not fail the close
+            return 0
+        decided = {"approved", "denied", "expired", "consumed"}
+        return sum(
+            1
+            for card in cards
+            if str(card.get("turn_id") or "") == state.turn["id"]
+            and str(card.get("status")) in decided
+        )
 
     def _budget_dict(self) -> dict[str, Any]:
         return {

@@ -17,21 +17,44 @@ anything; the dashboard, Telegram, and CLI are adapters.
 
 | Setting | Env var | Default |
 |---|---|---|
-| Base URL | `KELP_PROVIDER_BASE_URL` | **required**, no default (the documented path is `https://openrouter.ai/api/v1`) |
+| Provider id | `KELP_PROVIDER` | `openai-compatible` |
+| Base URL | `KELP_PROVIDER_BASE_URL` | **none** (empty means unconfigured; typed `missing_base_url`, no request) |
 | API key (server-only) | `KELP_PROVIDER_API_KEY` | — |
-| Primary model | `KELP_PRIMARY_MODEL` | `nvidia/nemotron-3.5-super-vl` |
-| Background model | `KELP_BACKGROUND_MODEL` | `nvidia/nemotron-3.5-lightning` |
+| Primary model | `KELP_PRIMARY_MODEL` | documented example: `nvidia/nemotron-3.5-super-vl` |
+| Background model | `KELP_BACKGROUND_MODEL` | documented example: `nvidia/nemotron-3.5-lightning` |
+| Price table override | `KELP_PRICING_JSON` | unset → the example rows in `kernel/providers/presets.py` |
 
-`Super VL` is the default conversational model because the product reads
-documents and screenshots. `Lightning` is the cheap **background** model for
-titles, summaries, compaction, and other non-user-facing work; select it with
+The provider is any OpenAI-compatible service, not a named vendor. `KELP_PROVIDER`
+is the id written to records and admin rows; it defaults to `openai-compatible`
+and does not select a different code path. To use a second provider, change that
+id, the base URL, the key, and the model ids; nothing needs a code fork.
+
+`Super VL` and `Lightning` above are **examples**, kept in
+`kernel/providers/presets.py`, because the product reads documents and
+screenshots. If your endpoint serves other ids, set `KELP_PRIMARY_MODEL` and
+`KELP_BACKGROUND_MODEL` to them. `Lightning` is the cheap **background** model
+for titles, summaries, compaction, and other non-user-facing work; select it with
 `config.model_for(ModelRole.BACKGROUND)`.
 
 A missing base URL yields a typed `missing_base_url` event and no request is
 made, so a misconfigured process cannot send the transcript to an inherited
-host. A missing key yields `missing_api_key` and likewise sends nothing. Neither
+host. The empty default is deliberate: there is no vendor endpoint to fall back
+to. A missing key yields `missing_api_key` and likewise sends nothing. Neither
 crashes startup (the server entry point does refuse to start without both).
 Redirects are disabled; the client never follows a provider-controlled URL.
+
+`KELP_PRICING_JSON` is optional. It is a JSON object of model id to
+`input_per_million` and `output_per_million` (USD per one million tokens). Rows
+add to or replace the example table, so a deployment can price its own models or
+correct a published price. A model with no row keeps `estimated_cost_usd = None`
+(`cost_known: false`); that is unchanged, and it fails closed when a spend cap
+is configured.
+
+The earlier Nebius-named variables are accepted only as explicit compatibility
+aliases: `NEBIUS_BASE_URL` / `NEBIUS_API_BASE_URL`, `NEBIUS_API_KEY`,
+`NEBIUS_PRIMARY_MODEL`, and `NEBIUS_BACKGROUND_MODEL`. The canonical `KELP_*`
+name always wins and the alias is read only when the canonical value is blank.
+No alias is a default: with none of them set, the endpoint stays empty.
 
 ### Streaming events (internal)
 

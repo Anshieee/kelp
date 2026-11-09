@@ -22,7 +22,11 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable, Mapping
 
-__all__ = ["AuditLog", "SecretScrubber"]
+__all__ = ["AuditLog", "DEFAULT_TENANT_ID", "SecretScrubber"]
+
+#: The only tenant admitted by this version. A record written without an
+#: explicit tenant is the owner's.
+DEFAULT_TENANT_ID = "owner"
 
 _REDACTED = "[redacted]"
 _MIN_SECRET_LEN = 4
@@ -147,6 +151,7 @@ class AuditLog:
         self,
         event: str,
         *,
+        tenant_id: str = DEFAULT_TENANT_ID,
         turn_id: str | None = None,
         request_id: str | None = None,
         tool: str | None = None,
@@ -159,7 +164,11 @@ class AuditLog:
         outcome: str | None = None,
         extra: Mapping[str, Any] | None = None,
     ) -> dict[str, Any]:
-        entry: dict[str, Any] = {"ts": self._now().isoformat(), "event": event}
+        entry: dict[str, Any] = {
+            "ts": self._now().isoformat(),
+            "event": event,
+            "tenant_id": self._scrubber.scrub(tenant_id),
+        }
         fields = {
             "turn_id": turn_id,
             "request_id": request_id,

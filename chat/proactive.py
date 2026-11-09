@@ -64,6 +64,7 @@ from openshell.audit import AuditLog
 from .errors import ChatError
 from .logging import log
 from .scheduler import MAX_SKIPS, RUNNABLE_STATES, ScheduleStore, tick_lock, utc_now
+from .tenancy import OWNER_TENANT_ID, TenantContext, validate_tenant_id
 from .service import ChatService
 from .store import ChatStore
 
@@ -277,12 +278,16 @@ class ProactiveRunner:
         audit: AuditLog | None = None,
         runner: Any | None = None,
         config: ProactiveConfig | None = None,
+        tenant_id: str | None = None,
         now: Callable[[], datetime] | None = None,
         monotonic: Callable[[], float] | None = None,
     ):
         self._service = service
         self._store = store
         self._schedule_store = schedule_store
+        self._tenant_id = (
+            None if tenant_id is None else validate_tenant_id(tenant_id)
+        )
         self._audit = audit if audit is not None else AuditLog(
             schedule_store.root / "audit.jsonl"
         )
@@ -451,6 +456,22 @@ class ProactiveRunner:
             return submit(coro)
         return self._runner.run(coro)
 
+    def _tenant_context(self) -> TenantContext:
+        """The principal a scheduled fire acts as.
+
+        The run record needs a concrete tenant and surface. The scheduler is a
+        non-human actor on the ``scheduler`` surface; the tenant is the one
+        this runner was built for, so the run carries explicit ownership rather
+        than relying on the scheduler store's directory to imply it.
+        """
+
+        return TenantContext(
+            tenant_id=self._tenant_id or OWNER_TENANT_ID,
+            actor_id=SCHEDULE_ORIGIN,
+            role="owner",
+            surface="scheduler",
+        )
+
     # -- one turn ----------------------------------------------------------
 
     async def _execute(self, run: _ActiveRun, task: Mapping[str, Any]) -> None:
@@ -466,6 +487,9 @@ class ProactiveRunner:
                 thread_id,
                 text=prompt,
                 client_turn_id=f"schedule:{run.schedule_id}:{run.scheduled_iso}",
+                tenant=self._tenant_context(),
+                surface="scheduler",
+                task_type="scheduled",
             )
             turn_id = str(payload["turn_id"])
             # The send above did not yield: the turn task starts only when this
@@ -564,13 +588,19 @@ class ProactiveRunner:
                 # spinning on a row that will never appear again.
                 return denied or self._denied_for_turn(thread_id, turn_id)
             for card in self._store.list_approvals(
-                thread_id=thread_id, status="pending", limit=_APPROVAL_SCAN_LIMIT
+                thread_id=thread_id,
+                status="pending",
+                limit=_APPROVAL_SCAN_LIMIT,
+                tenant_id=self._tenant_id or OWNER_TENANT_ID,
             ):
                 if str(card.get("turn_id") or "") != turn_id:
                     continue
                 try:
                     self._service.decide(
-                        str(card["id"]), "deny", actor=SCHEDULE_ORIGIN
+                        str(card["id"]),
+                        "deny",
+                        actor=SCHEDULE_ORIGIN,
+                        tenant=self._tenant_id,
                     )
                     denied = True
                 except ChatError:
@@ -584,7 +614,10 @@ class ProactiveRunner:
 
     def _denied_for_turn(self, thread_id: str, turn_id: str) -> bool:
         for card in self._store.list_approvals(
-            thread_id=thread_id, status="denied", limit=_APPROVAL_SCAN_LIMIT
+            thread_id=thread_id,
+            status="denied",
+            limit=_APPROVAL_SCAN_LIMIT,
+            tenant_id=self._tenant_id or OWNER_TENANT_ID,
         ):
             if str(card.get("turn_id") or "") == turn_id:
                 return True
@@ -601,13 +634,18 @@ class ProactiveRunner:
             if cached is not None:
                 return cached
             thread_id = f"ses_{schedule_id}"
-            if self._store.get_thread(thread_id) is not None:
+            tenant_id = self._tenant_id or OWNER_TENANT_ID
+            tenant_kwargs = (
+                {} if self._tenant_id is None else {"tenant_id": self._tenant_id}
+            )
+            if self._store.get_thread(thread_id, tenant_id=tenant_id) is not None:
                 return thread_id
             try:
                 self._store.create_thread(
                     title=label,
                     title_source=SCHEDULE_ORIGIN,
                     thread_id=thread_id,
+                    **tenant_kwargs,
                 )
                 return thread_id
             except sqlite3.IntegrityError:
@@ -615,7 +653,9 @@ class ProactiveRunner:
                 # id cannot be reused, so start a fresh dedicated thread and
                 # remember it for the rest of this process.
                 fresh = self._store.create_thread(
-                    title=label, title_source=SCHEDULE_ORIGIN
+                    title=label,
+                    title_source=SCHEDULE_ORIGIN,
+                    **tenant_kwargs,
                 )
                 self._fallback_threads[schedule_id] = str(fresh["id"])
                 return str(fresh["id"])

@@ -5,8 +5,10 @@
 - **Scope:** the server process in `chat/`, `kernel/`, `skills/`, `openshell/`, and `payments/`
 - **Companions:** the retention rule ([`docs/DEPLOY.md`](DEPLOY.md) §8.1, `chat/retention.py`),
   the policy gate ([`docs/OPENSHELL.md`](OPENSHELL.md)), the chat spec
-  ([`docs/CHAT_SPEC.md`](CHAT_SPEC.md) §12), and the sharing decision
-  ([ADR 0002](adr/0002-sharing-and-identity.md))
+  ([`docs/CHAT_SPEC.md`](CHAT_SPEC.md) §12), the sharing decision
+  ([ADR 0002](adr/0002-sharing-and-identity.md)), and the control-layer
+  contract ([`docs/SERVICE_CONTRACT.md`](SERVICE_CONTRACT.md),
+  [ADR 0003](adr/0003-service-control-layer.md))
 - **Enforced by:** `openshell/egress_ledger.py` (the ledger) and
   `tests/test_privacy.py` (recipient, ledger, and exec-boundary checks)
 
@@ -34,6 +36,12 @@ recipient named here that the code no longer knows.
 | Where are keys? | Only in the server process environment. `KELP_PROVIDER_API_KEY`, `TAVILY_API_KEY`, `GITHUB_TOKEN` are read from `os.environ`, sent only to their own recipient, and scrubbed from every log line |
 | What records exist? | Chat content until the owner deletes the thread; audit and usage records on a stated clock; a content-free egress ledger inside the audit trail; a device row per signed-in browser with a short label and timestamps, no credential |
 | Can I audit what left? | Yes: one `egress` line per outbound call — recipient, purpose, byte counts, outcome, no content |
+
+The provider key is read from `KELP_PROVIDER_API_KEY`; `NEBIUS_API_KEY` is
+accepted only as a legacy alias when the canonical name is blank, and its value
+is scrubbed from logs and audit lines exactly like the canonical one. The
+endpoint itself comes from `KELP_PROVIDER_BASE_URL` (or its legacy alias), so no
+vendor host is implicit.
 
 ---
 
@@ -77,10 +85,9 @@ with the status on a rejection — a failing probe is never filed as a success.
 
 - No analytics, metrics exporter, crash reporter, or log shipper. Metrics are
   served locally at `/api/metrics`; nothing pushes them anywhere.
-- No external fonts, scripts, or images. The tracker page in `netlify/` is static
-  and links out only; it loads no third-party asset.
-- The evaluation harness (`evals/`) and the demo fixtures replays recorded turns
-  with the network blocked (`evals/offline.py`); they are not recipients.
+- No external fonts, scripts, or images.
+- The evaluation harness (`evals/`) replays recorded turns with the network
+  blocked (`evals/offline.py`); it is not a recipient.
 - Local embeddings for document search run in-process. They are not an egress
   path.
 
@@ -295,9 +302,6 @@ does.
 - **Payments are not wired.** When they are, `stripe` and `razorpay` become live
   recipients; the ledger ids already exist so that change shows up in the audit
   trail on day one, but §2 will need its "Wired today?" column updated with it.
-- **The static tracker page** in `netlify/` links out to Linear and GitHub when a
-  reader clicks. That is a browser navigation, not a server egress, and it loads
-  no third-party asset.
 - **A shared thread is deliberately readable by a stranger.** Once the share
   surface ships, the owner can hand a URL to one thread and the holder can read it
   with no account. That is the feature, not a leak: the content is still the owner's,
@@ -346,6 +350,9 @@ review references that table rather than restating it.
 - Chat surface, approvals, and the security section: [`docs/CHAT_SPEC.md`](CHAT_SPEC.md) §12
 - Sharing and identity, including what a share link does and does not do:
   [`docs/adr/0002-sharing-and-identity.md`](adr/0002-sharing-and-identity.md)
+- Control-layer contract (tenants, provider seam, run records, gate order, and
+  admin read-model exclusions): [`docs/SERVICE_CONTRACT.md`](SERVICE_CONTRACT.md)
+  and [`docs/adr/0003-service-control-layer.md`](adr/0003-service-control-layer.md)
 - Skill contract and the `execute` prohibition: [`docs/SKILL_SPEC.md`](SKILL_SPEC.md)
 - Egress ledger: [`openshell/egress_ledger.py`](../openshell/egress_ledger.py)
 - Exec gate: [`openshell/exec_gate.py`](../openshell/exec_gate.py)
