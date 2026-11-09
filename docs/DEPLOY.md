@@ -143,6 +143,7 @@ baked into the image; the process refuses to start without all three, exit `2`.
 | `KELP_AUTH_FAILURE_IDLE_SECONDS` | no | `300` | no | Idle-out for an auth-failure record |
 | `KELP_AUTH_FAILURE_MAX_KEYS` | no | `4096` | no | Bound on the hashed auth-failure map |
 | `KELP_PROVIDER_BASE_URL` | **yes** | — | no | OpenAI-compatible provider endpoint, e.g. `https://openrouter.ai/api/v1`. No vendor host is baked in: empty is a typed `missing_base_url`, never a default request |
+| `KELP_TENANT_SECRETS_FILE` | no | unset → use `KELP_PROVIDER_API_KEY` | **yes** (path only) | Path to an optional JSON map of per-tenant secrets. The file must be mode `0600`; a group- or world-readable file is refused before parsing. Values never enter records, logs, metrics, or the admin read model |
 | `KELP_PRIMARY_MODEL` | no | example: `nvidia/nemotron-3.5-super-vl` | no | Conversational model; the id is provider-specific |
 | `KELP_BACKGROUND_MODEL` | no | example: `nvidia/nemotron-3.5-lightning` | no | Titles, summaries, compaction; the id is provider-specific |
 | `KELP_PRICING_JSON` | no | example rows in `kernel/providers/presets.py` | no | Optional USD-per-million price overrides, merged over the example table. An unpriced model keeps cost unknown and fails closed under a spend cap |
@@ -160,6 +161,9 @@ baked into the image; the process refuses to start without all three, exit `2`.
 | `KELP_SPEND_CAP_MONTH_USD` | no | unset → uncapped | no | Same, for the calendar month |
 | `KELP_SPEND_UNKNOWN_PRICE_MODE` | no | `block` | no | `block` or `count_as`: what an unpriced turn means for the cap |
 | `KELP_SPEND_UNKNOWN_PRICE_USD` | no | `0.01` | no | Amount charged per unpriced turn in `count_as` mode |
+| `KELP_ENTITLEMENT_PLAN` | no | `owner-unlimited` | no | Plan id used for tenants without an explicit mapping |
+| `KELP_ENTITLEMENT_PLANS_JSON` | no | built-in `owner-unlimited` | no | JSON object of `plan_id` to `{window, max_turns, max_runs, max_cost_usd, allowed_task_types}`. An unknown tenant or task type is denied; a missing decision is never an allow |
+| `KELP_ENTITLEMENT_TENANT_PLANS_JSON` | no | `{}` | no | JSON object mapping `tenant_id` to a configured plan id |
 | `KELP_LOG_LEVEL` | no | `info` | no | `debug` / `info` / `warning` / `error` |
 | `KELP_RATE_LIMIT_ENABLED` | no | `1` | no | Token buckets on; `0` disables them (concurrency caps stay on) |
 | `KELP_RATE_LIMIT_AUTH_RPM` / `_BURST` | no | `30` / `10` | no | Failed-auth attempts per minute and burst, per peer address |
@@ -199,6 +203,22 @@ falling back to a vendor host. For compatibility, `NEBIUS_BASE_URL` /
 `NEBIUS_API_BASE_URL`, `NEBIUS_API_KEY`, `NEBIUS_PRIMARY_MODEL`, and
 `NEBIUS_BACKGROUND_MODEL` are read only when the matching `KELP_*` value is
 blank. They are aliases, not defaults, and the canonical name always wins.
+
+`KELP_TENANT_SECRETS_FILE` names a JSON file, not a value. It maps tenant ids to
+secret names and supplies the per-tenant credential without baking it into the
+environment contract; the file must be mode `0600`, and only the bound tenant's
+map is retained in memory. With it unset, the owner tenant keeps using
+`KELP_PROVIDER_API_KEY`.
+
+The entitlement gate is the third gate after auth and tenant and before spend
+and any provider call. Plans are static configuration: `KELP_ENTITLEMENT_PLANS_JSON`
+defines ceilings and allowed task types, `KELP_ENTITLEMENT_TENANT_PLANS_JSON`
+maps tenants, and `KELP_ENTITLEMENT_PLAN` is the fallback plan id. The built-in
+`owner-unlimited` plan is an explicit unlimited plan, not a bypass: an unknown
+tenant, an unknown task type, or a malformed plan table still fails closed with
+`entitlement_denied` or `entitlement_exhausted`. Billing is an internal terminal
+hook and needs no environment variable; it receives usage fields and the plan
+snapshot, never prompt text.
 
 Rate-limit rejections are `429` JSON with `error.code = "rate_limited"` and a
 `Retry-After` header in whole seconds. They are never a `5xx`: an internal

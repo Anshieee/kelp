@@ -1444,24 +1444,20 @@ _RUN_BODY_FIELDS = (
 )
 
 
-def _entitlement_gate(context: TenantContext, task_type: str) -> None:
-    """The entitlement gate (contract §5 step 3) - a P5 seam.
+def _entitlement_gate(
+    api: "ChatAPI", context: TenantContext, task_type: str
+) -> None:
+    """The entitlement gate (contract §5 step 3).
 
-    P3-2 has no plan store: P5 builds it. Contract §4 says a missing decision is
-    not an ``allow``, so this placeholder admits only the one tenant and role
-    this deployment serves and denies everything else. P5 replaces the body with
-    a real :class:`EntitlementDecision` lookup and must keep this position:
-    after auth and tenant, before spend and any provider call.
+    P3-2 had a role-only placeholder; P5 asks the service's plan store for the
+    real :class:`~payments.entitlements.EntitlementDecision`. The position is
+    unchanged: after auth and tenant, before spend and any provider call. A
+    denial raises the frozen code (``entitlement_denied`` or
+    ``entitlement_exhausted``) with the same :class:`ChatError` shape every
+    other gate uses.
     """
 
-    del task_type  # P5: the decision is keyed by task type
-    if context.role == "owner" and context.tenant_id == OWNER_TENANT_ID:
-        return
-    raise ChatError(
-        "entitlement_denied",
-        status=403,
-        message="This task type is not available on the current plan.",
-    )
+    api.service.authorize_entitlement(context, task_type=task_type)
 
 
 def _runs_route(
@@ -1496,7 +1492,7 @@ def _start_run(api: "ChatAPI", request: "Request") -> "Response":
 
     # Gate order: auth and tenant are done; entitlement runs before any write
     # (which is when a thread would be minted), spend runs inside the send.
-    _entitlement_gate(context, body.get("task_type") or "chat")
+    _entitlement_gate(api, context, body.get("task_type") or "chat")
 
     if not api._turn_slots.acquire():
         return _busy_response(

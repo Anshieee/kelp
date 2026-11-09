@@ -14,24 +14,32 @@ Rules enforced here (not by the caller):
   two processes racing a completion cannot both win.
 * A replayed idempotency key returns the run that already exists instead of
   creating a second one.
-* The terminal hook is the seam a later slice uses to emit a billing event. P3-1
-  deliberately contains no billing code.
+* The terminal hook is the seam billing uses. A :class:`~payments.billing.BillingSink`
+  receives one allow-listed event per terminal run; prompt text never enters it.
 
 P3-2 adds :class:`TaskRunner`, the submission boundary for ``POST /api/runs``.
 It creates a thread when the caller names none, hands the prompt to
 :meth:`ChatService.send`, and returns the :class:`TaskRun`. The prompt is passed
 through and dropped: neither the recorder, the run row, nor any read method here
 can carry it back out.
+
+P5 adds the entitlement snapshot. The frozen ``TaskRun`` field order has no plan
+column, so the recorder keeps the plan id and limits that applied at creation in
+a read-only side map keyed by ``run_id``. It is never changed by a transition and
+is copied into the terminal billing event.
 """
 
 from __future__ import annotations
 
 import re
+import threading
 import uuid
 from dataclasses import dataclass, fields
 from datetime import datetime, timezone
 from enum import Enum
 from typing import Any, Callable, Mapping
+
+from payments.billing import BillingSink, billing_payload
 
 from .errors import ChatError
 from .store import (
@@ -123,14 +131,51 @@ def _new_run_id() -> str:
     return f"run_{uuid.uuid4().hex}"
 
 
+_PLAN_SNAPSHOT_KEYS = (
+    "plan_id",
+    "window",
+    "max_turns",
+    "max_runs",
+    "max_cost_usd",
+    "allowed_task_types",
+)
+
+
+def _plan_record(plan: Any) -> dict[str, Any] | None:
+    """Normalise a plan or limits object to the stored snapshot."""
+
+    if plan is None:
+        return None
+    if isinstance(plan, Mapping):
+        payload = dict(plan)
+    else:
+        snapshot = getattr(plan, "snapshot", None)
+        if not callable(snapshot):
+            return None
+        value = snapshot()
+        if not isinstance(value, Mapping):
+            return None
+        payload = dict(value)
+    plan_id = payload.get("plan_id")
+    if not isinstance(plan_id, str) or not plan_id.strip():
+        return None
+    record: dict[str, Any] = {"plan_id": plan_id.strip()}
+    for key in _PLAN_SNAPSHOT_KEYS[1:]:
+        value = payload.get(key)
+        if key == "allowed_task_types" and isinstance(value, (list, tuple)):
+            value = [str(item) for item in value]
+        record[key] = value
+    return record
+
+
 @dataclass(frozen=True)
 class TaskRun:
     """One frozen ``TaskRun`` row, in contract field order.
 
     ``status`` is a :class:`RunStatus`; ``to_dict`` renders the plain JSON
-    shape. ``plan`` is intentionally absent: the frozen P3 schema has no plan
-    column, so the entitlement snapshot is a caller-side placeholder that is
-    never persisted.
+    shape. ``plan`` is intentionally absent from the frozen schema; the recorder
+    keeps the entitlement snapshot beside the row and never serializes it into
+    the run or admin record.
     """
 
     run_id: str
@@ -200,8 +245,9 @@ class RunRecorder:
     """Create and settle ``TaskRun`` rows through a :class:`ChatStore`.
 
     ``now`` is injectable so a test can pin ``created_at``/``updated_at``.
-    ``on_terminal`` is invoked exactly once after a terminal transition wins;
-    it is the future billing seam and its failure never reopens the run.
+    ``on_terminal`` is invoked exactly once after a terminal transition wins.
+    ``billing`` is invoked from that same terminal branch, before ``on_terminal``,
+    with the allow-listed usage event; its failure never reopens the run.
     """
 
     def __init__(
@@ -210,10 +256,19 @@ class RunRecorder:
         *,
         now: Callable[[], datetime] | None = None,
         on_terminal: Callable[[TaskRun], Any] | None = None,
+        billing: BillingSink | None = None,
     ):
         self.store = store
         self._now = now or (lambda: datetime.now(timezone.utc))
         self._on_terminal = on_terminal
+        self._billing = billing
+        self._plans: dict[str, dict[str, Any]] = {}
+        self._plans_lock = threading.Lock()
+
+    def attach_billing(self, sink: BillingSink | None) -> None:
+        """Install or replace the terminal billing sink."""
+
+        self._billing = sink
 
     def _now_iso(self) -> str:
         return _iso(self._now())
@@ -239,11 +294,11 @@ class RunRecorder:
     ) -> TaskRun:
         """Insert one run, or return the run its idempotency key already owns.
 
-        ``plan`` is the P5 entitlement-snapshot seam. The frozen P3 schema has
-        no plan column, so it is accepted and deliberately not stored.
+        ``plan`` is the entitlement snapshot captured at creation: plan id plus
+        the limits that applied. The frozen run schema has no plan column, so it
+        is kept beside the record and copied into the terminal billing event.
         """
 
-        del plan  # reserved for P5; never persisted in P3
         tenant = validate_tenant_id(tenant_id)
         target = _coerce_status(status)
         if idempotency_key is not None:
@@ -294,6 +349,10 @@ class RunRecorder:
                 if existing is not None:
                     return TaskRun.from_record(existing)
             raise
+        snapshot = _plan_record(plan)
+        if snapshot is not None:
+            with self._plans_lock:
+                self._plans[str(stored["run_id"])] = snapshot
         return TaskRun.from_record(stored)
 
     # -- transition --------------------------------------------------------
@@ -336,12 +395,45 @@ class RunRecorder:
             # writer moved it in the same instant. Treat it as a lost race.
             raise RunError(f"run {run_id} changed before the transition landed.")
         run = TaskRun.from_record(updated)
-        if target in RUN_TERMINAL_STATUSES and self._on_terminal is not None:
+        if target in RUN_TERMINAL_STATUSES:
+            self._notify_terminal(run)
+        return run
+
+    def _notify_terminal(self, run: TaskRun) -> None:
+        """One terminal branch: billing first, then the caller's hook."""
+
+        if self._billing is not None:
             try:
-                self._on_terminal(run)
+                self._billing.on_terminal_run(self._billing_event(run))
             except Exception:  # noqa: BLE001 - billing must not undo the record
                 pass
-        return run
+        if self._on_terminal is not None:
+            try:
+                self._on_terminal(run)
+            except Exception:  # noqa: BLE001 - callbacks must not undo the record
+                pass
+
+    def _billing_event(self, run: TaskRun) -> dict[str, Any]:
+        return billing_payload(
+            run_id=run.run_id,
+            tenant_id=run.tenant_id,
+            task_type=run.task_type,
+            status=run.status.value,
+            model=run.model,
+            provider=run.provider,
+            input_tokens=run.input_tokens,
+            output_tokens=run.output_tokens,
+            total_tokens=run.total_tokens,
+            cost_usd=run.cost_usd,
+            plan=self.plan_snapshot(run.run_id),
+        )
+
+    def plan_snapshot(self, run_id: str) -> dict[str, Any] | None:
+        """The read-only plan stamped when the run was created, if any."""
+
+        with self._plans_lock:
+            snapshot = self._plans.get(str(run_id))
+            return None if snapshot is None else dict(snapshot)
 
     #: ``close`` reads better at a call site that is settling a finished turn.
     close = transition

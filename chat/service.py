@@ -37,6 +37,12 @@ from openshell.errors import (
     ApprovalNotGranted,
     ApprovalNotFound,
 )
+from payments.billing import BillingSink, CountingBillingSink
+from payments.entitlements import (
+    EntitlementDecision,
+    EntitlementStore,
+    StaticEntitlementStore,
+)
 from skills.context import ApprovalRequest as SkillApprovalRequest
 from skills.loader import SkillRegistry
 
@@ -309,11 +315,21 @@ class ChatService:
         metrics: Metrics | None = None,
         spend_guard: SpendGuard | None = None,
         runs: RunRecorder | None = None,
+        entitlements: EntitlementStore | None = None,
+        billing: BillingSink | None = None,
     ):
         self.store = store
         self.bus = EventBus()
         self._now = now or (lambda: datetime.now(timezone.utc))
-        self._runs = runs or RunRecorder(store, now=self._now)
+        # P5: the plan store and terminal billing hook. The owner default is an
+        # explicit unlimited plan; a configured plan can still deny or exhaust.
+        self.entitlements = entitlements or StaticEntitlementStore.from_env()
+        self.billing = billing or CountingBillingSink()
+        self._runs = runs or RunRecorder(
+            store, now=self._now, billing=self.billing
+        )
+        if runs is not None and billing is not None:
+            runs.attach_billing(billing)
         self.approvals = approvals or ApprovalStore()
         self.artifacts = _ScopedArtifacts(
             artifacts
@@ -392,6 +408,89 @@ class ChatService:
             self._audit.record(event, tenant_id=tenant_id, **fields)
         except Exception:  # noqa: BLE001 - a full disk must not end a turn
             return
+
+    # -- entitlement gate --------------------------------------------------
+
+    def decide_entitlement(
+        self,
+        tenant: TenantContext | str | None = None,
+        *,
+        task_type: str = "chat",
+        surface: str | None = None,
+    ) -> EntitlementDecision:
+        """Ask the plan store for this request's total decision.
+
+        Any store fault becomes ``internal_error``: a missing decision is not an
+        allow (contract §4), and the frozen code never carries a raw exception
+        message. The allowed/denied check is counted with fixed labels only.
+        """
+
+        context = self._ctx(tenant)
+        try:
+            decision = self.entitlements.decide(
+                tenant_id=context.tenant_id,
+                task_type=task_type,
+                actor_id=context.actor_id,
+                role=context.role,
+                surface=surface or context.surface,
+            )
+        except Exception:  # noqa: BLE001 - a missing decision fails closed
+            raise ChatError(
+                "internal_error",
+                status=500,
+                message="The plan check failed, so the request was refused.",
+            ) from None
+        if not isinstance(decision, EntitlementDecision) or not decision.code:
+            raise ChatError(
+                "internal_error",
+                status=500,
+                message="The plan check returned no decision, so the request was refused.",
+            )
+        try:
+            self._metrics.inc_entitlement_check(decision.decision, decision.code)
+        except Exception:  # noqa: BLE001 - a metric must not block a decision
+            pass
+        return decision
+
+    def authorize_entitlement(
+        self,
+        tenant: TenantContext | str | None = None,
+        *,
+        task_type: str = "chat",
+        surface: str | None = None,
+    ) -> EntitlementDecision:
+        """The entitlement gate itself: allow, or raise the frozen code."""
+
+        decision = self.decide_entitlement(
+            tenant, task_type=task_type, surface=surface
+        )
+        if decision.allowed:
+            return decision
+        code = (
+            decision.code
+            if decision.code in {"entitlement_denied", "entitlement_exhausted"}
+            else "entitlement_denied"
+        )
+        if code == "entitlement_exhausted":
+            message = (
+                "The plan's limit for this window is reached. New work resumes "
+                "when the window resets."
+            )
+            status = 429
+        else:
+            message = "This task type is not available on the current plan."
+            status = 403
+        raise ChatError(
+            code,
+            status=status,
+            message=message,
+            retryable=False,
+            details={
+                "plan_id": decision.plan_id,
+                "limit": decision.limit,
+                "window": decision.window,
+            },
+        )
 
     # -- spend guardrail ---------------------------------------------------
 
@@ -771,6 +870,12 @@ class ChatService:
                 details={"active_turn_id": thread["active_turn_id"]},
             )
 
+        # Gate order: tenant is resolved above; entitlement runs before spend,
+        # so a denied plan never reaches the spend guard or the provider.
+        entitlement = self.authorize_entitlement(
+            context, task_type=run_task_type, surface=run_surface
+        )
+
         # Before a turn or a message exists: a capped request leaves the
         # thread untouched and never reaches the provider.
         self._refuse_if_over_spend(action="send", tenant=context)
@@ -823,7 +928,7 @@ class ChatService:
                 model=self._model,
                 provider=self._config.provider,
                 idempotency_key=client_turn_id,
-                plan=self._plan_snapshot(context),
+                plan=entitlement.limits,
             )
             self.store.update_turn(turn_id, state="queued")
             self._emit(
@@ -974,6 +1079,22 @@ class ChatService:
         if user_message is None:  # pragma: no cover - internal invariant
             raise ChatError("unknown_turn", status=404)
         text = _message_text(user_message)
+        previous_run = self.store.get_run_by_turn(
+            turn_id, tenant_id=context.tenant_id
+        )
+        retry_task_type = (
+            str(previous_run["task_type"]) if previous_run is not None else "chat"
+        )
+        retry_surface = (
+            str(previous_run["surface"])
+            if previous_run is not None
+            else context.surface
+        )
+        # A retry is new work: it passes the entitlement gate before the spend
+        # gate, and a denial leaves the old turn exactly as it was.
+        entitlement = self.authorize_entitlement(
+            context, task_type=retry_task_type, surface=retry_surface
+        )
         # A retry opens a new turn, so it is a new spend decision too.
         self._refuse_if_over_spend(action="retry", tenant=context)
         # A retry never duplicates the user message: it opens a new assistant
@@ -981,9 +1102,6 @@ class ChatService:
         thread_id = turn["thread_id"]
         new_turn_id = new_id("turn")
         assistant_id = new_id("msg")
-        previous_run = self.store.get_run_by_turn(
-            turn_id, tenant_id=context.tenant_id
-        )
         with self.store.transaction():
             self.store.create_message(
                 thread_id=thread_id,
@@ -1008,16 +1126,8 @@ class ChatService:
                 tenant_id=context.tenant_id,
                 thread_id=thread_id,
                 turn_id=new_turn_id,
-                surface=(
-                    str(previous_run["surface"])
-                    if previous_run is not None
-                    else context.surface
-                ),
-                task_type=(
-                    str(previous_run["task_type"])
-                    if previous_run is not None
-                    else "chat"
-                ),
+                surface=retry_surface,
+                task_type=retry_task_type,
                 model=self._model,
                 provider=self._config.provider,
                 retry_of=(
@@ -1025,7 +1135,7 @@ class ChatService:
                     if previous_run is not None
                     else None
                 ),
-                plan=self._plan_snapshot(context),
+                plan=entitlement.limits,
             )
             self.store.update_turn(new_turn_id, state="queued")
             self.store.update_message(
@@ -2465,19 +2575,6 @@ class ChatService:
         return closed
 
     # -- helpers -----------------------------------------------------------
-
-    def _plan_snapshot(
-        self, tenant: TenantContext | str | None = None
-    ) -> Mapping[str, Any] | None:
-        """P5 plan snapshot seam; P3-1 deliberately carries no entitlement data.
-
-        The frozen run schema has no plan column, so the recorder accepts this
-        placeholder and does not persist it. P5 replaces the body with the
-        decision it already made for this request.
-        """
-
-        del tenant
-        return None
 
     def _transition_run(
         self, state: _TurnState, status: RunStatus, **fields: Any

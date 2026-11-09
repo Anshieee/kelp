@@ -30,6 +30,12 @@ The KEL-17 gap fix adds:
 
 * ``kelp_rate_limit_refusals_total`` — counter, refusals by limiter ``class``
 
+P5 adds:
+
+* ``kelp_entitlement_checks_total`` — counter, plan-gate checks by ``decision``
+  and frozen ``code`` (``ok`` for an allow). Labels never carry a plan value or
+  a tenant id, so a check cannot leak configuration.
+
 Label values are scrubbed with the OpenShell :class:`SecretScrubber`, so a
 secret that somehow reaches a label (a model id built from a key, a tool name)
 is rendered as ``[redacted]`` rather than exposed. Cards stay bounded because
@@ -312,6 +318,11 @@ class Metrics:
             "Rate-limit refusals by limiter class.",
             ("class",),
         )
+        self.entitlement_checks = Counter(
+            "kelp_entitlement_checks_total",
+            "Plan-gate checks by decision and frozen code.",
+            ("decision", "code"),
+        )
         self.spend_used = Gauge(
             "spend_used_usd", "Counted spend inside the spend window.",
             ("window",),
@@ -355,6 +366,7 @@ class Metrics:
             self.sse_reconnects,
             self.recoveries,
             self.rate_limit_refusals,
+            self.entitlement_checks,
             self.spend_used,
             self.spend_cap,
             self.spend_ratio,
@@ -414,6 +426,15 @@ class Metrics:
 
         labels = self._labels(**{"class": class_name})
         self.rate_limit_refusals.inc(**labels)
+
+    def inc_entitlement_check(self, decision: str, code: str) -> None:
+        """Count one plan-gate check with fixed, content-free labels."""
+
+        label_decision = "allow" if str(decision) == "allow" else "deny"
+        label_code = self._value(code) or "unknown"
+        self.entitlement_checks.inc(
+            **self._labels(decision=label_decision, code=label_code)
+        )
 
     def observe_spend(
         self,
