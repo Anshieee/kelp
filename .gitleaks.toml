@@ -14,10 +14,6 @@ useDefault = true
 [allowlist]
 description = "Known non-secret fixtures: scrubbing tests, fake provider keys, generated manifest."
 paths = [
-  # Fake Stripe-shaped key planted in an audited field; the demo asserts the
-  # audit log persists [redacted] instead. This file is a demo script, not a
-  # place where a real credential belongs.
-  '''demo/runner\.py''',
   # Eval dataset sentinels exercised by the secret-scrubbing scenarios.
   '''evals/datasets/v1/tasks\.json''',
   # Test fixtures that assert redaction or rejection of credential-shaped

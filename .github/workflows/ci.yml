@@ -83,7 +83,7 @@ jobs:
           pip install -U pip
           pip install -e ".[dev,browser]"
       - name: Mypy
-        run: mypy chat kernel openshell skills payments evals demo tools
+        run: mypy chat kernel openshell skills payments evals tools
 
   pytest:
     name: pytest

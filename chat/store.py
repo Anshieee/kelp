@@ -25,10 +25,14 @@ from typing import Any, Callable, Iterator, Mapping, Sequence
 
 from openshell.audit import AuditLog
 
+from .tenancy import OWNER_TENANT_ID, TenantMismatchError, validate_tenant_id
+
 __all__ = [
     "APPROVAL_TRANSITIONS",
     "ChatStore",
     "LIVE_TURN_STATES",
+    "RUN_STATUSES",
+    "RUN_TERMINAL_STATUSES",
     "SHARE_ID_LENGTH",
     "ThreadBusyError",
     "ThreadGoneError",
@@ -38,8 +42,16 @@ __all__ = [
 ]
 
 _SCHEMA = """
+-- P2-1: the tenant registry. Only ``owner`` is admitted today, but making the
+-- id an explicit row keeps the boundary in data rather than in a comment.
+CREATE TABLE IF NOT EXISTS tenants (
+    id TEXT PRIMARY KEY,
+    created_at TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS threads (
     id TEXT PRIMARY KEY,
+    tenant_id TEXT NOT NULL DEFAULT 'owner',
     title TEXT NOT NULL,
     title_source TEXT NOT NULL,
     created_at TEXT NOT NULL,
@@ -98,6 +110,45 @@ CREATE UNIQUE INDEX IF NOT EXISTS turns_client
     WHERE client_turn_id IS NOT NULL;
 CREATE INDEX IF NOT EXISTS turns_thread ON turns (thread_id, created_at, id);
 
+-- P3-1: the operational run record. It holds counters and ids only; prompt
+-- text, message text, tool arguments/results, artifact bytes, and secret
+-- values never have a column here.
+CREATE TABLE IF NOT EXISTS runs (
+    run_id TEXT PRIMARY KEY,
+    tenant_id TEXT NOT NULL DEFAULT 'owner',
+    thread_id TEXT,
+    turn_id TEXT,
+    surface TEXT NOT NULL,
+    task_type TEXT NOT NULL,
+    status TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    started_at TEXT,
+    finished_at TEXT,
+    model TEXT NOT NULL DEFAULT '',
+    provider TEXT NOT NULL DEFAULT '',
+    input_tokens INTEGER NOT NULL DEFAULT 0,
+    output_tokens INTEGER NOT NULL DEFAULT 0,
+    total_tokens INTEGER NOT NULL DEFAULT 0,
+    cost_usd REAL NOT NULL DEFAULT 0,
+    steps INTEGER NOT NULL DEFAULT 0,
+    tool_calls INTEGER NOT NULL DEFAULT 0,
+    approvals INTEGER NOT NULL DEFAULT 0,
+    error_code TEXT,
+    retry_of TEXT,
+    idempotency_key TEXT
+);
+CREATE INDEX IF NOT EXISTS runs_tenant ON runs (tenant_id, created_at);
+CREATE INDEX IF NOT EXISTS runs_thread ON runs (thread_id, created_at);
+-- One run per chat turn; a retry opens a new turn and therefore a new run.
+CREATE UNIQUE INDEX IF NOT EXISTS runs_turn
+    ON runs (turn_id) WHERE turn_id IS NOT NULL;
+-- A replayed idempotency key returns the existing run. The key is scoped to
+-- the tenant and thread because a client turn id is per thread.
+CREATE UNIQUE INDEX IF NOT EXISTS runs_idempotency
+    ON runs (tenant_id, COALESCE(thread_id, ''), idempotency_key)
+    WHERE idempotency_key IS NOT NULL;
+
 CREATE TABLE IF NOT EXISTS approvals (
     id TEXT PRIMARY KEY,
     thread_id TEXT NOT NULL,
@@ -115,6 +166,7 @@ CREATE INDEX IF NOT EXISTS approvals_thread ON approvals (thread_id, requested_a
 
 CREATE TABLE IF NOT EXISTS artifacts (
     handle TEXT PRIMARY KEY,
+    tenant_id TEXT NOT NULL DEFAULT 'owner',
     thread_id TEXT,
     name TEXT NOT NULL,
     kind TEXT NOT NULL,
@@ -134,6 +186,7 @@ CREATE INDEX IF NOT EXISTS artifacts_thread ON artifacts (thread_id, created_at)
 -- session or CSRF credential is ever written here.
 CREATE TABLE IF NOT EXISTS sessions (
     id_hash TEXT PRIMARY KEY,
+    tenant_id TEXT NOT NULL DEFAULT 'owner',
     label TEXT NOT NULL,
     created_at REAL NOT NULL,
     last_seen REAL NOT NULL,
@@ -151,6 +204,7 @@ CREATE INDEX IF NOT EXISTS sessions_seen ON sessions (last_seen);
 CREATE TABLE IF NOT EXISTS shares (
     token_hash TEXT PRIMARY KEY,
     owner_id TEXT NOT NULL DEFAULT 'owner',
+    tenant_id TEXT NOT NULL DEFAULT 'owner',
     thread_id TEXT NOT NULL,
     snapshot_json TEXT NOT NULL,
     snapshot_bytes INTEGER NOT NULL,
@@ -229,6 +283,92 @@ def _load(value: str | None, default: Any) -> Any:
 
 LIVE_TURN_STATES = ("queued", "running", "stopping")
 
+#: P3-1: the frozen status vocabulary (contract §3). Non-terminal statuses are
+#: ``queued``, ``running``, ``awaiting_approval``, and ``stopping``; a run has
+#: exactly one terminal record.
+RUN_STATUSES = (
+    "queued",
+    "running",
+    "awaiting_approval",
+    "stopping",
+    "completed",
+    "failed",
+    "cancelled",
+    "interrupted",
+)
+RUN_TERMINAL_STATUSES = frozenset(
+    {"completed", "failed", "cancelled", "interrupted"}
+)
+
+#: The run columns, in the contract's field order. Every read and write below
+#: uses this list, so no content field can be added by accident.
+_RUN_COLUMNS = (
+    "run_id",
+    "tenant_id",
+    "thread_id",
+    "turn_id",
+    "surface",
+    "task_type",
+    "status",
+    "created_at",
+    "updated_at",
+    "started_at",
+    "finished_at",
+    "model",
+    "provider",
+    "input_tokens",
+    "output_tokens",
+    "total_tokens",
+    "cost_usd",
+    "steps",
+    "tool_calls",
+    "approvals",
+    "error_code",
+    "retry_of",
+    "idempotency_key",
+)
+
+#: Columns a transition may write. The identity of a run (id, tenant, thread,
+#: turn) and ``created_at`` are immutable; only execution state changes here.
+_RUN_UPDATE_COLUMNS = tuple(
+    column
+    for column in _RUN_COLUMNS
+    if column not in {"run_id", "tenant_id", "thread_id", "turn_id", "created_at"}
+)
+
+_RUN_INT_COLUMNS = (
+    "input_tokens",
+    "output_tokens",
+    "total_tokens",
+    "steps",
+    "tool_calls",
+    "approvals",
+)
+
+#: A caller that tries to put conversation content into a run is refused rather
+#: than silently stripped: the read model's exclusions are structural.
+_RUN_FORBIDDEN_KEYS = frozenset(
+    {
+        "prompt",
+        "prompt_text",
+        "text",
+        "message_text",
+        "messages",
+        "blocks",
+        "tool_arguments",
+        "tool_results",
+        "provider_response_body",
+        "api_key",
+        "secret_values",
+        "headers",
+        "cookies",
+    }
+)
+
+#: Tables that carry the tenant boundary. They are created with the column in
+#: ``_SCHEMA``; existing databases get it through the additive migration below.
+_TENANT_TABLES = ("threads", "artifacts", "shares", "sessions")
+
 
 class ThreadBusyError(RuntimeError):
     """A purge found a live turn in the thread and aborted before deleting.
@@ -286,6 +426,8 @@ class ChatStore:
         self._conn.execute("PRAGMA synchronous=FULL")
         self._conn.execute("PRAGMA foreign_keys=ON")
         self._conn.executescript(_SCHEMA)
+        self._migrate_tenant_columns()
+        self._migrate_runs_table()
         try:
             os.chmod(self.path, 0o600)
         except OSError:  # pragma: no cover - platform dependent
@@ -307,6 +449,89 @@ class ChatStore:
             self._audit.record(event, **fields)
         except Exception:  # noqa: BLE001 - a full disk must not fail a revoke
             return
+
+    # -- tenant migration (P2-1) -------------------------------------------
+
+    def _migrate_tenant_columns(self) -> None:
+        """Add ``tenant_id`` to pre-P2-1 tables and backfill it to ``owner``.
+
+        ``CREATE TABLE IF NOT EXISTS`` never changes an existing table, so an
+        installed database keeps its old shape until this runs. SQLite fills an
+        added ``NOT NULL`` column with its default for every existing row; the
+        explicit ``UPDATE`` is the idempotent backfill and also repairs a row
+        written by an older build with a blank value. The statement is a no-op
+        once every row is scoped.
+        """
+
+        for table in _TENANT_TABLES:
+            columns = {
+                str(row["name"])
+                for row in self._conn.execute(f"PRAGMA table_info({table})")
+            }
+            if "tenant_id" not in columns:
+                self._conn.execute(
+                    f"ALTER TABLE {table} ADD COLUMN tenant_id TEXT NOT NULL "
+                    f"DEFAULT '{OWNER_TENANT_ID}'"
+                )
+            self._conn.execute(
+                f"UPDATE {table} SET tenant_id = ? "
+                "WHERE tenant_id IS NULL OR tenant_id = ''",
+                (OWNER_TENANT_ID,),
+            )
+        self._conn.execute(
+            "INSERT OR IGNORE INTO tenants (id, created_at) VALUES (?, ?)",
+            (OWNER_TENANT_ID, self._now_iso()),
+        )
+
+    def _migrate_runs_table(self) -> None:
+        """Bring a pre-P3-1 database's ``runs`` table to the frozen shape.
+
+        ``CREATE TABLE IF NOT EXISTS`` never changes an existing table. The
+        table is new in P3-1, so a normal database already has every column;
+        this pass only repairs a partially-created development table and is a
+        no-op afterwards. Only additive columns are possible: removing or
+        reordering a column is a contract change.
+        """
+
+        definitions: dict[str, str] = {
+            "run_id": "TEXT",
+            "tenant_id": "TEXT NOT NULL DEFAULT 'owner'",
+            "thread_id": "TEXT",
+            "turn_id": "TEXT",
+            "surface": "TEXT NOT NULL DEFAULT 'web'",
+            "task_type": "TEXT NOT NULL DEFAULT 'chat'",
+            "status": "TEXT NOT NULL DEFAULT 'queued'",
+            "created_at": "TEXT NOT NULL DEFAULT ''",
+            "updated_at": "TEXT NOT NULL DEFAULT ''",
+            "started_at": "TEXT",
+            "finished_at": "TEXT",
+            "model": "TEXT NOT NULL DEFAULT ''",
+            "provider": "TEXT NOT NULL DEFAULT ''",
+            "input_tokens": "INTEGER NOT NULL DEFAULT 0",
+            "output_tokens": "INTEGER NOT NULL DEFAULT 0",
+            "total_tokens": "INTEGER NOT NULL DEFAULT 0",
+            "cost_usd": "REAL NOT NULL DEFAULT 0",
+            "steps": "INTEGER NOT NULL DEFAULT 0",
+            "tool_calls": "INTEGER NOT NULL DEFAULT 0",
+            "approvals": "INTEGER NOT NULL DEFAULT 0",
+            "error_code": "TEXT",
+            "retry_of": "TEXT",
+            "idempotency_key": "TEXT",
+        }
+        columns = {
+            str(row["name"])
+            for row in self._conn.execute("PRAGMA table_info(runs)")
+        }
+        for column in _RUN_COLUMNS:
+            if column not in columns:
+                self._conn.execute(
+                    f"ALTER TABLE runs ADD COLUMN {column} {definitions[column]}"
+                )
+        self._conn.execute(
+            "UPDATE runs SET tenant_id = ? "
+            "WHERE tenant_id IS NULL OR tenant_id = ''",
+            (OWNER_TENANT_ID,),
+        )
 
     # -- lifecycle ---------------------------------------------------------
 
@@ -385,82 +610,109 @@ class ChatStore:
         title: str | None = None,
         title_source: str = "auto",
         thread_id: str | None = None,
+        tenant_id: str = OWNER_TENANT_ID,
     ) -> dict[str, Any]:
+        tenant = validate_tenant_id(tenant_id)
         thread_id = thread_id or new_id("ses")
         now = self._now_iso()
         clean_title = (title or "").strip() or "New chat"
         with self.transaction():
             self._conn.execute(
-                "INSERT INTO threads (id, title, title_source, created_at, updated_at) "
-                "VALUES (?, ?, ?, ?, ?)",
-                (thread_id, clean_title, title_source, now, now),
+                "INSERT INTO threads "
+                "(id, tenant_id, title, title_source, created_at, updated_at) "
+                "VALUES (?, ?, ?, ?, ?, ?)",
+                (thread_id, tenant, clean_title, title_source, now, now),
             )
-        return self.get_thread(thread_id)  # type: ignore[return-value]
+        return self.get_thread(thread_id, tenant_id=tenant)  # type: ignore[return-value]
 
-    def get_thread(self, thread_id: str) -> dict[str, Any] | None:
+    def get_thread(
+        self, thread_id: str, *, tenant_id: str = OWNER_TENANT_ID
+    ) -> dict[str, Any] | None:
         with self._lock:
             row = self._conn.execute(
-                "SELECT * FROM threads WHERE id = ? AND deleted_at IS NULL",
-                (thread_id,),
+                "SELECT * FROM threads WHERE id = ? AND tenant_id = ? "
+                "AND deleted_at IS NULL",
+                (thread_id, tenant_id),
             ).fetchone()
             if row is None:
                 return None
             return self._thread_record(row)
 
-    def thread_exists(self, thread_id: str) -> bool:
-        return self.get_thread(thread_id) is not None
+    def thread_exists(
+        self, thread_id: str, *, tenant_id: str = OWNER_TENANT_ID
+    ) -> bool:
+        return self.get_thread(thread_id, tenant_id=tenant_id) is not None
 
-    def touch_thread(self, thread_id: str, *, title: str | None = None) -> None:
+    def touch_thread(
+        self,
+        thread_id: str,
+        *,
+        title: str | None = None,
+        tenant_id: str = OWNER_TENANT_ID,
+    ) -> None:
         now = self._now_iso()
         with self.transaction():
             if title is not None:
                 self._conn.execute(
                     "UPDATE threads SET title = ?, title_source = 'user', updated_at = ? "
-                    "WHERE id = ?",
-                    (title, now, thread_id),
+                    "WHERE id = ? AND tenant_id = ?",
+                    (title, now, thread_id, tenant_id),
                 )
             else:
                 self._conn.execute(
-                    "UPDATE threads SET updated_at = ? WHERE id = ?", (now, thread_id)
+                    "UPDATE threads SET updated_at = ? "
+                    "WHERE id = ? AND tenant_id = ?",
+                    (now, thread_id, tenant_id),
                 )
 
-    def set_auto_title(self, thread_id: str, title: str) -> bool:
+    def set_auto_title(
+        self, thread_id: str, title: str, *, tenant_id: str = OWNER_TENANT_ID
+    ) -> bool:
         """Set the title only while it is still auto-generated."""
 
         with self.transaction():
             cursor = self._conn.execute(
                 "UPDATE threads SET title = ?, updated_at = ? "
-                "WHERE id = ? AND title_source = 'auto' AND deleted_at IS NULL",
-                (title, self._now_iso(), thread_id),
+                "WHERE id = ? AND tenant_id = ? AND title_source = 'auto' "
+                "AND deleted_at IS NULL",
+                (title, self._now_iso(), thread_id, tenant_id),
             )
             return cursor.rowcount > 0
 
-    def rename_thread(self, thread_id: str, title: str) -> dict[str, Any] | None:
+    def rename_thread(
+        self, thread_id: str, title: str, *, tenant_id: str = OWNER_TENANT_ID
+    ) -> dict[str, Any] | None:
         with self.transaction():
             cursor = self._conn.execute(
                 "UPDATE threads SET title = ?, title_source = 'user', updated_at = ? "
-                "WHERE id = ? AND deleted_at IS NULL",
-                (title, self._now_iso(), thread_id),
+                "WHERE id = ? AND tenant_id = ? AND deleted_at IS NULL",
+                (title, self._now_iso(), thread_id, tenant_id),
             )
             if cursor.rowcount == 0:
                 return None
-        return self.get_thread(thread_id)
+        return self.get_thread(thread_id, tenant_id=tenant_id)
 
-    def soft_delete_thread(self, thread_id: str) -> bool:
+    def soft_delete_thread(
+        self, thread_id: str, *, tenant_id: str = OWNER_TENANT_ID
+    ) -> bool:
         with self.transaction():
             cursor = self._conn.execute(
                 "UPDATE threads SET deleted_at = ?, updated_at = ? "
-                "WHERE id = ? AND deleted_at IS NULL",
-                (self._now_iso(), self._now_iso(), thread_id),
+                "WHERE id = ? AND tenant_id = ? AND deleted_at IS NULL",
+                (self._now_iso(), self._now_iso(), thread_id, tenant_id),
             )
             return cursor.rowcount > 0
 
     def list_threads(
-        self, *, limit: int = 50, cursor: str | None = None
+        self,
+        *,
+        limit: int = 50,
+        cursor: str | None = None,
+        tenant_id: str = OWNER_TENANT_ID,
     ) -> tuple[list[dict[str, Any]], str | None]:
         limit = max(1, min(int(limit), 100))
-        params: list[Any] = []
-        where = "deleted_at IS NULL"
+        params: list[Any] = [tenant_id]
+        where = "tenant_id = ? AND deleted_at IS NULL"
         if cursor:
             marker = _decode_cursor(cursor)
             if marker is not None:
@@ -504,6 +756,7 @@ class ChatStore:
                     break
         return {
             "id": thread_id,
+            "tenant_id": row["tenant_id"],
             "title": row["title"],
             "title_source": row["title_source"],
             "created_at": row["created_at"],
@@ -701,12 +954,18 @@ class ChatStore:
         }
 
     def find_turn_by_client_id(
-        self, thread_id: str, client_turn_id: str
+        self,
+        thread_id: str,
+        client_turn_id: str,
+        *,
+        tenant_id: str = OWNER_TENANT_ID,
     ) -> dict[str, Any] | None:
         with self._lock:
             row = self._conn.execute(
-                "SELECT * FROM turns WHERE thread_id = ? AND client_turn_id = ?",
-                (thread_id, client_turn_id),
+                "SELECT * FROM turns WHERE thread_id = ? AND client_turn_id = ? "
+                "AND EXISTS (SELECT 1 FROM threads t WHERE t.id = turns.thread_id "
+                "AND t.tenant_id = ?)",
+                (thread_id, client_turn_id, tenant_id),
             ).fetchone()
         return self._turn_record(row) if row is not None else None
 
@@ -752,12 +1011,242 @@ class ChatStore:
             )
 
     def running_turns(self) -> list[dict[str, Any]]:
+        """Live turns across every tenant, each carrying its owner.
+
+        Recovery is a boot-wide pass (P2-3 debt): it must settle every orphaned
+        turn, not only the owner's, so the tenant is read from the parent thread
+        rather than assumed from the store's constructor.
+        """
+
         with self._lock:
             rows = self._conn.execute(
-                "SELECT * FROM turns WHERE state IN ('queued', 'running', 'stopping') "
-                "ORDER BY created_at"
+                "SELECT turns.*, threads.tenant_id AS owner_tenant_id FROM turns "
+                "LEFT JOIN threads ON threads.id = turns.thread_id "
+                "WHERE turns.state IN ('queued', 'running', 'stopping') "
+                "ORDER BY turns.created_at"
             ).fetchall()
-        return [self._turn_record(row) for row in rows]
+        records: list[dict[str, Any]] = []
+        for row in rows:
+            record = self._turn_record(row)
+            record["tenant_id"] = row["owner_tenant_id"] or OWNER_TENANT_ID
+            records.append(record)
+        return records
+
+    # -- runs (P3-1) -------------------------------------------------------
+
+    def _run_value(self, column: str, value: Any) -> Any:
+        if column in _RUN_INT_COLUMNS:
+            if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+                return 0
+            return int(value)
+        if column == "cost_usd":
+            if isinstance(value, bool) or not isinstance(value, (int, float)):
+                return 0.0
+            return max(0.0, float(value))
+        if column in {"thread_id", "turn_id", "started_at", "finished_at",
+                      "error_code", "retry_of", "idempotency_key"}:
+            if value is None:
+                return None
+            return str(value)
+        return "" if value is None else str(value)
+
+    def _run_record(self, row: sqlite3.Row) -> dict[str, Any]:
+        return {column: row[column] for column in _RUN_COLUMNS}
+
+    def create_run(self, record: Mapping[str, Any]) -> dict[str, Any]:
+        """Insert one metadata-only run row; a duplicate id is idempotent.
+
+        Conversation content is not storable here by construction: only
+        :data:`_RUN_COLUMNS` are read from ``record``. A caller that names a
+        forbidden content key is refused instead of being silently stripped, so
+        a future writer cannot believe it persisted a prompt.
+        """
+
+        extra = set(record) - set(_RUN_COLUMNS)
+        forbidden = extra & _RUN_FORBIDDEN_KEYS
+        if forbidden:
+            raise ValueError(
+                "run records hold metadata only; refusing content field(s): "
+                + ", ".join(sorted(forbidden))
+            )
+        now = self._now_iso()
+        data = {
+            column: self._run_value(column, record.get(column))
+            for column in _RUN_COLUMNS
+        }
+        tenant = validate_tenant_id(str(data.get("tenant_id") or OWNER_TENANT_ID))
+        data["tenant_id"] = tenant
+        data["run_id"] = str(data.get("run_id") or new_id("run"))
+        status = getattr(record.get("status"), "value", record.get("status"))
+        status = str(status or "queued")
+        if status not in RUN_STATUSES:
+            raise ValueError(f"unknown run status {status!r}")
+        data["status"] = status
+        data["surface"] = str(record.get("surface") or "web")
+        data["task_type"] = str(record.get("task_type") or "chat")
+        data["created_at"] = str(record.get("created_at") or now)
+        data["updated_at"] = str(record.get("updated_at") or data["created_at"])
+
+        columns = ", ".join(_RUN_COLUMNS)
+        placeholders = ", ".join("?" for _ in _RUN_COLUMNS)
+        values = tuple(data[column] for column in _RUN_COLUMNS)
+        with self.transaction():
+            self._conn.execute(
+                f"INSERT INTO runs ({columns}) VALUES ({placeholders}) "
+                "ON CONFLICT(run_id) DO NOTHING",
+                values,
+            )
+            row = self._conn.execute(
+                "SELECT * FROM runs WHERE run_id = ? AND tenant_id = ?",
+                (data["run_id"], tenant),
+            ).fetchone()
+        if row is None:
+            raise ValueError(
+                f"run {data['run_id']} already exists for another tenant"
+            )
+        return self._run_record(row)
+
+    def get_run(
+        self, run_id: str, *, tenant_id: str = OWNER_TENANT_ID
+    ) -> dict[str, Any] | None:
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT * FROM runs WHERE run_id = ? AND tenant_id = ?",
+                (run_id, tenant_id),
+            ).fetchone()
+        return self._run_record(row) if row is not None else None
+
+    def get_run_by_turn(
+        self, turn_id: str, *, tenant_id: str | None = None
+    ) -> dict[str, Any] | None:
+        """The single run for a chat turn, optionally scoped to one tenant."""
+
+        with self._lock:
+            if tenant_id is None:
+                row = self._conn.execute(
+                    "SELECT * FROM runs WHERE turn_id = ? "
+                    "ORDER BY created_at, run_id LIMIT 1",
+                    (turn_id,),
+                ).fetchone()
+            else:
+                row = self._conn.execute(
+                    "SELECT * FROM runs WHERE turn_id = ? AND tenant_id = ? "
+                    "ORDER BY created_at, run_id LIMIT 1",
+                    (turn_id, tenant_id),
+                ).fetchone()
+        return self._run_record(row) if row is not None else None
+
+    def find_run_by_idempotency(
+        self,
+        idempotency_key: str,
+        *,
+        tenant_id: str = OWNER_TENANT_ID,
+        thread_id: str | None = None,
+    ) -> dict[str, Any] | None:
+        """The run a replayed key already owns, scoped like the submission."""
+
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT * FROM runs WHERE tenant_id = ? AND idempotency_key = ? "
+                "AND ((thread_id IS NULL AND ? IS NULL) OR thread_id = ?) "
+                "ORDER BY created_at, run_id LIMIT 1",
+                (tenant_id, idempotency_key, thread_id, thread_id),
+            ).fetchone()
+        return self._run_record(row) if row is not None else None
+
+    def update_run(
+        self,
+        run_id: str,
+        *,
+        tenant_id: str = OWNER_TENANT_ID,
+        status: str | None = None,
+        updated_at: str | None = None,
+        **fields: Any,
+    ) -> dict[str, Any] | None:
+        """Write one transition unless the row is already terminal.
+
+        The terminal guard is part of the SQL predicate, so two concurrent
+        writers cannot both produce a terminal record: the loser's UPDATE
+        matches no row and returns ``None``.
+        """
+
+        changes: list[str] = ["updated_at = ?"]
+        values: list[Any] = [updated_at or self._now_iso()]
+        supplied = {column: fields[column] for column in _RUN_UPDATE_COLUMNS
+                    if column in fields}
+        if status is not None:
+            status = getattr(status, "value", status)
+            if status not in RUN_STATUSES:
+                raise ValueError(f"unknown run status {status!r}")
+            supplied["status"] = status
+        for column, value in supplied.items():
+            if column == "updated_at":
+                continue
+            changes.append(f"{column} = ?")
+            values.append(self._run_value(column, value))
+        terminal = tuple(sorted(RUN_TERMINAL_STATUSES))
+        placeholders = ", ".join("?" for _ in terminal)
+        values.extend([run_id, tenant_id, *terminal])
+        with self.transaction():
+            cursor = self._conn.execute(
+                f"UPDATE runs SET {', '.join(changes)} "
+                f"WHERE run_id = ? AND tenant_id = ? "
+                f"AND status NOT IN ({placeholders})",
+                values,
+            )
+            if cursor.rowcount == 0:
+                return None
+            row = self._conn.execute(
+                "SELECT * FROM runs WHERE run_id = ? AND tenant_id = ?",
+                (run_id, tenant_id),
+            ).fetchone()
+        return self._run_record(row) if row is not None else None
+
+    def list_runs(
+        self,
+        *,
+        tenant_id: str = OWNER_TENANT_ID,
+        thread_id: str | None = None,
+        status: str | None = None,
+        limit: int = 100,
+    ) -> list[dict[str, Any]]:
+        clauses = ["tenant_id = ?"]
+        params: list[Any] = [tenant_id]
+        if thread_id is not None:
+            clauses.append("thread_id = ?")
+            params.append(thread_id)
+        if status is not None:
+            clauses.append("status = ?")
+            params.append(status)
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT * FROM runs WHERE " + " AND ".join(clauses) +
+                " ORDER BY created_at DESC, run_id DESC LIMIT ?",
+                (*params, max(1, min(int(limit), 500))),
+            ).fetchall()
+        return [self._run_record(row) for row in rows]
+
+    def running_runs(
+        self, *, tenant_id: str | None = None
+    ) -> list[dict[str, Any]]:
+        """Runs still in a non-terminal state, optionally one tenant's."""
+
+        non_terminal = tuple(
+            status for status in RUN_STATUSES if status not in RUN_TERMINAL_STATUSES
+        )
+        placeholders = ", ".join("?" for _ in non_terminal)
+        clauses = [f"status IN ({placeholders})"]
+        params: list[Any] = list(non_terminal)
+        if tenant_id is not None:
+            clauses.append("tenant_id = ?")
+            params.append(tenant_id)
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT * FROM runs WHERE " + " AND ".join(clauses) +
+                " ORDER BY created_at, run_id",
+                params,
+            ).fetchall()
+        return [self._run_record(row) for row in rows]
 
     # -- events ------------------------------------------------------------
 
@@ -821,16 +1310,46 @@ class ChatStore:
 
     # -- approvals ---------------------------------------------------------
 
-    def save_approval(self, card: Mapping[str, Any]) -> dict[str, Any]:
+    def _approval_tenant_clause(
+        self, tenant_id: str
+    ) -> tuple[str, tuple[Any, ...]]:
+        """SQL predicate for an approval owned by ``tenant_id``.
+
+        Approvals carry no tenant column of their own (P2-1 adds it to the
+        thread, artifact, share, and session tables). Ownership is therefore the
+        parent thread's tenant; an approval with no thread id belongs to the
+        owner, which is the only admitted tenant.
+        """
+
+        return (
+            "(EXISTS (SELECT 1 FROM threads t WHERE t.id = approvals.thread_id "
+            "AND t.tenant_id = ?) OR (approvals.thread_id = '' AND ? = ?))",
+            (tenant_id, tenant_id, OWNER_TENANT_ID),
+        )
+
+    def save_approval(
+        self, card: Mapping[str, Any], *, tenant_id: str = OWNER_TENANT_ID
+    ) -> dict[str, Any]:
         """Insert a card once; a later write never moves its state columns.
 
         The payload is refreshed so a caller that re-saves the same card gets
         its own shape back, but ``status``/``decided_at``/``consumed_at`` belong
         to :meth:`transition_approval`. Otherwise a stale writer could undo a
         decision or a consumption.
+
+        A card whose thread belongs to another tenant is refused, so a scoped
+        caller cannot create an approval inside a foreign thread.
         """
 
         card = dict(card)
+        parent = str(card.get("thread_id") or "")
+        if parent:
+            with self._lock:
+                row = self._conn.execute(
+                    "SELECT tenant_id FROM threads WHERE id = ?", (parent,)
+                ).fetchone()
+            if row is not None and row["tenant_id"] != tenant_id:
+                raise TenantMismatchError()
         with self.transaction():
             self._conn.execute(
                 "INSERT INTO approvals (id, thread_id, turn_id, call_id, source, "
@@ -851,7 +1370,7 @@ class ChatStore:
                     card.get("consumed_at"),
                 ),
             )
-        return self.get_approval(card["id"])  # type: ignore[return-value]
+        return self.get_approval(card["id"], tenant_id=tenant_id)  # type: ignore[return-value]
 
     def transition_approval(
         self,
@@ -861,12 +1380,15 @@ class ChatStore:
         allowed_from: Sequence[str] = ("pending",),
         decided_at: str | None = None,
         consumed_at: str | None = None,
+        tenant_id: str = OWNER_TENANT_ID,
     ) -> dict[str, Any] | None:
         """Guarded, atomic status change. ``None`` means another caller won.
 
         The guard is the SQL predicate itself (``WHERE status IN (...)``) and
         the winner is ``rowcount``, so two concurrent decisions — or a decision
-        racing a settle — cannot both move the row.
+        racing a settle — cannot both move the row. The tenant predicate is part
+        of the same statement, so a foreign caller cannot move a row even if it
+        knows the id.
         """
 
         fields = ["status = ?"]
@@ -881,23 +1403,29 @@ class ChatStore:
         if not allowed:  # pragma: no cover - callers always name a source state
             raise ValueError("allowed_from must name at least one status")
         placeholders = ", ".join("?" for _ in allowed)
+        tenant_clause, tenant_params = self._approval_tenant_clause(tenant_id)
         with self.transaction():
             cursor = self._conn.execute(
                 f"UPDATE approvals SET {', '.join(fields)} "
-                f"WHERE id = ? AND status IN ({placeholders})",
-                (*values, approval_id, *allowed),
+                f"WHERE id = ? AND status IN ({placeholders}) AND {tenant_clause}",
+                (*values, approval_id, *allowed, *tenant_params),
             )
             if cursor.rowcount == 0:
                 return None
             row = self._conn.execute(
-                "SELECT * FROM approvals WHERE id = ?", (approval_id,)
+                f"SELECT * FROM approvals WHERE id = ? AND {tenant_clause}",
+                (approval_id, *tenant_params),
             ).fetchone()
         return self._approval_record(row) if row is not None else None
 
-    def get_approval(self, approval_id: str) -> dict[str, Any] | None:
+    def get_approval(
+        self, approval_id: str, *, tenant_id: str = OWNER_TENANT_ID
+    ) -> dict[str, Any] | None:
+        tenant_clause, tenant_params = self._approval_tenant_clause(tenant_id)
         with self._lock:
             row = self._conn.execute(
-                "SELECT * FROM approvals WHERE id = ?", (approval_id,)
+                f"SELECT * FROM approvals WHERE id = ? AND {tenant_clause}",
+                (approval_id, *tenant_params),
             ).fetchone()
         return self._approval_record(row) if row is not None else None
 
@@ -914,6 +1442,7 @@ class ChatStore:
         status: str | None = None,
         thread_id: str | None = None,
         limit: int = 50,
+        tenant_id: str = OWNER_TENANT_ID,
     ) -> list[dict[str, Any]]:
         clauses: list[str] = []
         params: list[Any] = []
@@ -923,7 +1452,10 @@ class ChatStore:
         if thread_id:
             clauses.append("thread_id = ?")
             params.append(thread_id)
-        where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
+        tenant_clause, tenant_params = self._approval_tenant_clause(tenant_id)
+        clauses.append(tenant_clause)
+        params.extend(tenant_params)
+        where = " WHERE " + " AND ".join(clauses)
         with self._lock:
             rows = self._conn.execute(
                 "SELECT * FROM approvals" + where +
@@ -940,10 +1472,11 @@ class ChatStore:
         decided_at: str | None = None,
         consumed_at: str | None = None,
         allowed_from: Sequence[str] | None = None,
+        tenant_id: str = OWNER_TENANT_ID,
     ) -> dict[str, Any] | None:
         """Move an approval along its lifecycle; never reopens a settled one."""
 
-        if self.get_approval(approval_id) is None:
+        if self.get_approval(approval_id, tenant_id=tenant_id) is None:
             return None
         allowed = (
             allowed_from
@@ -956,21 +1489,38 @@ class ChatStore:
             allowed_from=allowed,
             decided_at=decided_at,
             consumed_at=consumed_at,
+            tenant_id=tenant_id,
         )
-        return updated if updated is not None else self.get_approval(approval_id)
+        return (
+            updated
+            if updated is not None
+            else self.get_approval(approval_id, tenant_id=tenant_id)
+        )
 
     # -- artifacts ---------------------------------------------------------
 
-    def create_artifact(self, meta: Mapping[str, Any]) -> dict[str, Any]:
+    def create_artifact(
+        self, meta: Mapping[str, Any], *, tenant_id: str = OWNER_TENANT_ID
+    ) -> dict[str, Any]:
         card = dict(meta)
+        tenant = validate_tenant_id(str(card.get("tenant_id") or tenant_id))
+        thread_id = card.get("thread_id")
+        if thread_id:
+            with self._lock:
+                parent = self._conn.execute(
+                    "SELECT tenant_id FROM threads WHERE id = ?", (thread_id,)
+                ).fetchone()
+            if parent is not None and parent["tenant_id"] != tenant:
+                raise TenantMismatchError()
         with self.transaction():
             self._conn.execute(
-                "INSERT INTO artifacts (handle, thread_id, name, kind, mime, "
-                "size_bytes, sha256, storage_path, created_at, pages, rows) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "INSERT INTO artifacts (handle, tenant_id, thread_id, name, kind, "
+                "mime, size_bytes, sha256, storage_path, created_at, pages, rows) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     card["handle"],
-                    card.get("thread_id"),
+                    tenant,
+                    thread_id,
                     card["name"],
                     card["kind"],
                     card["mime"],
@@ -982,19 +1532,23 @@ class ChatStore:
                     card.get("rows"),
                 ),
             )
-        return self.get_artifact(card["handle"])  # type: ignore[return-value]
+        return self.get_artifact(card["handle"], tenant_id=tenant)  # type: ignore[return-value]
 
-    def get_artifact(self, handle: str) -> dict[str, Any] | None:
+    def get_artifact(
+        self, handle: str, *, tenant_id: str = OWNER_TENANT_ID
+    ) -> dict[str, Any] | None:
         with self._lock:
             row = self._conn.execute(
-                "SELECT * FROM artifacts WHERE handle = ? AND deleted_at IS NULL",
-                (handle,),
+                "SELECT * FROM artifacts WHERE handle = ? AND tenant_id = ? "
+                "AND deleted_at IS NULL",
+                (handle, tenant_id),
             ).fetchone()
         return self._artifact_record(row) if row is not None else None
 
     def _artifact_record(self, row: sqlite3.Row) -> dict[str, Any]:
         return {
             "handle": row["handle"],
+            "tenant_id": row["tenant_id"],
             "thread_id": row["thread_id"],
             "name": row["name"],
             "kind": row["kind"],
@@ -1007,22 +1561,39 @@ class ChatStore:
             "rows": row["rows"],
         }
 
-    def bind_artifact(self, handle: str, thread_id: str) -> bool:
-        """Claim an unbound upload for one thread. Never re-points a bound one."""
+    def bind_artifact(
+        self,
+        handle: str,
+        thread_id: str,
+        *,
+        tenant_id: str = OWNER_TENANT_ID,
+    ) -> bool:
+        """Claim an unbound upload for one thread. Never re-points a bound one.
+
+        Both sides of the claim are checked against the tenant in the same
+        statement, so a caller cannot attach a foreign artifact to its own
+        thread or claim an upload into a foreign thread.
+        """
 
         with self.transaction():
             cursor = self._conn.execute(
                 "UPDATE artifacts SET thread_id = ? "
-                "WHERE handle = ? AND thread_id IS NULL AND deleted_at IS NULL",
-                (thread_id, handle),
+                "WHERE handle = ? AND tenant_id = ? AND thread_id IS NULL "
+                "AND deleted_at IS NULL "
+                "AND EXISTS (SELECT 1 FROM threads t WHERE t.id = ? "
+                "AND t.tenant_id = ?)",
+                (thread_id, handle, tenant_id, thread_id, tenant_id),
             )
             return cursor.rowcount > 0
 
-    def delete_artifacts_for_thread(self, thread_id: str) -> None:
+    def delete_artifacts_for_thread(
+        self, thread_id: str, *, tenant_id: str = OWNER_TENANT_ID
+    ) -> None:
         with self.transaction():
             self._conn.execute(
-                "UPDATE artifacts SET deleted_at = ? WHERE thread_id = ?",
-                (self._now_iso(), thread_id),
+                "UPDATE artifacts SET deleted_at = ? "
+                "WHERE thread_id = ? AND tenant_id = ?",
+                (self._now_iso(), thread_id, tenant_id),
             )
 
     # -- owner sessions (KEL-24 M4-C) --------------------------------------
@@ -1034,59 +1605,74 @@ class ChatStore:
         created_at: float,
         last_seen: float,
         expires_at: float,
+        *,
+        tenant_id: str = OWNER_TENANT_ID,
     ) -> None:
         """Persist one session row. The primary key is the hashed id only."""
 
+        tenant = validate_tenant_id(tenant_id)
         with self.transaction():
             self._conn.execute(
                 "INSERT INTO sessions "
-                "(id_hash, label, created_at, last_seen, expires_at, revoked_at) "
-                "VALUES (?, ?, ?, ?, ?, NULL) "
+                "(id_hash, tenant_id, label, created_at, last_seen, expires_at, "
+                "revoked_at) VALUES (?, ?, ?, ?, ?, ?, NULL) "
                 "ON CONFLICT(id_hash) DO UPDATE SET "
-                "label = excluded.label, created_at = excluded.created_at, "
+                "tenant_id = excluded.tenant_id, label = excluded.label, "
+                "created_at = excluded.created_at, "
                 "last_seen = excluded.last_seen, expires_at = excluded.expires_at, "
                 "revoked_at = NULL",
-                (id_hash, label, created_at, last_seen, expires_at),
+                (id_hash, tenant, label, created_at, last_seen, expires_at),
             )
         self._record_audit(
             "session_minted",
             actor="owner",
             outcome="created",
+            tenant_id=tenant,
             extra={"credential": "session", "id_short": id_hash[:8]},
         )
 
-    def session_get(self, id_hash: str, *, now: float) -> dict[str, Any] | None:
+    def session_get(
+        self, id_hash: str, *, now: float, tenant_id: str = OWNER_TENANT_ID
+    ) -> dict[str, Any] | None:
         """Return a live, unrevoked session row, or ``None``."""
 
         with self._lock:
             row = self._conn.execute(
-                "SELECT * FROM sessions WHERE id_hash = ? "
+                "SELECT * FROM sessions WHERE id_hash = ? AND tenant_id = ? "
                 "AND revoked_at IS NULL AND expires_at > ?",
-                (id_hash, now),
+                (id_hash, tenant_id, now),
             ).fetchone()
         return dict(row) if row is not None else None
 
     def session_touch(
-        self, id_hash: str, *, last_seen: float, expires_at: float
+        self,
+        id_hash: str,
+        *,
+        last_seen: float,
+        expires_at: float,
+        tenant_id: str = OWNER_TENANT_ID,
     ) -> bool:
         """Roll one live session forward; ``False`` if it is gone or expired."""
 
         with self.transaction():
             cursor = self._conn.execute(
                 "UPDATE sessions SET last_seen = ?, expires_at = ? "
-                "WHERE id_hash = ? AND revoked_at IS NULL AND expires_at > ?",
-                (last_seen, expires_at, id_hash, last_seen),
+                "WHERE id_hash = ? AND tenant_id = ? AND revoked_at IS NULL "
+                "AND expires_at > ?",
+                (last_seen, expires_at, id_hash, tenant_id, last_seen),
             )
             return cursor.rowcount > 0
 
-    def session_revoke(self, id_hash: str, *, revoked_at: float) -> bool:
+    def session_revoke(
+        self, id_hash: str, *, revoked_at: float, tenant_id: str = OWNER_TENANT_ID
+    ) -> bool:
         """Mark one session revoked. Revoking twice is idempotent."""
 
         with self.transaction():
             cursor = self._conn.execute(
                 "UPDATE sessions SET revoked_at = ? "
-                "WHERE id_hash = ? AND revoked_at IS NULL",
-                (revoked_at, id_hash),
+                "WHERE id_hash = ? AND tenant_id = ? AND revoked_at IS NULL",
+                (revoked_at, id_hash, tenant_id),
             )
             revoked = cursor.rowcount > 0
         if revoked:
@@ -1094,59 +1680,72 @@ class ChatStore:
                 "session_revoked",
                 actor="owner",
                 outcome="revoked",
+                tenant_id=tenant_id,
                 extra={"credential": "session", "id_short": id_hash[:8]},
             )
         return revoked
 
-    def session_revoke_all(self, *, revoked_at: float) -> int:
+    def session_revoke_all(
+        self, *, revoked_at: float, tenant_id: str = OWNER_TENANT_ID
+    ) -> int:
         with self.transaction():
             count = self._conn.execute(
-                "UPDATE sessions SET revoked_at = ? WHERE revoked_at IS NULL",
-                (revoked_at,),
+                "UPDATE sessions SET revoked_at = ? "
+                "WHERE tenant_id = ? AND revoked_at IS NULL",
+                (revoked_at, tenant_id),
             ).rowcount
         if count > 0:
             self._record_audit(
                 "sessions_revoked",
                 actor="owner",
                 outcome="revoked",
+                tenant_id=tenant_id,
                 extra={"credential": "session", "count": count},
             )
         return count
 
-    def session_list(self, *, now: float) -> list[dict[str, Any]]:
+    def session_list(
+        self, *, now: float, tenant_id: str = OWNER_TENANT_ID
+    ) -> list[dict[str, Any]]:
         """Live sessions, most recently seen first. No label is ever logged."""
 
         with self._lock:
             rows = self._conn.execute(
-                "SELECT * FROM sessions WHERE revoked_at IS NULL AND expires_at > ? "
+                "SELECT * FROM sessions WHERE tenant_id = ? "
+                "AND revoked_at IS NULL AND expires_at > ? "
                 "ORDER BY last_seen DESC, id_hash ASC",
-                (now,),
+                (tenant_id, now),
             ).fetchall()
         return [dict(row) for row in rows]
 
     def session_find_prefix(
-        self, prefix: str, *, now: float
+        self, prefix: str, *, now: float, tenant_id: str = OWNER_TENANT_ID
     ) -> dict[str, Any] | None:
         """Resolve a short id prefix only when exactly one live row matches."""
 
         with self._lock:
             rows = self._conn.execute(
-                "SELECT * FROM sessions WHERE revoked_at IS NULL AND expires_at > ? "
+                "SELECT * FROM sessions WHERE tenant_id = ? "
+                "AND revoked_at IS NULL AND expires_at > ? "
                 "AND substr(id_hash, 1, ?) = ? LIMIT 2",
-                (now, len(prefix), prefix),
+                (tenant_id, now, len(prefix), prefix),
             ).fetchall()
         return dict(rows[0]) if len(rows) == 1 else None
 
-    def session_count(self, *, now: float) -> int:
+    def session_count(
+        self, *, now: float, tenant_id: str = OWNER_TENANT_ID
+    ) -> int:
         with self._lock:
             row = self._conn.execute(
                 "SELECT COUNT(*) AS n FROM sessions "
-                "WHERE revoked_at IS NULL AND expires_at > ?",
-                (now,),
+                "WHERE tenant_id = ? AND revoked_at IS NULL AND expires_at > ?",
+                (tenant_id, now),
             ).fetchone()
         return int(row["n"])
 
-    def session_enforce_max(self, max_entries: int, *, now: float) -> int:
+    def session_enforce_max(
+        self, max_entries: int, *, now: float, tenant_id: str = OWNER_TENANT_ID
+    ) -> int:
         """Delete the oldest live sessions until at most ``max_entries`` remain."""
 
         removed = 0
@@ -1154,19 +1753,20 @@ class ChatStore:
             while True:
                 row = self._conn.execute(
                     "SELECT id_hash FROM sessions "
-                    "WHERE revoked_at IS NULL AND expires_at > ? "
+                    "WHERE tenant_id = ? AND revoked_at IS NULL AND expires_at > ? "
                     "ORDER BY last_seen ASC, id_hash ASC LIMIT 1",
-                    (now,),
+                    (tenant_id, now),
                 ).fetchone()
                 live = self._conn.execute(
                     "SELECT COUNT(*) AS n FROM sessions "
-                    "WHERE revoked_at IS NULL AND expires_at > ?",
-                    (now,),
+                    "WHERE tenant_id = ? AND revoked_at IS NULL AND expires_at > ?",
+                    (tenant_id, now),
                 ).fetchone()["n"]
                 if row is None or live <= max_entries:
                     return removed
                 self._conn.execute(
-                    "DELETE FROM sessions WHERE id_hash = ?", (row["id_hash"],)
+                    "DELETE FROM sessions WHERE id_hash = ? AND tenant_id = ?",
+                    (row["id_hash"], tenant_id),
                 )
                 removed += 1
 
@@ -1194,6 +1794,7 @@ class ChatStore:
         thread_id: str,
         snapshot: Mapping[str, Any],
         ttl_seconds: float,
+        tenant_id: str = OWNER_TENANT_ID,
     ) -> dict[str, Any]:
         """Insert one frozen snapshot. The raw token never reaches this layer.
 
@@ -1208,6 +1809,7 @@ class ChatStore:
         raises :class:`ThreadGoneError`, so an orphan share can never exist.
         """
 
+        tenant = validate_tenant_id(tenant_id)
         now = self._now()
         created_at = iso_now(now)
         expires_at = iso_now(now + timedelta(seconds=max(0.0, float(ttl_seconds))))
@@ -1217,29 +1819,33 @@ class ChatStore:
         payload = _dump(frozen)
         with self.transaction():
             cursor = self._conn.execute(
-                "INSERT INTO shares (token_hash, owner_id, thread_id, "
+                "INSERT INTO shares (token_hash, owner_id, tenant_id, thread_id, "
                 "snapshot_json, snapshot_bytes, created_at, expires_at, "
-                "revoked_at) SELECT ?, 'owner', ?, ?, ?, ?, ?, NULL "
+                "revoked_at) SELECT ?, ?, ?, ?, ?, ?, ?, ?, NULL "
                 "WHERE EXISTS (SELECT 1 FROM threads t WHERE t.id = ? "
-                "AND t.deleted_at IS NULL)",
+                "AND t.tenant_id = ? AND t.deleted_at IS NULL)",
                 (
                     token_hash,
+                    OWNER_TENANT_ID,
+                    tenant,
                     thread_id,
                     payload,
                     len(payload.encode("utf-8")),
                     created_at,
                     expires_at,
                     thread_id,
+                    tenant,
                 ),
             )
             if cursor.rowcount == 0:
                 raise ThreadGoneError(thread_id)
-        return self.share_get_any(token_hash)  # type: ignore[return-value]
+        return self.share_get_any(token_hash, tenant_id=tenant)  # type: ignore[return-value]
 
     def _share_record(self, row: sqlite3.Row) -> dict[str, Any]:
         return {
             "token_hash": row["token_hash"],
             "owner_id": row["owner_id"],
+            "tenant_id": row["tenant_id"],
             "thread_id": row["thread_id"],
             "snapshot": _load(row["snapshot_json"], {}),
             "snapshot_bytes": int(row["snapshot_bytes"]),
@@ -1249,76 +1855,93 @@ class ChatStore:
         }
 
     def share_get(
-        self, token_hash: str, *, now: str | None = None
+        self,
+        token_hash: str,
+        *,
+        now: str | None = None,
+        tenant_id: str = OWNER_TENANT_ID,
     ) -> dict[str, Any] | None:
         """Resolve a live link by its hash. Unknown, expired and revoked are ``None``.
 
         This is the whole read path: one keyed lookup, no join to ``threads``,
         and no mutation, so every failure is indistinguishable by construction.
+        The tenant is part of the key so one deployment cannot resolve another
+        tenant's link; a public route passes the tenant the token belongs to.
         """
 
         moment = now or self._now_iso()
         with self._lock:
             row = self._conn.execute(
-                "SELECT * FROM shares WHERE token_hash = ? "
+                "SELECT * FROM shares WHERE token_hash = ? AND tenant_id = ? "
                 "AND revoked_at IS NULL AND expires_at > ?",
-                (token_hash, moment),
+                (token_hash, tenant_id, moment),
             ).fetchone()
         return self._share_record(row) if row is not None else None
 
-    def share_get_any(self, token_hash: str) -> dict[str, Any] | None:
+    def share_get_any(
+        self, token_hash: str, *, tenant_id: str = OWNER_TENANT_ID
+    ) -> dict[str, Any] | None:
         """Return a row whatever its state, for the owner's own listing."""
 
         with self._lock:
             row = self._conn.execute(
-                "SELECT * FROM shares WHERE token_hash = ?", (token_hash,)
+                "SELECT * FROM shares WHERE token_hash = ? AND tenant_id = ?",
+                (token_hash, tenant_id),
             ).fetchone()
         return self._share_record(row) if row is not None else None
 
-    def share_list(self, thread_id: str) -> list[dict[str, Any]]:
+    def share_list(
+        self, thread_id: str, *, tenant_id: str = OWNER_TENANT_ID
+    ) -> list[dict[str, Any]]:
         """All rows for one thread, newest first. Includes revoked and expired."""
 
         with self._lock:
             rows = self._conn.execute(
-                "SELECT * FROM shares WHERE thread_id = ? "
+                "SELECT * FROM shares WHERE thread_id = ? AND tenant_id = ? "
                 "ORDER BY created_at DESC, token_hash ASC",
-                (thread_id,),
+                (thread_id, tenant_id),
             ).fetchall()
         return [self._share_record(row) for row in rows]
 
-    def share_revoke(self, token_hash: str, *, revoked_at: str | None = None) -> bool:
+    def share_revoke(
+        self, token_hash: str, *, revoked_at: str | None = None,
+        tenant_id: str = OWNER_TENANT_ID,
+    ) -> bool:
         """Set ``revoked_at`` once. The row is kept for the sweep, not deleted."""
 
         stamp = revoked_at or self._now_iso()
         with self.transaction():
             cursor = self._conn.execute(
                 "UPDATE shares SET revoked_at = ? "
-                "WHERE token_hash = ? AND revoked_at IS NULL",
-                (stamp, token_hash),
+                "WHERE token_hash = ? AND tenant_id = ? AND revoked_at IS NULL",
+                (stamp, token_hash, tenant_id),
             )
             return cursor.rowcount > 0
 
-    def share_revoke_thread(self, thread_id: str) -> list[str]:
+    def share_revoke_thread(
+        self, thread_id: str, *, tenant_id: str = OWNER_TENANT_ID
+    ) -> list[str]:
         """Revoke every live link for one thread in one transaction."""
 
         stamp = self._now_iso()
         with self.transaction():
             rows = self._conn.execute(
                 "SELECT token_hash FROM shares WHERE thread_id = ? "
-                "AND revoked_at IS NULL",
-                (thread_id,),
+                "AND tenant_id = ? AND revoked_at IS NULL",
+                (thread_id, tenant_id),
             ).fetchall()
             hashes = [str(row["token_hash"]) for row in rows]
             if hashes:
                 self._conn.execute(
                     "UPDATE shares SET revoked_at = ? WHERE thread_id = ? "
-                    "AND revoked_at IS NULL",
-                    (stamp, thread_id),
+                    "AND tenant_id = ? AND revoked_at IS NULL",
+                    (stamp, thread_id, tenant_id),
                 )
         return hashes
 
     def share_revoke_prefix(
-        self, thread_id: str, prefix: str, *, revoked_at: str | None = None
+        self, thread_id: str, prefix: str, *, revoked_at: str | None = None,
+        tenant_id: str = OWNER_TENANT_ID,
     ) -> dict[str, Any] | None:
         """Revoke one link by its public id, only when the shape is exact.
 
@@ -1333,17 +1956,18 @@ class ChatStore:
         stamp = revoked_at or self._now_iso()
         with self.transaction():
             rows = self._conn.execute(
-                "SELECT * FROM shares WHERE thread_id = ? "
+                "SELECT * FROM shares WHERE thread_id = ? AND tenant_id = ? "
                 "AND revoked_at IS NULL AND substr(token_hash, 1, ?) = ? "
                 "LIMIT 2",
-                (thread_id, SHARE_ID_LENGTH, prefix),
+                (thread_id, tenant_id, SHARE_ID_LENGTH, prefix),
             ).fetchall()
             if len(rows) != 1:
                 return None
             record = self._share_record(rows[0])
             self._conn.execute(
-                "UPDATE shares SET revoked_at = ? WHERE token_hash = ?",
-                (stamp, record["token_hash"]),
+                "UPDATE shares SET revoked_at = ? "
+                "WHERE token_hash = ? AND tenant_id = ?",
+                (stamp, record["token_hash"], tenant_id),
             )
             record["revoked_at"] = stamp
         return record
@@ -1434,6 +2058,7 @@ class ChatStore:
         *,
         on_artifacts: Callable[[Sequence[Mapping[str, Any]]], Any] | None = None,
         vacuum: bool = True,
+        tenant_id: str = OWNER_TENANT_ID,
     ) -> dict[str, Any]:
         """Hard-delete one thread and everything that belongs to it.
 
@@ -1472,65 +2097,83 @@ class ChatStore:
         }
         deleted_thread = False
         with self.transaction():
-            live = self._conn.execute(
-                "SELECT id FROM turns WHERE thread_id = ? AND state IN "
-                f"({', '.join('?' for _ in LIVE_TURN_STATES)}) "
-                "ORDER BY created_at, rowid",
-                (thread_id, *LIVE_TURN_STATES),
-            ).fetchall()
-            if live:
-                raise ThreadBusyError(thread_id, [row["id"] for row in live])
-            artifact_rows = [
-                self._artifact_record(row)
-                for row in self._conn.execute(
-                    "SELECT * FROM artifacts WHERE thread_id = ?", (thread_id,)
+            owned = self._conn.execute(
+                "SELECT id FROM threads WHERE id = ? AND tenant_id = ?",
+                (thread_id, tenant_id),
+            ).fetchone()
+            if owned is None:
+                # Nothing belongs to this caller. The report is empty rather
+                # than an error so a purge of a missing thread stays idempotent
+                # and cannot reveal whether another tenant owns the id.
+                pass
+            else:
+                live = self._conn.execute(
+                    "SELECT id FROM turns WHERE thread_id = ? AND state IN "
+                    f"({', '.join('?' for _ in LIVE_TURN_STATES)}) "
+                    "ORDER BY created_at, rowid",
+                    (thread_id, *LIVE_TURN_STATES),
                 ).fetchall()
-            ]
-            counts["blocks"] = self._conn.execute(
-                "DELETE FROM blocks WHERE message_id IN "
-                "(SELECT id FROM messages WHERE thread_id = ?)",
-                (thread_id,),
-            ).rowcount
-            counts["messages"] = self._conn.execute(
-                "DELETE FROM messages WHERE thread_id = ?", (thread_id,)
-            ).rowcount
-            counts["events"] = self._conn.execute(
-                "DELETE FROM events WHERE thread_id = ?", (thread_id,)
-            ).rowcount
-            counts["approvals"] = self._conn.execute(
-                "DELETE FROM approvals WHERE thread_id = ?", (thread_id,)
-            ).rowcount
-            counts["turns"] = self._conn.execute(
-                "DELETE FROM turns WHERE thread_id = ?", (thread_id,)
-            ).rowcount
-            counts["artifacts"] = self._conn.execute(
-                "DELETE FROM artifacts WHERE thread_id = ?", (thread_id,)
-            ).rowcount
-            # A share never survives its thread: the snapshot, every link and
-            # the aggregate view counters go in the same transaction (§8).
-            share_hashes = [
-                str(row["token_hash"])
-                for row in self._conn.execute(
-                    "SELECT token_hash FROM shares WHERE thread_id = ?",
+                if live:
+                    raise ThreadBusyError(thread_id, [row["id"] for row in live])
+                artifact_rows = [
+                    self._artifact_record(row)
+                    for row in self._conn.execute(
+                        "SELECT * FROM artifacts WHERE thread_id = ? "
+                        "AND tenant_id = ?",
+                        (thread_id, tenant_id),
+                    ).fetchall()
+                ]
+                counts["blocks"] = self._conn.execute(
+                    "DELETE FROM blocks WHERE message_id IN "
+                    "(SELECT id FROM messages WHERE thread_id = ?)",
                     (thread_id,),
-                ).fetchall()
-            ]
-            counts["shares"] = self._conn.execute(
-                "DELETE FROM shares WHERE thread_id = ?", (thread_id,)
-            ).rowcount
-            for start in range(0, len(share_hashes), 500):
-                chunk = share_hashes[start : start + 500]
-                placeholders = ", ".join("?" for _ in chunk)
-                counts["share_views"] += self._conn.execute(
-                    f"DELETE FROM share_views WHERE token_hash IN ({placeholders})",
-                    chunk,
                 ).rowcount
-            deleted_thread = (
-                self._conn.execute(
-                    "DELETE FROM threads WHERE id = ?", (thread_id,)
+                counts["messages"] = self._conn.execute(
+                    "DELETE FROM messages WHERE thread_id = ?", (thread_id,)
                 ).rowcount
-                > 0
-            )
+                counts["events"] = self._conn.execute(
+                    "DELETE FROM events WHERE thread_id = ?", (thread_id,)
+                ).rowcount
+                counts["approvals"] = self._conn.execute(
+                    "DELETE FROM approvals WHERE thread_id = ?", (thread_id,)
+                ).rowcount
+                counts["turns"] = self._conn.execute(
+                    "DELETE FROM turns WHERE thread_id = ?", (thread_id,)
+                ).rowcount
+                counts["artifacts"] = self._conn.execute(
+                    "DELETE FROM artifacts WHERE thread_id = ? AND tenant_id = ?",
+                    (thread_id, tenant_id),
+                ).rowcount
+                # A share never survives its thread: the snapshot, every link
+                # and the aggregate view counters go in the same transaction
+                # (§8).
+                share_hashes = [
+                    str(row["token_hash"])
+                    for row in self._conn.execute(
+                        "SELECT token_hash FROM shares WHERE thread_id = ? "
+                        "AND tenant_id = ?",
+                        (thread_id, tenant_id),
+                    ).fetchall()
+                ]
+                counts["shares"] = self._conn.execute(
+                    "DELETE FROM shares WHERE thread_id = ? AND tenant_id = ?",
+                    (thread_id, tenant_id),
+                ).rowcount
+                for start in range(0, len(share_hashes), 500):
+                    chunk = share_hashes[start : start + 500]
+                    placeholders = ", ".join("?" for _ in chunk)
+                    counts["share_views"] += self._conn.execute(
+                        f"DELETE FROM share_views WHERE token_hash IN "
+                        f"({placeholders})",
+                        chunk,
+                    ).rowcount
+                deleted_thread = (
+                    self._conn.execute(
+                        "DELETE FROM threads WHERE id = ? AND tenant_id = ?",
+                        (thread_id, tenant_id),
+                    ).rowcount
+                    > 0
+                )
 
         report: dict[str, Any] = {
             "thread_id": thread_id,
@@ -1702,9 +2345,10 @@ class ChatStore:
 
     # -- recovery ----------------------------------------------------------
 
-    def snapshot(self, thread_id: str, *, limit: int = 50, before: str | None = None
+    def snapshot(self, thread_id: str, *, limit: int = 50, before: str | None = None,
+                 tenant_id: str = OWNER_TENANT_ID
                  ) -> tuple[dict[str, Any] | None, list[dict[str, Any]], int, bool]:
-        thread = self.get_thread(thread_id)
+        thread = self.get_thread(thread_id, tenant_id=tenant_id)
         if thread is None:
             return None, [], 0, False
         messages, has_more = self.list_messages(thread_id, limit=limit, before=before)

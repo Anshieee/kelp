@@ -16,6 +16,7 @@ import base64
 import hashlib
 import hmac
 import inspect
+import json
 import math
 import os
 import re
@@ -34,6 +35,7 @@ from urllib.parse import parse_qs, unquote, urlsplit
 from openshell.egress_ledger import recipient_for_host
 
 from .artifacts import ArtifactError, MAX_UPLOAD_BYTES
+from . import admin as admin_routes
 from . import phone as phone_routes
 from .credentials import CredentialBroker
 from .errors import ChatError
@@ -62,24 +64,52 @@ from .routers._util import (
     _DEFAULT_DEVICE_LABEL,
     _DEVICE_ID_SHORT_RE,
     _RATE_LIMITED_FALLBACK_RETRY,
+    _busy_response,
+    _int_param,
     _json_response,
     _method_not_allowed_response,
     _rate_limited_response,
     _route_label,
     _secret_hash,
+    _segment,
     scrub_device_label,
 )
 from .routers.auth import _AuthLocked
-from .routers.body import _BodyRejected, _body_rejection_response
+from .routers.body import _BodyRejected, _body_rejection_response, _json_body
 from .routers.shared import (
     _SHARE_STREAM_TICK,
     _apply_share_headers,
     _is_share_path,
     _is_share_request,
 )
+from .runs import RUN_STATUSES, TaskRun, TaskRunner
 from .service import ChatService
 from .store import ChatStore
 from .stream import IDLE_SECONDS, sse_frames
+from .tenancy import (
+    OWNER_TENANT_ID,
+    Principal,
+    StaticTenantResolver,
+    TenantContext,
+    TenantMismatchError,
+    bind_tenant,
+    current_tenant,
+    validate_tenant_id,
+)
+
+
+def validate_session_tenant(requested: str | None, configured: str) -> str:
+    """A session is minted only inside this store's tenant.
+
+    The cookie has no tenant field; the row's tenant is the one the store was
+    configured with. Refusing a mismatch keeps a future second tenant from
+    writing a session row this process would then be unable to resolve.
+    """
+
+    configured = validate_tenant_id(configured)
+    if requested is None or requested == configured:
+        return configured
+    raise TenantMismatchError()
 
 __all__ = [
     "AuthFailureTracker",
@@ -955,6 +985,10 @@ class _Session:
     created_at: float = 0.0
     last_seen: float = 0.0
     expires_at: float = 0.0
+    #: The tenant that minted this session. The row is looked up by its hashed
+    #: id before a request tenant is known, so the resolved session carries the
+    #: tenant forward. Today every row is ``owner``.
+    tenant_id: str = OWNER_TENANT_ID
 
 
 class SessionStore:
@@ -980,6 +1014,7 @@ class SessionStore:
         clock: Callable[[], float] | None = None,
         store: ChatStore | None = None,
         secret: str | bytes | None = None,
+        tenant_id: str = OWNER_TENANT_ID,
     ):
         self.ttl = max(60.0, float(ttl))
         self.max_entries = max(1, int(max_entries))
@@ -990,6 +1025,10 @@ class SessionStore:
         self._lock = threading.Lock()
         self._store = store
         self._secret = _session_key(secret)
+        #: The tenant this store mints under. A session row records the same id
+        #: so a cookie keeps working even though it is looked up before any
+        #: request tenant is resolved.
+        self.tenant_id = tenant_id
 
     @classmethod
     def from_env(
@@ -998,6 +1037,7 @@ class SessionStore:
         *,
         store: ChatStore | None = None,
         fallback_secret: str | None = None,
+        tenant_id: str = OWNER_TENANT_ID,
     ) -> "SessionStore":
         env = os.environ if source is None else source
         secret = (env.get(SESSION_SECRET_ENV) or "").strip() or fallback_secret
@@ -1006,6 +1046,7 @@ class SessionStore:
             max_entries=_env_int(env, SESSION_MAX_ENV, _DEFAULT_SESSION_MAX, minimum=1),
             store=store,
             secret=secret,
+            tenant_id=tenant_id,
         )
 
     def now(self) -> float:
@@ -1024,11 +1065,15 @@ class SessionStore:
             created_at=float(row["created_at"]),
             last_seen=float(row["last_seen"]),
             expires_at=float(row["expires_at"]),
+            tenant_id=str(row.get("tenant_id") or self.tenant_id),
         )
 
-    def create(self, *, label: str | None = None) -> tuple[str, str, _Session]:
+    def create(
+        self, *, label: str | None = None, tenant_id: str | None = None
+    ) -> tuple[str, str, _Session]:
         """Mint a session and return ``(session_id, csrf_token, record)``."""
 
+        tenant = validate_session_tenant(tenant_id, self.tenant_id)
         now = self._clock()
         session_id = secrets.token_urlsafe(32)
         clean_label = scrub_device_label(label)
@@ -1038,6 +1083,7 @@ class SessionStore:
             created_at=now,
             last_seen=now,
             expires_at=now + self.ttl,
+            tenant_id=tenant,
         )
         if self._store is not None:
             self._store.session_prune(
@@ -1049,8 +1095,11 @@ class SessionStore:
                 record.created_at,
                 record.last_seen,
                 record.expires_at,
+                tenant_id=tenant,
             )
-            self._store.session_enforce_max(self.max_entries, now=now)
+            self._store.session_enforce_max(
+                self.max_entries, now=now, tenant_id=tenant
+            )
         else:
             with self._lock:
                 self._prune_locked(now)
@@ -1068,7 +1117,9 @@ class SessionStore:
         if self._store is not None:
             # Read-through keeps a revoke or expiry visible to the stream's
             # fresh auth check even when another device performed it.
-            row = self._store.session_get(key, now=moment)
+            row = self._store.session_get(
+                key, now=moment, tenant_id=self.tenant_id
+            )
             return self._record(row) if row is not None else None
         with self._lock:
             record = self._sessions.get(key)
@@ -1085,7 +1136,10 @@ class SessionStore:
         moment = self._clock() if now is None else now
         if self._store is not None:
             ok = self._store.session_touch(
-                record.id_hash, last_seen=moment, expires_at=moment + self.ttl
+                record.id_hash,
+                last_seen=moment,
+                expires_at=moment + self.ttl,
+                tenant_id=record.tenant_id,
             )
             if not ok:
                 return None
@@ -1095,6 +1149,7 @@ class SessionStore:
                 created_at=record.created_at,
                 last_seen=moment,
                 expires_at=moment + self.ttl,
+                tenant_id=record.tenant_id,
             )
         with self._lock:
             current = self._sessions.get(record.id_hash)
@@ -1122,13 +1177,17 @@ class SessionStore:
             return False
         key = _secret_hash(session_id)
         if self._store is not None:
-            return self._store.session_revoke(key, revoked_at=self._clock())
+            return self._store.session_revoke(
+                key, revoked_at=self._clock(), tenant_id=self.tenant_id
+            )
         with self._lock:
             return self._sessions.pop(key, None) is not None
 
     def revoke_all(self) -> int:
         if self._store is not None:
-            return self._store.session_revoke_all(revoked_at=self._clock())
+            return self._store.session_revoke_all(
+                revoked_at=self._clock(), tenant_id=self.tenant_id
+            )
         with self._lock:
             count = len(self._sessions)
             self._sessions.clear()
@@ -1145,7 +1204,7 @@ class SessionStore:
 
         moment = self._clock() if now is None else now
         if self._store is not None:
-            rows = self._store.session_list(now=moment)
+            rows = self._store.session_list(now=moment, tenant_id=self.tenant_id)
         else:
             with self._lock:
                 rows = [
@@ -1183,11 +1242,15 @@ class SessionStore:
             return None
         moment = self._clock() if now is None else now
         if self._store is not None:
-            row = self._store.session_find_prefix(id_short, now=moment)
+            row = self._store.session_find_prefix(
+                id_short, now=moment, tenant_id=self.tenant_id
+            )
             if row is None:
                 return None
             record = self._record(row)
-            if not self._store.session_revoke(record.id_hash, revoked_at=moment):
+            if not self._store.session_revoke(
+                record.id_hash, revoked_at=moment, tenant_id=record.tenant_id
+            ):
                 return None
             return record
         with self._lock:
@@ -1226,7 +1289,9 @@ class SessionStore:
 
     def __len__(self) -> int:
         if self._store is not None:
-            return self._store.session_count(now=self._clock())
+            return self._store.session_count(
+                now=self._clock(), tenant_id=self.tenant_id
+            )
         self.prune()
         return len(self._sessions)
 
@@ -1355,6 +1420,179 @@ class AuthFailureTracker:
         with self._lock:
             return len(self._records)
 
+# -- task runs (P3-2) ------------------------------------------------------
+#
+# ``POST /api/runs`` is the transport-neutral submission boundary. Auth and
+# tenant already ran in ``_dispatch_inner``; this module then runs the
+# entitlement gate, and ``ChatService.send`` owns the spend gate and the
+# provider call, so the contract's auth -> tenant -> entitlement -> spend ->
+# provider order holds. Reads are tenant-scoped and project the admin row only,
+# so a prompt or a provider payload cannot appear in a response body.
+
+#: One page at a time, matching the interactive thread listing's ceiling.
+_RUN_PAGE_MAX = 200
+#: The store's ``list_runs`` returns at most 500 newest-first rows per query;
+#: ``offset`` pages inside that window.
+_RUN_PAGE_WINDOW = 500
+#: Body fields a submission may carry; every one is a string when present.
+_RUN_BODY_FIELDS = (
+    "text",
+    "prompt",
+    "thread_id",
+    "idempotency_key",
+    "surface",
+    "task_type",
+)
+
+
+def _entitlement_gate(
+    api: "ChatAPI", context: TenantContext, task_type: str
+) -> None:
+    """The entitlement gate (contract §5 step 3).
+
+    P3-2 had a role-only placeholder; P5 asks the service's plan store for the
+    real :class:`~payments.entitlements.EntitlementDecision`. The position is
+    unchanged: after auth and tenant, before spend and any provider call. A
+    denial raises the frozen code (``entitlement_denied`` or
+    ``entitlement_exhausted``) with the same :class:`ChatError` shape every
+    other gate uses.
+    """
+
+    api.service.authorize_entitlement(context, task_type=task_type)
+
+
+def _runs_route(
+    api: "ChatAPI", request: "Request", method: str, rest: list[str]
+) -> "Response":
+    if not rest:
+        if method == "POST":
+            return _start_run(api, request)
+        if method == "GET":
+            return _list_runs(api, request)
+        raise ChatError("not_found", status=404, message="Unknown endpoint.")
+    if len(rest) == 1 and method == "GET":
+        return _get_run(api, _segment(rest[0]))
+    raise ChatError("not_found", status=404, message="Unknown endpoint.")
+
+
+def _start_run(api: "ChatAPI", request: "Request") -> "Response":
+    """Create one run (202) or return the run an idempotent replay owns."""
+
+    context = current_tenant()
+    body = _json_body(api, request, optional=True)
+    for name in _RUN_BODY_FIELDS:
+        value = body.get(name)
+        if value is not None and not isinstance(value, str):
+            raise ChatError(
+                "invalid_request",
+                status=400,
+                message=f"{name} must be a string.",
+                field=f"/{name}",
+                user_fixable=True,
+            )
+
+    # Gate order: auth and tenant are done; entitlement runs before any write
+    # (which is when a thread would be minted), spend runs inside the send.
+    _entitlement_gate(api, context, body.get("task_type") or "chat")
+
+    if not api._turn_slots.acquire():
+        return _busy_response(
+            class_name="turns",
+            reason="turn_capacity",
+            limit=api._turn_slots.limit,
+            metrics=api.metrics,
+        )
+    try:
+        run = api.runner.run(
+            api.task_runner.start(
+                text=body.get("text"),
+                prompt=body.get("prompt"),
+                thread_id=body.get("thread_id"),
+                idempotency_key=body.get("idempotency_key"),
+                surface=body.get("surface"),
+                task_type=body.get("task_type"),
+                tenant=context,
+            )
+        )
+    except BaseException:
+        # Nothing started, so the slot goes back now.
+        api._turn_slots.release()
+        raise
+    if run.terminal or run.turn_id is None:
+        # A replayed run owns no new work; a run without a turn never streams.
+        api._turn_slots.release()
+    else:
+        turn_routes._release_turn_slot_when_done(api, run.turn_id)
+    return _json_response(202, {"ok": True, "run": _run_envelope(run)})
+
+
+def _get_run(api: "ChatAPI", run_id: str) -> "Response":
+    """One run in the caller's tenant; a foreign id is the same 404 as missing."""
+
+    context = current_tenant()
+    run = api.task_runner.get(run_id, tenant_id=context.tenant_id)
+    if run is None:
+        raise ChatError("unknown_run", status=404, message="Unknown run.")
+    return _json_response(200, {"ok": True, "run": run.to_admin_row()})
+
+
+def _list_runs(api: "ChatAPI", request: "Request") -> "Response":
+    """One page of the caller's tenant runs, newest first."""
+
+    context = current_tenant()
+    limit = _int_param(request, "limit", 50, 1, _RUN_PAGE_MAX)
+    offset = _int_param(request, "offset", 0, 0, _RUN_PAGE_WINDOW)
+    # ``thread`` is accepted as the short spelling the envelope uses.
+    thread_id = request.query_one("thread_id") or request.query_one("thread")
+    status = request.query_one("status") or None
+    if status is not None and status not in RUN_STATUSES:
+        raise ChatError(
+            "invalid_request",
+            status=400,
+            message=f"status must be one of {', '.join(RUN_STATUSES)}.",
+            user_fixable=True,
+        )
+    # One extra row tells the caller whether another page exists without the
+    # store exposing a count or a cursor.
+    page = api.task_runner.list(
+        tenant_id=context.tenant_id,
+        thread_id=thread_id or None,
+        status=status,
+        limit=limit + 1,
+        offset=offset,
+    )
+    has_more = len(page) > limit
+    runs = page[:limit]
+    return _json_response(
+        200,
+        {
+            "ok": True,
+            "runs": [run.to_admin_row() for run in runs],
+            "next_offset": (offset + len(runs)) if has_more else None,
+        },
+    )
+
+
+def _run_envelope(run: TaskRun) -> dict[str, Any]:
+    """The 202 envelope: identifiers and links, never prompt or provider text."""
+
+    thread_id = run.thread_id
+    links: dict[str, str | None] = {"self": f"/api/runs/{run.run_id}"}
+    if thread_id:
+        links["thread"] = f"/api/threads/{thread_id}"
+        links["stream"] = f"/api/threads/{thread_id}/stream"
+    else:
+        links["thread"] = None
+        links["stream"] = None
+    return {
+        "run_id": run.run_id,
+        "status": run.status.value,
+        "tenant": run.tenant_id,
+        "thread": thread_id,
+        "links": links,
+    }
+
+
 class ChatAPI:
     def __init__(
         self,
@@ -1373,6 +1611,7 @@ class ChatAPI:
         max_share_streams: int | None = None,
         sessions: SessionStore | None = None,
         auth_failures: AuthFailureTracker | None = None,
+        tenant_resolver: StaticTenantResolver | None = None,
         cookie_secure: bool | None = None,
         share_ttl: float | None = None,
         share_max_ttl: float | None = None,
@@ -1381,8 +1620,13 @@ class ChatAPI:
         wallet_api: Any | None = None,
         checkout_api: Any | None = None,
         phone_root: Path | None = None,
+        task_runner: TaskRunner | None = None,
     ):
         self.service = service
+        # P3-2: the submission boundary behind ``/api/runs``. It shares the
+        # service's recorder, so a terminal hook installed on the service also
+        # sees runs started from this surface.
+        self.task_runner = task_runner or TaskRunner(service)
         self.credentials = credentials
         self.wallet_api = wallet_api
         self.checkout_api = checkout_api
@@ -1391,6 +1635,11 @@ class ChatAPI:
         self.phone_root = phone_root
         self.auth_token = auth_token
         self.csrf_token = csrf_token
+        # One resolver for the process: the root bearer token maps to the owner
+        # tenant, and with auth disabled every caller is that owner. A session
+        # cookie is resolved from the session row instead (it was minted by
+        # this deployment), so an existing cookie keeps working unchanged.
+        self.tenant_resolver = tenant_resolver or StaticTenantResolver(auth_token)
         self.stream_idle = stream_idle
         self.max_upload = max_upload
         self.health = health or HealthProbe.from_service(service)
@@ -1476,6 +1725,59 @@ class ChatAPI:
             self.credentials.close()
         if self._owns_runner:
             self.runner.close()
+
+    # -- tenant resolution -------------------------------------------------
+
+    def _tenant_context(self, request: "Request") -> Principal:
+        """The tenant this authenticated request acts for.
+
+        This is the only place the control layer turns a credential into a
+        tenant. It never reads a body field: a caller-supplied tenant is checked
+        against this result and can only fail, never widen scope.
+        """
+
+        cached = getattr(request, "_kelp_tenant", None)
+        if isinstance(cached, TenantContext):
+            return cached
+        auth = auth_routes._authenticate(self, request)
+        if not auth.ok:
+            # Dispatch only asks for a tenant after ``_authorize`` succeeded;
+            # reaching here meant the credential changed mid-request.
+            raise TenantMismatchError()
+        if auth.session is not None:
+            context = TenantContext(tenant_id=auth.session.tenant_id)
+        else:
+            # ``_authenticate`` already compared the bearer (or the deployment
+            # runs with auth disabled), so this maps the proven credential to
+            # its tenant without comparing a second, possibly stale copy.
+            context = self.tenant_resolver.context_for()
+        request._kelp_tenant = context  # type: ignore[attr-defined]
+        return context
+
+    @staticmethod
+    def _reject_foreign_body_tenant(
+        request: "Request", context: Principal
+    ) -> None:
+        """A body may name a tenant only if it is the one the credential bound.
+
+        The field is not consumed by any route; it exists so a future caller
+        cannot smuggle a tenant past the gate. Malformed JSON is left to the
+        route, which already owns its error shape.
+        """
+
+        if request.method.upper() not in _SUPPORTED_METHODS or not request.body:
+            return
+        try:
+            payload = json.loads(request.body.decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError):
+            return
+        if not isinstance(payload, Mapping):
+            return
+        named = payload.get("tenant_id", payload.get("tenant"))
+        if named is None:
+            return
+        if named != context.tenant_id:
+            raise TenantMismatchError()
 
     # -- dispatch ----------------------------------------------------------
 
@@ -1565,7 +1867,13 @@ class ChatAPI:
             ):
                 return self.checkout_api.handle(request)
             if len(segments) >= 2 and segments[0] == "api" and segments[1] == "shared":
-                return share_routes._shared(self, request, segments[2:])
+                # P2-2 share decision: the token carries its tenant. The store
+                # lookup in the share route is scoped by the deployment's tenant
+                # (owner today), so a link minted by another tenant is the same
+                # 404 as an unknown one. The binding below only labels the
+                # content-free view audit row with the acting principal.
+                with bind_tenant(Principal(actor_id="share")):
+                    return share_routes._shared(self, request, segments[2:])
             # The phone app's static shell: public, read-only, traversal-safe
             # (chat/phone.py). Its /api calls keep the normal auth and CSRF.
             if segments and segments[0] == phone_routes.PHONE_PATH_PREFIX:
@@ -1576,19 +1884,44 @@ class ChatAPI:
             # Liveness is the one unauthenticated route: a supervisor must be
             # able to tell "process alive" from "owner token missing".
             if not self._is_public(request, segments):
-                limited = auth_routes._limit(self, request, segments)
+                limited = auth_routes._limit(
+                    self, request, admin_routes.limit_segments(segments)
+                )
                 if limited is not None:
                     return limited
                 auth_routes._authorize(self, request)
             if len(segments) < 1 or segments[0] != "api":
                 raise ChatError("not_found", status=404, message="Unknown endpoint.")
-            return self._route(request, segments[1:])
+            if self._is_public(request, segments):
+                # Liveness carries no principal and no tenant-scoped work.
+                return self._route(request, segments[1:])
+            # Auth has run, so the credential can be mapped to exactly one
+            # tenant. Bind it for the route (and for any task the route starts)
+            # and reject a body that names a different one before any work.
+            tenant = self._tenant_context(request)
+            self._reject_foreign_body_tenant(request, tenant)
+            with bind_tenant(tenant):
+                return self._route(request, segments[1:])
         except _AuthLocked as exc:
             return _rate_limited_response(
                 exc.retry_after,
                 class_name="auth",
                 reason="locked",
                 metrics=self.metrics,
+            )
+        except TenantMismatchError as exc:
+            # The contract's typed tenant failure: 403, no tenant id echoed.
+            return _json_response(
+                exc.status,
+                {
+                    "ok": False,
+                    "error": {
+                        "code": exc.code,
+                        "message": str(exc),
+                        "retryable": False,
+                        "user_fixable": False,
+                    },
+                },
             )
         except ChatError as exc:
             return _json_response(exc.status, exc.to_body())
@@ -1644,6 +1977,10 @@ class ChatAPI:
             return thread_routes._threads(
                 self, request, method, segments[1:], frames_fn=sse_frames
             )
+        if head == "runs":
+            return _runs_route(self, request, method, segments[1:])
+        if head == "admin":
+            return admin_routes.admin_route(self, request, method, segments[1:])
         if head == "turns":
             return turn_routes._turns(self, request, method, segments[1:])
         if head == "approvals":

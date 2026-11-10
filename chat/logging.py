@@ -117,8 +117,8 @@ _scrubber = SecretScrubber()
 _stream: Any | None = None
 _write_lock = threading.Lock()
 #: Logging stays silent until the process entrypoint configures it. Library
-#: users that embed ``ChatAPI`` (the demo harness) own their stdout and must
-#: not have request lines interleaved with their own protocol.
+#: users that embed ``ChatAPI`` own their stdout and must not have request
+#: lines interleaved with their own protocol.
 _enabled = False
 
 

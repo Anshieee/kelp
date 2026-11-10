@@ -32,6 +32,8 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Mapping, Protocol
 
+from .config import DEFAULT_TENANT_ID
+
 __all__ = [
     "DEFAULT_UNKNOWN_PRICE_USD",
     "InMemoryUsageStore",
@@ -89,6 +91,10 @@ class UsageRecord:
     #: Correlated HTTP request that produced the turn (KEL-14). ``None`` for
     #: turns started outside an HTTP request (CLI, tests, recovery).
     request_id: str | None = None
+    #: Tenant that owns the turn (P2-1). Always present so a spend row can
+    #: never be mistaken for another tenant's; the global caps still total
+    #: every row, because only ``owner`` is admitted today.
+    tenant_id: str = DEFAULT_TENANT_ID
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)

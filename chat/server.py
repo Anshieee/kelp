@@ -32,8 +32,15 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
-from kernel import JsonlUsageStore, KernelConfig, ProviderClient
-from kernel.config import API_KEY_ENV, BASE_URL_ENV
+from kernel import JsonlUsageStore, KernelConfig
+from kernel.config import API_KEY_ENV, BASE_URL_ENV, TENANT_SECRETS_FILE_ENV
+from kernel.providers import OpenAICompatibleClient, build_provider
+from kernel.secrets import (
+    EnvSecretResolver,
+    MissingSecret,
+    SecretFileError,
+    TenantSecretResolver,
+)
 from kernel.usage import SpendCaps, SpendGuard
 from openshell.approvals import ApprovalStore
 from openshell.audit import AuditLog, SecretScrubber
@@ -69,6 +76,7 @@ from .scheduler import (
 from .credentials import CredentialBroker, validate_env as validate_credential_env
 from .service import ChatService
 from .store import ChatStore
+from .tenancy import OWNER_TENANT_ID, StaticTenantResolver
 from .wallet import WalletAPI
 from payments.razorpay_checkout import RazorpayCheckout
 from payments.razorpay_gateway import RazorpayWallet
@@ -109,6 +117,11 @@ _AUDIT_FILENAME = "audit.jsonl"
 _USAGE_FILENAME = "usage.jsonl"
 # Generous enough for approval unwinding, short enough to never hang a stop.
 _TURN_SHUTDOWN_SECONDS = 10.0
+
+#: The one module-level patchable provider symbol the service contract names.
+#: Replacing this class changes the default runtime provider; ``build_app``'s
+#: ``provider=`` keyword remains the per-call injection point.
+ProviderClient = OpenAICompatibleClient
 
 
 class ServerError(Exception):
@@ -238,15 +251,18 @@ class ServerConfig:
         except ValueError as exc:
             raise ConfigError("invalid_credential_config", str(exc)) from None
 
-        api_key = _text(source, API_KEY_ENV)
-        if not api_key:
+        try:
+            kernel = KernelConfig.from_env(source)
+        except ValueError as exc:
+            raise ConfigError("invalid_config", str(exc)) from None
+
+        if not kernel.api_key and not kernel.tenant_secrets_file:
             raise ConfigError(
                 "missing_api_key",
                 f"{API_KEY_ENV} is required; the server will not start without it.",
             )
 
-        base_url = _text(source, BASE_URL_ENV)
-        if not base_url:
+        if not kernel.base_url:
             raise ConfigError(
                 "missing_base_url",
                 f"{BASE_URL_ENV} is required; the server will not start without "
@@ -267,7 +283,6 @@ class ServerConfig:
             raise ConfigError("invalid_config", f"{HOST_ENV} must be a hostname or IP.")
 
         port = _parse_port(_text(source, PORT_ENV))
-        kernel = KernelConfig.from_env(source)
         try:
             spend_caps = SpendCaps.from_env(source)
         except ValueError as exc:
@@ -327,6 +342,19 @@ class ServerConfig:
                     "invalid_config",
                     f"{directory} exists but is not a directory.",
                 )
+        if self.kernel.tenant_secrets_file:
+            # Validate the mode and JSON shape without printing anything from
+            # the file. ``--check`` must not report a green boot for a secrets
+            # file the server would refuse a second later.
+            resolver = _secret_resolver(self, os.environ)
+            try:
+                resolver.resolve(API_KEY_ENV)
+            except MissingSecret:
+                raise ConfigError(
+                    "missing_api_key",
+                    f"{API_KEY_ENV} is not present for tenant "
+                    f"{self.kernel.tenant_id!r} in {TENANT_SECRETS_FILE_ENV}.",
+                ) from None
 
     def _state_directories(self) -> tuple[Path, ...]:
         return (
@@ -360,10 +388,35 @@ class ServerConfig:
             f"host={self.host!r}, port={self.port}, "
             "auth_token_configured=True, "
             f"csrf_token_configured={self.csrf_token is not None}, "
+            "tenant_secrets_file_configured="
+            f"{self.kernel.tenant_secrets_file is not None}, "
             f"api_key_configured={self.kernel.api_key_configured})"
         )
 
     __str__ = __repr__
+
+
+def _secret_resolver(
+    config: ServerConfig, source: Mapping[str, str]
+) -> EnvSecretResolver | TenantSecretResolver:
+    """Build the boot resolver: per-tenant file when configured, else the env.
+
+    ``KELP_TENANT_SECRETS_FILE`` is optional. When it is unset the explicit
+    environment mapping is authoritative, so single-tenant behaviour is
+    unchanged. A bad file (wrong mode, malformed JSON, missing path) becomes a
+    one-line configuration error that names the path and never echoes content.
+    """
+
+    path_text = config.kernel.tenant_secrets_file
+    if not path_text:
+        return EnvSecretResolver(source)
+    try:
+        return TenantSecretResolver(
+            Path(path_text).expanduser().resolve(),
+            tenant_id=config.kernel.tenant_id,
+        )
+    except SecretFileError as exc:
+        raise ConfigError("invalid_secret_file", str(exc)) from None
 
 
 class DatabaseLock:
@@ -496,6 +549,27 @@ class Application:
         self.close()
 
 
+class _TenantAudit:
+    """Audit facade for work that runs outside a request.
+
+    Boot recovery and the scheduler have no credential, but their rows must
+    still name a tenant. This adapter supplies the tenant resolved at boot
+    (the owner today) unless the caller already supplied one. Everything else
+    delegates to the real log, so rotation, scrubbing, and reads are unchanged.
+    """
+
+    def __init__(self, audit: AuditLog, tenant_id: str = OWNER_TENANT_ID):
+        self._audit = audit
+        self._tenant_id = tenant_id
+
+    def record(self, event: str, **fields: Any) -> dict[str, Any]:
+        fields.setdefault("tenant_id", self._tenant_id)
+        return self._audit.record(event, **fields)
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._audit, name)
+
+
 def _tool_specs(registry: SkillRegistry) -> tuple[dict[str, Any], ...]:
     """Model-facing tool list derived from manifests, in stable order."""
 
@@ -581,8 +655,16 @@ def build_app(
     runtime_provider = provider
     try:
         registry = SkillRegistry.load(config.skill_root)
+        # P4-1: one resolver for the process. A tenant file resolves this
+        # tenant's provider key; otherwise the explicit boot mapping does,
+        # preserving the single-tenant path. Values never leave this scope
+        # except as the provider client's private key field and the scrubber
+        # set below.
+        secret_resolver = _secret_resolver(config, source)
         secrets = _service_secrets(registry, config, source)
-        secret_values = tuple(dict.fromkeys([*secrets.values(), *[
+        resolver_values = getattr(secret_resolver, "secret_values", None)
+        tenant_values = resolver_values() if callable(resolver_values) else ()
+        secret_values = tuple(dict.fromkeys([*secrets.values(), *tenant_values, *[
             source[name] for name in ("KELP_VAULT_KEY", "KELP_BROWSER_WORKER_TOKEN")
             if source.get(name)
         ]]))
@@ -594,6 +676,10 @@ def build_app(
         )
         metrics = Metrics(scrubber=SecretScrubber(secret_values))
         audit = AuditLog(config.audit_path, secret_values=secret_values)
+        # Work outside a request (boot recovery, the scheduler) has no
+        # credential to resolve; this facade names the owner tenant explicitly
+        # instead of relying on the log's default.
+        boot_audit = _TenantAudit(audit, OWNER_TENANT_ID)
         # KEL-29: the store shares the process audit trail, so session mint
         # and revoke land in the same scrubbed JSONL as every other decision.
         store = ChatStore(config.db_path, audit=audit)
@@ -602,7 +688,25 @@ def build_app(
         # client and every skill's egress client.
         egress = EgressLedger(audit)
         if runtime_provider is None:
-            runtime_provider = ProviderClient(config.kernel)
+            # The service config is authoritative: pass its key, environ,
+            # resolver, and tenant explicitly so build_provider never has to
+            # guess from the process environment. When a tenant secrets file is
+            # configured its resolver is the key source; otherwise the boot
+            # environment's key is passed directly, unchanged from P1-2.
+            # ``factory`` keeps the module-level ``ProviderClient`` seam a
+            # one-argument callable.
+            runtime_provider = build_provider(
+                config.kernel,
+                factory=ProviderClient,
+                api_key=(
+                    None
+                    if config.kernel.tenant_secrets_file
+                    else config.kernel.api_key
+                ),
+                resolver=secret_resolver,
+                environ=source,
+                tenant_id=config.kernel.tenant_id,
+            )
             # Attach after construction on purpose: ``ProviderClient(config)``
             # stays a one-argument call, which the serve harness relies on.
             try:
@@ -640,7 +744,7 @@ def build_app(
         # from the records on disk, so a restart shows the real total.
         service.refresh_spend_metrics()
         # Exactly one recovery pass, before the API can accept a request.
-        recovery = settle_interrupted(service, store, audit)
+        recovery = settle_interrupted(service, store, boot_audit)
         recovered = len(recovery.closed_turns) + len(recovery.expired_approvals)
         if recovered:
             metrics.add_recoveries(recovered)
@@ -687,6 +791,10 @@ def build_app(
             checkout_api=checkout_api,
             auth_token=config.auth_token,
             csrf_token=config.csrf_token,
+            # One resolver for the process: the configured root token maps to
+            # the owner tenant, exactly as the direct ``auth_token=`` check
+            # always has. Session rows are minted under that same tenant.
+            tenant_resolver=StaticTenantResolver(config.auth_token),
             health=HealthProbe.from_service(service, audit=audit),
             metrics=metrics,
             # Sessions persist in the chat database (KEL-24): several devices
@@ -694,7 +802,10 @@ def build_app(
             # The CSRF half is derived from KELP_SESSION_SECRET, falling back
             # to the root token so a restart keeps existing pairs valid.
             sessions=SessionStore.from_env(
-                source, store=store, fallback_secret=config.auth_token
+                source,
+                store=store,
+                fallback_secret=config.auth_token,
+                tenant_id=OWNER_TENANT_ID,
             ),
             auth_failures=AuthFailureTracker.from_env(source),
             cookie_secure=_flag(source, SESSION_SECURE_ENV, True),
@@ -712,7 +823,7 @@ def build_app(
             service=service,
             store=store,
             schedule_store=schedule_store,
-            audit=audit,
+            audit=boot_audit,
             runner=api.runner,
             config=proactive_config,
         )
