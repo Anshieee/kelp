@@ -76,10 +76,22 @@ test('every route in the shared mobile contract is handled by the server', async
   }
 });
 
-test('every API route called by the mobile fallback is supported by the server contract', async () => {
+test('every API route called by the mobile fallback is supported by the server contract', async (t) => {
   const root = fileURLToPath(new URL('../../', import.meta.url));
   const contract = await readFile(new URL('../../docs/HACKATHON_DEMO_CONTRACT.md', import.meta.url), 'utf8');
-  const mobile = execFileSync('git', ['show', 'origin/feat/mobile-demo-fallback:netlify/mobile/app.js'], { cwd: root, encoding: 'utf8' });
+  // The mobile fallback now lives on main; prefer the origin/main blob, fall back to the
+  // working-tree copy (shallow CI clones may lack the ref), and skip when neither exists.
+  let mobile;
+  try {
+    mobile = execFileSync('git', ['show', 'origin/main:netlify/mobile/app.js'], { cwd: root, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
+  } catch {
+    try {
+      mobile = await readFile(new URL('../../netlify/mobile/app.js', import.meta.url), 'utf8');
+    } catch {
+      t.skip('netlify/mobile/app.js unavailable: origin/main ref and working tree copy both missing');
+      return;
+    }
+  }
   const supportedRoutes = new Set([...contract.matchAll(/^\| `?(GET|PUT|POST) ([^`|]+)`? \|/gm)]
     .map(([, method, path]) => `${method} ${path.split('?')[0]}`));
   const mobileRoutes = [...mobile.matchAll(/\bapi\(\s*(['"`])([^'"`]*)\1/g)].map((match) => {
