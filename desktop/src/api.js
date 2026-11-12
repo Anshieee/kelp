@@ -63,16 +63,6 @@ export const approvals = {
     api(`/api/approvals/${id}/decision`, { method: "POST", body: { decision, note } }),
 };
 
-/** Credential request metadata and one private owner submission. */
-export const credentialRequests = {
-  list: () => api("/api/credential-requests"),
-  submit: (id, values, save = false) => api(`/api/credential-requests/${encodeURIComponent(id)}/submit`, {
-    method: "POST", body: { values, save },
-  }),
-  deny: (id) => api(`/api/credential-requests/${encodeURIComponent(id)}/deny`, { method: "POST", body: {} }),
-  release: (id) => api(`/api/credential-requests/${encodeURIComponent(id)}/release`, { method: "POST", body: {} }),
-};
-
 export const devices = {
   list: () => api("/api/auth/devices"),
   revoke: (id) => api(`/api/auth/devices/${id}`, { method: "DELETE" }),
