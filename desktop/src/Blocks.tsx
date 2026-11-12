@@ -26,7 +26,12 @@ const APPROVAL_STATUS: Record<string, string> = {
  *  and the two callbacks. Passed down rather than read from context so the
  *  transcript stays a pure function of its props. */
 export interface ComputerCardHost {
-  viewer: { status: ViewerStatus; hostRef: { current: HTMLDivElement | null } };
+  viewer: {
+    status: ViewerStatus;
+    activeSessionId: string | null;
+    hostRef: { current: HTMLDivElement | null };
+    openSessionUrl: (session: { id: string; url: string | null }) => void;
+  };
   anchors: Set<string>;
   onOpen: () => void;
   onDismiss: (callId: string) => void;

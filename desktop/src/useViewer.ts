@@ -12,29 +12,38 @@ import type RFB from "@novnc/novnc";
 
 import {
   applyViewerSettings,
+  computerTransport,
   defaultViewerUrl,
   disconnectDetail,
+  isRfbTransport,
   normaliseViewerUrl,
   planCredentials,
   readStoredViewerUrl,
   RECONNECT_DELAYS_MS,
   reconnectDelay,
+  rememberViewerUrl,
+  resolveViewerTarget,
+  stripViewerSecrets,
   viewerConnectionOptions,
   viewerUrlProblem,
-  writeStoredViewerUrl,
   type CredentialPlan,
   type ViewerStatus,
 } from "./computerViewer";
 
 interface Session {
   url: string;
+  /** The backend session this dial belongs to, if it came from one. */
+  sessionId: string | null;
   /** Bumped to force a fresh connection on retry. */
   nonce: number;
 }
 
 export function useViewer({ enabled }: { enabled: boolean }) {
-  const [urlInput, setUrlInput] = useState(() => readStoredViewerUrl() ?? defaultViewerUrl());
+  const [urlInput, setUrlInput] = useState(() =>
+    isRfbTransport() ? (readStoredViewerUrl() ?? defaultViewerUrl()) : "",
+  );
   const [session, setSession] = useState<Session | null>(null);
+  const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
   const [status, setStatus] = useState<ViewerStatus>("idle");
   const [detail, setDetail] = useState<string | null>(null);
   // What the server asked for in `credentialsrequired`, and the password being
@@ -44,13 +53,21 @@ export function useViewer({ enabled }: { enabled: boolean }) {
   const [credentials, setCredentials] = useState<CredentialPlan | null>(null);
   const [password, setPassword] = useState("");
 
+  // Callback ref: the Computer panel is `display:none` until opened, and the
+  // host node only exists while it is mounted, so connection readiness is
+  // state rather than a ref read that can be null with no retry.
+  const [host, setHost] = useState<HTMLDivElement | null>(null);
   const hostRef = useRef<HTMLDivElement | null>(null);
+  const setHostRef = useCallback((node: HTMLDivElement | null) => {
+    hostRef.current = node;
+    setHost(node);
+  }, []);
   const viewerRef = useRef<RFB | null>(null);
   const attemptRef = useRef(0);
   const stoppedRef = useRef(false);
   const wasEnabledRef = useRef(false);
 
-  const start = useCallback((rawUrl: string) => {
+  const start = useCallback((rawUrl: string, sessionId: string | null = null) => {
     const problem = viewerUrlProblem(rawUrl);
     if (problem) {
       setStatus("error");
@@ -67,18 +84,49 @@ export function useViewer({ enabled }: { enabled: boolean }) {
     attemptRef.current = 0;
     setPassword("");
     setCredentials(null);
-    setUrlInput(normalised);
-    writeStoredViewerUrl(normalised);
+    setUrlInput(stripViewerSecrets(normalised));
+    rememberViewerUrl(normalised);
+    setActiveSessionId(sessionId);
     // Bumping the nonce tears down whatever is running — a viewer URL change
     // always disconnects the old session first.
     setSession((current) => ({
       url: normalised,
+      sessionId,
       nonce: (current?.nonce ?? 0) + 1,
     }));
   }, []);
 
+  /**
+   * Explicit user action: point the viewer at the backend's session URL. The
+   * card never dials on its own — the first real emission with a non-default
+   * `session.url` must show under the right row *and* offer this, never
+   * silently connect somewhere the user did not choose.
+   */
+  const openSessionUrl = useCallback(
+    (session: { id: string; url: string | null }) => {
+      const target = resolveViewerTarget(session);
+      if (!target) {
+        setStatus("error");
+        setDetail(
+          !session?.url
+            ? "That session reports no viewer URL."
+            : computerTransport() === "managed"
+              ? "That session URL is not a managed session link, and raw viewer endpoints are disabled in this build."
+              : "That session URL is not a usable viewer endpoint.",
+        );
+        return;
+      }
+      if (target.kind === "managed-session") {
+        setStatus("error");
+        setDetail(`Open this session in the browser: ${target.url}`);
+        return;
+      }
+      start(target.url, target.sessionId);
+    },
+    [start],
+  );
+
   useEffect(() => {
-    const host = hostRef.current;
     if (!session || !host || !enabled) return;
 
     let disposed = false;
@@ -149,7 +197,7 @@ export function useViewer({ enabled }: { enabled: boolean }) {
           if (exhausted) return;
           retryTimer = window.setTimeout(() => {
             setSession((current) =>
-              current ? { url: current.url, nonce: current.nonce + 1 } : current,
+              current ? { url: current.url, sessionId: current.sessionId, nonce: current.nonce + 1 } : current,
             );
           }, reconnectDelay(attemptRef.current));
         });
@@ -201,23 +249,28 @@ export function useViewer({ enabled }: { enabled: boolean }) {
       // Drop the last painted frame so a dead session never looks live.
       host.replaceChildren();
     };
-  }, [session, enabled]);
+  }, [session, enabled, host]);
 
   // Start on our own once the Kelp session is ready, and drop everything when
-  // it is not (sign-out). A manual Disconnect keeps the viewer stopped until
-  // Connect, Try again, a URL change — or the next sign-in, which starts a
-  // fresh session and is allowed to auto-start again.
+  // it is not (sign-out). Only the explicit rfb-stub transport auto-dials: a
+  // managed build has no typed-in fallback, so it waits for an explicit
+  // `openSessionUrl` call instead of connecting somewhere unchosen. A manual
+  // Disconnect keeps the viewer stopped until Connect, Try again, a URL
+  // change — or the next sign-in, which starts a fresh session and is allowed
+  // to auto-start again.
   useEffect(() => {
     if (!enabled) {
       wasEnabledRef.current = false;
       stoppedRef.current = true;
       setSession(null);
+      setActiveSessionId(null);
       setStatus("idle");
       setDetail(null);
       setPassword("");
       setCredentials(null);
       return;
     }
+    if (!isRfbTransport()) return;
     const becomingReady = !wasEnabledRef.current;
     wasEnabledRef.current = true;
     if (!session && (becomingReady || !stoppedRef.current)) {
@@ -252,6 +305,7 @@ export function useViewer({ enabled }: { enabled: boolean }) {
     setPassword("");
     setCredentials(null);
     setSession(null);
+    setActiveSessionId(null);
     setStatus("idle");
     setDetail(null);
     hostRef.current?.replaceChildren();
@@ -277,7 +331,10 @@ export function useViewer({ enabled }: { enabled: boolean }) {
     urlInput,
     setUrlInput,
     hostRef,
+    setHostRef,
+    activeSessionId,
     connect,
+    openSessionUrl,
     resetToDefault,
     disconnect,
     submitPassword,

@@ -9,7 +9,9 @@ import { CARD_MIRROR_MS, formatElapsed, type ViewerStatus } from "./computerView
 /** Just the parts of the viewer handle the card needs. */
 interface ViewerSource {
   status: ViewerStatus;
+  activeSessionId: string | null;
   hostRef: { current: HTMLDivElement | null };
+  openSessionUrl: (session: { id: string; url: string | null }) => void;
 }
 
 /**
@@ -48,6 +50,8 @@ export default function ComputerCard({
 
   const connected = viewer.status === "connected";
   const running = block.status === "running";
+  const sessionId = block.session?.id ?? null;
+  const viewingThis = connected && sessionId !== null && viewer.activeSessionId === sessionId;
 
   // Elapsed ticks only while the call is running; a finished call shows the
   // duration the server measured, not a counter that keeps going.
@@ -60,7 +64,10 @@ export default function ComputerCard({
   useEffect(() => {
     const card = cardRef.current;
     const canvas = frameRef.current;
-    if (!connected || !card || !canvas) return;
+    if (!viewingThis || !card || !canvas) {
+      if (!viewingThis) setMirrored(false);
+      return;
+    }
 
     // Pause when nobody is looking: a card scrolled out of the transcript, or
     // a window in the background, must not keep copying pixels.
@@ -95,13 +102,13 @@ export default function ComputerCard({
       window.clearInterval(timer);
       observer.disconnect();
     };
-  }, [connected, viewer.hostRef]);
+  }, [viewingThis, viewer.hostRef]);
 
   const elapsed = formatElapsed(
     running ? (startedAt.current === null ? null : now - startedAt.current) : block.duration_ms,
   );
-  const state = connected ? "live" : viewer.status === "connecting" ? "connecting" : "not connected";
-  const dot = connected ? "#3f7d5c" : viewer.status === "connecting" ? "#b08034" : "#8a8a86";
+  const state = viewingThis ? "live" : viewer.status === "connecting" ? "connecting" : "not connected";
+  const dot = viewingThis ? "#3f7d5c" : viewer.status === "connecting" ? "#b08034" : "#8a8a86";
 
   return (
     <Box
@@ -166,6 +173,17 @@ export default function ComputerCard({
           {elapsed ? ` · ${elapsed}` : ""}
         </Typography>
         <Box sx={{ flex: 1 }} />
+        {sessionId && block.session?.url && !viewingThis && (
+          <Button
+            size="small"
+            onClick={() => {
+              viewer.openSessionUrl({ id: sessionId, url: block.session?.url ?? null });
+              onOpen();
+            }}
+          >
+            Open session
+          </Button>
+        )}
         <Button size="small" endIcon={<OpenInNewRoundedIcon />} onClick={onOpen}>
           Open Computer
         </Button>

@@ -106,6 +106,73 @@ export function computerCardAnchors(messages: Message[]): Set<string> {
   return anchors;
 }
 
+/**
+ * Debug-card scaffolding for the computer card, as pure list operations so the
+ * lifecycle is unit-testable without React: inject one ephemeral card per
+ * thread (refresh in place on re-fire), dismiss by call id, re-inject the
+ * remembered cards when returning to a thread, and clear on sign-out.
+ */
+export const DEBUG_CARD_SESSION = "debug-session";
+
+let debugCounter = 0;
+
+export function debugCardMessage(now: number = Date.now()): Message {
+  const callId = `debug_${now.toString(36)}_${(debugCounter += 1)}`;
+  return {
+    id: `debug_msg_${callId}`,
+    role: "assistant",
+    status: "complete",
+    blocks: [
+      {
+        type: "tool_call",
+        call_id: callId,
+        tool: "computer.session",
+        label: "Computer",
+        summary: "Debug card — no tool actually ran.",
+        status: "done",
+        duration_ms: 4200,
+        effects: [],
+        approval_id: null,
+        detail: {},
+        surface: "computer",
+        session: { id: DEBUG_CARD_SESSION, url: null },
+      },
+    ],
+  };
+}
+
+const withoutDebugCards = (messages: Message[]): Message[] =>
+  messages.filter(
+    (candidate) =>
+      !candidate.blocks.some(
+        (block) => isToolBlock(block) && block.session?.id === DEBUG_CARD_SESSION,
+      ),
+  );
+
+/** Add the debug card to a thread's synthetic list, refreshing it in place. */
+export function injectDebugCard(synthetic: Map<string, Message[]>, threadId: string): Message {
+  const message = debugCardMessage();
+  synthetic.set(threadId, [...withoutDebugCards(synthetic.get(threadId) ?? []), message]);
+  return message;
+}
+
+/** Drop a card by call id from both the view list and the remembered list. */
+export function dismissCardMessage(messages: Message[], synthetic: Message[], callId: string): Message[] {
+  const without = (list: Message[]) =>
+    list.filter(
+      (message) =>
+        !message.blocks.some((block) => isToolBlock(block) && block.call_id === callId),
+    );
+  const next = without(messages);
+  synthetic.splice(0, synthetic.length, ...without(synthetic));
+  return next;
+}
+
+/** The view list for an opened thread: snapshot plus remembered synthetics. */
+export function withSyntheticCards(snapshot: Message[], synthetic: Message[]): Message[] {
+  return [...snapshot, ...synthetic];
+}
+
 function patchMessage(
   messages: Message[],
   messageId: string,

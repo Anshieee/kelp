@@ -68,7 +68,6 @@ describe("rfb stub server", () => {
       await stub.close();
     }
   });
-
   it("skips the challenge entirely in no-auth mode", async () => {
     const stub = await startServer({ noAuth: true });
     try {
@@ -112,6 +111,68 @@ describe("rfb stub server", () => {
       assert.equal(failure.readUInt32BE(0), 1);
       const reasonLength = failure.readUInt32BE(4);
       assert.equal(failure.subarray(8, 8 + reasonLength).toString("ascii"), "stub: password rejected");
+
+      client.ws.close();
+    } finally {
+      await stub.close();
+    }
+  });
+
+  it("answers every FramebufferUpdateRequest, packing pixels in the negotiated format", async () => {
+    const stub = await startServer({});
+    try {
+      const client = await openRfb(stub.url);
+      await client.next(); // version
+      client.send(Buffer.from("RFB 003.008\n", "ascii"));
+      await client.next(); // security types
+      client.send(Buffer.from([2]));
+      await client.next(); // challenge
+      client.send(Buffer.alloc(16));
+      await client.next(); // SecurityResult
+      client.send(Buffer.from([1])); // ClientInit, shared
+      await client.next(); // ServerInit
+
+      // Ask for BGR order (blueShift 16): the frame must be packed that way,
+      // or the channels arrive swapped and the card shows the wrong teal.
+      const setFormat = Buffer.alloc(20);
+      setFormat[0] = 0; // SetPixelFormat
+      setFormat[4] = 32; // bits-per-pixel
+      setFormat[5] = 24; // depth
+      setFormat[6] = 0; // little-endian
+      setFormat[7] = 1; // true-colour
+      setFormat.writeUInt16BE(255, 8); // red-max
+      setFormat.writeUInt16BE(255, 10); // green-max
+      setFormat.writeUInt16BE(255, 12); // blue-max
+      setFormat[14] = 0; // redShift
+      setFormat[15] = 8; // greenShift
+      setFormat[16] = 16; // blueShift
+      client.send(setFormat);
+
+      const frameRequest = Buffer.alloc(10);
+      frameRequest[0] = 3; // FramebufferUpdateRequest
+      frameRequest[1] = 0; // incremental = 0 → full
+      frameRequest.writeUInt16BE(0, 2); // x
+      frameRequest.writeUInt16BE(0, 4); // y
+      frameRequest.writeUInt16BE(1280, 6); // w
+      frameRequest.writeUInt16BE(800, 8); // h
+
+      for (let round = 0; round < 2; round++) {
+        client.send(frameRequest);
+        const frame = await client.next();
+        assert.equal(frame[0], 0); // FramebufferUpdate
+        assert.equal(frame.readUInt16BE(2), 1); // one rect
+        const pixels = frame.subarray(16);
+        assert.equal(pixels.length, 1280 * 800 * 4);
+        // Row 0 sits inside the first colour bar (teal [0x4f, 0xc4, 0xa8]),
+        // pixel (x=700) lands in the fourth band. With the negotiated BGR
+        // order (redShift 0, greenShift 8, blueShift 16) the little-endian
+        // bytes are [0x4f, 0xc4, 0xa8, 0x00] — an RGB packing would swap the
+        // first and third bytes and read as the wrong teal.
+        const sample = pixels.subarray(700 * 4, 700 * 4 + 4);
+        assert.deepEqual([...sample], [0x4f, 0xc4, 0xa8, 0x00]);
+      }
+
+      client.ws.close();
     } finally {
       await stub.close();
     }

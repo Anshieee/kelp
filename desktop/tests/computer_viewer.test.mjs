@@ -8,15 +8,22 @@ import {
   VIEWER_URL_STORAGE_KEY,
   applyViewerSettings,
   buttonStatusLabel,
+  computerTransport,
   defaultViewerUrl,
   disconnectDetail,
   formatElapsed,
+  isCleartextRemote,
   isDefaultViewerUrl,
+  isRfbTransport,
   normaliseViewerUrl,
   planCredentials,
   readStoredViewerUrl,
   reconnectDelay,
+  redactViewerUrl,
+  rememberViewerUrl,
+  resolveViewerTarget,
   statusLabel,
+  stripViewerSecrets,
   unsupportedCredentialsMessage,
   viewerConnectionOptions,
   viewerUrlProblem,
@@ -294,6 +301,101 @@ describe("isDefaultViewerUrl", () => {
     assert.equal(isDefaultViewerUrl("ws://127.0.0.1:6099/websockify"), false);
     assert.equal(isDefaultViewerUrl(TUNNEL_VIEWER_URL), false);
     assert.equal(isDefaultViewerUrl("not a url"), false);
+  });
+});
+
+describe("computer transport seam", () => {
+  it("defaults to managed sessions; only the explicit flag enables RFB", () => {
+    assert.equal(computerTransport({}), "managed");
+    assert.equal(computerTransport(undefined), "managed");
+    assert.equal(computerTransport({ VITE_COMPUTER_TRANSPORT: "bogus" }), "managed");
+    assert.equal(computerTransport({ VITE_COMPUTER_TRANSPORT: "rfb-stub" }), "rfb-stub");
+    assert.equal(isRfbTransport({}), false);
+    assert.equal(isRfbTransport({ VITE_COMPUTER_TRANSPORT: "rfb-stub" }), true);
+  });
+
+  it("routes a managed session URL without touching RFB", () => {
+    const session = { id: "sess_1", url: "https://boat.example.test/session/abc123" };
+    assert.deepEqual(resolveViewerTarget(session, {}), {
+      kind: "managed-session",
+      url: "https://boat.example.test/session/abc123",
+      sessionId: "sess_1",
+    });
+    // ...even on the dev transport: managed URLs never become websockify dials.
+    assert.equal(resolveViewerTarget(session, { VITE_COMPUTER_TRANSPORT: "rfb-stub" }).kind, "managed-session");
+  });
+
+  it("refuses raw viewer endpoints unless the dev transport is explicit", () => {
+    const session = { id: "sess_1", url: "ws://127.0.0.1:6080/websockify" };
+    assert.equal(resolveViewerTarget(session, {}), null);
+    assert.deepEqual(
+      resolveViewerTarget(session, { VITE_COMPUTER_TRANSPORT: "rfb-stub" }),
+      { kind: "rfb-websockify", url: "ws://127.0.0.1:6080/websockify", sessionId: "sess_1" },
+    );
+  });
+
+  it("produces a second anchor proposal for a second session id", () => {
+    const first = resolveViewerTarget(
+      { id: "sess_1", url: "ws://127.0.0.1:6080/websockify" },
+      { VITE_COMPUTER_TRANSPORT: "rfb-stub" },
+    );
+    const second = resolveViewerTarget(
+      { id: "sess_2", url: "ws://127.0.0.1:6081/websockify" },
+      { VITE_COMPUTER_TRANSPORT: "rfb-stub" },
+    );
+    assert.notEqual(first.sessionId, second.sessionId);
+    assert.notEqual(first.url, second.url);
+  });
+
+  it("rejects non-URL sessions and non-session URLs", () => {
+    const env = { VITE_COMPUTER_TRANSPORT: "rfb-stub" };
+    assert.equal(resolveViewerTarget(null, env), null);
+    assert.equal(resolveViewerTarget({ id: "", url: "ws://127.0.0.1:6080/websockify" }, env), null);
+    assert.equal(resolveViewerTarget({ id: "s", url: null }, env), null);
+    assert.equal(resolveViewerTarget({ id: "s", url: "not a url" }, env), null);
+    assert.equal(resolveViewerTarget({ id: "s", url: "https://example.test/plain" }, env), null);
+    assert.equal(resolveViewerTarget({ id: "s", url: "ftp://example.test/x" }, env), null);
+  });
+});
+
+describe("viewer url hygiene", () => {
+  it("flags cleartext ws:// to a non-loopback host", () => {
+    assert.equal(isCleartextRemote("ws://127.0.0.1:6080/websockify"), false);
+    assert.equal(isCleartextRemote("ws://localhost:6080/x"), false);
+    assert.equal(isCleartextRemote("wss://example.test/x"), false);
+    assert.equal(isCleartextRemote("ws://203.0.113.7:6080/websockify"), true);
+    assert.equal(isCleartextRemote("ws://vnc.example.test/x"), true);
+    const problem = viewerUrlProblem("ws://203.0.113.7:6080/websockify");
+    assert.match(problem, /cleartext/);
+    assert.match(problem, /wss/);
+  });
+
+  it("never persists query or fragment", () => {
+    const store = new Map();
+    globalThis.localStorage = { getItem: (k) => store.get(k) ?? null, setItem: (k, v) => store.set(k, String(v)) };
+    rememberViewerUrl("wss://vm.example.test/view?token=secret#frag");
+    assert.equal(store.get(VIEWER_URL_STORAGE_KEY), "wss://vm.example.test/view");
+    assert.equal(stripViewerSecrets("wss://vm.example.test/view?token=secret#frag"), "wss://vm.example.test/view");
+  });
+
+  it("redacts tokens in failure text instead of echoing them", () => {
+    const redacted = redactViewerUrl("wss://vm.example.test/view?token=secret");
+    assert.doesNotMatch(redacted, /secret/);
+    assert.match(redacted, /credentials hidden/);
+    assert.equal(redacted.startsWith("wss://vm.example.test/view"), true);
+    const detail = disconnectDetail({
+      url: "ws://127.0.0.1:6099/websockify?token=secret",
+      everConnected: false,
+      exhausted: true,
+    });
+    assert.doesNotMatch(detail, /secret/);
+    assert.match(detail, /6099/);
+  });
+
+  it("ignores a mid-path htm directory but still flags vnc.html", () => {
+    assert.equal(viewerUrlProblem("https://example.test/htmldocs/vnc"), null);
+    assert.match(viewerUrlProblem("https://vm.example.test/vnc.html?autoconnect=1"), /standalone/);
+    assert.match(viewerUrlProblem("https://vm.example.test/VNC.HTML"), /standalone/);
   });
 });
 

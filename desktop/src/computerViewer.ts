@@ -1,19 +1,85 @@
 // Pure helpers for the Computer tab.
 //
-// Kept apart from the React component so the URL rules, the credential
-// handshake, the reconnect cadence and the state labels can be unit-tested
-// without a live RFB endpoint — the viewer itself needs a real VNC server
-// behind a websockify proxy (or `tests/rfb_stub_server.mjs`).
+// Kept apart from the React component so the URL rules, the transport seam,
+// the reconnect cadence and the state labels can be unit-tested without a live
+// backend — the RFB path itself needs a real VNC server behind a websockify
+// proxy (or `tests/tools/rfb_stub_server.mjs`), and only ever runs under the
+// explicit `VITE_COMPUTER_TRANSPORT=rfb-stub` dev flag.
 
 import type RFB from "@novnc/novnc";
 import type { RFBOptions } from "@novnc/novnc";
 
-/** Where the last-used viewer URL is remembered. */
+/** Where the last-used viewer URL is remembered. Query and fragment are never
+ *  persisted — see `rememberViewerUrl`. */
 export const VIEWER_URL_STORAGE_KEY = "kelp.computer.viewerUrl";
 
 /**
+ * Which viewer transport this build uses.
+ *
+ * - `"managed"` (default): the tab points at a managed Steel/Boat session URL
+ *   (`https://…/session/…`) the backend hands out. There is no raw socket for
+ *   the user to type, and nothing to reconnect against.
+ * - `"rfb-stub"`: the local websockify test session, for development against
+ *   `tests/tools/rfb_stub_server.mjs` only. Selected explicitly via
+ *   `VITE_COMPUTER_TRANSPORT=rfb-stub`; any other value falls back to managed.
+ */
+export type ComputerTransport = "managed" | "rfb-stub";
+
+export function computerTransport(
+  env: Record<string, string | undefined> | undefined = import.meta.env,
+): ComputerTransport {
+  return env?.VITE_COMPUTER_TRANSPORT === "rfb-stub" ? "rfb-stub" : "managed";
+}
+
+/** True when the raw RFB/websockify path is available in this build. */
+export const isRfbTransport = (
+  env: Record<string, string | undefined> | undefined = import.meta.env,
+): boolean => computerTransport(env) === "rfb-stub";
+
+/** A managed session URL names a session on an https host. */
+const MANAGED_SESSION_PATH = /\/session\//;
+
+/**
+ * What the viewer should do with a backend session: which transport drives it,
+ * or null when the session carries nothing usable.
+ *
+ * Managed session URLs are accepted on any transport (they never touch RFB);
+ * raw `ws(s)` endpoints are only honoured on the explicit rfb-stub transport.
+ */
+export type ViewerTarget =
+  | { kind: "managed-session"; url: string; sessionId: string }
+  | { kind: "rfb-websockify"; url: string; sessionId: string }
+  | null;
+
+export function resolveViewerTarget(
+  session: { id: string; url: string | null } | null | undefined,
+  env: Record<string, string | undefined> | undefined = import.meta.env,
+): ViewerTarget {
+  const id = session?.id?.trim();
+  const raw = session?.url?.trim();
+  if (!id || !raw) return null;
+  let parsed: URL;
+  try {
+    parsed = new URL(raw);
+  } catch {
+    return null;
+  }
+  if (parsed.protocol === "https:" && parsed.host && MANAGED_SESSION_PATH.test(parsed.pathname)) {
+    return { kind: "managed-session", url: parsed.toString(), sessionId: id };
+  }
+  if ((parsed.protocol === "wss:" || parsed.protocol === "ws:") && parsed.host) {
+    if (!isRfbTransport(env)) return null;
+    const normalised = normaliseViewerUrl(raw);
+    return normalised ? { kind: "rfb-websockify", url: normalised, sessionId: id } : null;
+  }
+  return null;
+}
+
+/**
  * The local test session's default. `websockify` presents the RFB stream on a
- * WebSocket, which is the only transport noVNC speaks.
+ * WebSocket, which is the only transport noVNC speaks. Only used on the
+ * rfb-stub transport; the managed default is whatever session the backend
+ * reports, and there is no typed-in fallback for it.
  */
 export const DEFAULT_VIEWER_URL = "ws://127.0.0.1:6080/websockify";
 
@@ -70,10 +136,18 @@ export function normaliseViewerUrl(input: string): string | null {
 export function viewerUrlProblem(input: string): string | null {
   const raw = input.trim();
   if (!raw) return "Enter the viewer URL.";
-  if (/\.html?(?:[?#]|$)/i.test(raw)) {
+  // Anchor to a path segment: a mid-path "...htm..." directory must not match.
+  if (/(^|\/)vnc\.html?(?:[?#]|$)/i.test(raw)) {
     return (
       "That is the standalone viewer page (vnc.html), for testing in a browser. " +
       "This viewer needs the WebSocket URL instead — it usually ends in /websockify."
+    );
+  }
+  const normalised = normaliseViewerUrl(raw);
+  if (normalised && isCleartextRemote(normalised)) {
+    return (
+      "That address is not on this machine and does not use TLS — the VNC " +
+      "password would travel in cleartext. Use a wss:// tunnel instead."
     );
   }
   return null;
@@ -107,7 +181,8 @@ export function isDefaultViewerUrl(url: string): boolean {
  * A socket that never opened is an address problem, not a dropped session: a
  * stale remembered URL, a websockify that is not running, or a tunnel that is
  * down. Saying "the connection dropped" for that is a lie that sends people
- * looking in the wrong place, so it names the endpoint instead.
+ * looking in the wrong place, so it names the endpoint instead — redacted,
+ * because the raw URL may carry a token.
  */
 export function disconnectDetail({
   url,
@@ -118,10 +193,11 @@ export function disconnectDetail({
   everConnected: boolean;
   exhausted: boolean;
 }): string {
+  const shown = redactViewerUrl(url);
   if (!everConnected) {
     return exhausted
-      ? `Nothing is answering at ${url}. Start a VNC server behind websockify there, or use the default address.`
-      : `Could not reach ${url} — nothing is listening there.`;
+      ? `Nothing is answering at ${shown}. Start a VNC server behind websockify there, or use the default address.`
+      : `Could not reach ${shown} — nothing is listening there.`;
   }
   return exhausted
     ? "Could not reach the viewer after several attempts — check the tunnel and its certificate, then Try again."
@@ -173,6 +249,48 @@ export function formatElapsed(ms: number | null): string | null {
   return `${minutes}m ${String(seconds % 60).padStart(2, "0")}s`;
 }
 
+/** A `ws://` URL to a non-loopback host: the VNC password would travel bare. */
+export function isCleartextRemote(url: string): boolean {
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return false;
+  }
+  if (parsed.protocol !== "ws:") return false;
+  const host = parsed.hostname.toLowerCase().replace(/\.$/, "");
+  if (host === "localhost" || host === "127.0.0.1" || host === "::1") return false;
+  if (host === "[::1]") return false;
+  return true;
+}
+
+/** The host/port/path without any query or fragment — tokens never persist. */
+export function stripViewerSecrets(url: string): string {
+  try {
+    const parsed = new URL(url);
+    parsed.search = "";
+    parsed.hash = "";
+    return parsed.toString();
+  } catch {
+    return url;
+  }
+}
+
+/** Failure text may name the endpoint but must never echo a `?token=`. */
+export function redactViewerUrl(url: string): string {
+  try {
+    const parsed = new URL(url);
+    if (parsed.search || parsed.hash) {
+      parsed.search = "";
+      parsed.hash = "";
+      return `${parsed.toString()} (credentials hidden)`;
+    }
+    return url;
+  } catch {
+    return url;
+  }
+}
+
 /** Read the remembered URL, or null when storage is unavailable/empty. */
 export function readStoredViewerUrl(): string | null {
   try {
@@ -183,14 +301,21 @@ export function readStoredViewerUrl(): string | null {
   }
 }
 
-/** Remember the URL. Storage failures are not worth interrupting the viewer. */
-export function writeStoredViewerUrl(url: string): void {
+/**
+ * Remember the URL with its query and fragment stripped: a `?token=` is a
+ * credential, and localStorage is the wrong place for one. Storage failures
+ * are not worth interrupting the viewer.
+ */
+export function rememberViewerUrl(url: string): void {
   try {
-    globalThis.localStorage?.setItem(VIEWER_URL_STORAGE_KEY, url);
+    globalThis.localStorage?.setItem(VIEWER_URL_STORAGE_KEY, stripViewerSecrets(url));
   } catch {
     /* ignore */
   }
 }
+
+/** Backwards-compatible alias. Prefer `rememberViewerUrl` for new call sites. */
+export const writeStoredViewerUrl = rememberViewerUrl;
 
 /**
  * How every viewer connection is configured.

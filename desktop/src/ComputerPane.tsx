@@ -1,7 +1,7 @@
 import { Box, Button, Chip, CircularProgress, Stack, TextField, Typography } from "@mui/material";
 import ReplayRoundedIcon from "@mui/icons-material/ReplayRounded";
 
-import { isDefaultViewerUrl, statusLabel, unsupportedCredentialsMessage } from "./computerViewer";
+import { isDefaultViewerUrl, isRfbTransport, statusLabel, unsupportedCredentialsMessage } from "./computerViewer";
 import type { ViewerHandle } from "./useViewer";
 
 /**
@@ -29,7 +29,7 @@ export default function ComputerPane({ viewer }: { viewer: ViewerHandle }) {
     setPassword,
     urlInput,
     setUrlInput,
-    hostRef,
+    setHostRef: hostRef,
     connect,
     resetToDefault,
     disconnect,
@@ -38,11 +38,16 @@ export default function ComputerPane({ viewer }: { viewer: ViewerHandle }) {
 
   const connected = status === "connected";
   const onDefault = isDefaultViewerUrl(urlInput);
+  // The managed transport has no raw endpoint to type: sessions arrive from
+  // the backend and dial only through the card's explicit action. The URL row
+  // is a dev-transport tool for pointing at the stub.
+  const showUrlRow = isRfbTransport();
 
   return (
     <Box
       sx={{ flex: 1, width: "100%", display: "flex", flexDirection: "column", minHeight: 0 }}
     >
+      {showUrlRow ? (
       <Stack
         direction="row"
         spacing={1}
@@ -72,6 +77,20 @@ export default function ComputerPane({ viewer }: { viewer: ViewerHandle }) {
         </Button>
         <Chip size="small" variant="outlined" label={connected ? "live · view-only" : "view-only"} />
       </Stack>
+      ) : (
+      <Stack
+        direction="row"
+        spacing={1}
+        alignItems="center"
+        sx={{ px: 3, py: 1.5, borderBottom: "1px solid rgba(25,24,23,0.08)" }}
+      >
+        <Chip size="small" variant="outlined" label={connected ? "live · view-only" : "view-only"} />
+        <Box sx={{ flex: 1 }} />
+        <Button size="small" color="inherit" onClick={disconnect} disabled={status === "idle"}>
+          Disconnect
+        </Button>
+      </Stack>
+      )}
 
       <Box sx={{ position: "relative", flex: 1, minHeight: 0, background: "#141615" }}>
         <Box

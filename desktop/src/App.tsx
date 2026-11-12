@@ -98,12 +98,17 @@ export default function App() {
   const cardAnchors = useMemo(() => computerCardAnchors(chat.messages), [chat.messages]);
   const computerCards = useMemo<ComputerCardHost>(
     () => ({
-      viewer: { status: viewer.status, hostRef: viewer.hostRef },
+      viewer: {
+        status: viewer.status,
+        activeSessionId: viewer.activeSessionId,
+        hostRef: viewer.hostRef,
+        openSessionUrl: viewer.openSessionUrl,
+      },
       anchors: cardAnchors,
       onOpen: () => setComputerOpen(true),
       onDismiss: chat.dismissComputerCard,
     }),
-    [viewer.status, viewer.hostRef, cardAnchors, chat.dismissComputerCard],
+    [viewer.status, viewer.activeSessionId, viewer.hostRef, viewer.openSessionUrl, cardAnchors, chat.dismissComputerCard],
   );
 
   // Debug scaffold: fabricate a computer card so the inline preview can be
@@ -117,6 +122,7 @@ export default function App() {
     let stop: (() => void) | undefined;
     const fire = async () => {
       const current = chatRef.current;
+      if (current.phase !== "ready") return;
       if (!current.activeId) await current.newChat();
       current.injectComputerCard();
     };

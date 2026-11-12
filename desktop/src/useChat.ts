@@ -15,16 +15,10 @@ import {
   type StreamState,
   type Thread,
 } from "./bridge";
-import { applyEvent, isToolBlock } from "./chatEvents";
+import { DEBUG_CARD_SESSION, applyEvent, dismissCardMessage, injectDebugCard, isToolBlock, withSyntheticCards } from "./chatEvents";
 import { isTauri } from "./tauri";
 
 export type Phase = "loading" | "signed-out" | "ready" | "error";
-
-/** The scaffolding session id; one debug card per thread, refreshed in place. */
-const DEBUG_CARD_SESSION = "debug-session";
-
-/** Two fires in the same millisecond must still get distinct message ids. */
-let debugCounter = 0;
 
 let counter = 0;
 /** Tauri's webview is a secure context, but keep a fallback for a plain tab. */
@@ -97,7 +91,7 @@ export function useChat() {
 
       try {
         const snapshot = await getThread(threadId);
-        setMessages([...(snapshot.messages ?? []), ...(syntheticRef.current.get(threadId) ?? [])]);
+        setMessages(withSyntheticCards([...(snapshot.messages ?? [])], syntheticRef.current.get(threadId) ?? []));
         setFailure(null);
         lastSeq.current = snapshot.last_seq ?? 0;
         await bridge.openStream(threadId, lastSeq.current);
@@ -251,42 +245,19 @@ export function useChat() {
   const injectComputerCard = useCallback(() => {
     const threadId = activeRef.current;
     if (!threadId) return false;
-    const callId = `debug_${Date.now().toString(36)}_${(debugCounter += 1)}`;
-    const message: Message = {
-      id: `debug_msg_${callId}`,
-      role: "assistant",
-      status: "complete",
-      blocks: [
-        {
-          type: "tool_call",
-          call_id: callId,
-          tool: "computer.session",
-          label: "Computer",
-          summary: "Debug card — no tool actually ran.",
-          status: "done",
-          duration_ms: 4200,
-          effects: [],
-          approval_id: null,
-          detail: {},
-          surface: "computer",
-          session: { id: DEBUG_CARD_SESSION, url: null },
-        },
-      ],
-    };
-    const withoutDebugCard = (messages: Message[]) =>
-      messages.filter(
-        (candidate) =>
-          !candidate.blocks.some(
-            (block) =>
-              isToolBlock(block) &&
-              block.session?.id === DEBUG_CARD_SESSION,
+    injectDebugCard(syntheticRef.current, threadId);
+    const remembered = syntheticRef.current.get(threadId) ?? [];
+    const rememberedIds = new Set(remembered.map((message) => message.id));
+    setMessages((current) => [
+      ...current.filter(
+        (message) =>
+          !rememberedIds.has(message.id) &&
+          !message.blocks.some(
+            (block) => isToolBlock(block) && block.session?.id === DEBUG_CARD_SESSION,
           ),
-      );
-    syntheticRef.current.set(threadId, [
-      ...withoutDebugCard(syntheticRef.current.get(threadId) ?? []),
-      message,
+      ),
+      ...remembered,
     ]);
-    setMessages((current) => [...withoutDebugCard(current), message]);
     return true;
   }, []);
 
@@ -294,13 +265,8 @@ export function useChat() {
   const dismissComputerCard = useCallback((callId: string) => {
     const threadId = activeRef.current;
     if (!threadId) return;
-    const without = (messages: Message[]) =>
-      messages.filter(
-        (message) =>
-          !message.blocks.some((block) => isToolBlock(block) && block.call_id === callId),
-      );
-    syntheticRef.current.set(threadId, without(syntheticRef.current.get(threadId) ?? []));
-    setMessages((current) => without(current));
+    const synthetic = syntheticRef.current.get(threadId) ?? [];
+    setMessages((current) => dismissCardMessage(current, synthetic, callId));
   }, []);
 
   const send = useCallback(

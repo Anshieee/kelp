@@ -248,7 +248,10 @@ function runRfbSession(socket, stats, rejectPasswords, noAuth) {
         }
         // Key and pointer events must never arrive from a view-only viewer.
         if (type === 4 || type === 5) stats.inputEvents += 1;
-        if (type === 3 && !sentFramebuffer) {
+        if (type === 3) {
+          // Every request gets a live frame, not just the first: a viewer
+          // that paints once and stalls is indistinguishable from a dead
+          // socket, so the stub must keep answering to prove the mirror.
           sentFramebuffer = true;
           send(framebufferUpdate(format));
         }
@@ -264,8 +267,17 @@ function runRfbSession(socket, stats, rejectPasswords, noAuth) {
       const frame = readFrame(state);
       if (!frame) return;
       if (frame.opcode === 8) {
-        sendFrame(socket, Buffer.alloc(0), 0x88); // echo close
-        socket.end();
+        // The client is going away. The stub may already have ended this
+        // socket (rejected password), so echo only while it is still open —
+        // writing to an ended socket throws and wedges the test server.
+        if (!socket.destroyed && socket.writable && !socket.writableEnded) {
+          try {
+            sendFrame(socket, Buffer.alloc(0), 0x88); // echo close
+          } catch {
+            /* already gone */
+          }
+        }
+        socket.destroy();
         return;
       }
       if (frame.opcode === 9) {
@@ -283,6 +295,7 @@ function runRfbSession(socket, stats, rejectPasswords, noAuth) {
 /** Start the stub. Resolves once it is listening on an ephemeral or given port. */
 export async function startServer({ port = 0, rejectPasswords = false, noAuth = false } = {}) {
   const stats = { connections: 0, inputEvents: 0 };
+  const sockets = new Set();
   const server = http.createServer((request, response) => {
     if (request.url === "/stats") {
       response.writeHead(200, {
@@ -312,6 +325,8 @@ export async function startServer({ port = 0, rejectPasswords = false, noAuth = 
     if (protocols) headers.push(`Sec-WebSocket-Protocol: ${String(protocols).split(",")[0].trim()}`);
     socket.write(headers.join("\r\n") + "\r\n\r\n");
     stats.connections += 1;
+    sockets.add(socket);
+    socket.on("close", () => sockets.delete(socket));
     runRfbSession(socket, stats, rejectPasswords, noAuth);
   });
 
@@ -322,7 +337,13 @@ export async function startServer({ port = 0, rejectPasswords = false, noAuth = 
         port: address.port,
         url: `ws://127.0.0.1:${address.port}/websockify`,
         stats,
-        close: () => new Promise((done) => server.close(() => done())),
+        close: () =>
+          new Promise((done) => {
+            // A test must never hang on teardown: drop any sockets the
+            // client left open, then close the listener.
+            for (const socket of sockets) socket.destroy();
+            server.close(() => done());
+          }),
       });
     });
   });
