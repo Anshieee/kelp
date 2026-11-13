@@ -5,6 +5,7 @@
  */
 import { useState } from "react";
 import ConversationDrawer from "../components/ConversationDrawer";
+import SproutMark from "../components/SproutMark";
 import ThemeToggle from "../components/ThemeToggle";
 import { AccountChip, ThreadListView, useThreadsList } from "../components/ThreadList";
 
@@ -33,11 +34,8 @@ export default function Threads({ onOpenThread, onOpenSettings }: ThreadsProps) 
           </svg>
         </button>
         <div className="top-bar-title">
-          <span className="kelp-avatar small" aria-hidden="true">
-            <i />
-            <i />
-          </span>
-          <h1>Kelp</h1>
+          <SproutMark size={22} />
+          <h1 className="wordmark-title">kelp</h1>
           {list.deviceLabel && <span className="device-chip">{list.deviceLabel}</span>}
         </div>
         <button
@@ -85,10 +83,7 @@ export default function Threads({ onOpenThread, onOpenSettings }: ThreadsProps) 
           </p>
         )}
         <div className="empty-state">
-          <span className="kelp-avatar hero-avatar" aria-hidden="true">
-            <i />
-            <i />
-          </span>
+          <SproutMark size={44} className="hero-sprout" />
           <p>
             {list.loading
               ? "Loading…"

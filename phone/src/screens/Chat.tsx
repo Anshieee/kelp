@@ -21,6 +21,7 @@ import ApprovalCard from "../components/ApprovalCard";
 import Composer from "../components/Composer";
 import ConversationDrawer from "../components/ConversationDrawer";
 import MessageList from "../components/MessageList";
+import SproutMark from "../components/SproutMark";
 import ThemeToggle from "../components/ThemeToggle";
 import { AccountChip, ThreadListView, useThreadsList } from "../components/ThreadList";
 
@@ -304,10 +305,7 @@ function ChatHeader({
         </svg>
       </button>
       <div className="chat-identity">
-        <span className="kelp-avatar small" aria-hidden="true">
-          <i />
-          <i />
-        </span>
+        <SproutMark size={20} />
         <h1 className="chat-title">{title}</h1>
       </div>
       <span className={`connection ${live ? "online" : "offline"}`} role="status">

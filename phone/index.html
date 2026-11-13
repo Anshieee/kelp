@@ -1,28 +1,32 @@
 <!doctype html>
-<html lang="en" data-skin="midnight">
+<html lang="en" data-skin="light">
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
-    <meta name="color-scheme" content="dark light" />
-    <meta name="theme-color" content="#141414" />
+    <meta name="color-scheme" content="light dark" />
+    <meta name="theme-color" content="#fbf9f5" />
     <meta name="mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-capable" content="yes" />
-    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="default" />
     <meta name="apple-mobile-web-app-title" content="Kelp" />
     <meta name="referrer" content="no-referrer" />
     <link rel="manifest" href="/phone/manifest.webmanifest" />
     <link rel="icon" href="/phone/icons/icon-192.png" type="image/png" />
     <link rel="apple-touch-icon" href="/phone/icons/icon-192.png" />
-    <link rel="preload" href="/phone/fonts/geist-latin.woff2" as="font" type="font/woff2" crossorigin />
+    <link rel="preload" href="/phone/fonts/inter-latin.woff2" as="font" type="font/woff2" crossorigin />
+    <link rel="preload" href="/phone/fonts/newsreader-latin.woff2" as="font" type="font/woff2" crossorigin />
+    <link rel="preload" href="/phone/fonts/newsreader-italic-latin.woff2" as="font" type="font/woff2" crossorigin />
     <title>Kelp</title>
     <script>
-      // Apply the stored skin before first paint (Midnight default).
+      // Apply the stored skin before first paint (Light default).
+      // Unknown values (including the retired "meadow" skin) fall back
+      // to light so old prefs never strand the app on a missing skin.
       try {
         var skin = localStorage.getItem("kelp.phone.skin");
-        if (skin === "meadow" || skin === "midnight") {
-          document.documentElement.dataset.skin = skin;
+        if (skin === "midnight") {
+          document.documentElement.dataset.skin = "midnight";
           var meta = document.querySelector('meta[name="theme-color"]');
-          if (meta) meta.setAttribute("content", skin === "meadow" ? "#f6f8f6" : "#141414");
+          if (meta) meta.setAttribute("content", "#141414");
         }
       } catch (e) {}
     </script>
