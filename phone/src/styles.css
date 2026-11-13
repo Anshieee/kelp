@@ -249,7 +249,7 @@ body::after {
   inset: 0;
   z-index: 200;
   pointer-events: none;
-  opacity: 0.05;
+  opacity: 0.09;
   background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='180' height='180'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.85' stitchTiles='stitch'/%3E%3C/filter%3E%3Cpath fill='%23191817' filter='url(%23n)' opacity='.6' d='M0 0h180v180H0z'/%3E%3C/svg%3E");
 }
 
@@ -257,12 +257,42 @@ body::after {
   background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='180' height='180'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.85' stitchTiles='stitch'/%3E%3C/filter%3E%3Cpath fill='%23f5f5f5' filter='url(%23n)' opacity='.6' d='M0 0h180v180H0z'/%3E%3C/svg%3E");
 }
 
-/* Empty-state living blob: the canvas paints its own art, sized by the
-   component; keep it above the fold and clear of the text below. */
+/* Empty-state living blob: the site's own hero artwork (captured frame),
+   breathing slowly and drifting toward the pointer. Transform-only motion so
+   the compositor does the work; frozen under prefers-reduced-motion. */
 .hero-blob {
   display: block;
   margin-bottom: 4px;
   border-radius: 50%;
+  transform: translate(var(--drift-x, 0px), var(--drift-y, 0px));
+  will-change: transform;
+}
+
+.hero-blob img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  border-radius: 50%;
+  animation: hero-breathe 11s ease-in-out infinite alternate;
+  will-change: transform;
+  pointer-events: none;
+  user-select: none;
+  -webkit-user-drag: none;
+}
+
+@keyframes hero-breathe {
+  from {
+    transform: scale(1) rotate(-1deg);
+  }
+  to {
+    transform: scale(1.035) rotate(1.1deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .hero-blob img {
+    animation: none;
+  }
 }
 
 /* --- top bar --- */
