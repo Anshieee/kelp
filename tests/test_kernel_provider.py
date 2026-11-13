@@ -246,6 +246,134 @@ def test_top_level_combinators_are_dropped_from_parameters() -> None:
     assert parameters["properties"] == {"kind": {"enum": ["a", "b"]}}
 
 
+def test_truncation_collisions_round_trip() -> None:
+    """Two long dotted names that truncate alike get distinct wires and restore."""
+    first = "a." + "x" * 70
+    second = "a." + "y" * 70
+    captured: dict[str, Any] = {}
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        captured["body"] = json.loads(req.content)
+        tools = captured["body"]["tools"]
+        wires = [tool["function"]["name"] for tool in tools]
+        assert wires[0] != wires[1]
+        assert all(len(wire) <= 64 for wire in wires)
+        return httpx.Response(
+            200,
+            text=sse(
+                {
+                    "choices": [
+                        {
+                            "delta": {
+                                "tool_calls": [
+                                    {
+                                        "index": 0,
+                                        "id": "call_1",
+                                        "function": {
+                                            "name": wires[0],
+                                            "arguments": "{}",
+                                        },
+                                    },
+                                    {
+                                        "index": 1,
+                                        "id": "call_2",
+                                        "function": {
+                                            "name": wires[1],
+                                            "arguments": "{}",
+                                        },
+                                    },
+                                ]
+                            }
+                        }
+                    ]
+                },
+                {"choices": [{"delta": {}, "finish_reason": "tool_calls"}]},
+            ),
+        )
+
+    async def run() -> list[Any]:
+        request = ChatRequest(
+            model="m",
+            messages=[{"role": "user", "content": "hi"}],
+            tools=[
+                {"type": "function", "function": {"name": first, "parameters": {}}},
+                {"type": "function", "function": {"name": second, "parameters": {}}},
+            ],
+        )
+        async with client_with(handler) as client:
+            return [event async for event in client.stream(request)]
+
+    events = asyncio.run(run())
+    calls = [e for e in events if isinstance(e, ToolCallReady)]
+    assert [call.name for call in calls] == [first, second]
+
+
+def test_unknown_tool_name_passes_through() -> None:
+    """A name the model invents is delivered as-is, not dropped or mapped."""
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            text=sse(
+                {
+                    "choices": [
+                        {
+                            "delta": {
+                                "tool_calls": [
+                                    {
+                                        "index": 0,
+                                        "id": "call_1",
+                                        "function": {
+                                            "name": "hallucinated_tool",
+                                            "arguments": "{}",
+                                        },
+                                    }
+                                ]
+                            }
+                        }
+                    ]
+                },
+                {"choices": [{"delta": {}, "finish_reason": "tool_calls"}]},
+            ),
+        )
+
+    events = drain(client_with(handler))
+    calls = [e for e in events if isinstance(e, ToolCallReady)]
+    assert [call.name for call in calls] == ["hallucinated_tool"]
+
+
+def test_only_refused_keys_leaves_an_object_schema() -> None:
+    """A parameters map with nothing but refused keys still wires as an object."""
+    captured: dict[str, Any] = {}
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        captured["body"] = json.loads(req.content)
+        return httpx.Response(
+            200, text=sse({"choices": [{"delta": {}, "finish_reason": "stop"}]})
+        )
+
+    async def run() -> list[Any]:
+        request = ChatRequest(
+            model="m",
+            messages=[{"role": "user", "content": "hi"}],
+            tools=[
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "github.read",
+                        "parameters": {"oneOf": [{"required": ["kind"]}]},
+                    },
+                }
+            ],
+        )
+        async with client_with(handler) as client:
+            return [event async for event in client.stream(request)]
+
+    events = asyncio.run(run())
+    assert events[-1] == StreamEnd("stop")
+    assert captured["body"]["tools"][0]["function"]["parameters"] == {"type": "object"}
+
+
 def test_tenant_mismatch_never_reaches_the_wire() -> None:
     seen: list[httpx.Request] = []
 

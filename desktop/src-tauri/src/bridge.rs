@@ -16,7 +16,14 @@ use serde_json::{json, Value};
 use tauri::{Emitter, State};
 
 const SERVER_ENV: &str = "KELP_SERVER_URL";
+/// Debug builds talk to a local `make serve` instance. Release builds default
+/// to the https placeholder and fail closed (a connection error, not a silent
+/// cleartext dial) until the operator sets KELP_SERVER_URL — a packaged app
+/// must never default to loopback in production.
+#[cfg(debug_assertions)]
 const DEFAULT_SERVER: &str = "http://127.0.0.1:8000";
+#[cfg(not(debug_assertions))]
+const DEFAULT_SERVER: &str = "https://kelp.example.com";
 
 /// A failure the webview can render without parsing HTTP itself.
 #[derive(Debug, Serialize)]

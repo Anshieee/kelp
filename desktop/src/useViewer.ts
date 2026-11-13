@@ -15,6 +15,7 @@ import {
   computerTransport,
   defaultViewerUrl,
   disconnectDetail,
+  isCleartextRemote,
   isRfbTransport,
   normaliseViewerUrl,
   planCredentials,
@@ -68,7 +69,12 @@ export function useViewer({ enabled }: { enabled: boolean }) {
   const wasEnabledRef = useRef(false);
 
   const start = useCallback((rawUrl: string, sessionId: string | null = null) => {
-    const problem = viewerUrlProblem(rawUrl);
+    const problem =
+      viewerUrlProblem(rawUrl) ??
+      (isCleartextRemote(rawUrl)
+        ? "That address is not on this machine and does not use TLS — the VNC " +
+          "password would travel in cleartext. Use a wss:// tunnel instead."
+        : null);
     if (problem) {
       setStatus("error");
       setDetail(problem);

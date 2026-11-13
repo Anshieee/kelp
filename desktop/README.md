@@ -55,6 +55,24 @@ JS unit tests (no deps, `node --test`):
 node --test desktop/tests/
 ```
 
+## Auth
+
+One bearer exchange, then the Rust bridge owns the session. The webview holds
+the bearer in React state only while the sign-in dialog is open and clears it
+on both submit paths; the only wire it ever travels is the single
+`bridge_sign_in` invoke, which POSTs to `/api/auth/session` from Rust. After
+that the cookie jar in `bridge.rs` authorizes every call and the CSRF
+double-submit pair guards mutations — no routine request carries the bearer.
+Nothing is written to localStorage, disk, or logs: `bearer_persistence.test.mjs`
+pins that the dialog clears state on both submit paths and that the bridge
+interface exposes no getter, no stored token, and no bearer logging.
+
+The old `keychain.js` (direct stronghold access from JS) is intentionally
+gone. Its UI died with `app.js`; auth returns through the backend wiring
+described above. If a future pass needs at-rest persistence beyond the
+session cookie, the replacement is a Rust-side stronghold write inside
+`bridge_sign_in` — never a webview-held secret.
+
 ## Computer tab
 
 The production tab points at a managed session URL (`https://…/session/…`)

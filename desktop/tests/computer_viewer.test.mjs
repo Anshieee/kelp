@@ -370,6 +370,26 @@ describe("viewer url hygiene", () => {
     assert.match(problem, /wss/);
   });
 
+  it("treats every loopback spelling as local, including edge hosts", () => {
+    // 0.0.0.0 (dial-this-machine), IPv4-mapped IPv6, uppercase scheme, and
+    // userinfo URLs must not read as remote — but a trailing-dot remote name
+    // still is.
+    for (const url of [
+      "ws://0.0.0.0:6080/websockify",
+      "ws://[::ffff:127.0.0.1]:6080/x",
+      "WS://127.0.0.1:6080/websockify",
+      "ws://user:pass@127.0.0.1:6080/x",
+      "ws://localhost.:6080/x",
+      "ws://[::1]:6080/x",
+    ]) {
+      assert.equal(isCleartextRemote(url), false, url);
+    }
+    assert.equal(isCleartextRemote("ws://example.test./x"), true);
+    // viewerUrlProblem agrees through the same path the dial entry uses.
+    assert.equal(viewerUrlProblem("WS://127.0.0.1:6080/websockify"), null);
+    assert.match(viewerUrlProblem("ws://user:pass@203.0.113.7:6080/x"), /cleartext/);
+  });
+
   it("never persists query or fragment", () => {
     const store = new Map();
     globalThis.localStorage = { getItem: (k) => store.get(k) ?? null, setItem: (k, v) => store.set(k, String(v)) };

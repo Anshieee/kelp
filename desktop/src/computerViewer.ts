@@ -99,6 +99,21 @@ export type ViewerStatus =
 
 const WS_SCHEMES = new Set(["ws:", "wss:"]);
 
+/** Host spellings that still mean this machine when dialled. */
+const LOOPBACK_HOSTS = new Set([
+  "localhost",
+  "127.0.0.1",
+  "::1",
+  "[::1]",
+  "0.0.0.0",
+  // IPv4-mapped IPv6: Node's URL hexifies the v4 tail (`::ffff:7f00:1`),
+  // so both spellings are listed.
+  "::ffff:127.0.0.1",
+  "[::ffff:127.0.0.1]",
+  "::ffff:7f00:1",
+  "[::ffff:7f00:1]",
+]);
+
 /**
  * Accept what people actually paste — a bare host, an http(s) URL, or a ws(s)
  * URL — and return the ws(s) form, or null when it cannot be used.
@@ -257,10 +272,11 @@ export function isCleartextRemote(url: string): boolean {
   } catch {
     return false;
   }
-  if (parsed.protocol !== "ws:") return false;
+  // URL lowercases the scheme but not always the host for IPv6 forms, and a
+  // `user@host` paste must be judged by its host, not its userinfo.
+  if (parsed.protocol.toLowerCase() !== "ws:") return false;
   const host = parsed.hostname.toLowerCase().replace(/\.$/, "");
-  if (host === "localhost" || host === "127.0.0.1" || host === "::1") return false;
-  if (host === "[::1]") return false;
+  if (LOOPBACK_HOSTS.has(host)) return false;
   return true;
 }
 
