@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 148 148" role="img" aria-label="Kelp">
+  <!-- Desk-pet orb as vector, matching the website's e-orb-face element:
+       one flat jade disc, two dark capsule eyes, one specular highlight.
+       State tint comes from page CSS via [data-pet-state] on the host. -->
+  <circle class="pet-disc" cx="74" cy="74" r="60" />
+  <ellipse class="pet-spec" cx="56" cy="52" rx="16" ry="9" transform="rotate(-24 56 52)" />
+  <g class="pet-gaze">
+    <g class="pet-eyes">
+      <rect class="pet-eye" x="38" y="62" width="28" height="17" rx="8.5" />
+      <rect class="pet-eye" x="82" y="62" width="28" height="17" rx="8.5" />
+    </g>
+  </g>
+</svg>

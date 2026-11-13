@@ -127,6 +127,278 @@ def test_tool_call_deltas_are_assembled() -> None:
     assert events[-1] == StreamEnd("tool_calls")
 
 
+def test_tool_names_are_rewritten_for_the_wire_and_restored() -> None:
+    captured: dict[str, Any] = {}
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        captured["body"] = json.loads(req.content)
+        return httpx.Response(
+            200,
+            text=sse(
+                {
+                    "choices": [
+                        {
+                            "delta": {
+                                "tool_calls": [
+                                    {
+                                        "index": 0,
+                                        "id": "call_1",
+                                        "function": {
+                                            "name": "web_search",
+                                            "arguments": '{"query": "x"}',
+                                        },
+                                    }
+                                ]
+                            }
+                        }
+                    ]
+                },
+                {"choices": [{"delta": {}, "finish_reason": "tool_calls"}]},
+            ),
+        )
+
+    events = drain(client_with(handler))
+    assert captured["body"]["tools"][0]["function"]["name"] == "web_search"
+    calls = [e for e in events if isinstance(e, ToolCallReady)]
+    assert [call.name for call in calls] == ["web.search"]
+
+
+def test_transcript_tool_names_are_rewritten_too() -> None:
+    captured: dict[str, Any] = {}
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        captured["body"] = json.loads(req.content)
+        return httpx.Response(
+            200, text=sse({"choices": [{"delta": {}, "finish_reason": "stop"}]})
+        )
+
+    async def run() -> list[Any]:
+        request = ChatRequest(
+            model="m",
+            messages=[
+                {"role": "user", "content": "hi"},
+                {
+                    "role": "assistant",
+                    "content": None,
+                    "tool_calls": [
+                        {
+                            "id": "call_1",
+                            "type": "function",
+                            "function": {"name": "web.search", "arguments": "{}"},
+                        }
+                    ],
+                },
+                {"role": "tool", "tool_call_id": "call_1", "name": "web.search", "content": "{}"},
+            ],
+            tools=[
+                {"type": "function", "function": {"name": "web.search", "parameters": {}}}
+            ],
+        )
+        async with client_with(handler) as client:
+            return [event async for event in client.stream(request)]
+
+    asyncio.run(run())
+    messages = captured["body"]["messages"]
+    assert messages[1]["tool_calls"][0]["function"]["name"] == "web_search"
+    assert messages[2]["name"] == "web_search"
+
+
+def test_top_level_combinators_are_dropped_from_parameters() -> None:
+    captured: dict[str, Any] = {}
+    schema = {
+        "type": "object",
+        "properties": {"kind": {"enum": ["a", "b"]}},
+        "required": ["kind"],
+        "oneOf": [{"required": ["kind"]}],
+        "anyOf": [{"required": ["kind"]}],
+        "allOf": [{"required": ["kind"]}],
+        "not": {"required": ["other"]},
+        "const": "kind",
+        "enum": ["a", "b"],
+    }
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        captured["body"] = json.loads(req.content)
+        return httpx.Response(
+            200, text=sse({"choices": [{"delta": {}, "finish_reason": "stop"}]})
+        )
+
+    async def run() -> list[Any]:
+        request = ChatRequest(
+            model="m",
+            messages=[{"role": "user", "content": "hi"}],
+            tools=[
+                {
+                    "type": "function",
+                    "function": {"name": "github.read", "parameters": schema},
+                }
+            ],
+        )
+        async with client_with(handler) as client:
+            return [event async for event in client.stream(request)]
+
+    events = asyncio.run(run())
+    assert events[-1] == StreamEnd("stop")
+    parameters = captured["body"]["tools"][0]["function"]["parameters"]
+    for refused in ("oneOf", "anyOf", "allOf", "not", "const", "enum"):
+        assert refused not in parameters
+    assert parameters["type"] == "object"
+    assert parameters["properties"] == {"kind": {"enum": ["a", "b"]}}
+
+
+def test_truncation_collisions_round_trip() -> None:
+    """Two long dotted names that truncate alike get distinct wires and restore."""
+    first = "a." + "x" * 70
+    second = "a." + "y" * 70
+    captured: dict[str, Any] = {}
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        captured["body"] = json.loads(req.content)
+        tools = captured["body"]["tools"]
+        wires = [tool["function"]["name"] for tool in tools]
+        assert wires[0] != wires[1]
+        assert all(len(wire) <= 64 for wire in wires)
+        return httpx.Response(
+            200,
+            text=sse(
+                {
+                    "choices": [
+                        {
+                            "delta": {
+                                "tool_calls": [
+                                    {
+                                        "index": 0,
+                                        "id": "call_1",
+                                        "function": {
+                                            "name": wires[0],
+                                            "arguments": "{}",
+                                        },
+                                    },
+                                    {
+                                        "index": 1,
+                                        "id": "call_2",
+                                        "function": {
+                                            "name": wires[1],
+                                            "arguments": "{}",
+                                        },
+                                    },
+                                ]
+                            }
+                        }
+                    ]
+                },
+                {"choices": [{"delta": {}, "finish_reason": "tool_calls"}]},
+            ),
+        )
+
+    async def run() -> list[Any]:
+        request = ChatRequest(
+            model="m",
+            messages=[{"role": "user", "content": "hi"}],
+            tools=[
+                {"type": "function", "function": {"name": first, "parameters": {}}},
+                {"type": "function", "function": {"name": second, "parameters": {}}},
+            ],
+        )
+        async with client_with(handler) as client:
+            return [event async for event in client.stream(request)]
+
+    events = asyncio.run(run())
+    calls = [e for e in events if isinstance(e, ToolCallReady)]
+    assert [call.name for call in calls] == [first, second]
+
+
+def test_unknown_tool_name_passes_through() -> None:
+    """A name the model invents is delivered as-is, not dropped or mapped."""
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            text=sse(
+                {
+                    "choices": [
+                        {
+                            "delta": {
+                                "tool_calls": [
+                                    {
+                                        "index": 0,
+                                        "id": "call_1",
+                                        "function": {
+                                            "name": "hallucinated_tool",
+                                            "arguments": "{}",
+                                        },
+                                    }
+                                ]
+                            }
+                        }
+                    ]
+                },
+                {"choices": [{"delta": {}, "finish_reason": "tool_calls"}]},
+            ),
+        )
+
+    events = drain(client_with(handler))
+    calls = [e for e in events if isinstance(e, ToolCallReady)]
+    assert [call.name for call in calls] == ["hallucinated_tool"]
+
+
+def test_only_refused_keys_leaves_an_object_schema() -> None:
+    """A parameters map with nothing but refused keys still wires as an object."""
+    captured: dict[str, Any] = {}
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        captured["body"] = json.loads(req.content)
+        return httpx.Response(
+            200, text=sse({"choices": [{"delta": {}, "finish_reason": "stop"}]})
+        )
+
+    async def run() -> list[Any]:
+        request = ChatRequest(
+            model="m",
+            messages=[{"role": "user", "content": "hi"}],
+            tools=[
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "github.read",
+                        "parameters": {"oneOf": [{"required": ["kind"]}]},
+                    },
+                }
+            ],
+        )
+        async with client_with(handler) as client:
+            return [event async for event in client.stream(request)]
+
+    events = asyncio.run(run())
+    assert events[-1] == StreamEnd("stop")
+    assert captured["body"]["tools"][0]["function"]["parameters"] == {"type": "object"}
+
+
+def test_tenant_mismatch_never_reaches_the_wire() -> None:
+    seen: list[httpx.Request] = []
+
+    def handler(req: httpx.Request) -> httpx.Response:  # pragma: no cover - must not run
+        seen.append(req)
+        raise AssertionError("a tenant-mismatched request must not be sent")
+
+    async def run() -> list[Any]:
+        request = ChatRequest(
+            model="m",
+            messages=[{"role": "user", "content": "hi"}],
+            tools=[{"type": "function", "function": {"name": "web.search", "parameters": {}}}],
+            tenant_id="someone-else",
+        )
+        async with client_with(handler) as client:
+            return [event async for event in client.stream(request)]
+
+    events = asyncio.run(run())
+    assert len(events) == 1
+    assert isinstance(events[0], ProviderFailure)
+    assert events[0].code == "tenant_mismatch"
+    assert events[0].retryable is False
+    assert seen == []
+
+
 def test_missing_api_key_is_a_typed_event() -> None:
     def handler(req: httpx.Request) -> httpx.Response:  # pragma: no cover - must not run
         raise AssertionError("no request should be made without a key")

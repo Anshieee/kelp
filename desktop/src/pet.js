@@ -1,134 +1,279 @@
-// Desk-pet overlay wiring: orb + live SSE state + interactivity.
-// Settled scope: notifications + one-tap Approve/Deny, click-to-open, mute.
+// Desk-pet overlay: the animated avatar, and the interaction states over it.
 //
-// - Click pet: open (or focus) the main app window.
-// - Approval notification: tap focuses the app on that approval card (one
-//   more tap decides); the decision receipt renders in-app. Server caps
-//   (single use, TTL, idempotent replay) are enforced server-side.
-// - Notifications use the Web Notification API, so OS do-not-disturb
-//   silences them automatically; the pet never buzzes through quiet hours.
-// - Right-click: mute motion / quit (Tauri menu; no-op in plain browser).
-// - Respects OS reduced-motion: CSS face only, no canvas loop.
-// - Never shows text beyond a tooltip.
+// State arrives from the Rust bridge, never from a browser EventSource: the
+// server has no CORS layer and its CSRF gate rejects a tauri:// origin, so the
+// webview cannot reach it directly (docs/DESKTOP_API_BRIDGE_PLAN.md). The bridge
+// already broadcasts `chat-event` / `chat-stream-state` to every window, so the
+// pet only listens. It must never open its own stream: the bridge keys streams
+// by thread id, so a second opener would cancel the main window's.
+//
+// Layers, lowest first: the streamed turn state, a held hover, a one-shot
+// (click or fidget). A real state change preempts a one-shot; hover is held
+// until the pointer leaves. `offline` is reachability rather than a turn state,
+// so the bridge decides it, not the event table.
+//
+// Between real turns the mascot fidgets on its own — a restless rotation of
+// thinking / curious / surprised / happy / excited expressions, never twice in
+// a row (see pet_motion.js for what is deliberately excluded and why).
+//
+// Gaze leans the mascot toward the cursor; the kit's loops have their eyes
+// baked in, so the lean is what stands in for eye tracking.
+//
+// Right-click still mutes motion by switching the kit to its still.
 
-import { approvals, connectStream } from "./api.js";
-import { SERVER_URL } from "./config.js";
-import { initPetOrb, petStateFromEvent } from "./orb.js";
+import { petStateFromEvent } from "./orb.js";
+import {
+  GAZE_TRAVEL_X,
+  GAZE_TRAVEL_Y,
+  ONE_SHOT_MS,
+  ONE_SHOT_SLACK_MS,
+  SETTLE_MS,
+  canFidget,
+  motionState,
+  nextFidgetDelay,
+  nextFidgetGap,
+  resolveState,
+  settlesToIdle,
+} from "./pet_motion.js";
 
 const host = document.querySelector("[data-orb]");
-const orb = initPetOrb(host);
+const companion = document.getElementById("companion");
+const fallback = document.querySelector(".pet-fallback");
+const reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)");
+
+let base = "idle";
+let oneShot = null;
+let hovering = false;
 let muted = false;
-let currentThread = new URLSearchParams(location.search).get("thread") || null;
-let streamHandle = null;
+let lastFidget = null;
+let oneShotTimer = 0;
+let fidgetTimer = 0;
+let settleTimer = 0;
 
-function setState(state) {
-  if (state) orb?.setPetState?.(state);
+// One source of truth for the lean distance; styles.css consumes these.
+host?.style.setProperty("--gaze-x", `${GAZE_TRAVEL_X}px`);
+host?.style.setProperty("--gaze-y", `${GAZE_TRAVEL_Y}px`);
+
+function render() {
+  const state = resolveState({ base, oneShot, hovering });
+  host.dataset.petState = state;
+  host.dataset.petMotion = oneShot ? oneShot.kind : hovering ? "hover" : "";
+  companion?.setAttribute("state", state);
 }
 
-/** Hook the pet to a thread's SSE stream (called by main window / deep link). */
-export function watchThread(threadId) {
-  if (streamHandle || !threadId || threadId === currentThread) return;
-  currentThread = threadId;
-  streamHandle = connectStream(threadId, {
-    onEvent: (data) => {
-      const state = petStateFromEvent(data);
-      if (state) setState(state);
-      if (data?.type === "approval_created") void notifyApproval(data.approval);
-    },
-  });
+function cancelOneShot() {
+  clearTimeout(oneShotTimer);
+  oneShot = null;
 }
 
-// Emit the server's receipt so the main window renders it in-app.
-function emitReceipt(receipt) {
-  const invoke = window.__TAURI__?.core?.invoke ?? window.__TAURI__?.invoke;
-  invoke?.("plugin:event|emit", { event: "pet-decision-receipt", payload: receipt }).catch(() => {});
-  try {
-    localStorage.setItem("kelp.pet-receipt", JSON.stringify({ ...receipt, at: Date.now() }));
-  } catch { /* private mode: Tauri bridge already carried it */ }
+/* -- transient motion --------------------------------------------------- */
+
+function playOneShot(kind) {
+  const state = motionState(kind, Math.random, kind === "fidget" ? lastFidget : null);
+  if (!state) return;
+  if (kind === "fidget") lastFidget = state;
+  oneShot = { kind, state };
+  clearTimeout(oneShotTimer);
+  // The kit's loops run 2.56 s; the slack absorbs a dropped frame so the pet
+  // can never be left parked mid-hop.
+  oneShotTimer = setTimeout(() => {
+    oneShot = null;
+    render();
+    scheduleFidget(nextFidgetGap());
+  }, ONE_SHOT_MS + ONE_SHOT_SLACK_MS);
+  render();
 }
 
-async function notifyApproval(approval) {
-  if (!("Notification" in window)) return;
-  if (Notification.permission !== "granted") {
-    try {
-      await Notification.requestPermission();
-    } catch { /* ignore */ }
-  }
-  if (Notification.permission !== "granted" || !approval?.id) return;
-  // Quiet under OS do-not-disturb: the OS suppresses this automatically.
-  // No sound, no vibration, no custom priority — a plain banner.
-  const n = new Notification("Kelp needs approval", {
-    body: approval.title || approval.tool || "Review the pending action.",
-    tag: approval.id,
-    silent: true,
-  });
-  // One tap focuses the app on the approval card; the receipt comes back
-  // in-app after Approve/Deny.
-  n.onclick = () => focusMain(approval.id);
+function scheduleFidget(delay) {
+  clearTimeout(fidgetTimer);
+  if (reduceMotion.matches) return;
+  fidgetTimer = setTimeout(() => {
+    const allowed = canFidget({
+      base,
+      oneShot,
+      hovering,
+      hidden: document.hidden,
+      reducedMotion: reduceMotion.matches,
+    });
+    if (allowed) playOneShot("fidget");
+    else scheduleFidget(nextFidgetGap());
+  }, delay ?? nextFidgetDelay());
 }
 
-async function decideQuickAction(approvalId, decision) {
-  try {
-    await approvals.decide(approvalId, decision);
-    setState("working");
-    emitReceipt({ id: approvalId, decision, ok: true });
-  } catch (e) {
-    setState("waiting"); // stay put so the owner sees it still needs them
-    emitReceipt({ id: approvalId, decision, ok: false, error: e.message });
-  }
+/* -- streamed state ----------------------------------------------------- */
+
+/**
+ * A finished turn celebrates for one loop and then settles. Without this the
+ * pet parks on `done` — the happy landing — and never floats again, which is
+ * exactly what "it only shows the happy kelp" looks like.
+ */
+function settleAfterCelebration() {
+  clearTimeout(settleTimer);
+  if (!settlesToIdle(base)) return;
+  settleTimer = setTimeout(() => {
+    if (!settlesToIdle(base)) return; // a real event overtook the celebration
+    base = "idle";
+    render();
+    scheduleFidget(nextFidgetGap());
+  }, SETTLE_MS);
 }
 
-// Click: open / focus the main window, optionally on an approval card.
-function focusMain(approvalId) {
-  const url = approvalId
-    ? `./index.html?approval=${encodeURIComponent(approvalId)}`
-    : "./index.html";
-  const invoke = window.__TAURI__?.core?.invoke ?? window.__TAURI__?.invoke;
-  if (invoke) {
-    invoke("plugin:window|show", { label: "main" }).catch(() => {});
-    invoke("plugin:window|set_focus", { label: "main" }).catch(() => {});
-    invoke("plugin:event|emit", {
-      event: "pet-focus-approval",
-      payload: approvalId ?? null,
-    }).catch(() => {});
+function applyEvent(type, reason) {
+  const state = petStateFromEvent({ type, reason });
+  if (!state || state === base) return;
+  base = state;
+  // A real state change preempts a one-shot. Hover is not one, so a pointer
+  // resting on the pet keeps its own expression through the change.
+  if (oneShot) cancelOneShot();
+  render();
+  if (base === "idle") scheduleFidget(nextFidgetGap());
+  else clearTimeout(fidgetTimer);
+  settleAfterCelebration();
+}
+
+/** Reachability, not a turn state: only the bridge can decide this. */
+function setOffline(offline) {
+  if (offline) {
+    if (base === "offline") return;
+    base = "offline";
+    cancelOneShot();
+    clearTimeout(fidgetTimer);
+    clearTimeout(settleTimer);
   } else {
-    window.open(url, "_blank");
+    if (base !== "offline") return; // never stomp a live turn state
+    base = "idle";
+    scheduleFidget(nextFidgetGap());
   }
+  render();
 }
 
-host?.addEventListener("click", () => focusMain());
+void (async () => {
+  try {
+    const { listen } = await import("@tauri-apps/api/event");
+    await listen("chat-event", (event) => {
+      const payload = event.payload || {};
+      const data = payload.data || {};
+      applyEvent(payload.event ?? data.type, data.reason);
+    });
+    // A stream that closes is not an unreachable server; only an error is.
+    await listen("chat-stream-state", (event) => {
+      if (event.payload?.state === "error") setOffline(true);
+    });
+    await listen("bridge-reachability", (event) => {
+      setOffline(event.payload?.reachable === false);
+    });
+  } catch {
+    /* Plain browser: no bridge, so the pet simply stays idle. */
+  }
+})();
 
-// Right-click: mute motion / quit (Tauri menu; no-op in plain browser).
-host?.addEventListener("contextmenu", (e) => {
-  e.preventDefault();
+/* -- fallback ----------------------------------------------------------- */
+
+function showFallback() {
+  if (!fallback) return;
+  fallback.hidden = false;
+  host.dataset.petFallback = "true";
+}
+
+// The kit's own stills already cover reduced motion, so this only covers what
+// the component cannot: its assets missing or unreadable.
+if (!customElements.get("kelp-pet")) {
+  showFallback();
+} else {
+  companion?.shadowRoot?.querySelector("img")?.addEventListener("error", showFallback);
+}
+
+/* -- gaze --------------------------------------------------------------- */
+
+// The kit's loops have their eyes baked into the artwork, so the mascot cannot
+// have independently moving pupils. What it can do — and what reads as
+// tracking — is lean toward the cursor: the eyes sit high in the body, so
+// shifting the whole sprite moves them. The same custom properties drive the
+// fallback's vector eyes, which *do* move independently.
+function setGaze(x, y) {
+  if (!Number.isFinite(x) || !Number.isFinite(y)) return;
+  host.style.setProperty("--gx", Math.max(-1, Math.min(1, x)).toFixed(3));
+  host.style.setProperty("--gy", Math.max(-1, Math.min(1, y)).toFixed(3));
+}
+
+window.addEventListener(
+  "pointermove",
+  (event) => {
+    const rect = host.getBoundingClientRect();
+    if (!rect.width) return;
+    setGaze(
+      ((event.clientX - rect.left) / rect.width) * 2 - 1,
+      ((event.clientY - rect.top) / rect.height) * 2 - 1,
+    );
+  },
+  { passive: true },
+);
+
+// The shell feeds the cursor from anywhere on screen: a webview only hears
+// pointer events inside its own window.
+void (async () => {
+  try {
+    const { listen } = await import("@tauri-apps/api/event");
+    await listen("pet-gaze", (event) => {
+      const gaze = event.payload || {};
+      setGaze(Number(gaze.x), Number(gaze.y));
+    });
+  } catch {
+    /* Plain browser: the pointermove handler above is all there is. */
+  }
+})();
+
+/* -- interaction -------------------------------------------------------- */
+
+host?.addEventListener("pointerenter", () => {
+  hovering = true;
+  clearTimeout(fidgetTimer); // never fidget under the pointer
+  render();
+});
+
+host?.addEventListener("pointerleave", () => {
+  hovering = false;
+  render();
+  scheduleFidget(nextFidgetGap());
+});
+
+// Click: summon or dismiss the panel. The hop is a one-shot and must never
+// delay the toggle — the panel opens while the pet is still moving.
+host?.addEventListener("click", () => {
+  playOneShot("click");
+  void togglePanel();
+});
+
+host?.addEventListener("contextmenu", (event) => {
+  event.preventDefault();
   toggleMute();
 });
+
+async function togglePanel() {
+  try {
+    const { invoke } = await import("@tauri-apps/api/core");
+    await invoke("toggle_overlay");
+  } catch {
+    /* Plain browser: there is no panel window to summon. */
+  }
+}
 
 export function toggleMute() {
   muted = !muted;
   document.body.classList.toggle("motion-paused", muted);
-  if (muted) host?.classList.remove("e-orb--webgl");
+  companion?.toggleAttribute("paused", muted); // the component shows its still
+  if (muted) cancelOneShot();
+  render();
   return muted;
 }
 
-// Tauri deep-link / event bridge: main window forwards pet states + quick
-// actions when both windows run under the same Tauri process.
-if (window.__TAURI__?.event?.listen) {
-  window.__TAURI__.event.listen("pet-state", (e) => setState(e.payload));
-  window.__TAURI__.event.listen("pet-watch", (e) => watchThread(e.payload));
-  window.__TAURI__.event.listen("pet-approve", (e) => {
-    if (e.payload?.id) void decideQuickAction(e.payload.id, "approve");
-  });
-  window.__TAURI__.event.listen("pet-deny", (e) => {
-    if (e.payload?.id) void decideQuickAction(e.payload.id, "deny");
-  });
-}
+// Keep the fidget loop in step with the OS setting. Pausing under reduced
+// motion is correct, but a loop that never re-arms once reduce is switched back
+// off leaves a permanently still pet — so re-arm on the change.
+reduceMotion.addEventListener("change", () => {
+  if (reduceMotion.matches) clearTimeout(fidgetTimer);
+  else scheduleFidget(nextFidgetGap());
+});
 
-// Query-string bootstrap (?thread=…) for the plain-browser dev path.
-if (currentThread) watchThread(currentThread)
-
-// Keep SERVER_URL referenced so a misconfigured build fails loudly here,
-// not at first fetch: every pet request must hit the one configured host.
-if (!SERVER_URL.startsWith("https://") && !SERVER_URL.startsWith("http://127.0.0.1")) {
-  console.warn(`[pet] SERVER_URL looks unconfigured: ${SERVER_URL}`);
-}
+render();
+scheduleFidget();
