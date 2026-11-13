@@ -8,7 +8,7 @@
  *
  * Bump VERSION whenever the app shell changes shape.
  */
-const VERSION = "kelp-phone-v1";
+const VERSION = "kelp-phone-v2";
 const SHELL_CACHE = `${VERSION}-shell`;
 const ASSET_CACHE = `${VERSION}-assets`;
 const BASE = "/phone/";
