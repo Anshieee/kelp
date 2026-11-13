@@ -51,6 +51,15 @@ wordmark in app chrome; pill buttons and rounded cards.
   (`landing/index.html`): a stroke-only mark, `fill:none`,
   `stroke:currentColor`. The install icons (`public/icons/*`) are unchanged
   originals.
+- The film-grain page overlay (`body::after` in `src/styles.css`) adapts the
+  site's static `feTurbulence` data-URI (`landing/styles.css`), with an
+  inverted speckle for the dark theme. The empty-state artwork
+  (`src/components/LivingBlob.tsx`) is an original canvas re-imagining of the
+  site hero field's look — layered sine-warped contour rings over a
+  peach/gold/mint wash, drifting on incommensurate tides with pointer
+  follow — written fresh for the phone's performance budget (~30fps,
+  reduced backing store, DPR cap, pausing when hidden, off-screen, or
+  reduced-motion), not a port of the site's WebGL shader.
 - `public/fonts/newsreader-latin.woff2`, `newsreader-italic-latin.woff2`,
   and `inter-latin.woff2` are the SIL Open Font License 1.1 faces the site
   loads from Google Fonts, vendored here so the offline-first PWA never

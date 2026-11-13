@@ -6,6 +6,7 @@
 import { useState } from "react";
 import ConversationDrawer from "../components/ConversationDrawer";
 import SproutMark from "../components/SproutMark";
+import LivingBlob from "../components/LivingBlob";
 import ThemeToggle from "../components/ThemeToggle";
 import { AccountChip, ThreadListView, useThreadsList } from "../components/ThreadList";
 
@@ -83,7 +84,7 @@ export default function Threads({ onOpenThread, onOpenSettings }: ThreadsProps) 
           </p>
         )}
         <div className="empty-state">
-          <SproutMark size={44} className="hero-sprout" />
+          <LivingBlob size={260} className="hero-blob" />
           <p>
             {list.loading
               ? "Loading…"
