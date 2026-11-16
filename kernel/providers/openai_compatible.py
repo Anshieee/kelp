@@ -12,13 +12,18 @@ Design rules:
 - The API key is never included in an exception, event, or ``repr``.
 - ``ChatRequest.tenant_id`` must equal the tenant this client is bound to, and
   it is never written into the request body.
+- Tool names are rewritten onto the provider's function-name alphabet
+  (``^[a-zA-Z0-9_-]{1,64}$``) and restored before events reach the loop, so a
+  skill keeps its dotted name whatever the endpoint accepts.
 """
 
 from __future__ import annotations
 
+import hashlib
 import json
+import re
 import urllib.parse
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any, AsyncIterator, Mapping
 
 import httpx
@@ -77,6 +82,97 @@ async def _iter_sse_data(lines: AsyncIterator[str]) -> AsyncIterator[str]:
             buffer.append(line[5:].lstrip(" "))
     if buffer:
         yield "\n".join(buffer)
+
+
+_WIRE_NAME = re.compile(r"[^A-Za-z0-9_-]")
+_WIRE_NAME_MAX = 64
+_WIRE_FALLBACK = "tool"
+#: JSON Schema keywords a strict provider refuses at the top of a function's
+#: ``parameters``. Nested uses are fine and are left alone.
+_TOP_LEVEL_REFUSED = frozenset({"oneOf", "anyOf", "allOf", "not", "const", "enum"})
+
+
+class _ToolNames:
+    """Rewrite tool names onto the provider's function-name alphabet.
+
+    OpenAI-compatible endpoints validate ``^[a-zA-Z0-9_-]{1,64}$``, while
+    Kelp's skills are namespaced with dots (``web.search``). Substitution alone
+    is ambiguous, so each request keeps its own forward/reverse pair and the
+    model's tool calls are restored to the dotted name before they reach the
+    loop. A name the model invents passes through untouched.
+    """
+
+    def __init__(self) -> None:
+        self._forward: dict[str, str] = {}
+        self._reverse: dict[str, str] = {}
+
+    def wire(self, name: str) -> str:
+        known = self._forward.get(name)
+        if known is not None:
+            return known
+        base = _WIRE_NAME.sub("_", name).strip("_") or _WIRE_FALLBACK
+        if len(base) > _WIRE_NAME_MAX:
+            # Keep the name stable and unique when truncation is unavoidable.
+            digest = hashlib.sha256(name.encode("utf-8", "surrogatepass")).hexdigest()
+            base = f"{base[: _WIRE_NAME_MAX - 9]}_{digest[:8]}"
+        wire = base
+        suffix = 2
+        while wire in self._reverse:
+            tail = f"_{suffix}"
+            wire = f"{base[: _WIRE_NAME_MAX - len(tail)]}{tail}"
+            suffix += 1
+        self._forward[name] = wire
+        self._reverse[wire] = name
+        return wire
+
+    def original(self, wire: str) -> str:
+        return self._reverse.get(wire, wire)
+
+
+def _wire_parameters(parameters: Mapping[str, Any]) -> dict[str, Any]:
+    """Drop top-level combinators a strict provider refuses.
+
+    OpenAI validates function parameters as a plain object schema and rejects
+    ``oneOf``/``anyOf``/``allOf``/``not``/``const``/``enum`` at the top level.
+    Kelp's manifests use them to pin per-``kind`` requirements, and the loader
+    validates every call against the untouched manifest, so the wire copy
+    carries the object shape alone.
+    """
+
+    wired = {key: value for key, value in parameters.items() if key not in _TOP_LEVEL_REFUSED}
+    wired.setdefault("type", "object")
+    return wired
+
+
+def _wire_tool(names: _ToolNames, tool: Mapping[str, Any]) -> dict[str, Any]:
+    """One tool definition (or one tool call) with its function name rewritten."""
+
+    wired = dict(tool)
+    function = wired.get("function")
+    if isinstance(function, Mapping):
+        renamed = dict(function)
+        name = renamed.get("name")
+        if isinstance(name, str) and name:
+            renamed["name"] = names.wire(name)
+        parameters = renamed.get("parameters")
+        if isinstance(parameters, Mapping):
+            renamed["parameters"] = _wire_parameters(parameters)
+        wired["function"] = renamed
+    return wired
+
+
+def _wire_message(names: _ToolNames, message: Mapping[str, Any]) -> dict[str, Any]:
+    wired = dict(message)
+    tool_calls = wired.get("tool_calls")
+    if isinstance(tool_calls, list):
+        wired["tool_calls"] = [
+            _wire_tool(names, call) if isinstance(call, Mapping) else call
+            for call in tool_calls
+        ]
+    name = wired.get("name")
+    if wired.get("role") == "tool" and isinstance(name, str) and name:
+        wired["name"] = names.wire(name)
+    return wired
 
 
 @dataclass
@@ -282,9 +378,12 @@ class OpenAICompatibleClient:
             "Content-Type": "application/json",
             "Accept": "text/event-stream",
         }
+        names = _ToolNames()
         payload: dict[str, Any] = {
             "model": request.model,
-            "messages": [dict(message) for message in request.messages],
+            "messages": [
+                _wire_message(names, message) for message in request.messages
+            ],
             "stream": True,
             "stream_options": {"include_usage": True},
             "temperature": request.temperature,
@@ -292,7 +391,7 @@ class OpenAICompatibleClient:
         if request.max_tokens is not None:
             payload["max_tokens"] = max(1, int(request.max_tokens))
         if request.tools:
-            payload["tools"] = [dict(tool) for tool in request.tools]
+            payload["tools"] = [_wire_tool(names, tool) for tool in request.tools]
             payload["tool_choice"] = "auto"
 
         url = f"{base_url}/chat/completions"
@@ -347,6 +446,10 @@ class OpenAICompatibleClient:
                         yield event
 
                 for event in state.finish():
+                    # The endpoint sees (and echoes) wire names; the loop and
+                    # every stored transcript keep the dotted skill name.
+                    if isinstance(event, ToolCallReady):
+                        event = replace(event, name=names.original(event.name))
                     yield event
                 outcome = "completed"
         except httpx.TimeoutException:

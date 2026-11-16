@@ -1,0 +1,85 @@
+{
+  "version": 1,
+  "defaultState": "idle",
+  "frameWidth": 256,
+  "frameHeight": 256,
+  "columns": 8,
+  "rows": 8,
+  "frameCount": 64,
+  "frameDurationMs": 40,
+  "durationMs": 2560,
+  "loop": true,
+  "alpha": true,
+  "states": {
+    "idle": {
+      "label": "Ready when you are",
+      "motion": "Gentle float and blink",
+      "animation": "idle.webp",
+      "poster": "idle.svg",
+      "sprite": "idle.png"
+    },
+    "working": {
+      "label": "Working",
+      "motion": "Steady bounce and orbiting dots",
+      "animation": "working.webp",
+      "poster": "working.svg",
+      "sprite": "working.png"
+    },
+    "waiting": {
+      "label": "Approval needed",
+      "motion": "Slow breath and amber pulse",
+      "animation": "waiting.webp",
+      "poster": "waiting.svg",
+      "sprite": "waiting.png"
+    },
+    "done": {
+      "label": "Task completed",
+      "motion": "Happy landing and sparkles",
+      "animation": "done.webp",
+      "poster": "done.svg",
+      "sprite": "done.png"
+    },
+    "offline": {
+      "label": "Disconnected",
+      "motion": "Settled float and muted eyes",
+      "animation": "offline.webp",
+      "poster": "offline.svg",
+      "sprite": "offline.png"
+    },
+    "curious": {
+      "label": "Listening",
+      "motion": "Head tilt and questioning glance",
+      "animation": "curious.webp",
+      "poster": "curious.svg",
+      "sprite": "curious.png"
+    },
+    "happy": {
+      "label": "Happy",
+      "motion": "Soft side-to-side smile",
+      "animation": "happy.webp",
+      "poster": "happy.svg",
+      "sprite": "happy.png"
+    },
+    "excited": {
+      "label": "Good news",
+      "motion": "Two energetic hops and cheering eyes",
+      "animation": "excited.webp",
+      "poster": "excited.svg",
+      "sprite": "excited.png"
+    },
+    "thinking": {
+      "label": "Thinking",
+      "motion": "Looking side to side with thinking dots",
+      "animation": "thinking.webp",
+      "poster": "thinking.svg",
+      "sprite": "thinking.png"
+    },
+    "surprised": {
+      "label": "Something new",
+      "motion": "Quick lift and wide eyes",
+      "animation": "surprised.webp",
+      "poster": "surprised.svg",
+      "sprite": "surprised.png"
+    }
+  }
+}

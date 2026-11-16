@@ -8,34 +8,42 @@
 // Source of truth for the event→state table: desktop/pet_state.py
 // (mirrored here; keep both in sync).
 
-export const PET_STATES = ["working", "waiting", "done", "idle"];
+export const PET_STATES = ["working", "thinking", "waiting", "done", "idle"];
 
-// Subset of SSE event types the pet cares about. Anything unlisted keeps
-// the current state (returns null).
-const EVENT_TO_STATE = {
-  turn_started: "working",
-  turn_stopped: "idle",
+// The stream vocabulary, as `chat/service.py` actually emits it. An unlisted
+// event keeps the current state (returns null) — that is what stops a noisy
+// event (`usage_updated`, `sources_ready`, `thread_updated`) from resetting the
+// animation mid-loop.
+export const EVENT_TO_STATE = {
+  // The turn is accepted but no token has arrived yet: that is the model
+  // thinking, not the assistant working, and the two read differently.
+  turn_started: "thinking",
   token_delta: "working",
-  tool_call: "working",
-  approval_created: "waiting",
-  approval_pending: "waiting",
-  approval_decided: "working",
+  tool_call_started: "working",
+  tool_call_finished: "working",
+  approval_requested: "waiting",
+  approval_resolved: "working",
   turn_finished: "done",
-  turn_failed: "idle",
-  stream_closed: "idle",
 };
 
-/** Map one SSE event to a pet state, or null to keep the current state. */
+//: A turn that ended badly settles rather than celebrating.
+const IDLE_REASONS = new Set(["error", "cancelled"]);
+
+/** Map one streamed event to a pet state, or null to keep the current state. */
 export function petStateFromEvent(event) {
   if (!event || typeof event.type !== "string") return null;
+  if (event.type === "turn_finished") {
+    return IDLE_REASONS.has(event.reason) ? "idle" : "done";
+  }
   return EVENT_TO_STATE[event.type] ?? null;
 }
 
-// Flavour i stands in for PET_STATES[i]: working is busy, waiting settles
-// and watches, done is unhurried, idle drifts slowly. Colours match the
-// landing orb; cadences match e-fx.js ORB_FLAVOURS.
+// Flavour i stands in for PET_STATES[i]: working is busy, thinking mulls it
+// over, waiting settles and watches, done is unhurried, idle drifts slowly.
+// Colours match the landing orb; cadences match e-fx.js ORB_FLAVOURS.
 export const ORB_FLAVOURS = [
   { state: "working", body: [0.286, 0.588, 0.439], deep: [0.075, 0.207, 0.157], glance: 2200, blink: 2800 },
+  { state: "thinking", body: [0.345, 0.473, 0.616], deep: [0.086, 0.157, 0.259], glance: 3600, blink: 4600 },
   { state: "waiting", body: [0.878, 0.553, 0.412], deep: [0.408, 0.212, 0.145], glance: 5600, blink: 5200 },
   { state: "done", body: [0.463, 0.678, 0.776], deep: [0.129, 0.286, 0.376], glance: 3800, blink: 4200 },
   { state: "idle", body: [0.42, 0.5, 0.48], deep: [0.12, 0.18, 0.16], glance: 6000, blink: 5200 },
@@ -73,6 +81,8 @@ export const ORB_FRAGMENT = `
 `;
 
 const clamp01 = (v) => Math.min(1, Math.max(0, v));
+/** Gaze runs the other way round: -1 looks left/up, +1 looks right/down. */
+const clamp11 = (v) => Math.min(1, Math.max(-1, v));
 
 /**
  * Mount the orb into `host` ([data-orb] with .e-orb-canvas + .e-orb-face).
@@ -83,8 +93,8 @@ export function initPetOrb(host, { muted = false } = {}) {
   if (!host || !canvas) return null;
   const reduce = window.matchMedia("(prefers-reduced-motion: reduce)");
 
-  let target = 3; // idle index into ORB_FLAVOURS
-  let current = { ...ORB_FLAVOURS[3] };
+  let target = PET_STATES.indexOf("idle");
+  let current = { ...ORB_FLAVOURS[target] };
   let raf = 0;
   let gl = null;
 
@@ -179,8 +189,8 @@ export function initPetOrb(host, { muted = false } = {}) {
   const onPointer = (e) => {
     const r = canvas.getBoundingClientRect();
     if (!r.width) return;
-    gaze.x = clamp01(((e.clientX - r.left) / r.width) * 2 - 1, -1, 1);
-    gaze.y = clamp01(((e.clientY - r.top) / r.height) * 2 - 1, -1, 1);
+    gaze.x = clamp11(((e.clientX - r.left) / r.width) * 2 - 1);
+    gaze.y = clamp11(((e.clientY - r.top) / r.height) * 2 - 1);
   };
   window.addEventListener("pointermove", onPointer, { passive: true });
 
