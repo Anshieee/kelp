@@ -25,15 +25,43 @@ export const VIEWER_URL_STORAGE_KEY = "kelp.computer.viewerUrl";
  */
 export type ComputerTransport = "managed" | "rfb-stub";
 
+/**
+ * The build-time env, optionally overridden at runtime.
+ *
+ * `import.meta.env` is baked in at build time (under plain Node it is absent),
+ * which makes it impossible to exercise the dev transport in tests. A build
+ * may expose `window.__KELP_ENV__` to override the values it cares about
+ * (e.g. `VITE_COMPUTER_TRANSPORT`); the overrides are additive and the
+ * fallback stays the build-time env.
+ *
+ * The override is a test/dev seam, not a switch a page can flip: packaged
+ * builds (`import.meta.env.DEV === false`) ignore it, so page script can
+ * never talk a managed build into the raw transport.
+ */
+export function buildEnv(
+  baked: Record<string, string | boolean | undefined> | undefined = (
+    import.meta as { env?: Record<string, string | boolean | undefined> }
+  ).env,
+  runtime: Record<string, string | undefined> | undefined =
+    typeof window !== "undefined"
+      ? (window as unknown as { __KELP_ENV__?: Record<string, string | undefined> }).__KELP_ENV__
+      : undefined,
+): Record<string, string | undefined> | undefined {
+  type StrEnv = Record<string, string | undefined> | undefined;
+  if (!runtime) return baked as StrEnv;
+  if (baked?.DEV === false) return baked as StrEnv;
+  return { ...(baked as StrEnv), ...runtime };
+}
+
 export function computerTransport(
-  env: Record<string, string | undefined> | undefined = import.meta.env,
+  env: Record<string, string | undefined> | undefined = buildEnv(),
 ): ComputerTransport {
   return env?.VITE_COMPUTER_TRANSPORT === "rfb-stub" ? "rfb-stub" : "managed";
 }
 
 /** True when the raw RFB/websockify path is available in this build. */
 export const isRfbTransport = (
-  env: Record<string, string | undefined> | undefined = import.meta.env,
+  env: Record<string, string | undefined> | undefined = buildEnv(),
 ): boolean => computerTransport(env) === "rfb-stub";
 
 /** A managed session URL names a session on an https host. */
@@ -53,7 +81,7 @@ export type ViewerTarget =
 
 export function resolveViewerTarget(
   session: { id: string; url: string | null } | null | undefined,
-  env: Record<string, string | undefined> | undefined = import.meta.env,
+  env: Record<string, string | undefined> | undefined = buildEnv(),
 ): ViewerTarget {
   const id = session?.id?.trim();
   const raw = session?.url?.trim();
@@ -254,6 +282,39 @@ export const statusLabel = (status: ViewerStatus): string => STATUS_LABELS[statu
  */
 export const CARD_MIRROR_MS = 250;
 
+/** The least a canvas must be for the card mirror: real canvases satisfy this. */
+export interface MirrorFrame {
+  readonly width: number;
+  readonly height: number;
+}
+
+/**
+ * Copy one painted framebuffer onto the card's thumbnail. Returns true when a
+ * frame was copied (the card can drop its placeholder), false when there is
+ * nothing to show yet — no source, an unpainted source (noVNC has not drawn),
+ * or no 2d context. Syncs the thumbnail size to the source first so the copy
+ * is never stretched. Visibility and tab-hidden checks stay with the caller:
+ * they are environmental, not frame logic. Tests cover this through
+ * structural stubs (plain width/height/getContext objects).
+ */
+export function mirrorViewerFrame(
+  source: MirrorFrame | null | undefined,
+  target: HTMLCanvasElement | null | undefined,
+): boolean {
+  if (!source || !target) return false;
+  // Width 0 means noVNC has not painted yet: leave the placeholder up rather
+  // than showing an empty black rectangle.
+  if (!source.width || !source.height) return false;
+  if (target.width !== source.width || target.height !== source.height) {
+    target.width = source.width;
+    target.height = source.height;
+  }
+  const context = target.getContext("2d");
+  if (!context) return false;
+  context.drawImage(source as CanvasImageSource, 0, 0);
+  return true;
+}
+
 /** Compact elapsed time for a card: "0.4s", "4.2s", "9s", "1m 03s". */
 export function formatElapsed(ms: number | null): string | null {
   if (ms === null || !Number.isFinite(ms) || ms < 0) return null;
@@ -385,10 +446,14 @@ export function unsupportedCredentialsMessage(requested: readonly string[]): str
  * local default without a code change — point it at `TUNNEL_VIEWER_URL` (or
  * any websockify endpoint) when testing the tunnel. A value that cannot be
  * used is ignored rather than half-applied.
+ *
+ * Dev-transport only: a managed build ignores the override entirely, so a
+ * packaged app can never be talked into dialing a raw socket.
  */
 export function defaultViewerUrl(
-  env: Record<string, string | undefined> | undefined = import.meta.env,
+  env: Record<string, string | undefined> | undefined = buildEnv(),
 ): string {
+  if (!isRfbTransport(env)) return DEFAULT_VIEWER_URL;
   const configured = env?.VITE_VNC_WS_URL;
   return (configured ? normaliseViewerUrl(configured) : null) ?? DEFAULT_VIEWER_URL;
 }

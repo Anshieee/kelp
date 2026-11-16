@@ -7,6 +7,7 @@ import {
   TUNNEL_VIEWER_URL,
   VIEWER_URL_STORAGE_KEY,
   applyViewerSettings,
+  buildEnv,
   buttonStatusLabel,
   computerTransport,
   defaultViewerUrl,
@@ -15,6 +16,7 @@ import {
   isCleartextRemote,
   isDefaultViewerUrl,
   isRfbTransport,
+  mirrorViewerFrame,
   normaliseViewerUrl,
   planCredentials,
   readStoredViewerUrl,
@@ -192,6 +194,60 @@ describe("viewer connection settings", () => {
   });
 });
 
+describe("mirrorViewerFrame", () => {
+  // The card's mirror path: one painted framebuffer copied onto the
+  // thumbnail. Stubs stand in for canvases — the helper only needs
+  // width/height/getContext.
+  function stubCanvas(width, height, { context = true } = {}) {
+    const drawn = [];
+    return {
+      canvas: {
+        width,
+        height,
+        getContext: () =>
+          context
+            ? {
+                drawImage: (source, dx, dy) => void drawn.push({ source, dx, dy }),
+              }
+            : null,
+      },
+      drawn,
+    };
+  }
+
+  it("copies a painted frame and reports it", () => {
+    const source = { width: 1024, height: 768 };
+    const { canvas, drawn } = stubCanvas(0, 0);
+    assert.equal(mirrorViewerFrame(source, canvas), true);
+    assert.equal(drawn.length, 1);
+    assert.equal(drawn[0].source, source);
+    assert.deepEqual([drawn[0].dx, drawn[0].dy], [0, 0]);
+  });
+
+  it("syncs the thumbnail size to the source before copying", () => {
+    const { canvas } = stubCanvas(320, 200);
+    mirrorViewerFrame({ width: 1024, height: 768 }, canvas);
+    assert.equal(canvas.width, 1024);
+    assert.equal(canvas.height, 768);
+  });
+
+  it("leaves the placeholder up when noVNC has not painted yet", () => {
+    const { canvas, drawn } = stubCanvas(320, 200);
+    assert.equal(mirrorViewerFrame({ width: 0, height: 0 }, canvas), false);
+    assert.equal(drawn.length, 0);
+  });
+
+  it("copies nothing without a source, a target, or a 2d context", () => {
+    const { canvas, drawn } = stubCanvas(320, 200);
+    assert.equal(mirrorViewerFrame(null, canvas), false);
+    assert.equal(mirrorViewerFrame({ width: 100, height: 100 }, null), false);
+    const noCtx = stubCanvas(320, 200, { context: false });
+    assert.equal(mirrorViewerFrame({ width: 100, height: 100 }, noCtx.canvas), false);
+    assert.equal(drawn.length, 0);
+    assert.equal(noCtx.drawn.length, 0);
+  });
+});
+
 describe("planCredentials", () => {
   it("answers a standard VNC password prompt", () => {
     assert.deepEqual(planCredentials(["password"]), { kind: "password" });
@@ -255,6 +311,10 @@ describe("viewerUrlProblem", () => {
 });
 
 describe("defaultViewerUrl", () => {
+  // The override and the whole RFB path are dev-transport only: a managed
+  // build (the default) ignores VITE_VNC_WS_URL entirely.
+  const RFB = { VITE_COMPUTER_TRANSPORT: "rfb-stub" };
+
   it("defaults to the local test session", () => {
     assert.equal(defaultViewerUrl({}), DEFAULT_VIEWER_URL);
     // No env at all (plain Node) must also fall back cleanly.
@@ -262,12 +322,37 @@ describe("defaultViewerUrl", () => {
   });
 
   it("can be pointed at the tunnel candidate without a code change", () => {
-    assert.equal(defaultViewerUrl({ VITE_VNC_WS_URL: TUNNEL_VIEWER_URL }), TUNNEL_VIEWER_URL);
+    assert.equal(
+      defaultViewerUrl({ ...RFB, VITE_VNC_WS_URL: TUNNEL_VIEWER_URL }),
+      TUNNEL_VIEWER_URL,
+    );
     assert.equal(normaliseViewerUrl(TUNNEL_VIEWER_URL), TUNNEL_VIEWER_URL);
   });
 
   it("ignores a broken override rather than half-using it", () => {
-    assert.equal(defaultViewerUrl({ VITE_VNC_WS_URL: "not a url" }), DEFAULT_VIEWER_URL);
+    assert.equal(defaultViewerUrl({ ...RFB, VITE_VNC_WS_URL: "not a url" }), DEFAULT_VIEWER_URL);
+  });
+
+  it("ignores the override entirely on the managed transport", () => {
+    assert.equal(defaultViewerUrl({ VITE_VNC_WS_URL: TUNNEL_VIEWER_URL }), DEFAULT_VIEWER_URL);
+  });
+
+  it("a packaged build ignores the runtime override, so a page cannot flip the gate", () => {
+    // The __KELP_ENV__ seam is for tests and dev servers only: with a
+    // packaged env baked in, the override is dropped and the build stays
+    // managed no matter what page script sets.
+    assert.deepEqual(buildEnv({ DEV: false }, { VITE_COMPUTER_TRANSPORT: "rfb-stub" }), {
+      DEV: false,
+    });
+    assert.equal(
+      isRfbTransport(buildEnv({ DEV: false }, { VITE_COMPUTER_TRANSPORT: "rfb-stub" })),
+      false,
+    );
+    // Without a packaged env (dev server, plain node) the override applies.
+    assert.equal(
+      isRfbTransport(buildEnv(undefined, { VITE_COMPUTER_TRANSPORT: "rfb-stub" })),
+      true,
+    );
   });
 });
 

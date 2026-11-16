@@ -284,8 +284,6 @@ fn spawn_gaze_emitter(app: tauri::AppHandle) {
 fn main() {
     tauri::Builder::default()
         .manage(bridge::Bridge::new())
-        .plugin(tauri_plugin_store::Builder::default().build())
-        .plugin(tauri_plugin_stronghold::Builder::new(|salt| salt.as_bytes().to_vec()).build())
         .plugin(
             tauri_plugin_global_shortcut::Builder::new()
                 .with_handler(|app, _shortcut, event| {

@@ -39,8 +39,9 @@ export default function ComputerPane({ viewer }: { viewer: ViewerHandle }) {
   const connected = status === "connected";
   const onDefault = isDefaultViewerUrl(urlInput);
   // The managed transport has no raw endpoint to type: sessions arrive from
-  // the backend and dial only through the card's explicit action. The URL row
-  // is a dev-transport tool for pointing at the stub.
+  // the backend and dial only through the card's explicit action. The URL row,
+  // and everything that points the viewer at a raw websockify endpoint, is a
+  // dev-transport tool for pointing at the stub.
   const showUrlRow = isRfbTransport();
 
   return (
@@ -175,8 +176,9 @@ export default function ComputerPane({ viewer }: { viewer: ViewerHandle }) {
                 )}
                 {status === "idle" && (
                   <Typography variant="caption" sx={{ color: "rgba(255,255,255,0.6)" }}>
-                    The viewer connects on its own once the Kelp session is ready — or point it at
-                    a websockify endpoint and press Connect.
+                    {showUrlRow
+                      ? "The viewer connects on its own once the Kelp session is ready — or point it at a websockify endpoint and press Connect."
+                      : "The viewer connects on its own once the Kelp session is ready — use the Open session action on the card that drove it."}
                   </Typography>
                 )}
                 {status === "disconnected" && (
@@ -184,15 +186,17 @@ export default function ComputerPane({ viewer }: { viewer: ViewerHandle }) {
                     Reconnecting automatically…
                   </Typography>
                 )}
-                <Button
-                  size="small"
-                  startIcon={<ReplayRoundedIcon />}
-                  onClick={connect}
-                  sx={{ color: "inherit" }}
-                >
-                  Try again
-                </Button>
-                {(status === "error" || status === "disconnected") && !onDefault && (
+                {showUrlRow && (
+                  <Button
+                    size="small"
+                    startIcon={<ReplayRoundedIcon />}
+                    onClick={connect}
+                    sx={{ color: "inherit" }}
+                  >
+                    Try again
+                  </Button>
+                )}
+                {showUrlRow && (status === "error" || status === "disconnected") && !onDefault && (
                   <Button size="small" onClick={resetToDefault} sx={{ color: "inherit" }}>
                     Use the default address
                   </Button>

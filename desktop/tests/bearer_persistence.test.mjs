@@ -44,4 +44,20 @@ describe("bearer persistence", () => {
     assert.doesNotMatch(bridge, /Authorization/);
     assert.doesNotMatch(bridge, /Bearer/);
   });
+
+  it("no dead credential plugins are registered or built into the shell", () => {
+    // The bearer lives in React state and the bridge cookie jar only; the
+    // desktop shell must not pull in store/stronghold plugins or at-rest
+    // wiring. If a future pass re-adds Rust-side stronghold in
+    // bridge_sign_in, update this test deliberately — not by accident.
+    const mainRs = read("src-tauri/src/main.rs");
+    const cargo = read("src-tauri/Cargo.toml");
+    const tauriConf = read("src-tauri/tauri.conf.json");
+    assert.doesNotMatch(mainRs, /tauri_plugin_store|tauri_plugin_stronghold/);
+    assert.doesNotMatch(cargo, /tauri-plugin-store|tauri-plugin-stronghold/);
+    assert.doesNotMatch(tauriConf, /stronghold|keychain|tauri-plugin-store/i);
+    // And the webview must not reach for a keychain-like store either.
+    const app = read("src/App.tsx");
+    assert.doesNotMatch(app, /keychain\.js|stronghold|invoke.*store/i);
+  });
 });

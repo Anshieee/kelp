@@ -66,6 +66,33 @@ impl ApiError {
     }
 }
 
+/// One route segment of a backend id (`thread_…`, `turn_…`, `approval_…`).
+/// Backend ids are hex/UUID-style spellings; anything outside this charset is
+/// rejected rather than smuggled into a URL.
+fn is_id_segment(segment: &str) -> bool {
+    !segment.is_empty()
+        && segment.len() <= 128
+        && segment
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
+}
+
+/// Percent-encode a path segment per RFC 3986, leaving unreserved bytes alone.
+/// Combined with the id checks below this is belt and braces: a validated id
+/// encodes to itself, and anything unvalidated never reaches a URL.
+fn encode_path_segment(segment: &str) -> String {
+    const UNRESERVED: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_.~";
+    let mut out = String::with_capacity(segment.len());
+    for &b in segment.as_bytes() {
+        if UNRESERVED.contains(&b) {
+            out.push(b as char);
+        } else {
+            out.push_str(&format!("%{b:02X}"));
+        }
+    }
+    out
+}
+
 pub struct Bridge {
     client: reqwest::Client,
     server: String,
@@ -126,7 +153,53 @@ impl Bridge {
             let _ = app.emit("bridge-reachability", json!({ "reachable": reachable }));
         }
     }
+}
 
+/// The routes the webview is allowed to reach through `bridge_api`, with the
+/// methods each accepts. This is an allowlist, not a prefix check: the webview
+/// is untrusted input (any XSS reaches these commands), so a caller-controlled
+/// `path` like `/api/../admin` or `/other-host` must be rejected, not
+/// concatenated. Keep in sync with `desktop/src/bridge.ts`.
+fn check_api_route(method: &reqwest::Method, path: &str) -> Result<(), ApiError> {
+    if !path.starts_with('/') || path.bytes().any(|b| b <= b' ' || b == 0x7f) {
+        return Err(ApiError::transport("Unsupported bridge request"));
+    }
+    let allowed = match (method.as_str(), path) {
+        ("GET", "/api/threads") => true,
+        ("POST", "/api/threads") => true,
+        // `GET /api/auth/session` is handled by bridge_sign_in, not bridge_api,
+        // and `DELETE /api/auth/session` by bridge_sign_out — they are not
+        // re-exposed here.
+        _ => false,
+    };
+    if allowed {
+        return Ok(());
+    }
+    // `GET /api/threads?limit=N` is the only call that carries a query.
+    if *method == reqwest::Method::GET {
+        if let Some(rest) = path.strip_prefix("/api/threads?limit=") {
+            if !rest.is_empty() && rest.bytes().all(|b| b.is_ascii_digit()) {
+                return Ok(());
+            }
+        }
+    }
+    let segments: Vec<&str> = path.split('/').collect();
+    let allowed = match (method.as_str(), segments.as_slice()) {
+        ("GET", ["", "api", "threads", id]) => is_id_segment(id),
+        ("POST", ["", "api", "threads", id, "turns"]) => is_id_segment(id),
+        ("POST", ["", "api", "turns", id, "stop"]) => is_id_segment(id),
+        ("POST", ["", "api", "turns", id, "retry"]) => is_id_segment(id),
+        ("POST", ["", "api", "approvals", id, "decision"]) => is_id_segment(id),
+        _ => false,
+    };
+    if allowed {
+        Ok(())
+    } else {
+        Err(ApiError::transport("Unsupported bridge request"))
+    }
+}
+
+impl Bridge {
     async fn request(
         &self,
         app: &tauri::AppHandle,
@@ -244,6 +317,13 @@ pub async fn bridge_api(
 ) -> Result<Value, ApiError> {
     let method = reqwest::Method::from_bytes(method.to_uppercase().as_bytes())
         .map_err(|_| ApiError::transport("Unsupported method"))?;
+    if method != reqwest::Method::GET
+        && method != reqwest::Method::POST
+        && method != reqwest::Method::DELETE
+    {
+        return Err(ApiError::transport("Unsupported method"));
+    }
+    check_api_route(&method, &path)?;
     bridge.request(&app, method, &path, body).await
 }
 
@@ -255,6 +335,9 @@ pub async fn bridge_open_stream(
     thread_id: String,
     after: u64,
 ) -> Result<(), ApiError> {
+    if !is_id_segment(&thread_id) {
+        return Err(ApiError::transport("Unsupported bridge request"));
+    }
     bridge.cancel_stream(&thread_id);
 
     let (cancel_tx, mut cancel_rx) = tokio::sync::watch::channel(false);
@@ -265,7 +348,9 @@ pub async fn bridge_open_stream(
     let client = bridge.client.clone();
     let url = format!(
         "{}/api/threads/{}/stream?after={}",
-        bridge.server, thread_id, after
+        bridge.server,
+        encode_path_segment(&thread_id),
+        after
     );
     let handle = app.clone();
     let id = thread_id.clone();

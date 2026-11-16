@@ -7,11 +7,12 @@
 // flags. Timer assertions check scheduling, not firing — the reconnect budget
 // is ~2 minutes and the test must not wait it out.
 //
-// One documented limit: `import.meta.env` is build-baked, so under plain
-// `node --test` the hook always reads the managed transport. The rfb-transport
-// routing of `openSessionUrl` (stripped URL + sessionId propagation) is pinned
-// at helper level in computer_viewer.test.mjs instead; what this file proves
-// is the seam that ships — what actually constructs RFB, with what URL, and
+// One documented limit, now resolved: `import.meta.env` is build-baked, but
+// the transport seam reads `window.__KELP_ENV__` first at call time, so these
+// tests pin `VITE_COMPUTER_TRANSPORT` per case. The default (no override) is
+// the managed transport — the seam that ships. The rfb-stub routing of
+// `openSessionUrl` is pinned at helper level in computer_viewer.test.mjs;
+// what this file proves is what actually constructs RFB, with what URL, and
 // what tears it down.
 
 import { register } from "node:module";
@@ -47,6 +48,14 @@ if (typeof globalThis.localStorage === "undefined") {
     setItem: (key, value) => void store.set(String(key), String(value)),
     removeItem: (key) => void store.delete(key),
   };
+}
+
+// These tests exercise both transports through the call-time `__KELP_ENV__`
+// seam. The managed transport is the shipped default, so the managed case
+// clears the override; the rfb-stub cases pin it explicitly. Each test sets
+// what it needs before any viewer action.
+function setTransport(value) {
+  globalThis.window.__KELP_ENV__ = value ? { VITE_COMPUTER_TRANSPORT: value } : {};
 }
 
 const tick = () => new Promise((resolve) => setTimeout(resolve, 0));
@@ -108,6 +117,7 @@ async function mountViewer(enabled) {
 
 describe("useViewer seam", () => {
   it("a managed session never constructs RFB; it offers the browser link", async () => {
+    setTransport(null); // managed: the shipped default
     const { hook } = await mountViewer(true);
     resetInstances();
     await TestRenderer.act(async () => {
@@ -119,9 +129,31 @@ describe("useViewer seam", () => {
     assert.match(hook.current.detail, /browser/);
   });
 
-  it("an explicit dial constructs RFB once with the stripped URL, then connects", async () => {
+  it("a managed build refuses to dial even a raw ws URL it already holds", async () => {
+    setTransport(null); // managed
     const { hook } = await mountViewer(true);
     resetInstances();
+    await TestRenderer.act(async () => {
+      hook.current.setUrlInput("ws://127.0.0.1:6080/websockify");
+      await tick();
+    });
+    await TestRenderer.act(async () => {
+      hook.current.connect();
+      await tick();
+    });
+    await TestRenderer.act(async () => {
+      hook.current.resetToDefault();
+      await tick();
+    });
+    assert.equal(instances.length, 0);
+    assert.match(hook.current.status, /error/);
+  });
+
+  it("an explicit dial constructs RFB once with the stripped URL, then connects", async () => {
+    setTransport(null); // mount as managed: no auto-dial on becoming ready
+    const { hook } = await mountViewer(true);
+    resetInstances();
+    setTransport("rfb-stub"); // then enable the dev transport for the explicit dial
     await TestRenderer.act(async () => {
       hook.current.setUrlInput("ws://127.0.0.1:6080/websockify?token=secret");
       await tick();
@@ -148,8 +180,10 @@ describe("useViewer seam", () => {
   });
 
   it("a second dial replaces the first; a drop schedules a retry against the redacted URL", async () => {
+    setTransport(null); // mount as managed: no auto-dial on becoming ready
     const { hook } = await mountViewer(true);
     resetInstances();
+    setTransport("rfb-stub"); // then enable the dev transport for the explicit dials
     timeoutCalls.length = 0;
     await TestRenderer.act(async () => {
       hook.current.setUrlInput("ws://127.0.0.1:6080/websockify");
@@ -190,9 +224,11 @@ describe("useViewer seam", () => {
   });
 
   it("the password goes straight to RFB and dies with the session; sign-out tears down", async () => {
+    setTransport(null); // mount as managed: no auto-dial on becoming ready
     const mounted = await mountViewer(true);
     const { hook } = mounted;
     resetInstances();
+    setTransport("rfb-stub"); // then enable the dev transport for the explicit dial
     await TestRenderer.act(async () => {
       hook.current.setUrlInput("ws://127.0.0.1:6080/websockify");
       await tick();

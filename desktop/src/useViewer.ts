@@ -15,13 +15,13 @@ import {
   computerTransport,
   defaultViewerUrl,
   disconnectDetail,
-  isCleartextRemote,
   isRfbTransport,
   normaliseViewerUrl,
   planCredentials,
   readStoredViewerUrl,
   RECONNECT_DELAYS_MS,
   reconnectDelay,
+  redactViewerUrl,
   rememberViewerUrl,
   resolveViewerTarget,
   stripViewerSecrets,
@@ -68,19 +68,20 @@ export function useViewer({ enabled }: { enabled: boolean }) {
   const stoppedRef = useRef(false);
   const wasEnabledRef = useRef(false);
 
+  // Single choke point: nothing raw reaches noVNC unless this build ships the
+  // dev (rfb-stub) transport. A managed build can never construct RFB, no
+  // matter which code path asks.
   const start = useCallback((rawUrl: string, sessionId: string | null = null) => {
+    const normalised = normaliseViewerUrl(rawUrl);
     const problem =
-      viewerUrlProblem(rawUrl) ??
-      (isCleartextRemote(rawUrl)
-        ? "That address is not on this machine and does not use TLS — the VNC " +
-          "password would travel in cleartext. Use a wss:// tunnel instead."
-        : null);
+      !isRfbTransport() && normalised && /^wss?:\/\//i.test(normalised)
+        ? "Raw viewer endpoints are disabled in this build — open the session from its card."
+        : viewerUrlProblem(rawUrl);
     if (problem) {
       setStatus("error");
       setDetail(problem);
       return;
     }
-    const normalised = normaliseViewerUrl(rawUrl);
     if (!normalised) {
       setStatus("error");
       setDetail("That does not look like a WebSocket viewer URL.");
@@ -124,7 +125,7 @@ export function useViewer({ enabled }: { enabled: boolean }) {
       }
       if (target.kind === "managed-session") {
         setStatus("error");
-        setDetail(`Open this session in the browser: ${target.url}`);
+        setDetail(`Open this session in the browser: ${redactViewerUrl(target.url)}`);
         return;
       }
       start(target.url, target.sessionId);
@@ -299,8 +300,16 @@ export function useViewer({ enabled }: { enabled: boolean }) {
 
   const connect = useCallback(() => start(urlInput), [start, urlInput]);
 
-  /** Forget a remembered endpoint that does not answer and go back to ours. */
+  /** Forget a remembered endpoint that does not answer and go back to ours.
+   *  Dev-transport only: a managed build has no raw endpoint to fall back to. */
   const resetToDefault = useCallback(() => {
+    if (!isRfbTransport()) {
+      setStatus("error");
+      setDetail(
+        "This build uses managed sessions — raw viewer endpoints are disabled. Open the session from its card instead.",
+      );
+      return;
+    }
     const fallback = defaultViewerUrl();
     setUrlInput(fallback);
     start(fallback);

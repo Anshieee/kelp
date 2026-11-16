@@ -4,7 +4,12 @@ import CloseRoundedIcon from "@mui/icons-material/CloseRounded";
 import OpenInNewRoundedIcon from "@mui/icons-material/OpenInNewRounded";
 
 import type { ToolBlock } from "./chatEvents";
-import { CARD_MIRROR_MS, formatElapsed, type ViewerStatus } from "./computerViewer";
+import {
+  CARD_MIRROR_MS,
+  formatElapsed,
+  mirrorViewerFrame,
+  type ViewerStatus,
+} from "./computerViewer";
 
 /** Just the parts of the viewer handle the card needs. */
 interface ViewerSource {
@@ -83,17 +88,7 @@ export default function ComputerCard({
     const copy = () => {
       if (!visible || document.hidden) return;
       const source = viewer.hostRef.current?.querySelector("canvas");
-      // Width 0 means noVNC has not painted yet: leave the placeholder up
-      // rather than showing an empty black rectangle.
-      if (!source || !source.width || !source.height) return;
-      if (canvas.width !== source.width || canvas.height !== source.height) {
-        canvas.width = source.width;
-        canvas.height = source.height;
-      }
-      const context = canvas.getContext("2d");
-      if (!context) return;
-      context.drawImage(source, 0, 0);
-      setMirrored(true);
+      if (mirrorViewerFrame(source, canvas)) setMirrored(true);
     };
 
     copy();

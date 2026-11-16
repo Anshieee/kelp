@@ -68,10 +68,10 @@ pins that the dialog clears state on both submit paths and that the bridge
 interface exposes no getter, no stored token, and no bearer logging.
 
 The old `keychain.js` (direct stronghold access from JS) is intentionally
-gone. Its UI died with `app.js`; auth returns through the backend wiring
-described above. If a future pass needs at-rest persistence beyond the
-session cookie, the replacement is a Rust-side stronghold write inside
-`bridge_sign_in` — never a webview-held secret.
+gone, along with the dead `tauri-plugin-store`/`tauri-plugin-stronghold`
+wiring it rode on — nothing at rest, nothing on disk. If a future pass needs
+at-rest persistence beyond the session cookie, add the Rust-side stronghold
+write inside `bridge_sign_in`; never a webview-held secret.
 
 ## Computer tab
 
@@ -108,6 +108,18 @@ reaching the server, and must stay at 0 while the viewer is view-only.
 
 Unsigned dev builds only: no updater keys, no signing step
 (`tauri.conf.json` `updater.active` stays off).
+
+The packaged network posture is pinned by `tests/production_guards.test.mjs`.
+Two entries in the Tauri CSP are intentionally broad and stay that way:
+
+- `wss:` is unscoped because tunnel hostnames are operator-chosen and
+  dynamic — a new tunnel should not need a config edit to work. The viewer
+  still refuses cleartext remotes, strips tokens before display or storage,
+  and only dials raw endpoints on the explicit `rfb-stub` dev transport.
+- Cleartext (`http://127.0.0.1:*`, `ws://127.0.0.1:*`) is allowed for
+  loopback only, for the local stub (`tests/tools/rfb_stub_server.mjs`).
+  Release builds default to the `https://kelp.example.com` placeholder and
+  fail closed until the operator sets the real server URL.
 
 ## Diagnostics
 
