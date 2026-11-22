@@ -73,7 +73,6 @@ jobs:
       - name: Collect failed check context
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
           EVENT_NAME: ${{ github.event_name }}
           REPOSITORY: ${{ github.repository }}
           PR_SHA: ${{ steps.pr.outputs.sha }}
@@ -183,8 +182,25 @@ jobs:
         with:
           python-version: "3.12"
 
+      # Pinned: this job holds a contents:write token and, in the next step,
+      # the OpenRouter key. aider-chat pins its own dependencies exactly, so
+      # one version pin fixes the whole installed tree. Bump deliberately.
       - name: Install Aider
-        run: python -m pip install --disable-pip-version-check aider-chat
+        run: python -m pip install --disable-pip-version-check 'aider-chat==0.86.2'
+
+      # Aider loads .env (overriding the environment) and .aider* config files
+      # from the checked-out tree. Refuse a PR that ships any of them, so the
+      # PR cannot redirect the API base or change Aider's flags while the key
+      # is present.
+      - name: Refuse repository-supplied Aider configuration
+        run: |
+          set -euo pipefail
+          found=$(find . -path ./.git -prune -o \( -name '.env' -o -name '.aider*' \) -print)
+          if [[ -n "$found" ]]; then
+            echo "Refusing to run Aider: the PR tree contains .env or .aider* files:" >&2
+            printf '%s\n' "$found" >&2
+            exit 1
+          fi
 
       - name: Attempt repair (maximum 2 attempts)
         env:
