@@ -164,6 +164,10 @@ def test_worker_tokens_are_request_scoped_and_expire(broker):
     assert not broker.worker_token_scope(token, second['id'], 'get')
     assert not broker.worker_token_scope(token, first['id'], 'delete')
     broker._clock = lambda: first['expires_at']
+    assert not broker.worker_token_scope(token, first['id'], 'claim')
+    assert not broker.worker_token_scope(token, first['id'], 'finish')
+    assert broker.worker_token_scope(token, first['id'], 'get')  # status poll outlives the deadline
+    broker._clock = lambda: first['expires_at'] + 86400
     assert not broker.worker_token_scope(token, first['id'], 'get')
 
 
@@ -379,3 +383,290 @@ def test_pending_payload_survives_restart_encrypted(tmp_path):
     assert b.claim(r['id'], r['binding'], r['session_id'], r['origin'])['values']['password'] == VALUE
     assert len(b.list_vault()) == 1
     b.close()
+
+
+# ---- Request-scoped worker token review (KEL-30) ---------------------------------
+
+def make_scoped(api, **descriptor_changes):
+    """Create a request through the real route; return (id, scoped token)."""
+    status, created = call(api, 'POST', '/api/credential-worker', descriptor(**descriptor_changes), token=WORKER)
+    assert status == 201
+    return created['request']['id'], created['worker_token']
+
+
+def claim_body():
+    return {k: descriptor()[k] for k in ('session_id', 'binding', 'origin')}
+
+
+async def recording_worker(api, scenario):
+    """Run scenario(worker, seen) with a CredentialWorker wired to the real routes."""
+    seen: list[tuple[str, str, str]] = []
+
+    def transport(req):
+        token = req.headers['Authorization'][7:]
+        seen.append((req.method, req.url.path, token))
+        status, body = call(api, req.method, req.url.path,
+                            json.loads(req.content) if req.content else None, token=token)
+        return httpx.Response(status, json=body)
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(transport)) as http:
+        worker = CredentialWorker('https://kelp.example.test', WORKER, client=http)
+        await scenario(worker, seen)
+
+
+def test_one_worker_serves_two_sequential_requests_with_per_request_tokens(api):
+    async def scenario(worker, seen):
+        ids = []
+        for _ in range(2):
+            page = FakePage()
+            session = PrivateBrowserSession(page)
+            record = await worker.request(session, FIELDS, '#submit')
+            ids.append(record['id'])
+            call(api, 'POST', f"/api/credential-requests/{record['id']}/submit", {'values': {'password': VALUE}})
+            result = await worker.deliver(session, record['id'])
+            assert result['status'] == 'completed' and page.filled == VALUE
+            call(api, 'POST', f"/api/credential-requests/{record['id']}/release", {})
+            await worker.resume(session, record['id'])
+            session.assert_observable()
+        assert ids[0] != ids[1]
+        # The root token appears only on the create POST; every other call carries
+        # a token scoped to exactly the id in its own path.
+        creates = [s for s in seen if s[0] == 'POST' and s[1] == '/api/credential-worker']
+        assert len(creates) == 2 and all(t == WORKER for _, _, t in creates)
+        for method, path, token in seen:
+            if (method, path) == ('POST', '/api/credential-worker'):
+                continue
+            assert token != WORKER
+            ident = path.split('/')[3]
+            op = 'get' if method == 'GET' else path.split('/')[4]
+            assert api.credentials.worker_token_scope(token, ident, op)
+            other = ids[1] if ident == ids[0] else ids[0]
+            assert not api.credentials.worker_token_scope(token, other, op)
+    asyncio.run(recording_worker(api, scenario))
+
+
+def test_worker_never_falls_back_to_root_token_for_unknown_request(api):
+    async def scenario(worker, seen):
+        with pytest.raises(RuntimeError, match='unknown_credential_request'):
+            await worker.call('GET', '/cred_not_created_by_this_worker')
+        with pytest.raises(RuntimeError, match='unknown_credential_request'):
+            await worker.call('POST', '/cred_x/claim', claim_body())
+        assert seen == []  # nothing was sent, in particular not the root token
+    asyncio.run(recording_worker(api, scenario))
+
+
+def test_worker_rejects_create_reply_without_a_scoped_token(api):
+    def transport(req):
+        return httpx.Response(201, json={'ok': True, 'request': {'id': 'cred_x'}})
+
+    async def scenario():
+        async with httpx.AsyncClient(transport=httpx.MockTransport(transport)) as http:
+            worker = CredentialWorker('https://kelp.example.test', WORKER, client=http)
+            with pytest.raises(RuntimeError, match='credential_service_rejected'):
+                await worker.request(PrivateBrowserSession(FakePage()), FIELDS, '#submit')
+    asyncio.run(scenario())
+
+
+def test_token_for_request_a_cannot_touch_request_b(api):
+    a, token_a = make_scoped(api)
+    b, token_b = make_scoped(api)
+    call(api, 'POST', f'/api/credential-requests/{b}/submit', {'values': {'password': VALUE}})
+    assert call(api, 'GET', f'/api/credential-worker/{b}', token=token_a)[0] == 401
+    assert call(api, 'POST', f'/api/credential-worker/{b}/claim', claim_body(), token=token_a)[0] == 401
+    assert call(api, 'POST', f'/api/credential-worker/{b}/finish', {'outcome': 'failed'}, token=token_a)[0] == 401
+    assert api.credentials.get(b)['status'] == 'submitted'  # nothing was consumed
+    assert call(api, 'POST', f'/api/credential-worker/{b}/claim', claim_body(), token=token_b)[0] == 200
+    assert a != b
+
+
+@pytest.mark.parametrize('operation', ['get', 'claim', 'finish'])
+def test_root_worker_token_never_authorizes_request_operations(api, operation):
+    ident, _ = make_scoped(api)
+    call(api, 'POST', f'/api/credential-requests/{ident}/submit', {'values': {'password': VALUE}})
+    method = 'GET' if operation == 'get' else 'POST'
+    body = {'get': None, 'claim': claim_body(), 'finish': {'outcome': 'failed'}}[operation]
+    path = f'/api/credential-worker/{ident}' + ('' if operation == 'get' else '/' + operation)
+    assert call(api, method, path, body, token=WORKER)[0] == 401
+    assert api.credentials.get(ident)['status'] == 'submitted'
+
+
+def test_scoped_token_cannot_create_requests_or_use_other_operations(api):
+    ident, token = make_scoped(api)
+    assert call(api, 'POST', '/api/credential-worker', descriptor(), token=token)[0] == 401
+    for op in ('release', 'deny', 'submit', 'delete'):
+        assert call(api, 'POST', f'/api/credential-worker/{ident}/{op}', {}, token=token)[0] == 401
+    assert call(api, 'GET', f'/api/credential-worker/{ident}/claim', token=token)[0] == 401
+    assert call(api, 'GET', '/api/credential-requests', token=token)[0] == 401
+
+
+def test_claim_still_checks_the_current_browser_binding(api):
+    ident, token = make_scoped(api)
+    call(api, 'POST', f'/api/credential-requests/{ident}/submit', {'values': {'password': VALUE}})
+    drifted = {**claim_body(), 'binding': 'c' * 64}
+    assert call(api, 'POST', f'/api/credential-worker/{ident}/claim', drifted, token=token)[0] == 409
+    assert api.credentials.get(ident)['status'] == 'submitted'
+    assert call(api, 'POST', f'/api/credential-worker/{ident}/claim', claim_body(), token=token)[0] == 200
+
+
+def test_scoped_token_is_useless_for_claim_after_finish_and_replay(api):
+    ident, token = make_scoped(api)
+    call(api, 'POST', f'/api/credential-requests/{ident}/submit', {'values': {'password': VALUE}})
+    assert call(api, 'POST', f'/api/credential-worker/{ident}/claim', claim_body(), token=token)[0] == 200
+    assert call(api, 'POST', f'/api/credential-worker/{ident}/finish', {'outcome': 'filled'}, token=token)[0] == 200
+    status, replay = call(api, 'POST', f'/api/credential-worker/{ident}/claim', claim_body(), token=token)
+    assert status == 409 and VALUE not in json.dumps(replay)
+    assert call(api, 'POST', f'/api/credential-worker/{ident}/finish', {'outcome': 'filled'}, token=token)[0] == 409
+
+
+def forge(api, ident, **changes):
+    row = api.credentials._row(ident)
+    claims = {'v': 1, 'id': ident, 'device': row['device'], 'target': row['origin'],
+              'binding': row['binding'], 'session': row['session'], 'exp': int(row['expires']),
+              'read_exp': int(row['expires']) + 86400, 'scope': ['get', 'claim', 'finish'], **changes}
+    encoded = base64.urlsafe_b64encode(json.dumps(claims, sort_keys=True, separators=(',', ':')).encode()).rstrip(b'=').decode()
+    return encoded
+
+
+def test_tampered_payload_or_signature_is_refused(api):
+    ident, token = make_scoped(api)
+    encoded, signature = token.split('.')
+    # Re-signed with the wrong key, and a valid signature over a different payload.
+    wrong_key = hmac.new(WORKER.encode(), forge(api, ident).encode(), hashlib.sha256).digest()
+    wrong = forge(api, ident) + '.' + base64.urlsafe_b64encode(wrong_key).rstrip(b'=').decode()
+    swapped = forge(api, ident, scope=['get', 'claim', 'finish', 'release']) + '.' + signature
+    flipped = encoded + '.' + ('A' if signature[0] != 'A' else 'B') + signature[1:]
+    for bad in (wrong, swapped, flipped, encoded, encoded + '.', '.' + signature, '', '.', 'a.b.c', token + 'x'):
+        assert call(api, 'GET', f'/api/credential-worker/{ident}', token=bad)[0] == 401, bad
+
+
+@pytest.mark.parametrize('suffix', ['!', '!!!!', '====', '=', '==', '\n', '\n\n\n\n', ' ', '.', '.junk', '\x00'])
+def test_signature_encoding_is_not_malleable(api, suffix):
+    # base64's lenient decoder discards characters outside the alphabet, so a
+    # decode-then-compare check accepts many distinct strings for one signature.
+    ident, token = make_scoped(api)
+    assert not api.credentials.worker_token_scope(token + suffix, ident, 'get')
+    assert api.credentials.worker_token_scope(token, ident, 'get')
+
+
+def test_expired_token_is_refused_for_claim_and_finish(api):
+    ident, token = make_scoped(api)
+    expires = api.credentials.get(ident)['expires_at']
+    api.credentials._clock = lambda: expires + 1
+    assert call(api, 'POST', f'/api/credential-worker/{ident}/claim', claim_body(), token=token)[0] == 401
+    assert call(api, 'POST', f'/api/credential-worker/{ident}/finish', {'outcome': 'failed'}, token=token)[0] == 401
+
+
+def test_worker_can_still_poll_and_resume_after_the_request_deadline(api):
+    # The owner may release long after the ten-minute request deadline (they read
+    # the outcome first). The worker's GET poll must keep working, or the page
+    # stays private forever and the CLI exits without ever seeing 'released'.
+    ident, token = make_scoped(api)
+    expires = api.credentials.get(ident)['expires_at']
+    api.credentials._clock = lambda: expires + 3600
+    status, body = call(api, 'GET', f'/api/credential-worker/{ident}', token=token)
+    assert status == 200 and body['request']['status'] == 'expired'
+    assert call(api, 'POST', f'/api/credential-requests/{ident}/release', {})[0] == 200
+    status, body = call(api, 'GET', f'/api/credential-worker/{ident}', token=token)
+    assert status == 200 and body['request']['status'] == 'released'
+    assert call(api, 'POST', f'/api/credential-worker/{ident}/claim', claim_body(), token=token)[0] == 401
+
+
+def test_read_access_ends_when_the_record_is_pruned(api):
+    ident, token = make_scoped(api)
+    expires = api.credentials.get(ident)['expires_at']
+    api.credentials._clock = lambda: expires + 86400 + 1
+    assert call(api, 'GET', f'/api/credential-worker/{ident}', token=token)[0] == 401
+
+
+def test_broker_rejects_weak_or_shared_signing_keys(tmp_path):
+    key = Fernet.generate_key().decode()
+    for bad in ('', 'short', 'x' * 31, WORKER, key):
+        with pytest.raises(ValueError):
+            CredentialBroker(tmp_path / 'weak.db', key, WORKER, [SITE], signing_key=bad)
+
+
+@pytest.mark.parametrize('field', ['KELP_CREDENTIAL_SIGNING_KEY'])
+def test_signing_key_validation_rules(field):
+    key = Fernet.generate_key().decode()
+    env = {'KELP_CREDENTIALS_ENABLED': '1', 'KELP_VAULT_KEY': key, 'KELP_BROWSER_WORKER_TOKEN': WORKER,
+           'KELP_CREDENTIAL_SIGNING_KEY': SIGNING_KEY, 'KELP_BROWSER_ALLOWED_ORIGINS': SITE,
+           'KELP_AUTH_TOKEN': OWNER}
+    assert validate_env(env)
+    for bad in (None, '', 'x' * 31, WORKER, key, OWNER):
+        changed = {k: v for k, v in env.items() if k != field}
+        if bad is not None:
+            changed[field] = bad
+        with pytest.raises(ValueError):
+            validate_env(changed)
+
+
+def legacy_store(path, key, rows):
+    """Write a pre-device-column credentials.db the way main created it."""
+    import sqlite3
+    db = sqlite3.connect(path)
+    db.executescript('''
+        CREATE TABLE meta (id INTEGER PRIMARY KEY, check_value BLOB NOT NULL);
+        CREATE TABLE requests (
+            id TEXT PRIMARY KEY, session TEXT NOT NULL, origin TEXT NOT NULL,
+            binding TEXT NOT NULL, spec TEXT NOT NULL, submission TEXT NOT NULL, state TEXT NOT NULL,
+            created REAL NOT NULL, expires REAL NOT NULL, payload BLOB, result TEXT NOT NULL DEFAULT '');
+        CREATE TABLE vault (id TEXT PRIMARY KEY, origin TEXT NOT NULL, spec TEXT NOT NULL,
+            created REAL NOT NULL, payload BLOB NOT NULL);
+    ''')
+    cipher = Fernet(key.encode())
+    db.execute('INSERT INTO meta VALUES (1, ?)', (cipher.encrypt(b'kelp-vault-v1'),))
+    spec = json.dumps(FIELDS)
+    roles = [('password', 'password')]
+    for ident, state in rows:
+        context = json.dumps(['request', ident, SITE, roles], separators=(',', ':'))
+        payload = cipher.encrypt(json.dumps({'context': context, 'values': {'password': VALUE}}).encode()) \
+            if state in ('submitted', 'claimed') else None
+        db.execute('INSERT INTO requests VALUES (?,?,?,?,?,?,?,?,?,?,?)',
+                   (ident, 'browser_test', SITE, 'a' * 64, spec, json.dumps({'enabled': True, 'label': 'x'}),
+                    state, 1.0, 4_000_000_000.0, payload, ''))
+    db.commit()
+    db.close()
+
+
+def test_in_flight_requests_from_before_the_upgrade_fail_closed(tmp_path):
+    key = Fernet.generate_key().decode()
+    path = tmp_path / 'vault.db'
+    legacy_store(path, key, [('cred_pend', 'pending'), ('cred_sub', 'submitted'),
+                             ('cred_done', 'completed')])
+    b = CredentialBroker(path, key, WORKER, [SITE], signing_key=SIGNING_KEY)
+    try:
+        # No worker holds a scoped token for these, and the sealed payloads use the
+        # old context: do not leave them looking live, and do not attribute them
+        # to today's worker device.
+        assert b.get('cred_pend')['status'] == 'failed' and b.get('cred_pend')['outcome'] == 'upgraded'
+        assert b.get('cred_sub')['status'] == 'failed'
+        assert b._db.execute("SELECT payload FROM requests WHERE id='cred_sub'").fetchone()[0] is None
+        assert b.get('cred_done')['status'] == 'completed'
+        rows = {r['id']: r['device'] for r in b._db.execute('SELECT id, device FROM requests')}
+        assert set(rows.values()) == {''}
+        with pytest.raises(ChatError):
+            b.issue_worker_token('cred_done')  # never mint for a row with no known device
+        new = b.create(descriptor())
+        assert b._row(new['id'])['device'] == b._device_id
+        assert b.worker_token_scope(b.issue_worker_token(new['id']), new['id'], 'get')
+    finally:
+        b.close()
+
+
+def test_scoped_token_response_is_no_store_and_never_reaches_logs_or_audit(api, capsys):
+    from chat.logging import configure_logging
+    configure_logging()
+    response = api.handle(Request('POST', '/api/credential-worker',
+                                  headers={'Authorization': 'Bearer ' + WORKER},
+                                  body=json.dumps(descriptor()).encode()))
+    assert response.status == 201
+    assert response.headers.get('Cache-Control') == 'no-store'
+    token = json.loads(response.body)['worker_token']
+    ident = json.loads(response.body)['request']['id']
+    call(api, 'GET', f'/api/credential-worker/{ident}', token=token)
+    call(api, 'GET', f'/api/credential-worker/{ident}', token=token + 'x')
+    out = capsys.readouterr()
+    audit_text = api.credentials._audit.path.read_text()
+    for secret in (token, token.split('.')[1], WORKER, SIGNING_KEY):
+        assert secret not in out.out + out.err + audit_text
+    assert ident in audit_text  # only the handoff id is recorded

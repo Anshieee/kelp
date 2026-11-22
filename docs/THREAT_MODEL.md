@@ -169,6 +169,19 @@ Each item names where the guarantee lives.
   stdout/stderr bodies, or secret material. There is no rewrite or delete API;
   rotation is whole-segment (`chat/retention.py`).
 
+- **Credential-handoff worker tokens (only with `KELP_CREDENTIALS_ENABLED=1`).**
+  `KELP_BROWSER_WORKER_TOKEN` is accepted solely by `POST /api/credential-worker`
+  (`chat/routers/credentials.py::credentials`). `get`, `claim` and `finish`
+  require the HMAC-SHA256 token from `CredentialBroker.issue_worker_token`, signed
+  with `KELP_CREDENTIAL_SIGNING_KEY` (32+ characters, distinct from the vault key,
+  the worker token and the owner token, enforced by `credentials.validate_env`).
+  `worker_token_scope` verifies the signature in constant time before parsing, then
+  matches request ID, device, target origin, browser binding, session, operation
+  and deadline against the stored row. A leaked scoped token lets its holder poll
+  one request and, until the deadline, claim or finish it once; it cannot reach
+  another request, owner routes or the vault. A compromised server or worker still
+  sees plaintext (`docs/CREDENTIAL_HANDOFF.md`).
+
 ---
 
 ## 4. What the loop is allowed to do

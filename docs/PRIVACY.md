@@ -364,9 +364,12 @@ When `KELP_CREDENTIALS_ENABLED=1`, owner input sent to the separate credential
 API is encrypted in `credentials.db` beside `chat.db`. It is never appended to
 chat, tool results, SSE replay, shares or provider requests. A separately
 authenticated trusted browser worker receives it once and enters it into the
-explicit HTTPS site. Its bootstrap token is server configuration; registration
-issues a request-only token scoped to read status, claim once, and finish, expiring
-with the request (no later than ten minutes). Device identity is derived by the
+explicit HTTPS site. Its bootstrap token (`KELP_BROWSER_WORKER_TOKEN`) can only
+register a request. Registration issues a token signed with a separate server-only
+`KELP_CREDENTIAL_SIGNING_KEY` and scoped to that one request's status read, claim
+and finish. Claim and finish stop at the ten-minute request deadline; the status
+read remains for the 24-hour retention window so the worker can see the owner's
+release. Device identity is derived by the
 server from the bootstrap credential, not accepted from the worker body. The
 request ciphertext is bound to its ID, target origin, browser session, authenticated
 device, form fingerprint, and field roles; a changed binding fails closed. These

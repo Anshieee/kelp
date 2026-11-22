@@ -28,6 +28,11 @@ from .errors import ChatError
 MAX_BODY = 16_384
 _ID = re.compile(r"[A-Za-z][A-Za-z0-9_-]{0,63}\Z")
 _BINDING = re.compile(r"[0-9a-f]{64}\Z")
+# Terminal rows are pruned this long after their deadline. A worker token may
+# keep polling status (only) for the same window, so it can see the owner release.
+_RETENTION = 86_400
+_MIN_SIGNING_KEY = 32
+_MAX_TOKEN = 2048
 
 
 def fail(code: str = 'invalid_credential_request', status: int = 400) -> NoReturn:
@@ -98,6 +103,10 @@ class CredentialBroker:
 
     def __init__(self, path: Path, key: str, worker_token: str, allowed_origins: list[str],
                  *, signing_key: str, audit: Any = None, clock: Callable[[], float] = time.time):
+        # validate_env enforces this at startup; repeat it here because an empty or
+        # shared signing key would let the root-token holder mint scoped tokens.
+        if len(signing_key) < _MIN_SIGNING_KEY or signing_key in {key, worker_token}:
+            raise ValueError('Credential signing key must be 32+ characters and distinct.')
         self._cipher = Fernet(key.encode())
         self._worker_digest = hashlib.sha256(worker_token.encode()).digest()
         self._signing_key = signing_key.encode()
@@ -127,7 +136,11 @@ class CredentialBroker:
         columns = {row['name'] for row in self._db.execute('PRAGMA table_info(requests)')}
         if 'device' not in columns:
             self._db.execute("ALTER TABLE requests ADD COLUMN device TEXT NOT NULL DEFAULT ''")
-        self._db.execute("UPDATE requests SET device=? WHERE device=''", (self._device_id,))
+        # Rows with no recorded device pre-date request-scoped tokens. No worker holds
+        # a token for them and their payloads are sealed under the old context, so
+        # fail live ones closed rather than attribute them to today's worker.
+        self._db.execute("UPDATE requests SET state='failed',payload=NULL,result='upgraded' "
+                         "WHERE device='' AND state IN ('pending','submitted','claimed')")
         try:
             row = self._db.execute('SELECT check_value FROM meta WHERE id=1').fetchone()
             if row:
@@ -153,40 +166,59 @@ class CredentialBroker:
         """Stable server-derived identity for the configured trusted worker."""
         return self._worker_digest.hex()
 
+    def _sign(self, encoded: str) -> str:
+        digest = hmac.new(self._signing_key, encoded.encode(), hashlib.sha256).digest()
+        return base64.urlsafe_b64encode(digest).rstrip(b'=').decode()
+
     def issue_worker_token(self, ident: str) -> str:
-        """Issue a request-only bearer token expiring with its credential request."""
+        """Issue a request-only bearer token for a request this worker device created.
+
+        ``exp`` (the request deadline) bounds claim and finish. ``read_exp`` bounds
+        the status poll, which must outlive the deadline so the worker can observe
+        an expiry or the owner's later release.
+        """
         with self._transaction():
             row = self._row(ident)
+            if row['device'] != self._device_id:
+                fail('credential_device_mismatch', 403)
             payload = json.dumps({'v': 1, 'id': ident, 'device': row['device'],
                                   'target': row['origin'], 'binding': row['binding'],
-                                  'session': row['session'],
-                                  'exp': int(row['expires']), 'scope': ['get', 'claim', 'finish']},
+                                  'session': row['session'], 'exp': int(row['expires']),
+                                  'read_exp': int(row['expires']) + _RETENTION,
+                                  'scope': ['get', 'claim', 'finish']},
                                  sort_keys=True, separators=(',', ':')).encode()
         encoded = base64.urlsafe_b64encode(payload).rstrip(b'=').decode()
-        signature = hmac.new(self._signing_key, encoded.encode(), hashlib.sha256).digest()
-        return encoded + '.' + base64.urlsafe_b64encode(signature).rstrip(b'=').decode()
+        return encoded + '.' + self._sign(encoded)
 
     def worker_token_scope(self, token: str, ident: str, operation: str) -> bool:
-        """Verify an unforgeable, unexpired token scoped to one request/device."""
+        """Verify an unforgeable, unexpired token scoped to one request/device/operation."""
         try:
-            encoded, signature_text = token.split('.', 1)
-            supplied = base64.urlsafe_b64decode(signature_text + '=' * (-len(signature_text) % 4))
-            expected = hmac.new(self._signing_key, encoded.encode(), hashlib.sha256).digest()
-            if not hmac.compare_digest(supplied, expected):
+            if len(token) > _MAX_TOKEN or token.count('.') != 1:
                 return False
-            raw = base64.urlsafe_b64decode(encoded + '=' * (-len(encoded) % 4))
-            claims = json.loads(raw)
+            encoded, supplied = token.split('.')
+            # Authenticate the exact bytes before decoding or parsing anything.
+            # Compare the canonical text form: base64's lenient decoder would
+            # otherwise accept many distinct strings for one signature.
+            if not hmac.compare_digest(supplied.encode('ascii'), self._sign(encoded).encode('ascii')):
+                return False
+            claims = json.loads(base64.urlsafe_b64decode(encoded + '=' * (-len(encoded) % 4)))
             with self._lock:
                 row = self._db.execute('SELECT * FROM requests WHERE id=?', (ident,)).fetchone()
-            return (row is not None and claims.get('v') == 1 and claims.get('id') == ident
+            if row is None or not isinstance(claims, dict):
+                return False
+            exp, read_exp = claims.get('exp'), claims.get('read_exp')
+            if type(exp) is not int or type(read_exp) is not int:
+                return False
+            deadline = read_exp if operation == 'get' else exp
+            return (claims.get('v') == 1 and claims.get('id') == ident
                     and claims.get('device') == row['device'] == self._device_id
                     and claims.get('target') == row['origin']
                     and claims.get('binding') == row['binding']
                     and claims.get('session') == row['session']
                     and operation in claims.get('scope', [])
-                    and type(claims.get('exp')) is int
-                    and claims['exp'] == int(row['expires']) and claims['exp'] > self._clock())
-        except (ValueError, TypeError, AttributeError, json.JSONDecodeError):
+                    and exp == int(row['expires']) and read_exp == exp + _RETENTION
+                    and deadline > self._clock())
+        except (ValueError, TypeError, AttributeError):
             return False
 
     @contextmanager
@@ -195,7 +227,7 @@ class CredentialBroker:
             self._db.execute('BEGIN IMMEDIATE')
             try:
                 self._db.execute("UPDATE requests SET state='expired',payload=NULL,result='expired' WHERE expires<=? AND state IN ('pending','submitted','claimed')", (self._clock(),))
-                self._db.execute("DELETE FROM requests WHERE expires<?", (self._clock() - 86400,))
+                self._db.execute("DELETE FROM requests WHERE expires<?", (self._clock() - _RETENTION,))
                 yield
                 self._db.execute('COMMIT')
             except BaseException:
