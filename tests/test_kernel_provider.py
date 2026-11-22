@@ -557,9 +557,60 @@ def test_auth_header_is_sent_but_never_echoed() -> None:
         assert API_KEY not in repr(event)
 
 
-def test_done_marker_is_required_for_clean_end() -> None:
+class _RecordingLedger:
+    def __init__(self) -> None:
+        self.rows: list[dict[str, Any]] = []
+
+    def record(self, **kwargs: Any) -> None:
+        self.rows.append(kwargs)
+
+
+def test_stream_without_done_marker_or_finish_reason_is_a_protocol_error() -> None:
     def handler(req: httpx.Request) -> httpx.Response:
-        return httpx.Response(200, text=sse({"choices": [{"delta": {"content": "ok"}}]}, done=False))
+        return httpx.Response(
+            200,
+            text=sse({"choices": [{"delta": {"content": "upstream secret text"}}]}, done=False),
+        )
+
+    ledger = _RecordingLedger()
+    client = client_with(handler)
+    client.ledger = ledger  # type: ignore[assignment]
+    events = drain(client)
+
+    assert not any(isinstance(event, StreamEnd) for event in events)
+    failure = events[-1]
+    assert isinstance(failure, ProviderFailure)
+    assert failure.code == "provider_protocol_error"
+    assert failure.retryable is True
+    assert "upstream secret text" not in failure.message
+    assert [row["outcome"] for row in ledger.rows] == ["provider_protocol_error"]
+
+
+def test_empty_stream_without_done_marker_is_a_protocol_error() -> None:
+    def handler(req: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, text="")
 
     events = drain(client_with(handler))
-    assert events[-1] == StreamEnd("stop")
+    assert isinstance(events[-1], ProviderFailure)
+    assert events[-1].code == "provider_protocol_error"
+
+
+def test_finish_reason_without_done_marker_still_ends_cleanly() -> None:
+    def handler(req: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            text=sse(
+                {"choices": [{"delta": {"content": "ok"}}]},
+                {"choices": [{"delta": {}, "finish_reason": "length"}]},
+                done=False,
+            ),
+        )
+
+    ledger = _RecordingLedger()
+    client = client_with(handler)
+    client.ledger = ledger  # type: ignore[assignment]
+    events = drain(client)
+
+    assert events[-1] == StreamEnd("length")
+    assert not any(isinstance(event, ProviderFailure) for event in events)
+    assert [row["outcome"] for row in ledger.rows] == ["completed"]
