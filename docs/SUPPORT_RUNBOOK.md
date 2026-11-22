@@ -122,7 +122,14 @@ The admin surface uses the `admin` class (`KELP_RATE_LIMIT_ADMIN_RPM`,
 budget or a scrape loop; the default is 1200/minute with a 300 burst. Wait for
 `Retry-After`, or fix the scraper. Do not disable the limiter permanently.
 
-### Branch 4 — Spend looks wrong or a turn is refused with `spend_cap_exceeded`
+### Branch 4 — Spend looks wrong or a turn is refused with `spend_cap_reached`
+
+The chat API refuses the turn with HTTP `402` and `error.code: "spend_cap_reached"`
+(`chat/service.py`). `spend_cap_exceeded` is the frozen control-layer code in
+`docs/SERVICE_CONTRACT.md` §5 for a `TaskRun.error_code`; today a spend refusal
+happens before any `TaskRun` exists, so the API code is the one you will see. A
+scheduled run skipped by the cap writes a `schedule_run` audit row with
+`reason: "spend_cap"` (`chat/proactive.py`).
 
 **First command** — read the tenant summary and the persisted windows:
 
