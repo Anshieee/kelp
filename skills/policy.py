@@ -14,8 +14,14 @@ runs. The same policy backs the handler-facing chokepoints:
 Network egress has a second, independent guard: while a skill handler runs,
 process-wide socket entry points refuse direct connections, datagram sends, and
 DNS lookups. A handler that ignores ``context.egress()`` and reaches for
-``socket`` or ``urllib`` fails closed instead of escaping its allowlist. The
-guard is a ContextVar, so code outside an invocation is unaffected. Threads
+``socket`` or ``urllib`` fails closed instead of escaping its allowlist. Inside
+``context.egress()`` the guard also binds ``connect``: a handler-supplied
+transport runs with egress allowed, so ``connect``/``connect_ex`` accept only an
+IP that a host-checked ``getaddrinfo``/``gethostbyname*`` returned during that
+same request. An IP literal, a hostname, an ``AF_UNIX`` path, or any address
+nobody resolved is refused (``egress:unresolved``). The resolved set belongs to
+one request and is shared by reference with its worker threads. The guard is a
+ContextVar, so code outside an invocation is unaffected. Threads
 started during an invocation inherit it through ``contextvars.copy_context()``.
 
 The guard is cooperative and covers the Python-level ``socket`` module, plus
@@ -112,6 +118,12 @@ _ACTIVE: contextvars.ContextVar[_ActiveInvocation | None] = contextvars.ContextV
 _EGRESS_ALLOWED: contextvars.ContextVar[bool] = contextvars.ContextVar(
     "kelp_skill_egress_allowed", default=False
 )
+#: IPs returned by host-checked lookups during the current egress request.
+#: ``connect`` is bound to this set. The mutable set is created per request and
+#: shared by reference with threads that copy the context.
+_RESOLVED_ADDRESSES: contextvars.ContextVar[set[str] | None] = contextvars.ContextVar(
+    "kelp_skill_resolved_addresses", default=None
+)
 
 
 @contextmanager
@@ -198,19 +210,68 @@ def _guard_address(address: Any) -> None:
         _guard_socket_target(address)
 
 
+def _normalise_ip(value: Any) -> str | None:
+    """Canonical text for an IP address, or ``None`` if ``value`` is not one."""
+
+    if not isinstance(value, str):
+        return None
+    address, separator, zone = value.strip().partition("%")
+    try:
+        canonical = str(ipaddress.ip_address(address))
+    except ValueError:
+        return None
+    return f"{canonical}{separator}{zone}" if separator else canonical
+
+
+def _record_resolved(*addresses: Any) -> None:
+    """Remember IPs a host-checked lookup returned, for this egress request."""
+
+    resolved = _RESOLVED_ADDRESSES.get()
+    if resolved is None or _ACTIVE.get() is None or not _EGRESS_ALLOWED.get():
+        return
+    for address in addresses:
+        canonical = _normalise_ip(address)
+        if canonical is not None:
+            resolved.add(canonical)
+
+
+def _guard_connect_address(address: Any) -> None:
+    """Refuse a connect inside an invocation unless it targets a resolved IP."""
+
+    if _ACTIVE.get() is None:
+        return
+    if not _EGRESS_ALLOWED.get():
+        _refuse_direct_egress()
+    resolved = _RESOLVED_ADDRESSES.get()
+    target = (
+        _normalise_ip(address[0]) if isinstance(address, tuple) and address else None
+    )
+    if resolved is None or target is None or target not in resolved:
+        raise PolicyDenied(
+            "connect target was not resolved for an allowed host in this egress request",
+            ("net:unresolved", "egress:unresolved"),
+        )
+
+
 def _guarded_getaddrinfo(host: Any, port: Any, *args: Any, **kwargs: Any) -> Any:
     _guard_socket_target(host)
-    return _REAL_GETADDRINFO(host, port, *args, **kwargs)
+    result = _REAL_GETADDRINFO(host, port, *args, **kwargs)
+    _record_resolved(*(entry[4][0] for entry in result if entry[4]))
+    return result
 
 
 def _guarded_gethostbyname(host: Any) -> Any:
     _guard_socket_target(host)
-    return _REAL_GETHOSTBYNAME(host)
+    result = _REAL_GETHOSTBYNAME(host)
+    _record_resolved(result)
+    return result
 
 
 def _guarded_gethostbyname_ex(host: Any) -> Any:
     _guard_socket_target(host)
-    return _REAL_GETHOSTBYNAME_EX(host)
+    result = _REAL_GETHOSTBYNAME_EX(host)
+    _record_resolved(*result[2])
+    return result
 
 
 def _guarded_gethostbyaddr(host: Any) -> Any:
@@ -224,14 +285,12 @@ def _guarded_create_connection(address: Any, *args: Any, **kwargs: Any) -> Any:
 
 
 def _guarded_connect(self: socket.socket, address: Any) -> Any:
-    if _ACTIVE.get() is not None and not _EGRESS_ALLOWED.get():
-        _refuse_direct_egress()
+    _guard_connect_address(address)
     return _REAL_SOCKET_CONNECT(self, address)
 
 
 def _guarded_connect_ex(self: socket.socket, address: Any) -> Any:
-    if _ACTIVE.get() is not None and not _EGRESS_ALLOWED.get():
-        _refuse_direct_egress()
+    _guard_connect_address(address)
     return _REAL_SOCKET_CONNECT_EX(self, address)
 
 
@@ -815,6 +874,7 @@ class EgressClient:
             raise ValueError("timeout must be positive")
         self._audit("skill_egress", host, normalised, "allow", "started")
         token = _EGRESS_ALLOWED.set(True)
+        resolved_token = _RESOLVED_ADDRESSES.set(set())
         try:
             if self._transport is not None:
                 response = self._transport(
@@ -839,6 +899,7 @@ class EgressClient:
             self._ledger_record(host, normalised, request_bytes, 0, "egress_error")
             raise
         finally:
+            _RESOLVED_ADDRESSES.reset(resolved_token)
             _EGRESS_ALLOWED.reset(token)
         self._audit(
             "skill_egress",
