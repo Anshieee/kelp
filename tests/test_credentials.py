@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import io
 import json
 from concurrent.futures import ThreadPoolExecutor
 
@@ -13,6 +14,7 @@ from chat import ChatAPI, Request
 from chat.credential_browser import CredentialWorker, PrivateBrowserSession
 from chat.credentials import CredentialBroker, origin, validate_env
 from chat.errors import ChatError
+from chat.logging import configure_logging
 from openshell.audit import AuditLog
 from tests.chatkit import make_service, text_script
 
@@ -297,13 +299,27 @@ def test_disabled_feature_stays_closed(api):
         api.credentials = saved
 
 
-def test_model_history_and_http_logs_never_receive_credential_values(api, capsys):
-    from chat.logging import configure_logging
-    configure_logging()
-    r = api.credentials.create(descriptor())
-    assert call(api, 'POST', f"/api/credential-requests/{r['id']}/submit",
-                {'values': {'password': VALUE}})[0] == 200
-    assert VALUE not in capsys.readouterr().out
+def test_model_history_and_http_logs_never_receive_credential_values(api):
+    # VALUE is deliberately NOT registered with the scrubber: the only thing
+    # keeping it out of the log is that the credential routes never hand the
+    # request body to the logger. An explicit buffer replaces capsys, so the
+    # check does not depend on whichever stream a previous test left configured.
+    log_buffer = io.StringIO()
+    configure_logging(level='debug', secret_values=(), stream=log_buffer)
+    try:
+        r = api.credentials.create(descriptor())
+        path = f"/api/credential-requests/{r['id']}/submit"
+        assert call(api, 'POST', path, {'values': {'password': VALUE}})[0] == 200
+        log_output = log_buffer.getvalue()
+    finally:
+        configure_logging(level='info', secret_values=(), stream=None, enabled=False)
+    # Positive control: the submit request itself was logged, so a missing
+    # VALUE below means it was kept out, not that nothing was logged.
+    records = [json.loads(line) for line in log_output.splitlines() if line.strip()]
+    submits = [x for x in records if x['event'] == 'http_request'
+               and x['method'] == 'POST' and x['status'] == 200]
+    assert len(submits) == 1
+    assert VALUE not in log_output
     assert api.service.store._conn.execute('SELECT COUNT(*) FROM messages').fetchone()[0] == 0
 
 

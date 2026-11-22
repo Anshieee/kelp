@@ -361,7 +361,6 @@ def test_admin_rows_use_the_frozen_field_list_and_leak_no_prompt_or_secret(
         serialized = json.dumps(audit_rows)
         assert PROMPT not in serialized
         assert SECRET_VALUE not in serialized
-        assert service is not None
     finally:
         api.close()
         store.close()

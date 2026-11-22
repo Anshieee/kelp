@@ -20,7 +20,6 @@ import httpx
 import pytest
 
 from chat.logging import configure_logging, log
-from chat.store import ChatStore
 from kernel.config import KernelConfig
 from kernel.providers import (
     ChatRequest,
@@ -37,6 +36,14 @@ from kernel.secrets import (
     TenantSecretResolver,
 )
 from openshell.audit import AuditLog
+
+from .chatkit import (
+    executor_factory,
+    make_service,
+    send_and_wait,
+    text_script,
+    tool_script,
+)
 
 FAKE_ENV = "sk-test-fake-env-secret"
 FAKE_A = "sk-test-fake-tenant-a-secret"
@@ -360,7 +367,14 @@ def test_no_secret_value_reaches_repr_logs_audit_or_sqlite(tmp_path: Path) -> No
         )
         log("provider_key_test", reason=f"loaded {FAKE_A}")
     finally:
-        configure_logging(enabled=False)
+        configure_logging(
+            level="info", secret_values=(), stream=None, enabled=False
+        )
+    # Positive control: the probe line reached the sink with the value replaced,
+    # so the absence check below fails if the scrubber stops covering it.
+    logged = json.loads(stream.getvalue())
+    assert logged["event"] == "provider_key_test"
+    assert logged["reason"] == "loaded [redacted]"
     assert FAKE_A not in stream.getvalue()
 
     # Audit rows carry the key name and metadata only; even a caller that
@@ -373,16 +387,44 @@ def test_no_secret_value_reaches_repr_logs_audit_or_sqlite(tmp_path: Path) -> No
     )
     audit.record("provider_key_mistake", extra={"api_key": FAKE_A})
     raw_audit = audit_path.read_text(encoding="utf-8")
+    # Positive control: the mistaken row was written, with the value replaced.
+    assert "provider_key_mistake" in raw_audit
+    assert "[redacted]" in raw_audit
     assert FAKE_A not in raw_audit
     assert PROVIDER_KEY in raw_audit
     assert "value" not in raw_audit.splitlines()[0]
 
-    # Durable chat state never sees the resolver at all.
-    db_path = tmp_path / "chat.db"
-    store = ChatStore(db_path, audit=audit)
-    store.create_thread(title="ordinary thread")
-    store.close()
+    # Durable chat state: route the resolver values through the one store path
+    # that could carry them. ChatService writes tool arguments and results into
+    # message blocks and events; ``scrub_values`` is what keeps a tenant value
+    # out of them. (An unrelated ``create_thread`` cannot fail this check.)
+    async def executor(call: object) -> dict:
+        return {"ok": True, "output": {"echo": f"leaked {FAKE_A}"}}
 
-    for candidate in tmp_path.glob("chat.db*"):
-        if candidate.is_file():
-            assert FAKE_A.encode() not in candidate.read_bytes()
+    service, chat_store, _provider = make_service(
+        tmp_path / "service",
+        [tool_script("stub.tool", {"q": FAKE_A}), text_script("done")],
+        scrub_values=tuple(resolver.secret_values()),
+        tool_executor_factory=executor_factory(executor),
+    )
+    try:
+        thread = service.create_thread()
+
+        async def scenario() -> tuple[str, str]:
+            payload = await send_and_wait(service, thread["id"], "go")
+            blocks = chat_store.get_message(payload["assistant_message_id"])["blocks"]
+            return json.dumps(blocks), json.dumps(chat_store.events_after(thread["id"]))
+
+        blocks_json, events_json = asyncio.run(scenario())
+    finally:
+        chat_store.close()
+
+    # Positive control: the tool turn was persisted and carries the marker.
+    assert "stub.tool" in blocks_json
+    assert "[redacted]" in blocks_json
+    assert FAKE_A not in blocks_json
+    assert FAKE_A not in events_json
+    db_files = [c for c in (tmp_path / "service").glob("chat.db*") if c.is_file()]
+    assert db_files
+    for candidate in db_files:
+        assert FAKE_A.encode() not in candidate.read_bytes()

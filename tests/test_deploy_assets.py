@@ -185,7 +185,6 @@ def test_compose_healthcheck_matches_the_image() -> None:
 
 def test_compose_pins_the_project_and_volume_names() -> None:
     text = COMPOSE.read_text(encoding="utf-8")
-    assert text.splitlines()[0].startswith("#") or "name: kelp" in text
     assert "name: kelp" in text
     assert "name: kelp-data" in text
 

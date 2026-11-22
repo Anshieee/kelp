@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import io
 import json
 from pathlib import Path
 from typing import Any
@@ -10,7 +11,7 @@ import httpx
 import pytest
 
 from chat.api import Request
-from chat.logging import log
+from chat.logging import configure_logging, log
 from chat.server import ServerConfig, build_app
 from openshell.egress_ledger import EgressLedger
 from payments.razorpay_gateway import HttpRazorpayTransport
@@ -105,7 +106,7 @@ def test_checkout_is_mounted_separately_when_test_keys_are_configured(
 
 
 def test_razorpay_credentials_are_scrubbed_across_server_surfaces(
-    tmp_path: Path, capsys: Any
+    tmp_path: Path,
 ) -> None:
     credentials = {
         "RAZORPAY_KEY_ID": "rzp_test_walletscrub1234",
@@ -119,6 +120,12 @@ def test_razorpay_credentials_are_scrubbed_across_server_surfaces(
     env = _env(tmp_path / "configured", **credentials)
     app = build_app(ServerConfig.from_env(env), environ=env)
     errors: list[str] = []
+    # build_app installed the process-wide scrubber from the service secrets.
+    # Redirect only the destination into a buffer this test owns, and leave
+    # ``secret_values`` unset so the scrubber under test stays the one build_app
+    # configured (passing the credentials here would make the check vacuous).
+    log_buffer = io.StringIO()
+    configure_logging(level="debug", stream=log_buffer)
     try:
         owner = {"authorization": f"Bearer {env['KELP_AUTH_TOKEN']}"}
         owner_csrf = {**owner, "x-csrf-token": env["KELP_CSRF_TOKEN"]}
@@ -177,7 +184,16 @@ def test_razorpay_credentials_are_scrubbed_across_server_surfaces(
         assert metrics_response.status == 200
         metrics_output = metrics_response.body.decode()
         audit_output = app.config.audit_path.read_text(encoding="utf-8")
-        log_output = capsys.readouterr().out
+        log_output = log_buffer.getvalue()
+
+        # Positive control: every probe reached the sink, so the absence checks
+        # below can fail. Each probe must carry the redaction marker instead of
+        # the value it was given.
+        records = [json.loads(line) for line in log_output.splitlines() if line.strip()]
+        probes = [r for r in records if r["event"] == "payment_scrubber_probe"]
+        assert len(probes) == len(credentials)
+        assert all(probe["error_code"] == "[redacted]" for probe in probes)
+        assert any(r["event"] == "http_request" for r in records)
 
         for secret in credentials.values():
             assert secret not in log_output
@@ -185,6 +201,7 @@ def test_razorpay_credentials_are_scrubbed_across_server_surfaces(
             assert secret not in audit_output
             assert all(secret not in body for body in errors)
     finally:
+        configure_logging(level="info", secret_values=(), stream=None, enabled=False)
         app.close()
         unconfigured_app.close()
 

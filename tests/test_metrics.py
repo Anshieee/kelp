@@ -64,11 +64,12 @@ def make_api(
     metrics: Metrics | None = None,
     audit: AuditLog | None = None,
     usage_store: Any | None = None,
+    reply: str = "Hello",
 ) -> tuple[ChatAPI, ChatService, ChatStore]:
     store = ChatStore(tmp_path / "chat.db")
     service = ChatService(
         store=store,
-        provider=StubProvider([text_script("Hello", usage=(10, 5))]),
+        provider=StubProvider([text_script(reply, usage=(10, 5))]),
         model=MODEL,
         audit=audit,
         metrics=metrics,
@@ -337,11 +338,17 @@ def test_one_send_shares_one_request_id_across_logs_audit_and_usage(
     usage_path = tmp_path / "usage" / "usage.jsonl"
     inner = JsonlUsageStore(usage_path)
     metrics = Metrics(scrubber=SecretScrubber([SECRET]))
+    # The model reply carries both a plain sentinel and the configured secret.
+    # Reply text is allow-list-excluded from every sink, so neither may appear;
+    # if a sink ever starts recording replies, the sentinel fails the check even
+    # where the scrubber would have hidden the secret.
+    reply_sentinel = "REPLY-MUST-NOT-LEAK-456"
     api, service, store = make_api(
         tmp_path,
         metrics=metrics,
         audit=audit,
         usage_store=LoggedUsageStore(inner),
+        reply=f"{reply_sentinel} {SECRET}",
     )
     prompt = "PROMPT-MUST-NOT-LEAK-123"
     request_id = "req_shared_abc123"
@@ -358,6 +365,10 @@ def test_one_send_shares_one_request_id_across_logs_audit_and_usage(
         assert response.headers["X-Request-Id"] == request_id
         payload = json.loads(response.body)
         api.runner.run(service.wait_for_turn(payload["turn_id"]))
+        # Positive control: the reply (sentinel and secret) was really
+        # persisted, so the sink checks below are about sinks, not a lost reply.
+        assistant = store.get_message(payload["assistant_message_id"])
+        assert reply_sentinel in json.dumps(assistant["blocks"])
     finally:
         api.close()
         store.close()
@@ -404,6 +415,7 @@ def test_one_send_shares_one_request_id_across_logs_audit_and_usage(
         metrics_text,
     ):
         assert prompt not in text
+        assert reply_sentinel not in text
         assert SECRET not in text
 
 
@@ -491,10 +503,21 @@ def test_non_finite_measurements_never_reach_the_exposition() -> None:
     rendered = metrics.render()
     assert "nan" not in rendered.lower()
     assert "-inf" not in rendered.lower()
-    # A non-finite observation is dropped, so the histogram has no series and
-    # the cost counter stays at the zero it was booted with.
-    assert "http_request_duration_seconds_count" not in rendered
     values = samples(rendered)
+    # NaN and +inf durations are dropped from their histograms: the labelled
+    # HTTP histogram never gets a series, and the unlabelled turn histogram
+    # (created at zero on boot) stays at zero. The counters beside them still
+    # count the request and the turn. (``le="+Inf"`` is a legal bucket label,
+    # so the text "inf" itself is not evidence either way.)
+    assert "http_request_duration_seconds_count" not in rendered
+    assert values['http_requests_total{method="GET",route="/api/threads",status="200"}'] == 1
+    assert values["turn_duration_seconds_count"] == 0
+    assert values["turn_duration_seconds_sum"] == 0
+    assert values['turns_total{outcome="stop"}'] == 1
+    # -0.0 is finite, so it is NOT dropped: it is clamped to 0.0 and recorded.
+    assert values["approval_wait_seconds_count"] == 1
+    assert values["approval_wait_seconds_sum"] == 0
+    # A NaN cost leaves the counter at the zero it was booted with.
     assert values["cost_usd_total"] == 0
     assert values[f'tokens_total{{direction="input",model="{MODEL}"}}'] == 4
 
