@@ -301,6 +301,55 @@ def test_confirm_on_an_order_paid_elsewhere_is_a_409(api: CheckoutAPI) -> None:
     assert "receipt" not in body
 
 
+def test_no_token_and_no_upstream_authorization_fails_closed(
+    transport: CheckoutTransport,
+) -> None:
+    bare = CheckoutAPI(make_checkout(transport=transport))
+
+    read = call(bare, "GET", "/api/wallet/checkout", auth=False)
+    write = call(
+        bare, "POST", "/api/wallet/checkout", body={"amount_cents": 1500}, auth=False
+    )
+
+    assert read.status == 401
+    assert payload(read)["error"]["code"] == "unauthorized"
+    assert write.status == 401
+
+
+def test_upstream_authorized_allows_a_request_without_a_token(
+    transport: CheckoutTransport,
+) -> None:
+    trusted = CheckoutAPI(
+        make_checkout(transport=transport), upstream_authorized=True
+    )
+
+    response = call(trusted, "GET", "/api/wallet/checkout", auth=False)
+
+    assert response.status == 200
+
+
+def test_upstream_authorized_still_enforces_csrf(
+    transport: CheckoutTransport,
+) -> None:
+    trusted = CheckoutAPI(
+        make_checkout(transport=transport),
+        upstream_authorized=True,
+        csrf_token=CSRF,
+    )
+
+    response = call(
+        trusted,
+        "POST",
+        "/api/wallet/checkout",
+        body={"amount_cents": 1500},
+        auth=False,
+        csrf=False,
+    )
+
+    assert response.status == 403
+    assert payload(response)["error"]["code"] == "csrf_failed"
+
+
 # -- webhook ---------------------------------------------------------------
 
 
@@ -332,6 +381,33 @@ def test_webhook_is_not_session_authenticated(api: CheckoutAPI) -> None:
 
     assert response.status == 200
     assert payload(response)["proposal"]["status"] == "paid"
+
+
+def test_webhook_works_with_no_token_and_no_upstream_authorization(
+    transport: CheckoutTransport,
+) -> None:
+    checkout = make_checkout(transport=transport)
+    owner = CheckoutAPI(checkout, auth_token=TOKEN, csrf_token=CSRF)
+    bare = CheckoutAPI(checkout)
+    order_id = create(owner)["checkout"]["order_id"]
+    body = json.dumps(webhook_event(order_id, "pay_test0001")).encode("utf-8")
+    signature = expected_webhook_signature(WEBHOOK_SECRET, body)
+
+    response = webhook_call(bare, body, signature)
+
+    assert response.status == 200
+    assert payload(response)["proposal"]["status"] == "paid"
+
+
+def test_webhook_with_no_token_still_rejects_a_bad_signature(
+    transport: CheckoutTransport,
+) -> None:
+    bare = CheckoutAPI(make_checkout(transport=transport))
+    body = json.dumps(webhook_event("order_unknown1", "pay_test0001")).encode("utf-8")
+
+    response = webhook_call(bare, body, "0" * 64)
+
+    assert response.status == 401
 
 
 def test_webhook_with_a_bad_signature_is_401(

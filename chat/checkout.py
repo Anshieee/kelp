@@ -54,10 +54,15 @@ class CheckoutAPI:
         *,
         auth_token: str | None = None,
         csrf_token: str | None = None,
+        upstream_authorized: bool = False,
     ) -> None:
         self.checkout = checkout
         self.auth_token = auth_token
         self.csrf_token = csrf_token
+        # True only when the caller (ChatAPI) has already authenticated every
+        # request it routes here. Without it and without an auth_token the
+        # API fails closed instead of treating "no token" as "open".
+        self.upstream_authorized = upstream_authorized
 
     # -- dispatch ----------------------------------------------------------
 
@@ -203,8 +208,10 @@ class CheckoutAPI:
             raise WalletError("csrf_failed", status=403)
 
     def _authorized_for(self, request: Request) -> bool:
-        if not self.auth_token:
+        if self.upstream_authorized:
             return True
+        if not self.auth_token:
+            return False
         header = request.header("authorization") or ""
         prefix = "Bearer "
         if header.startswith(prefix) and hmac.compare_digest(

@@ -72,6 +72,69 @@ def test_events_are_gap_free_per_thread_and_replayable(tmp_path: Path) -> None:
         store.close()
 
 
+SPOOFED_BODY = {
+    "seq": 999,
+    "type": "spoof",
+    "thread_id": "other",
+    "ts": "x",
+    "k": 1,
+}
+
+
+def test_append_event_reserved_keys_cannot_be_overridden_by_payload(
+    tmp_path: Path,
+) -> None:
+    store, _clock = make_store(tmp_path)
+    try:
+        thread = store.create_thread()
+
+        event = store.append_event(thread["id"], "token_delta", dict(SPOOFED_BODY))
+
+        assert event["seq"] == 1
+        assert event["type"] == "token_delta"
+        assert event["thread_id"] == thread["id"]
+        assert event["ts"] != "x"
+        assert event["ts"].endswith("Z")
+        assert event["k"] == 1
+    finally:
+        store.close()
+
+
+def test_events_after_reserved_keys_cannot_be_overridden_by_payload(
+    tmp_path: Path,
+) -> None:
+    store, _clock = make_store(tmp_path)
+    try:
+        thread = store.create_thread()
+        appended = store.append_event(thread["id"], "token_delta", dict(SPOOFED_BODY))
+
+        (replayed,) = store.events_after(thread["id"])
+
+        assert replayed["seq"] == 1
+        assert replayed["type"] == "token_delta"
+        assert replayed["thread_id"] == thread["id"]
+        assert replayed["ts"] == appended["ts"]
+        assert replayed["k"] == 1
+        assert replayed == appended
+    finally:
+        store.close()
+
+
+def test_reserved_payload_keys_are_still_stored_verbatim(tmp_path: Path) -> None:
+    store, _clock = make_store(tmp_path)
+    try:
+        thread = store.create_thread()
+        store.append_event(thread["id"], "token_delta", dict(SPOOFED_BODY))
+
+        row = store._conn.execute(
+            "SELECT payload_json FROM events WHERE thread_id = ?", (thread["id"],)
+        ).fetchone()
+
+        assert json.loads(row["payload_json"]) == SPOOFED_BODY
+    finally:
+        store.close()
+
+
 def test_messages_keep_block_order_and_sources(tmp_path: Path) -> None:
     store, _clock = make_store(tmp_path)
     try:
