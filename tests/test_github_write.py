@@ -212,3 +212,11 @@ def test_ordinary_ref_names_pass_the_schema(ref: str) -> None:
     from skills.builtin.github_write.handler import _valid_ref
 
     assert _valid_ref(ref) is True
+
+
+@pytest.mark.parametrize("field", ["base", "branch"])
+def test_ref_with_a_trailing_newline_is_rejected(field: str) -> None:
+    args = arguments()
+    args[field] = "main\n"
+    result = invoke(registry(), args, approval=_approve, secrets={"GITHUB_TOKEN": TOKEN})
+    assert result["error"]["code"] == "invalid_arguments", result

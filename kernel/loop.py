@@ -813,6 +813,10 @@ class _PolledStream:
     the same task is waited on again by the next call, so a slow read is never
     cancelled just to poll. ``discard`` cancels a read still in flight, for an
     early exit, so the provider's own ``finally`` can run.
+
+    Each read runs in its own task with a copy of the caller's context, so a
+    provider must not keep ContextVar state across ``yield`` (a value set during
+    one read is not visible in the next, and ``reset`` would fail).
     """
 
     def __init__(self, stream: Any) -> None:

@@ -624,3 +624,26 @@ def test_address_less_datagram_without_a_live_scope_is_refused(
         assert isinstance(error, PolicyDenied), (name, error)
         assert error.blast_radius == ("net:direct", "egress:scope_closed"), name
     assert SENDS == []
+
+
+def test_sendto_with_flags_checks_the_address_argument(
+    stub_dns: None, stub_sends: None, tmp_path: Path
+) -> None:
+    ADDRS[:] = [PUBLIC_V4]
+
+    def body() -> None:
+        _lookup_getaddrinfo(ALLOWED_HOST)
+        CAUGHT.append(_udp(lambda sock: sock.sendto(b"x", 0, (PUBLIC_V4, 443))))
+        CAUGHT.append(_udp(lambda sock: sock.sendto(b"x", 0, (ALLOWED_HOST, 443))))
+
+    assert _run(tmp_path, body=body)["ok"] is True
+    allowed, refused = CAUGHT
+    assert allowed is None
+    assert isinstance(refused, PolicyDenied), refused
+    assert refused.blast_radius == ("net:unresolved", "egress:unresolved")
+    assert SENDS == [("sendto", (PUBLIC_V4, 443))]
+
+
+def test_datagram_outside_an_invocation_is_not_checked(stub_sends: None) -> None:
+    assert _udp(lambda sock: sock.sendto(b"x", ("example.invalid", 9))) is None
+    assert SENDS == [("sendto", ("example.invalid", 9))]

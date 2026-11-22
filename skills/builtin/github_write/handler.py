@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import base64
+import functools
 import json
 import re
 from pathlib import Path
@@ -54,6 +55,7 @@ def _invalid_arguments(arguments: Mapping[str, Any]) -> None:
         )
 
 
+@functools.lru_cache(maxsize=1)
 def _ref_pattern() -> re.Pattern[str]:
     schema = json.loads(_MANIFEST.read_text(encoding="utf-8"))["input_schema"]
     return re.compile(schema["properties"]["branch"]["pattern"])
