@@ -25,7 +25,6 @@ no handler echoes request values into an error body.
 
 from __future__ import annotations
 
-import hmac
 import json
 from typing import Any, Mapping
 from urllib.parse import unquote, urlsplit
@@ -39,6 +38,7 @@ from payments.wallet import (
 )
 
 from .api import Request, Response
+from .compare import constant_time_equals
 
 __all__ = ["WalletAPI"]
 
@@ -232,18 +232,18 @@ class WalletAPI:
             return False
         header = request.header("authorization") or ""
         prefix = "Bearer "
-        if header.startswith(prefix) and hmac.compare_digest(
+        if header.startswith(prefix) and constant_time_equals(
             header[len(prefix) :], self.auth_token
         ):
             return True
         cookies = _parse_cookies(request.header("cookie"))
         session = cookies.get("session")
-        return bool(session) and hmac.compare_digest(session, self.auth_token)
+        return bool(session) and constant_time_equals(session, self.auth_token)
 
     def _csrf_ok(self, request: Request) -> bool:
         if self.csrf_token:
             supplied = request.header("x-csrf-token") or ""
-            return hmac.compare_digest(supplied, self.csrf_token)
+            return constant_time_equals(supplied, self.csrf_token)
         origin = request.header("origin")
         if not origin:
             return True

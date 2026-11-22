@@ -87,7 +87,11 @@ MESSAGE_STATUS_BY_REASON = {
     "interrupted": "interrupted",
 }
 
-_TERMINAL_RETRY_REASONS = frozenset({"error", "stopped", "interrupted"})
+#: CHAT_SPEC §5.4: a finished turn may be retried when the *message status* its
+#: reason maps to is one of these. Turns store the reason (``cancelled``,
+#: ``budget``, ...), not the status, so the lookup goes through
+#: ``MESSAGE_STATUS_BY_REASON``; an unknown reason is not retryable.
+_RETRYABLE_MESSAGE_STATUSES = frozenset({"error", "stopped", "interrupted"})
 
 #: P3-1: how a finished chat turn settles its run. ``stop`` and ``length`` are
 #: normal completions; a budget stop and a crash are failures; a client Stop is
@@ -1073,7 +1077,11 @@ class ChatService:
         latest = self.store.latest_turn(thread_id)
         if latest is None or latest["id"] != turn_id:
             raise ChatError("not_latest_turn", status=409)
-        if turn["state"] != "finished" or turn["reason"] not in _TERMINAL_RETRY_REASONS:
+        if (
+            turn["state"] != "finished"
+            or MESSAGE_STATUS_BY_REASON.get(turn["reason"])
+            not in _RETRYABLE_MESSAGE_STATUSES
+        ):
             raise ChatError("turn_not_retryable", status=409)
 
         user_message = self.store.get_message(turn["user_message_id"])

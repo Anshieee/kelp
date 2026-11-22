@@ -37,6 +37,7 @@ from openshell.egress_ledger import recipient_for_host
 from .artifacts import ArtifactError, MAX_UPLOAD_BYTES
 from . import admin as admin_routes
 from . import phone as phone_routes
+from .compare import constant_time_equals
 from .credentials import CredentialBroker
 from .errors import ChatError
 from .logging import (
@@ -1165,7 +1166,7 @@ class SessionStore:
     def csrf_matches(self, record: _Session, token: str) -> bool:
         if not token:
             return False
-        return hmac.compare_digest(self._csrf_for(record.id_hash), token)
+        return constant_time_equals(self._csrf_for(record.id_hash), token)
 
     def csrf_token(self, record: _Session) -> str:
         """The derived readable CSRF half for one live session."""
