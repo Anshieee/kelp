@@ -7,6 +7,7 @@ import json
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
+import httpx
 import pytest
 
 from kernel import (
@@ -19,8 +20,10 @@ from kernel import (
     RegistryToolExecutor,
     TurnBudget,
 )
+from kernel.loop import _request_input_bound
 from kernel.provider import (
     ChatRequest,
+    OpenAICompatibleClient,
     ProviderFailure,
     StreamEnd,
     TextDelta,
@@ -983,7 +986,9 @@ def test_unmetered_step_after_a_metered_step_adds_only_its_own_bound() -> None:
     assert result[-1].estimated_cost_usd == record.estimated_cost_usd
 
 
-def test_provider_failure_as_the_only_event_adds_no_bound() -> None:
+def test_http_status_failure_as_the_only_event_adds_no_bound() -> None:
+    # An HTTP status failure means the provider answered the request with an
+    # error status, so no request was accepted for billing.
     store = InMemoryUsageStore()
     failing = [ProviderFailure("provider_http_error", "HTTP 503", retryable=True, status=503)]
     loop, _ = build([failing], store=store)
@@ -998,6 +1003,154 @@ def test_provider_failure_as_the_only_event_adds_no_bound() -> None:
     assert record.cost_known is True
     assert record.usage_reported is False
     assert record.usage_estimated is False
+
+
+@pytest.mark.parametrize("code", ["missing_api_key", "missing_base_url", "tenant_mismatch"])
+def test_missing_config_failure_as_the_only_event_adds_no_bound(code: str) -> None:
+    # The client refuses before any request is made (missing configuration,
+    # or kernel.providers.base.tenant_failure), so nothing was billable.
+    store = InMemoryUsageStore()
+    failing = [ProviderFailure(code, "not configured", retryable=False)]
+    loop, _ = build([failing], store=store)
+
+    result = collect(loop, [{"role": "user", "content": "hi"}])
+
+    assert result[-1].reason == "error"
+    record = store.records[0]
+    assert record.input_tokens == 0
+    assert record.output_tokens == 0
+    assert record.estimated_cost_usd == 0.0
+    assert record.usage_estimated is False
+
+
+@pytest.mark.parametrize(
+    "code", ["provider_timeout", "provider_unreachable", "provider_protocol_error"]
+)
+def test_sole_failure_without_a_status_is_bounded(code: str) -> None:
+    # No HTTP status: the failure can follow an HTTP 200 or a request the
+    # provider already accepted, so the step may have been billed.
+    store = InMemoryUsageStore()
+    messages = [{"role": "user", "content": "hi"}]
+    failing = [ProviderFailure(code, "failed", retryable=True)]
+    loop, _ = build([failing], store=store)
+
+    result = collect(loop, messages)
+
+    assert result[-1].reason == "error"
+    record = store.records[0]
+    assert record.input_tokens == input_bound(messages)
+    assert record.output_tokens == 1024
+    assert record.usage_estimated is True
+    assert record.estimated_cost_usd is not None and record.estimated_cost_usd > 0
+    # The finished event keeps reported counts only.
+    assert result[-1].input_tokens == 0
+    assert result[-1].output_tokens == 0
+
+
+def test_http_status_failure_after_a_metered_step_adds_no_bound() -> None:
+    store = InMemoryUsageStore()
+    failing = [ProviderFailure("provider_http_error", "HTTP 503", retryable=True, status=503)]
+    loop, _ = build(
+        [tool_script("stub.tool", {"n": 1}, usage=(10, 5)), failing],
+        store=store,
+        executor=CallableToolExecutor(lambda call: _ok()),
+    )
+
+    result = collect(loop, [{"role": "user", "content": "go"}])
+
+    assert result[-1].reason == "error"
+    record = store.records[0]
+    assert record.steps == 2
+    assert record.input_tokens == 10
+    assert record.output_tokens == 5
+    assert record.total_tokens == 15
+    assert record.usage_reported is True
+    assert record.usage_estimated is False
+
+
+def _sse_body(*chunks: Any, done: bool = True) -> str:
+    body = "\n\n".join(f"data: {json.dumps(chunk)}" for chunk in chunks)
+    if done:
+        body += "\n\ndata: [DONE]"
+    return body + "\n\n"
+
+
+class _DiesMidBody(httpx.AsyncByteStream):
+    """A 200 response whose body raises a transport error after one chunk."""
+
+    async def __aiter__(self) -> Any:
+        yield b'data: {"choices":[{"delta":{"role":"assistant"}}]}\n\n'
+        raise httpx.ReadError("connection reset")
+
+
+ROLE_ONLY_CHUNK = {"choices": [{"delta": {"role": "assistant"}}]}
+
+
+@pytest.mark.parametrize(
+    ("make_response", "code"),
+    [
+        pytest.param(
+            lambda: httpx.Response(200, text=_sse_body(ROLE_ONLY_CHUNK, done=False)),
+            "provider_protocol_error",
+            id="truncated-no-done-no-finish-reason",
+        ),
+        pytest.param(
+            lambda: httpx.Response(200, text="data: {not json\n\n"),
+            "provider_protocol_error",
+            id="malformed-first-chunk",
+        ),
+        pytest.param(
+            lambda: httpx.Response(200, stream=_DiesMidBody()),
+            "provider_unreachable",
+            id="transport-error-mid-body",
+        ),
+    ],
+)
+def test_failure_after_http_200_through_the_real_client_is_bounded(
+    make_response: Any, code: str
+) -> None:
+    # The real client yields a lone first-event ProviderFailure (status None)
+    # after an HTTP 200, when the provider may already have billed the step.
+    def handler(request: httpx.Request) -> httpx.Response:
+        return make_response()
+
+    config = KernelConfig(api_key="test-key", base_url="https://provider.example.test/v1")
+    client = OpenAICompatibleClient(
+        config, client=httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    )
+    store = InMemoryUsageStore()
+    messages = [{"role": "user", "content": "hi"}]
+    loop = AgentLoop(provider=client, config=config, usage_store=store, model=MODEL)
+
+    async def run() -> list[Any]:
+        async with client:
+            return [event async for event in loop.run_turn(messages, turn_id="t1")]
+
+    result = asyncio.run(run())
+
+    errors = [event for event in result if event.kind == "error"]
+    assert [event.code for event in errors] == [code]
+    assert result[-1].reason == "error"
+    record = store.records[0]
+    assert record.usage_estimated is True
+    assert record.usage_reported is False
+    assert record.input_tokens == input_bound(messages)
+    assert record.output_tokens == 1024
+    assert record.estimated_cost_usd is not None and record.estimated_cost_usd > 0
+    assert record.estimated_cost_usd == config.estimate_cost(MODEL, record.input_tokens, 1024)
+
+
+def test_request_input_bound_falls_back_to_repr_for_unserializable_keys() -> None:
+    # json.dumps cannot sort or encode a tuple key; accounting must not fail.
+    messages = [{"role": "user", "content": "hi", ("a", 1): "tuple key"}]
+
+    with pytest.raises(TypeError):
+        json.dumps({"messages": messages, "tools": []})
+
+    bound = _request_input_bound(messages, [])
+
+    assert isinstance(bound, int)
+    assert bound > 0
 
 
 def test_provider_failure_after_text_is_estimated() -> None:

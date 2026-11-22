@@ -53,6 +53,12 @@ __all__ = [
 
 MAX_TOOL_CONTENT_CHARS = 20_000
 
+# Codes of failures a provider raises before it makes any request: missing
+# configuration, and the defensive tenant check in kernel.providers.base.
+_UNBILLED_FAILURE_CODES = frozenset(
+    {"missing_base_url", "missing_api_key", "tenant_mismatch"}
+)
+
 
 class CancelToken:
     """Cooperative stop signal for one turn.
@@ -327,7 +333,7 @@ class AgentLoop:
         # exception cut short.
         step_open = False
         step_metered = False
-        step_sole_failure = False
+        step_unbilled_failure = False
         step_events = 0
         step_input_bound = 0
         step_output_bound = 0
@@ -399,7 +405,7 @@ class AgentLoop:
                 step_output_bound = step_max_tokens
                 step_open = True
                 step_metered = False
-                step_sole_failure = False
+                step_unbilled_failure = False
                 step_events = 0
 
                 content_parts: list[str] = []
@@ -442,14 +448,23 @@ class AgentLoop:
                             )
                         elif isinstance(event, ProviderFailure):
                             failure = event
-                            # A failure that is the step's only event means
-                            # nothing was generated (HTTP status, unreachable).
-                            step_sole_failure = step_events == 1
+                            # Exempt from the bound only when no request was
+                            # accepted for billing: the step's first and only
+                            # event is an HTTP status failure (the provider
+                            # answered with an error status) or a failure in
+                            # _UNBILLED_FAILURE_CODES (no request was made). Timeouts,
+                            # transport errors and protocol errors carry no
+                            # status and can follow an HTTP 200, so they are
+                            # bounded.
+                            step_unbilled_failure = step_events == 1 and (
+                                event.status is not None
+                                or event.code in _UNBILLED_FAILURE_CODES
+                            )
                             break
                         elif isinstance(event, StreamEnd):
                             finish_reason = event.finish_reason
 
-                if step_open and not step_metered and not step_sole_failure:
+                if step_open and not step_metered and not step_unbilled_failure:
                     estimated_input_tokens += step_input_bound
                     estimated_output_tokens += step_output_bound
                     usage_estimated = True
@@ -590,7 +605,7 @@ class AgentLoop:
                 # Provider-billed steps must still be accounted, and nothing
                 # may be yielded or awaited from here. A step whose stream was
                 # open and unmetered at exit may already have been billed.
-                if step_open and not step_metered and not step_sole_failure:
+                if step_open and not step_metered and not step_unbilled_failure:
                     estimated_input_tokens += step_input_bound
                     estimated_output_tokens += step_output_bound
                     usage_estimated = True

@@ -1056,12 +1056,17 @@ a restart neither forgets the total nor the warning already sent. Behaviour:
   reports the count in the gauge and the error details.
 - **Unreported usage** — a step that reached the provider but ended without a
   usage report (a backend that never reports usage, a stream cancelled before
-  its final usage chunk, or a stream that failed mid-step) is recorded at an
-  upper bound with `usage_estimated: true`: input is the request's serialized
-  size in bytes and output is the step's `max_tokens`. The cost is therefore a
-  finite ceiling that counts toward the caps, not `$0`, and not an unknown price,
-  so it does not lock the window under `block`. A step whose only event is a
-  provider failure generated nothing and adds no bound.
+  its final usage chunk, a timeout, or a stream that failed mid-step, including
+  after an HTTP 200) is recorded at an upper bound with `usage_estimated: true`:
+  input is the request's serialized size in bytes and output is the step's
+  `max_tokens`. For a priced model the cost is therefore a finite ceiling that
+  counts toward the caps, not `$0`, and not an unknown price, so it does not
+  lock the window under `block`. An unpriced model still records
+  `estimated_cost_usd: null` and follows the unknown-price rule above. Only a
+  step whose first and only event is an HTTP-status failure, or a failure
+  raised before any request (`missing_base_url`, `missing_api_key`,
+  `tenant_mismatch`), adds no bound, because no request was accepted for
+  billing. An unreachable provider is bounded too, which overcounts.
 - **Unreadable usage** — if `usage.jsonl` cannot be read while a cap is set, new
   turns are refused with reason `usage_unavailable` (fail closed), not allowed
   through at an unknown spend.

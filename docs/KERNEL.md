@@ -116,8 +116,10 @@ carries `usage_estimated: true`:
 - input tokens: the UTF-8 byte length of the compact JSON of
   `{"messages": <transcript sent in that request>, "tools": <tools>}`. A token
   covers at least one byte and the JSON keys and quotes add far more bytes than
-  a chat template adds tokens, so this is above the billed input for what the
-  loop sends. A system prompt added by a provider adapter is not counted;
+  a chat template adds tokens, so this is above the billed input for text
+  messages. An image or other non-text part could bill more than its bytes; the
+  chat service sends text only today. A system prompt added by a provider
+  adapter is not counted;
 - output tokens: that step's `max_tokens`, which the provider cannot exceed.
 
 The record's `input_tokens`, `output_tokens`, `total_tokens`, and
@@ -127,12 +129,30 @@ price still records `estimated_cost_usd: null`. `usage_reported` stays `true`
 only if some step reported usage. `turn_finished` keeps the reported token
 counts, and its `estimated_cost_usd` equals the record's.
 
-A step is not estimated when its first and only event is a provider failure
-(HTTP status error, unreachable endpoint): nothing was generated. A failure
-after any text or tool call, a cancel, or an exception while the stream was open
-is estimated. A timeout before the first streamed byte is a sole
-failure too, so it adds no bound even if the provider started work; that is
-the one known gap.
+A step is not estimated only when its first and only event is a provider failure
+that means no request was accepted for billing: a failure carrying an HTTP status
+(the provider answered with an error status), or a failure raised before any
+request (`missing_base_url`, `missing_api_key`, and `tenant_mismatch` from
+`kernel.providers.base.tenant_failure`). Every other unmetered step is bounded.
+That includes a timeout, an unreachable endpoint, and a protocol error that
+carry no HTTP status. An unreachable endpoint usually billed nothing, so its
+bound overcounts; the loop cannot tell a refused connection from a dropped one,
+and overcounting is the safe direction for a cap. The rule also
+includes a failure after an HTTP 200 (a truncated stream, a malformed first
+chunk, a transport error mid-body, an error chunk inside the body), when the
+provider may already have billed. A failure after any text or tool call, a
+cancel, or an exception while the stream was open is bounded too.
+
+`TurnFinished` and `UsageUpdated` token fields are reported-only; they never
+include the bound. `UsageUpdated.estimated_cost_usd` is likewise priced from
+reported tokens only, while `TurnFinished.estimated_cost_usd` equals the record's.
+When the turn exits through `CancelledError` or an exception, the loop still
+writes the record with the bound, but no `TurnFinished` reaches the chat layer.
+`chat/service.py` then finalizes from the last `UsageUpdated` it saw
+(`state.estimated_cost_usd`), so the turn's `usage` and the `TaskRun` `cost_usd`
+can be lower than the `usage.jsonl` record (and `cost_usd` is `0.0` when no
+`UsageUpdated` arrived). Spend caps read `usage.jsonl`, so enforcement uses the
+bound.
 
 ### Tool calls
 

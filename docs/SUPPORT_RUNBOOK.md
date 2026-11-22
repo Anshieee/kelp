@@ -152,6 +152,17 @@ wc -l "$KELP_USAGE_DIR"/usage.jsonl \
   "$KELP_USAGE_DIR"/usage.jsonl.* 2>/dev/null | tail -n 5
 ```
 
+4. Estimated rows, which are ceilings and not provider-reported spend:
+
+```bash
+grep -c '"usage_estimated":true' "$KELP_USAGE_DIR"/usage.jsonl*
+```
+
+A nonzero count means some turns were recorded at an upper bound because the
+provider reported no usage for a step (a timeout, a cut stream, a backend that
+never reports usage). Those rows are expected to be above the provider invoice;
+compare the invoice against the cap total with that in mind.
+
 If the totals disagree with the file, capture an evidence bundle (below) and
 compare the newest rotated segment timestamps. Do not delete usage records to
 “reset” spend; that is a policy change and hides the real total.

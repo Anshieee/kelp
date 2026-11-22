@@ -11,7 +11,6 @@ from __future__ import annotations
 
 import asyncio
 import json
-from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
@@ -21,7 +20,7 @@ import pytest
 from chat import ChatAPI, ChatService, ChatStore, Request
 from chat.errors import ChatError
 from chat.metrics import Metrics
-from kernel import config as kernel_config
+from kernel import AgentLoop, KernelConfig, config as kernel_config
 from kernel.usage import (
     SPEND_CAP_DAY_ENV,
     SPEND_CAP_MONTH_ENV,
@@ -34,7 +33,7 @@ from kernel.usage import (
     SpendGuard,
     UsageRecord,
 )
-from kernel.provider import ProviderFailure
+from kernel.provider import ProviderFailure, StreamEnd, TextDelta
 from openshell.audit import AuditLog
 
 from .chatkit import MODEL, StubProvider, text_script
@@ -94,23 +93,52 @@ def samples(text: str) -> dict[str, float]:
     return parsed
 
 
+class _UnmeteredProvider:
+    """Streams text and ends cleanly without ever sending a ``UsageReport``."""
+
+    async def stream(self, request: Any) -> Any:
+        yield TextDelta("hello")
+        yield StreamEnd("stop")
+
+
 # -- windows and boundaries ------------------------------------------------
 
 
-def test_estimated_usage_record_counts_toward_the_cap(tmp_path: Path) -> None:
-    # A turn whose provider reported no usage is recorded at an upper bound
-    # (usage_estimated=True) with a finite cost; the guard must count it.
-    path = tmp_path / "estimated.jsonl"
-    store = JsonlUsageStore(path)
-    record = replace(usage_record(0.10), usage_reported=False, usage_estimated=True)
-    store.record(record)
+def test_unmetered_turn_is_recorded_at_its_bound_and_blocks_at_the_cap(tmp_path: Path) -> None:
+    # End to end: a priced stream that never reports usage goes through the
+    # real loop into the real JSONL store the guard reads. The bound is a
+    # positive cost, so a cap at that cost refuses the next turn.
+    path = tmp_path / "unmetered.jsonl"
+    provider = _UnmeteredProvider()
+    loop = AgentLoop(
+        provider=provider,
+        config=KernelConfig(api_key="test-key"),
+        usage_store=JsonlUsageStore(path),
+        model=MODEL,
+        now_fn=lambda: NOW,
+    )
 
-    state = guard(path, SpendCaps(day_usd=0.10)).evaluate()
+    async def run() -> None:
+        async for _ in loop.run_turn([{"role": "user", "content": "hi"}], turn_id="t1"):
+            pass
 
-    assert record.usage_estimated is True
-    assert state.day.used_usd == pytest.approx(0.10)
+    asyncio.run(run())
+
+    rows = JsonlUsageStore(path).records()
+    assert len(rows) == 1
+    row = rows[0]
+    assert row["usage_estimated"] is True
+    assert row["usage_reported"] is False
+    cost = row["estimated_cost_usd"]
+    assert cost is not None and cost > 0
+
+    state = guard(path, SpendCaps(day_usd=cost)).evaluate()
+
+    assert state.day.used_usd == pytest.approx(cost)
     assert state.blocked is True
     assert state.block_reason == "cap"
+    # A cap above the bound still lets the turn through.
+    assert guard(path, SpendCaps(day_usd=cost * 2)).evaluate().blocked is False
 
 
 def test_day_cap_is_refused_exactly_at_the_limit(tmp_path: Path) -> None:
