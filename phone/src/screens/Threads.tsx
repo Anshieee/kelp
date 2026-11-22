@@ -13,9 +13,10 @@ import { AccountChip, ThreadListView, useThreadsList } from "../components/Threa
 interface ThreadsProps {
   onOpenThread: (threadId: string) => void;
   onOpenSettings: () => void;
+  onOpenWallet: () => void;
 }
 
-export default function Threads({ onOpenThread, onOpenSettings }: ThreadsProps) {
+export default function Threads({ onOpenThread, onOpenSettings, onOpenWallet }: ThreadsProps) {
   const list = useThreadsList(onOpenThread);
   const [drawerOpen, setDrawerOpen] = useState(false);
 
@@ -107,6 +108,9 @@ export default function Threads({ onOpenThread, onOpenSettings }: ThreadsProps) 
                   Open conversations
                 </button>
               )}
+              <button type="button" className="btn" onClick={onOpenWallet}>
+                Wallet
+              </button>
             </div>
           )}
         </div>

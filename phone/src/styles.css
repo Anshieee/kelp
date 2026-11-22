@@ -1631,6 +1631,335 @@ textarea:focus-visible {
   justify-content: flex-end;
 }
 
+/* --- wallet / payment sheet (bottom sheet; light + midnight skins) --- */
+
+.sheet-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.6);
+  padding: 0;
+}
+
+.pay-sheet {
+  width: 100%;
+  max-width: 520px;
+  max-height: 92dvh;
+  overflow-y: auto;
+  background: var(--panel);
+  border-top-left-radius: 20px;
+  border-top-right-radius: 20px;
+  border: 1px solid var(--line-2);
+  border-bottom: 0;
+  padding: 12px 18px calc(20px + env(safe-area-inset-bottom));
+  animation: pay-sheet-up 0.22s ease;
+}
+
+:root[data-skin="midnight"] .pay-sheet {
+  background: var(--panel-2);
+}
+
+@keyframes pay-sheet-up {
+  from {
+    transform: translateY(24px);
+    opacity: 0;
+  }
+  to {
+    transform: translateY(0);
+    opacity: 1;
+  }
+}
+
+.pay-sheet-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  position: sticky;
+  top: 0;
+  background: inherit;
+  padding: 4px 0 8px;
+}
+
+.pay-sheet-eyebrow {
+  font-size: 12px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--dim);
+}
+
+.pay-hero {
+  text-align: center;
+  padding: 8px 0 4px;
+}
+
+.pay-amount {
+  margin: 0;
+  font-family: var(--serif);
+  font-weight: 400;
+  font-size: 42px;
+  letter-spacing: -0.02em;
+  line-height: 1.1;
+  overflow-wrap: anywhere;
+}
+
+.pay-amount-fallback {
+  margin: 0;
+  font-family: var(--serif);
+  font-weight: 400;
+  font-size: 26px;
+  letter-spacing: -0.01em;
+}
+
+.pay-payee {
+  margin: 6px 0 0;
+  font-size: 15px;
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+
+.pay-rows {
+  margin: 12px 0 0;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  overflow: hidden;
+  background: var(--panel);
+}
+
+:root[data-skin="midnight"] .pay-rows {
+  background: transparent;
+}
+
+.pay-row + .pay-row {
+  border-top: 1px solid var(--line);
+}
+
+.pay-row-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  min-height: 44px;
+  padding: 10px 14px;
+  background: transparent;
+  border: 0;
+  color: var(--ink);
+  text-align: left;
+  font-size: 14px;
+}
+
+.pay-row-label {
+  flex-shrink: 0;
+  font-size: 12px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--dim);
+  min-width: 118px;
+}
+
+.pay-row-value {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--ink);
+}
+
+.pay-chevron {
+  flex-shrink: 0;
+  color: var(--dim);
+  font-size: 13px;
+}
+
+.pay-row-body {
+  padding: 2px 14px 12px 14px;
+  font-size: 13px;
+  color: var(--muted);
+  line-height: 1.55;
+  overflow-wrap: anywhere;
+}
+
+.pay-row-note {
+  margin: 0;
+}
+
+.pay-card-toggle {
+  display: inline-flex;
+  align-items: center;
+  min-height: 44px;
+  padding: 0 4px;
+  background: transparent;
+  border: 0;
+  color: var(--accent);
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.pay-card-list {
+  list-style: none;
+  margin: 4px 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.pay-card-option {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  width: 100%;
+  min-height: 44px;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: transparent;
+  color: var(--ink);
+  font-size: 14px;
+  text-align: left;
+}
+
+.pay-card-option[aria-pressed="true"] {
+  border-color: var(--accent);
+}
+
+.pay-default {
+  font-size: 11px;
+  color: var(--muted);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 2px 8px;
+  white-space: nowrap;
+}
+
+.pay-error {
+  margin-left: 0;
+  margin-right: 0;
+}
+
+.pay-actions {
+  display: flex;
+  gap: 10px;
+  margin-top: 16px;
+  position: sticky;
+  bottom: 0;
+  padding: 12px 0 4px;
+  background: inherit;
+}
+
+.pay-actions .btn-quiet {
+  flex: 1;
+}
+
+.pay-actions .btn-pay {
+  flex: 1.6;
+}
+
+/* Approve is the dark primary action; quiet Cancel is the secondary. */
+.btn-pay {
+  background: #191817;
+  border-color: #191817;
+  color: #fbf9f5;
+}
+
+:root[data-skin="midnight"] .btn-pay {
+  background: #f5f5f5;
+  border-color: #f5f5f5;
+  color: #121212;
+}
+
+.btn-quiet {
+  background: transparent;
+  border-color: var(--line-2);
+  color: var(--ink);
+}
+
+.pay-footnote {
+  margin: 8px 0 0;
+  font-size: 11px;
+  color: var(--dim);
+  line-height: 1.6;
+  text-align: center;
+}
+
+/* Inline "Review purchase >" link on spend-related chat approval cards. */
+.approval-review-link {
+  display: inline-flex;
+  align-items: center;
+  min-height: 44px;
+  padding: 0 2px;
+  background: transparent;
+  border: 0;
+  color: var(--accent);
+  font-size: 14px;
+  font-weight: 600;
+}
+
+/* Receipt view (paid amount, last4, paid-at, order id). */
+.pay-receipt {
+  text-align: center;
+  padding: 12px 0 4px;
+}
+
+.pay-receipt h2 {
+  margin: 0 0 4px;
+  font-family: var(--serif);
+  font-weight: 400;
+  font-size: 28px;
+  letter-spacing: -0.01em;
+  overflow-wrap: anywhere;
+}
+
+.pay-receipt-mark {
+  margin: 0 0 4px;
+  font-size: 30px;
+  color: var(--dim);
+}
+
+.pay-receipt-mark.ok {
+  color: var(--success);
+}
+
+.pay-receipt-rows {
+  margin: 14px 0 4px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  overflow: hidden;
+  text-align: left;
+}
+
+.pay-receipt-rows > div {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 12px;
+  padding: 10px 14px;
+}
+
+.pay-receipt-rows > div + div {
+  border-top: 1px solid var(--line);
+}
+
+.pay-receipt-rows dt {
+  font-size: 13px;
+  color: var(--muted);
+}
+
+.pay-receipt-rows dd {
+  margin: 0;
+  font-size: 13px;
+  color: var(--ink);
+  overflow-wrap: anywhere;
+  text-align: right;
+}
+
 /* --- phone-first responsive: drawer stays a slide-over at every width --- */
 
 @media (max-width: 767px) {
@@ -1691,6 +2020,10 @@ textarea:focus-visible {
 
   .conv-drawer {
     transition: none;
+  }
+
+  .pay-sheet {
+    animation: none;
   }
 
   .screen {
