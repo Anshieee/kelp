@@ -1584,7 +1584,9 @@ class SkillRegistry:
                     tool,
                     "timeout",
                     f"Skill {tool!r} exceeded its {skill.timeout_ms} ms timeout.",
-                    retryable=True,
+                    # A timed-out handler may have run to completion; only a
+                    # skill that declares itself idempotent is safe to repeat.
+                    retryable=skill.idempotent,
                     user_fixable=False,
                     duration_ms=_ms(started),
                 ),

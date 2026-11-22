@@ -151,9 +151,29 @@ def _read_hex_key(path: Path, expected_bytes: int, kind: str) -> bytes:
     return key
 
 
-def _write_hex_key(path: Path, key: bytes) -> Path:
+def _write_hex_key(path: Path, key: bytes, *, private: bool = False) -> Path:
+    """Write ``key`` as hex text; a ``private`` key is created owner-only (0600).
+
+    The private file is opened with mode 0600 so it is never briefly readable
+    under a permissive umask, then ``fchmod``-ed so a pre-existing looser file
+    is tightened too. It is truncated, so a rewrite replaces the old contents.
+    """
+
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(key.hex() + "\n", encoding="utf-8")
+    data = (key.hex() + "\n").encode("utf-8")
+    if not private:
+        path.write_bytes(data)
+        return path
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    try:
+        if os.name == "posix":  # Windows has no fchmod; its ACLs apply instead
+            os.fchmod(fd, 0o600)
+        with os.fdopen(fd, "wb") as handle:
+            fd = -1  # ownership passed to the file object
+            handle.write(data)
+    finally:
+        if fd != -1:
+            os.close(fd)
     return path
 
 
@@ -165,11 +185,15 @@ def generate_keypair() -> tuple[bytes, bytes]:
 
 
 def write_keypair(private_key_path: str | Path, public_key_path: str | Path) -> tuple[Path, Path]:
-    """Generate a keypair and write both halves as hex text files."""
+    """Generate a keypair and write both halves as hex text files.
+
+    The private key file is owner-only (0600); the public key keeps the default
+    mode.
+    """
 
     seed, public = generate_keypair()
     return (
-        _write_hex_key(Path(private_key_path), seed),
+        _write_hex_key(Path(private_key_path), seed, private=True),
         _write_hex_key(Path(public_key_path), public),
     )
 

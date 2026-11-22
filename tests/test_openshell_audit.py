@@ -30,6 +30,86 @@ def test_scrubber_removes_common_credential_patterns() -> None:
     assert "hunter3" not in scrubber.scrub_text("api_key: 'hunter3'")
 
 
+# Synthetic, key-shaped samples. None is a real credential.
+_OPENROUTER = "sk-or-v1-" + "0123456789abcdef" * 4
+_GITHUB_TOKENS = (
+    "ghp_" + "A1b2C3d4E5f6G7h8I9j0K1l2",
+    "gho_" + "A1b2C3d4E5f6G7h8I9j0K1l2M3",
+    "ghu_" + "A1b2C3d4E5f6G7h8I9j0K1l2",
+    "ghs_" + "A1b2C3d4E5f6G7h8I9j0K1l2",
+    "ghr_" + "A1b2C3d4E5f6G7h8I9j0K1l2",
+)
+_GITHUB_PAT = "github_pat_" + "11ABCDEFG0abcdefgh_ijklmnop" + "QRSTUVWXYZ0123456789"
+_AWS_KEY_ID = "AKIA" + "IOSFODNN7EXAMPLE"
+
+
+@pytest.mark.parametrize(
+    "secret",
+    [_OPENROUTER, *_GITHUB_TOKENS, _GITHUB_PAT, _AWS_KEY_ID],
+    ids=["openrouter", "ghp", "gho", "ghu", "ghs", "ghr", "github_pat", "aws_akia"],
+)
+class TestKeyShapePatterns:
+    def test_bare_key_is_redacted_in_prose(self, secret: str) -> None:
+        cleaned = SecretScrubber([]).scrub_text(f"the key {secret} leaked here")
+        assert cleaned == "the key [redacted] leaked here"
+
+    def test_key_is_redacted_inside_a_url_and_json(self, secret: str) -> None:
+        scrubber = SecretScrubber([])
+        assert secret not in scrubber.scrub_text(f"https://x.invalid/{secret}?a=1")
+        assert secret not in scrubber.scrub_text(json.dumps({"note": secret}))
+
+    def test_key_is_redacted_after_an_underscore_prefix(self, secret: str) -> None:
+        cleaned = SecretScrubber([]).scrub_text(f"LEAK_{secret}")
+        assert secret not in cleaned
+
+    def test_audit_log_never_writes_the_key(self, secret: str, tmp_path: Path) -> None:
+        log = AuditLog(tmp_path / "audit.jsonl")
+        log.record("exec_requested", turn_id="t1", extra={"stderr_tail": f"bad {secret}"})
+        assert secret not in (tmp_path / "audit.jsonl").read_text(encoding="utf-8")
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "ghp_short",  # under 20 chars
+        "gh_" + "a" * 30,  # wrong prefix letter set
+        "ghx_" + "a" * 30,
+        "github_pat_short",
+        "sk-or-v2-" + "a" * 30,  # different key family
+        "sk-or-v1-",  # no body
+        "AKIA" + "A" * 15,  # one short
+        "AKIA" + "A" * 17,  # one long: not an access key id
+        "AKIA" + "a" * 16,  # lowercase body is not an access key id
+        "xghp_" + "a" * 30,  # glued to a preceding word
+        "task-or-v1-" + "a" * 30,
+        "plain prose about GitHub tokens and AWS keys",
+    ],
+)
+def test_near_miss_shapes_are_left_alone(text: str) -> None:
+    assert SecretScrubber([]).scrub_text(text) == text
+
+
+def test_key_shape_patterns_do_not_backtrack_catastrophically() -> None:
+    scrubber = SecretScrubber([])
+    hostile = (
+        "ghp_" + "a" * 200_000,
+        "github_pat_" + "_" * 200_000 + "!",
+        "sk-or-v1-" + "-" * 200_000 + "!",
+        "AKIA" + "A" * 200_000,
+        ("ghp_" + "a" * 19 + " ") * 20_000,
+    )
+    for text in hostile:
+        cleaned = scrubber.scrub_text(text)
+        assert isinstance(cleaned, str)
+
+
+def test_existing_provider_key_redaction_is_unchanged() -> None:
+    scrubber = SecretScrubber([])
+    assert scrubber.scrub_text("k sk_live_abcdef123456 e") == "k [redacted] e"
+    assert scrubber.scrub_text("k rk_test_abcd e") == "k [redacted] e"
+    assert scrubber.scrub_text("k pk_live_abc e") == "k pk_live_abc e"  # < 4 chars
+
+
 def test_scrub_recurses_into_structures() -> None:
     scrubber = SecretScrubber([SECRET])
     value = {"nested": [SECRET, {"deep": f"x-{SECRET}-y"}]}

@@ -32,7 +32,18 @@ _REDACTED = "[redacted]"
 _MIN_SECRET_LEN = 4
 
 _BEARER_RE = re.compile(r"(?i)\bbearer\s+[A-Za-z0-9._~+/=-]+")
-_PROVIDER_KEY_RE = re.compile(r"\b(?:sk|rk|pk)_(?:live|test)_[A-Za-z0-9]{4,}")
+# Well-known provider key shapes. Every alternative is a literal prefix followed
+# by one bounded character class, so matching is linear (no nested quantifiers).
+# The new shapes are anchored with a look-behind/look-ahead on [A-Za-z0-9] rather
+# than ``\b`` so a key glued to an ``_`` (``LEAK_ghp_...``) is still redacted,
+# while a longer alphanumeric word that merely contains the prefix is not.
+_PROVIDER_KEY_RE = re.compile(
+    r"\b(?:sk|rk|pk)_(?:live|test)_[A-Za-z0-9]{4,}"  # Stripe-style
+    r"|(?<![A-Za-z0-9])sk-or-v1-[A-Za-z0-9_-]{8,}"  # OpenRouter
+    r"|(?<![A-Za-z0-9])gh[pousr]_[A-Za-z0-9]{20,}"  # GitHub token families
+    r"|(?<![A-Za-z0-9])github_pat_[A-Za-z0-9_]{20,}"  # GitHub fine-grained PAT
+    r"|(?<![A-Za-z0-9])AKIA[0-9A-Z]{16}(?![A-Za-z0-9])"  # AWS access key id
+)
 _KV_RE = re.compile(
     r"(?i)\b(token|secret|password|passwd|api[_-]?key|access[_-]?key|private[_-]?key)"
     r"\b(\s*[=:]\s*)(\"[^\"]*\"|'[^']*'|\S+)"

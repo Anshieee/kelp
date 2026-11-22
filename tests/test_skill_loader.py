@@ -490,14 +490,34 @@ def test_approved_call_executes(tmp_path: Path) -> None:
     assert seen[0].expires_at > seen[0].requested_at
 
 
-def test_timeout_is_retryable(tmp_path: Path) -> None:
+def test_timeout_of_an_idempotent_skill_is_retryable(tmp_path: Path) -> None:
     manifest = golden()
     manifest["entry"]["callable"] = "slow"
     manifest["timeout_ms"] = 100
+    assert manifest["idempotent"] is True
     registry = load_ok(tmp_path, manifest)
     result = invoke(registry, "demo.echo", {"text": "hi"})
     assert result["error"]["code"] == "timeout"
     assert result["error"]["retryable"] is True
+    assert result["error"]["user_fixable"] is False
+
+
+def test_timeout_of_a_non_idempotent_skill_is_not_retryable(tmp_path: Path) -> None:
+    # A write skill that timed out may already have run; a blind retry could
+    # repeat the side effect, so the envelope must not invite one.
+    manifest = _approval_manifest()
+    manifest["entry"]["callable"] = "slow"
+    manifest["timeout_ms"] = 100
+    assert manifest["idempotent"] is False
+    registry = load_ok(tmp_path, manifest)
+
+    async def approve(request: Any) -> bool:
+        return True
+
+    result = invoke(registry, "demo.echo", {"text": "hi"}, approval=approve)
+    assert result["ok"] is False
+    assert result["error"]["code"] == "timeout"
+    assert result["error"]["retryable"] is False
     assert result["error"]["user_fixable"] is False
 
 
