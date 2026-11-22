@@ -20,6 +20,30 @@ export interface StreamEvent {
 export type StreamState = "connecting" | "live" | "reconnecting";
 
 /**
+ * Every event type the server frames on the thread stream. The server names
+ * each frame (`event: <type>`), so a listener must exist per name: the
+ * generic `onmessage` handler fires ONLY for unnamed frames (or
+ * `event: message`), and without these registrations the app would connect
+ * successfully yet never render a single live update. Keep this list in step
+ * with the reducer in chatState.ts and the `kind` values in kernel/events.py
+ * (plus the store-level approval/thread events the stream also carries).
+ */
+const SERVER_EVENT_TYPES = [
+  "message_created",
+  "turn_started",
+  "token_delta",
+  "tool_call_started",
+  "tool_call_finished",
+  "approval_requested",
+  "approval_resolved",
+  "usage_updated",
+  "thread_updated",
+  "error",
+  "turn_finished",
+  "cancelled",
+] as const;
+
+/**
  * Incrementally parse an SSE byte stream into events.
  *
  * Feed it accumulated text; it returns every complete event found and the
@@ -127,17 +151,37 @@ export class ThreadStream {
       this.callbacks.onState?.("live");
     };
 
-    source.onmessage = (message: MessageEvent<string>) => {
-      const { events } = parseSseBuffer(`data: ${message.data}\n\n`);
+    // NOTE: `onmessage` alone is NOT enough. The server names every frame
+    // (`event: token_delta`, ...), and named events never reach `onmessage`.
+    // Each known type gets an explicit listener below; `onmessage` stays as
+    // the fallback for unnamed frames.
+    const handleData = (data: string) => {
+      const { events } = parseSseBuffer(`data: ${data}\n\n`);
       for (const event of events) {
         if (isDuplicate(event, this.lastSeq)) continue;
         this.lastSeq = nextAfter(this.lastSeq, event);
         this.callbacks.onEvent(event);
       }
     };
+    for (const type of SERVER_EVENT_TYPES) {
+      source.addEventListener(type, (message: Event) => {
+        handleData((message as MessageEvent<string>).data ?? "");
+      });
+    }
+    source.onmessage = (message: MessageEvent<string>) => {
+      handleData(message.data);
+    };
 
-    source.onerror = () => {
+    source.onerror = (event: Event) => {
       if (this.closed) return;
+      // A server-sent `event: error` frame (a failed turn, a refused tool
+      // call) ALSO dispatches here, because it shares the name with the DOM
+      // error event — but it arrives as a MessageEvent carrying data, on a
+      // perfectly healthy connection. Only a dataless error means the
+      // transport itself failed. Treating the former as a disconnect leaves
+      // the pill stuck on "reconnecting" after every failed turn, which is
+      // exactly what users reported ("switch chats to see updates").
+      if (event instanceof MessageEvent && event.data !== undefined) return;
       // While CONNECTING the browser retries on its own (it also replays with
       // Last-Event-ID). Once it gives up (CLOSED), we reconnect ourselves with
       // an explicit after= cursor and backoff.

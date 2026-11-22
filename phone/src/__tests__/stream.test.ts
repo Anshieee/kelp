@@ -101,6 +101,7 @@ describe("reconnect policy", () => {
       onopen: (() => void) | null = null;
       onmessage: ((event: { data: string }) => void) | null = null;
       onerror: (() => void) | null = null;
+      addEventListener(_type: string, _handler: (event: { data: string }) => void) {}
       constructor(public url: string) {
         factoryCalls += 1;
         seen.push(
@@ -152,6 +153,7 @@ describe("reconnect policy", () => {
       onopen: (() => void) | null = null;
       onmessage: ((event: { data: string }) => void) | null = null;
       onerror: (() => void) | null = null;
+      addEventListener(_type: string, _handler: (event: { data: string }) => void) {}
       constructor() {
         sources.push(this);
       }
@@ -184,4 +186,78 @@ describe("reconnect policy", () => {
 
 afterEach(() => {
   vi.useRealTimers();
+});
+
+describe("named server events (regression: onmessage-only wiring)", () => {
+  it("delivers server-named frames to onEvent, not just onmessage", () => {
+    // The server names every frame (`event: token_delta`, ...). A real
+    // browser dispatches those to addEventListener(type) handlers and NEVER
+    // to onmessage — a wiring that only listens on onmessage connects fine
+    // yet renders nothing, exactly the reported "switch chats to see
+    // updates" symptom. This test replays that browser behavior faithfully:
+    // named dispatches go to the type listener, onmessage stays silent.
+    const applied: StreamEvent[] = [];
+    const listeners = new Map<string, Array<(event: { data: string }) => void>>();
+    class FakeEventSource {
+      static CLOSED = 2;
+      readyState = 0;
+      onopen: (() => void) | null = null;
+      onmessage: ((event: { data: string }) => void) | null = null;
+      onerror: (() => void) | null = null;
+      constructor(public url: string) {}
+      addEventListener(type: string, handler: (event: { data: string }) => void) {
+        const list = listeners.get(type) ?? [];
+        list.push(handler);
+        listeners.set(type, list);
+      }
+      close() {}
+      /** Like a browser: named frame -> type listeners only, never onmessage. */
+      dispatchNamed(type: string, data: string) {
+        for (const handler of listeners.get(type) ?? []) handler({ data });
+      }
+    }
+
+    vi.stubGlobal("EventSource", FakeEventSource);
+    try {
+      const stream = new ThreadStream("ses_z", { onEvent: (event) => applied.push(event) });
+      stream.open(0);
+      const serverFrame = JSON.stringify(ev(7, "token_delta", { text: "hi" }));
+      // What the server actually sends: a named frame, dispatched by a real
+      // browser to the type listener and never to onmessage.
+      const handlers = listeners.get("token_delta") ?? [];
+      expect(handlers.length).toBeGreaterThan(0);
+      for (const handler of handlers) handler({ data: serverFrame });
+      expect(applied.map((event) => event.seq)).toEqual([7]);
+      stream.close();
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("still honors the unnamed onmessage fallback", () => {
+    const applied: StreamEvent[] = [];
+    const created: Array<{ onmessage: ((event: { data: string }) => void) | null }> = [];
+    class FakeEventSource {
+      static CLOSED = 2;
+      readyState = 0;
+      onopen: (() => void) | null = null;
+      onmessage: ((event: { data: string }) => void) | null = null;
+      onerror: (() => void) | null = null;
+      addEventListener(_type: string, _handler: (event: { data: string }) => void) {}
+      constructor(public url: string) {
+        created.push(this);
+      }
+      close() {}
+    }
+    vi.stubGlobal("EventSource", FakeEventSource);
+    try {
+      const stream = new ThreadStream("ses_w", { onEvent: (event) => applied.push(event) });
+      stream.open(0);
+      created[0]?.onmessage?.({ data: JSON.stringify(ev(9, "message_created")) });
+      expect(applied.map((event) => event.seq)).toEqual([9]);
+      stream.close();
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
 });
