@@ -36,7 +36,7 @@ from kernel.usage import (
 from kernel.provider import ProviderFailure, StreamEnd, TextDelta
 from openshell.audit import AuditLog
 
-from .chatkit import MODEL, StubProvider, text_script
+from .chatkit import MODEL, StubProvider, send_and_wait, text_script
 
 NOW = datetime(2026, 10, 30, 12, 0, tzinfo=timezone.utc)
 
@@ -495,10 +495,9 @@ def test_count_as_mode_admits_then_refuses_when_counted_spend_reaches_the_cap(
         tmp_path, caps, [], model="vendor/unpriced-model"
     )
     thread = service.create_thread("Budget")
-    payload, _ = asyncio.run(
-        service.send(thread["id"], text="hi", client_turn_id="ct-1234abcd")
-    )
-    asyncio.run(service.wait_for_turn(payload["turn_id"]))
+    # Send and wait in one event loop: a second ``asyncio.run`` would start
+    # after the first loop's shutdown had already cancelled the turn task.
+    asyncio.run(send_and_wait(service, thread["id"], "hi"))
     # The turn itself was unpriced, so count_as charged it one assumed amount.
     assert usage.records()[-1]["estimated_cost_usd"] is None
     assert len(usage.records()) == 1
@@ -523,10 +522,9 @@ def test_warning_is_logged_and_gauge_published_once(
     )
     thread = service.create_thread("Budget")
     for index, client_id in enumerate(("ct-1234abcd", "ct-5678efgh")):
-        payload, _ = asyncio.run(
-            service.send(thread["id"], text=f"hi {index}", client_turn_id=client_id)
+        asyncio.run(
+            send_and_wait(service, thread["id"], f"hi {index}", client_turn_id=client_id)
         )
-        asyncio.run(service.wait_for_turn(payload["turn_id"]))
 
     warnings = audit.entries(event="spend_cap_warning")
     assert len(warnings) == 1
@@ -587,10 +585,9 @@ def test_retry_is_gated_by_the_same_cap(tmp_path: Path) -> None:
         now=lambda: NOW,
     )
     thread = service.create_thread("Budget")
-    payload, _ = asyncio.run(
-        service.send(thread["id"], text="hi", client_turn_id="ct-1234abcd")
-    )
-    asyncio.run(service.wait_for_turn(payload["turn_id"]))
+    # Send and wait in one event loop: a second ``asyncio.run`` would start
+    # after the first loop's shutdown had already cancelled the turn task.
+    payload = asyncio.run(send_and_wait(service, thread["id"], "hi"))
     assert store.get_turn(payload["turn_id"])["reason"] == "error"
     assert len(provider.requests) == 1
 
@@ -631,10 +628,9 @@ def test_metrics_scrape_after_one_turn_shows_spend_without_a_second_send(
     )
     api = ChatAPI(service, auth_token="tok", csrf_token="csrf", metrics=metrics)
     thread = service.create_thread("Budget")
-    payload, _ = asyncio.run(
-        service.send(thread["id"], text="hi", client_turn_id="ct-1234abcd")
-    )
-    asyncio.run(service.wait_for_turn(payload["turn_id"]))
+    # Send and wait in one event loop: a second ``asyncio.run`` would start
+    # after the first loop's shutdown had already cancelled the turn task.
+    asyncio.run(send_and_wait(service, thread["id"], "hi"))
     # Exactly one provider call: the scrape below must not need a second send
     # to move the gauge.
     assert len(provider.requests) == 1
