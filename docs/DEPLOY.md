@@ -5,9 +5,9 @@
 - **Branch:** `main` (head `f7ed9d1`; deploy slice `7addf56`)
 - **Scope:** one container image, one Compose service, one systemd wrapper, one
   health probe, one `/data` volume. No application code changed.
-- **Tests:** `tests/test_deploy_healthcheck.py` (25 cases) and
-  `tests/test_deploy_assets.py` (40 cases); full suite **1045** passed on
-  `main`
+- **Tests:** `tests/test_deploy_healthcheck.py` and `tests/test_deploy_assets.py`;
+  run `python -m pytest` for the current counts (the numbers in §12.3 and §17 are
+  a record from the date shown there, not a gate)
 - **Not in scope:** evals, chat/turn logic, payments, and any
   actual server. Nothing here was deployed to a hosted VM; every command below
   was executed locally against this image and is reported with its measured
@@ -33,6 +33,11 @@ browser ──TLS──▶ Caddy/nginx on :443 ──HTTP──▶ kelp containe
                                           /data (named volume)
                                   chat.db · workspace/ · audit/ · usage/
 ```
+
+The image does not contain the phone web app. The Dockerfile copies no `phone/`
+directory, so inside the container `/phone/` answers `404 phone_not_built`. A
+source checkout serves `phone/dist` after `make phone` (`KELP_PHONE_ROOT`
+overrides the directory), and `phone/dist` is not committed.
 
 The image is CPU-only. The "GPU" in the milestone is the *model host*: this
 service is a thin client of a hosted model endpoint, so a 2 vCPU / 8 GB VM is
@@ -498,6 +503,54 @@ Notes:
   if buffering were left on; keep it off anyway.
 - Do not add authentication at the proxy as a replacement for
   `KELP_AUTH_TOKEN`. Both are expected; the token is what the API checks.
+
+**Keep share-link tokens out of the proxy access log.** A read-only share link
+(`GET /api/shared/{token}` and `GET /api/shared/{token}/stream`, CHAT_SPEC §12.3)
+carries its bearer token as a URL path segment, and a link stays valid for 7 days
+by default (30 at most). The app never logs the raw token: its own access line
+records the route label `/api/shared/{id}`, and `log_message` on the stdlib
+handler is a no-op. A reverse proxy has no such rule: nginx's default access log
+format writes the full request line (`$request`), and Caddy writes
+`request.uri` as soon as a `log` directive is enabled. Anyone who can read that
+log can then open every live link in it. Turn access logging off for that prefix
+and leave it on for the rest:
+
+```caddyfile
+# Caddy 2.8 or later (`log_skip`). Only matters if the site has a `log` directive.
+kelp.example.com {
+    @share path /api/shared/*
+    log_skip @share
+    # ... encode, request_body and reverse_proxy exactly as above ...
+}
+```
+
+```nginx
+# Inside the same `server { ... }` block, next to `location /`. A longer prefix
+# wins over `/`, so the proxy settings must be repeated: SSE still needs
+# buffering off and the 300 s timeouts for `/api/shared/{token}/stream`.
+location /api/shared/ {
+    access_log off;
+    proxy_pass http://127.0.0.1:8765;
+    proxy_http_version 1.1;
+    proxy_set_header Host $host;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto $scheme;
+    proxy_buffering off;
+    proxy_cache off;
+    proxy_read_timeout 300s;
+    proxy_send_timeout 300s;
+    add_header X-Content-Type-Options nosniff always;
+}
+```
+
+- This silences the access log only. A proxy's *error* log can still contain the
+  request line of a failed upstream call (nginx `error_log`, Caddy's runtime
+  log), so keep those logs readable by the operator alone.
+- Do not forward the proxy's access log to a third-party log service without
+  the same exclusion.
+- ADR 0002 §10 originally called this route `/s/{token}`; the shipped path is
+  `/api/shared/{token}` (ADR 0002 §14.1), so the rule is on `/api/shared/`.
 - Behind the proxy, readiness and metrics are still owner-token routes. Use the
   token in `curl`, not a browser cookie, for those.
 
@@ -944,8 +997,9 @@ BASE=${BASE:-http://127.0.0.1:8765}
 # reads headers from a file with `-H @file`.
 umask 077
 HDRS=$(mktemp)
+SSE=$(mktemp)
 printf 'Authorization: Bearer %s\n' "$KELP_AUTH_TOKEN" > "$HDRS"
-trap 'rm -f "$HDRS"' EXIT
+trap 'rm -f "$HDRS" "$SSE"' EXIT
 
 THREAD=$(curl -fsS -X POST "$BASE/api/threads" \
   -H @"$HDRS" -H 'Content-Type: application/json' \
@@ -959,22 +1013,37 @@ curl -fsS -X POST "$BASE/api/threads/$THREAD/turns" \
 
 # Replay from the start; the stream tails until idle, so cap it.
 timeout 60 curl -N -sS "$BASE/api/threads/$THREAD/stream?after=0" \
-  -H @"$HDRS" > /tmp/kelp-smoke.sse || true
+  -H @"$HDRS" > "$SSE" || true
 
-grep -c '^event: text' /tmp/kelp-smoke.sse
-grep -A1 '^event: turn_finished' /tmp/kelp-smoke.sse | grep -o '"reason":"[a-z]*"'
-grep -A1 '^event: turn_finished' /tmp/kelp-smoke.sse | grep -o '"estimated_cost_usd":[^,}]*'
+# Each SSE frame is four lines in this order: `id:`, `event:`, `retry:`,
+# `data:` (`format_event` in chat/stream.py). The JSON the checks need is on the
+# `data:` line, two lines below the `event:` line, so `grep -A3` is required;
+# `-A1` would stop at `retry: 2000`.
+grep -c '^event: token_delta' "$SSE"
+grep -A3 '^event: turn_finished' "$SSE" | grep -o '"reason":"[a-z_]*"'
+grep -A3 '^event: turn_finished' "$SSE" | grep -o '"estimated_cost_usd":[^,}]*'
+if grep -q '^event: token_delta' "$SSE" \
+   && grep -A3 '^event: turn_finished' "$SSE" | grep -q '"reason":"stop"'; then
+  echo 'smoke: PASS'
+else
+  echo 'smoke: FAIL (no token_delta, or turn_finished did not carry reason=stop)'
+fi
 ```
 
-The `trap` deletes the header file when the shell exits, including on `Ctrl-C`.
+The `trap` deletes both temporary files (the header file and the captured stream)
+when the shell exits, including on `Ctrl-C`.
 If your curl predates 8.2, use `--config` with a `header = "Authorization: …"`
 line in the same 0600 file instead of `-H @`; do not fall back to argv.
 
 Expected:
 
-- at least one `event: text` line — the model answered;
-- `"reason":"complete"` on `turn_finished` (the failure path prints `"error"`);
-- `"estimated_cost_usd"` greater than `0.0`;
+- at least one `event: token_delta` line (the first command prints a count of 1
+  or more) — the model answered;
+- `"reason":"stop"` on `turn_finished` (a normal completion; the failure path
+  prints `"error"`, and a budget stop prints `"budget"`), followed by the line
+  `smoke: PASS`;
+- `"estimated_cost_usd"` greater than `0.0` (a small cost prints in exponent form,
+  for example `4e-06`);
 - a matching line in `docker compose logs kelp` with `"event":"turn_finished"`,
   and one new record in `/data/usage/usage.jsonl`.
 
@@ -1006,10 +1075,12 @@ nothing about the image. Run the same two commands on the VM after a deploy only
 if the VM is also the checkout you tested; otherwise record the numbers from the
 build host next to the commit, and treat the VM as proven by §12.1 and §12.2.
 
-Measured on the verification host: **68 passed in 0.74 s** for the
-retrieval/answer suites and **1066 passed** for the full suite on the current
-`main`. Record this number next to the commit in the release note; a drop means
-the deploy is not the code you tested.
+At the time of writing (2 November 2026, `main` at `f7ed9d1`) the verification
+host measured **68 passed in 0.74 s** for the retrieval/answer suites and **1066
+passed** for the full suite. Those numbers go stale with every commit: run both
+commands on your build host and record your own result next to the commit in the
+release note; a drop from one release to the next means the deploy is not the
+code you tested.
 
 ---
 
@@ -1201,6 +1272,10 @@ the probe sends the token as a header and never prints it.
 
 ## 17. Verification record
 
+Counts and timings in this table were measured at the time of writing (30 October
+to 2 November 2026) and are a record, not a gate: the suites have grown since.
+Re-run the commands for current numbers.
+
 | Check | Command | Result | Time |
 |---|---|---|---|
 | Image build | `docker build --no-cache … -t kelp:<tag> .` | 194.5 MiB, non-root `10001:10001`, 656 kB context | 6 s |
@@ -1220,11 +1295,11 @@ the probe sends the token as a header and never prints it.
 | Restart persistence | stop + `up -d`, count rows | 2 threads / 2 turns before and after | — |
 | Backup | tar of `/data` into a host backup dir | archive with numeric owners | 1 s |
 | Restore | fresh volume + `tar --numeric-owner` | 2 threads / 2 turns, uid 10001 | < 1 s |
-| Offline eval | `pytest tests/test_docs_answer*.py` | 68 passed | 0.74 s |
-| Full suite | `python -m pytest` | 1066 passed on `main` | — |
-| Asset tests | `pytest tests/test_deploy_assets.py` | 40 passed | 0.12 s |
-| Probe tests | `pytest tests/test_deploy_healthcheck.py` | 25 passed | 4.08 s |
-| Live checkout receipt | test-mode order `order_TtyLUT5JHr4pdK`, ₹1 (100 paise) netbanking payment `pay_TtyOkNxvfHSKFS` captured; confirm → HTTP 200 `idempotent=false` with receipt `pi_rzpTtyOkNxvfHSKFS`; replay idempotent; ledger shows one paid proposal + one provider payment | verified | 2026-10-30 |
+| Offline eval | `pytest tests/test_docs_answer*.py` | 68 passed (at the time of writing) | 0.74 s |
+| Full suite | `python -m pytest` | 1066 passed on `main` (at the time of writing) | — |
+| Asset tests | `pytest tests/test_deploy_assets.py` | 40 passed (at the time of writing) | 0.12 s |
+| Probe tests | `pytest tests/test_deploy_healthcheck.py` | 25 passed (at the time of writing) | 4.08 s |
+| Test-mode checkout receipt | test-mode order `order_TtyLUT5JHr4pdK`, ₹1 (100 paise) netbanking payment `pay_TtyOkNxvfHSKFS` captured; confirm → HTTP 200 `idempotent=false` with receipt `pi_rzpTtyOkNxvfHSKFS`; replay idempotent; ledger shows one paid proposal + one provider payment | verified | 2026-10-30 |
 
 Re-run on 30 October 2026 for the `--no-build` change: build, compose
 resolution, both failure paths, the unit guard, boot-to-healthy, the container's

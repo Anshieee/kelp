@@ -199,6 +199,49 @@ def test_privacy_review_states_the_payment_wiring_as_it_is() -> None:
     assert "wallet_not_configured" in doc
 
 
+def test_privacy_review_states_the_share_surface_as_shipped() -> None:
+    """The share rows describe the live ``/api/shared`` surface, not a future one."""
+
+    from chat.routers.shared import _is_share_path
+    from chat.store import ChatStore
+
+    # The code the document points at exists and is wired.
+    assert _is_share_path("/api/shared/token")
+    assert callable(getattr(ChatStore, "share_sweep", None))
+
+    doc = _doc()
+    lowered = doc.lower()
+    for stale in (
+        "not in this build",
+        "when the share surface lands",
+        "once the share surface ships",
+        "where a share snapshot will sit",
+    ):
+        assert stale not in lowered, stale
+
+    # §1 short table: the reader is listed next to the recipients.
+    short = doc.split("## 1. The short version", 1)[1].split("\n---\n", 1)[0]
+    reader_rows = [
+        line for line in short.splitlines() if line.startswith("| Who can read a shared thread?")
+    ]
+    assert len(reader_rows) == 1
+    assert "/api/shared/{token}" in reader_rows[0]
+
+    # §3 retention row: present, unqualified, and bound to the real tables.
+    store_rows = [
+        line for line in doc.splitlines() if line.startswith("| Share snapshot and daily view counts")
+    ]
+    assert len(store_rows) == 1
+    assert "(not in this build)" not in store_rows[0].lower()
+    assert "`shares` and `share_views`" in store_rows[0]
+
+    # §2.3 states the live route and still says the recipient list is unchanged.
+    section = doc.split("### 2.3", 1)[1].split("\n---\n", 1)[0]
+    assert "GET /api/shared/{token}" in section
+    assert "It is live in this build" in section
+    assert "It adds no recipient" in section
+
+
 def test_build_app_never_constructs_the_stripe_gateway(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

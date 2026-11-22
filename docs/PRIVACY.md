@@ -1,7 +1,8 @@
 # Privacy review — what leaves the machine, and what does not (KEL-22 / M3-E)
 
 - **Status:** written review, 2026-10-30; sharing cross-references added 2026-10-30
-- **Branch:** `kel-22`; `kel-26` adds the ADR 0002 material and the share rows below
+- **Branch:** `kel-22`; `kel-26` added the ADR 0002 material; the share rows below describe the
+  shipped KEL-28 surface (ADR 0002 §14.1)
 - **Scope:** the server process in `chat/`, `kernel/`, `skills/`, `openshell/`, and `payments/`
 - **Companions:** the retention rule ([`docs/DEPLOY.md`](DEPLOY.md) §8.1, `chat/retention.py`),
   the policy gate ([`docs/OPENSHELL.md`](OPENSHELL.md)), the chat spec
@@ -35,6 +36,7 @@ recipient named here that the code no longer knows.
 | Do payments reach the network? | Only Razorpay, and only when both `RAZORPAY_KEY_ID` and `RAZORPAY_KEY_SECRET` are set: hosted Checkout (`/api/wallet/checkout`) and saved-card wallet (`/api/wallet`) routes are mounted, and each payment call goes to `api.razorpay.com` and writes an `egress` row (recipient `razorpay`). With no keys those routes answer `503 wallet_not_configured` and nothing is sent. Stripe is never constructed by `build_app` |
 | Where are keys? | Only in the server process environment, or (provider key only) in the private tenant secrets file named by `KELP_TENANT_SECRETS_FILE`. `TAVILY_API_KEY` and `GITHUB_TOKEN` are read from `os.environ` only. Each is sent only to its own recipient and scrubbed from every log line and audit row |
 | What records exist? | Chat content until the owner deletes the thread; audit and usage records on a stated clock; a content-free egress ledger inside the audit trail; a device row per signed-in browser with a short label and timestamps, no credential |
+| Who can read a shared thread? | Whoever holds a share URL the owner created (`GET /api/shared/{token}`): no account, one frozen snapshot of one thread, until the link is revoked or expires (7 days by default, 30 at most). A share read is inbound, so it adds no recipient and no egress row; the store keeps a per-link daily view count and the audit one `share_viewed` record per link per day, with no viewer identity (§2.3) |
 | Can I audit what left? | Yes: one `egress` line per outbound call — recipient, purpose, byte counts, outcome, no content |
 
 The provider key is read from `KELP_PROVIDER_API_KEY` (from the tenant secrets
@@ -101,18 +103,20 @@ holds the URL.
 - **It adds no recipient.** A share read writes no egress row, opens no socket,
   starts no turn, calls no tool, and reads no artifact bytes. The list in §2 is
   unchanged by sharing.
-- **It does add a reader.** When the share surface lands (ADR 0002, KEL-28), the
-  owner can hand out a URL that shows one thread's snapshot to anyone who holds it,
-  with no account, until it is revoked or expires. That person receives the owner's
+- **It does add a reader.** The owner can hand out a URL
+  (`POST /api/threads/{id}/share`, then `GET /api/shared/{token}`; ADR 0002,
+  KEL-28) that shows one thread's snapshot to anyone who holds it, with no
+  account, until it is revoked or expires. That person receives the owner's
   content. They are not tracked: the audit records the link, not the viewer, and
   aggregate daily view counts are the only usage record. No IP, no user agent, no
   cookie.
 - **It is a copy.** Revocation stops the next request; it cannot recall a page
   already delivered to a browser. Sharing is a decision to hand someone a copy, and
   the UI says so.
-- **It is not in this build.** Nothing in §1, §3, or §4 depends on the share
-  surface existing. This subsection exists so that when it does land, no reader has
-  to guess whether the recipient list grew. It does not.
+- **It is live in this build.** The routes are mounted by `chat/api.py` and
+  specified in [`docs/CHAT_SPEC.md`](CHAT_SPEC.md) §12.3. This subsection exists so
+  that no reader has to guess whether the recipient list grew when sharing shipped.
+  It did not.
 
 ---
 
@@ -121,7 +125,7 @@ holds the URL.
 | Data | Location | Removed by | Retention row |
 |---|---|---|---|
 | Chat content — threads, messages, blocks, events, turns, approvals | `KELP_DB_PATH` (`chat.db`) | `ChatStore.purge_thread` — immediate hard delete, no `deleted_at` shadow | **Chat content** |
-| Share snapshot and daily view counts (not in this build) | `KELP_DB_PATH` (`chat.db`), `shares` and `share_views` | `ChatStore.purge_thread` deletes both in the thread's transaction; revoked and expired rows are pruned by KEL-28's share sweep (boot and daily), never on the read path. The snapshot holds no artifact bytes, so it has nothing to delete when an artifact is purged | **Chat content** (no separate row) |
+| Share snapshot and daily view counts | `KELP_DB_PATH` (`chat.db`), `shares` and `share_views` | `ChatStore.purge_thread` deletes both in the thread's transaction; revoked and expired rows are pruned by the share sweep (`ChatStore.share_sweep`, run by `RetentionMaintenance` at boot and daily), never on the read path. The snapshot holds no artifact bytes, so it has nothing to delete when an artifact is purged | **Chat content** (no separate row) |
 | Owner device sessions — hashed session id, short label, timestamps, revocation | `KELP_DB_PATH` (`chat.db`), `sessions` table | `DELETE /api/auth/devices/{id_short}`, `DELETE /api/auth/session(s)`; expired and evicted rows pruned on use | Not in the retention table; bounded by the session TTL and `KELP_SESSION_MAX` |
 | Uploaded files | `KELP_ARTIFACT_DIR` (default `workspace/var/artifacts`) | `ArtifactRegistry.purge` when the thread goes; `sweep_orphans` when parentless | **Uploaded files** |
 | Derived document index | `workspace/var/index` | Removed eagerly with the artifact; orphan directories swept | **Derived index** |
@@ -136,19 +140,19 @@ The row names in the last column are the `class` values of
 That table is the contract; this one says which of its rows hold what this review
 talks about, so a reader can move between the two without guessing.
 
-**Where a share snapshot will sit.** A share link (§2.3) is a second copy of one
+**Where a share snapshot sits.** A share link (§2.3) is a second copy of one
 thread's content, and its per-day view counter (`share_views`) is a small aggregate
 keyed by the link's token hash. Both belong to the **Chat content** row and inherit
 that row's rule: they are removed in the same transaction that purges the thread,
 and neither is retained after the thread is gone. So sharing adds **no** row to
 `chat.retention.RETENTION_ROWS` or to `docs/DEPLOY.md` §8.1. Revoked and expired
-links are pruned by KEL-28's share sweep (boot and daily), never on the read path,
+links are pruned by the share sweep (boot and daily), never on the read path,
 and a revoked row is kept until that prune rather than deleted at revoke. The
 snapshot never contains artifact bytes — the projection drops storage paths,
 hashes, and artifact handles — so a purged artifact leaves nothing behind inside a
 share row.
 
-If KEL-28 instead gives share rows their own retention window, that window must be
+If share rows are ever given their own retention window, that window must be
 added to `RETENTION_ROWS`, `docs/DEPLOY.md` §8.1, and this table in the same
 change. The test binding is one-directional, so that change still needs a reviewer:
 `tests/test_privacy.py` asserts that every `RETENTION_ROWS` class name appears in
@@ -316,8 +320,8 @@ does.
   constructed by `build_app`, `stripe` becomes a live recipient and §2's "Wired
   today?" column must change with it; `tests/test_privacy.py` fails if the
   constructor runs.
-- **A shared thread is deliberately readable by a stranger.** Once the share
-  surface ships, the owner can hand a URL to one thread and the holder can read it
+- **A shared thread is deliberately readable by a stranger.** Because the share
+  surface is live, the owner can hand a URL to one thread and the holder can read it
   with no account. That is the feature, not a leak: the content is still the owner's,
   the model provider already has it, and the only promise is that the link dies on
   revocation or expiry. The page cannot be un-rendered once it has been seen.
