@@ -322,6 +322,7 @@ class ChatService:
         runs: RunRecorder | None = None,
         entitlements: EntitlementStore | None = None,
         billing: BillingSink | None = None,
+        scrub_values: Sequence[str] = (),
     ):
         self.store = store
         self.bus = EventBus()
@@ -358,8 +359,15 @@ class ChatService:
         self._config = config or KernelConfig.from_env()
         self._model = model or self._config.primary_model
         self._secrets = dict(secrets or {})
+        # ``secrets`` also supplies skills (by declared name); ``scrub_values``
+        # are redaction-only, e.g. tenant-secrets-file values that no skill
+        # receives but that must still never land in a chat record.
         self._secret_values = tuple(
-            value for value in self._secrets.values() if isinstance(value, str) and len(value) >= 4
+            dict.fromkeys(
+                value
+                for value in (*self._secrets.values(), *scrub_values)
+                if isinstance(value, str) and len(value) >= 4
+            )
         )
         self._workspace_root = workspace_root
         self._tool_executor_factory = tool_executor_factory

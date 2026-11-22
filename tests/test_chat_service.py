@@ -1517,3 +1517,34 @@ def test_thread_deleted_mid_turn_closes_the_loop_in_the_turn_task(tmp_path: Path
         assert written_by is provider.closed_in
     finally:
         store.close()
+
+
+def test_scrub_values_are_redacted_but_never_supplied_to_skills(tmp_path: Path) -> None:
+    # Tenant-file values are redaction-only: chat records must not carry them,
+    # and they must not join the mapping that supplies skill secrets.
+    tenant_value = "tenant-file-only-value"
+
+    async def executor(call: object) -> dict:
+        return {"ok": True, "output": {"echo": f"leaked {tenant_value}"}}
+
+    service, store, _provider = make_service(
+        tmp_path,
+        [tool_script("stub.tool", {"q": tenant_value}), text_script("done")],
+        secrets={"DEMO_TOKEN": "boot-secret-value"},
+        scrub_values=(tenant_value,),
+        tool_executor_factory=executor_factory(executor),
+    )
+    try:
+        assert tenant_value not in service._secrets.values()
+        thread = service.create_thread()
+
+        async def scenario() -> None:
+            payload = await send_and_wait(service, thread["id"], "go")
+            assert tenant_value not in json.dumps(
+                store.get_message(payload["assistant_message_id"])["blocks"]
+            )
+            assert tenant_value not in json.dumps(store.events_after(thread["id"]))
+
+        asyncio.run(scenario())
+    finally:
+        store.close()

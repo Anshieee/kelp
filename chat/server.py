@@ -734,6 +734,9 @@ def build_app(
             model=config.kernel.primary_model,
             config=config.kernel,
             secrets=secrets,
+            # Redaction-only: tenant-file values are scrubbed from chat records
+            # but never supplied to a skill (only the provider key is read).
+            scrub_values=tuple(tenant_values),
             workspace_root=str(config.workspace_root),
             tools=_tool_specs(registry),
             audit=audit,

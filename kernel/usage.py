@@ -144,6 +144,24 @@ class InMemoryUsageStore:
         return len(self.records)
 
 
+
+def _ends_mid_line(path: Path) -> bool:
+    """True when ``path`` is non-empty and its last byte is not a newline.
+
+    A crash mid-append leaves a partial last line. Writing the next row straight
+    after it would glue the two together, and the reader would skip both.
+    """
+
+    try:
+        with path.open("rb") as handle:
+            handle.seek(0, os.SEEK_END)
+            if handle.tell() == 0:
+                return False
+            handle.seek(-1, os.SEEK_END)
+            return handle.read(1) != b"\n"
+    except OSError:
+        return False
+
 class JsonlUsageStore:
     """Append-only JSONL store. Safe for concurrent writers within one process."""
 
@@ -156,24 +174,41 @@ class JsonlUsageStore:
         with self._lock:
             self.path.parent.mkdir(parents=True, exist_ok=True)
             is_new = not self.path.exists()
+            torn = not is_new and _ends_mid_line(self.path)
             with self.path.open("a", encoding="utf-8") as handle:
                 if is_new:
                     try:
                         os.chmod(self.path, 0o600)
                     except OSError:
                         pass
-                handle.write(payload + "\n")
+                handle.write(("\n" if torn else "") + payload + "\n")
                 handle.flush()
                 os.fsync(handle.fileno())
 
     def records(self) -> list[dict[str, Any]]:
+        """Every readable usage row, oldest first.
+
+        A crash mid-write leaves one partial line. It is skipped (like any
+        line that is not a JSON object) so the surrounding rows stay visible;
+        :class:`SpendGuard` reads the files itself and counts such a line as
+        unknown-price spend.
+        """
+
         rows: list[dict[str, Any]] = []
         for path in _jsonl_paths(self.path):
             try:
                 lines = path.read_text(encoding="utf-8").splitlines()
             except FileNotFoundError:  # a rotation raced this read
                 continue
-            rows.extend(json.loads(line) for line in lines if line.strip())
+            for line in lines:
+                if not line.strip():
+                    continue
+                try:
+                    row = json.loads(line)
+                except ValueError:  # a torn or garbled line: keep the rest
+                    continue
+                if isinstance(row, dict):
+                    rows.append(row)
         return rows
 
 

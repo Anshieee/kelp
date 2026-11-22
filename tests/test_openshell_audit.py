@@ -114,3 +114,45 @@ def test_tenant_secret_audit_rows_carry_names_and_metadata_only(
     assert entry["extra"]["secret_name"] == "KELP_PROVIDER_API_KEY"
     assert "value" not in entry["extra"]["secret_ref"]
     assert entry["extra"]["secret_ref"]["source"] == "tenant-file"
+
+
+# -- torn / garbled lines --------------------------------------------------
+
+
+def test_entries_skip_torn_and_garbled_lines_across_segments(tmp_path: Path) -> None:
+    path = tmp_path / "audit.jsonl"
+    segment = tmp_path / "audit.jsonl.20261030T120000000000Z"
+    segment.write_text(
+        json.dumps({"event": "old", "n": 1}) + "\n"
+        + "{not json at all\n"
+        + json.dumps({"event": "old", "n": 2}) + "\n",
+        encoding="utf-8",
+    )
+    path.write_text(
+        json.dumps({"event": "new", "n": 3}) + "\n"
+        + "[1, 2, 3]\n"  # valid JSON, not an object
+        + '"just a string"\n'
+        + "\n"
+        + json.dumps({"event": "new", "n": 4}) + "\n"
+        + '{"event": "torn", "n": 5',  # crash mid-write: no closing brace/newline
+        encoding="utf-8",
+    )
+    log = AuditLog(path)
+
+    assert [row["n"] for row in log.entries()] == [1, 2, 3, 4]
+    assert [row["n"] for row in log.entries(event="new")] == [3, 4]
+
+
+def test_a_row_written_after_a_torn_tail_is_not_lost(tmp_path: Path) -> None:
+    # A crash mid-write leaves a partial last line with no newline. The next
+    # append must start on its own line, or it is glued onto the partial one
+    # and the reader skips both.
+    path = tmp_path / "audit.jsonl"
+    log = AuditLog(path)
+    log.record("first", tool="t")
+    with path.open("a", encoding="utf-8") as handle:
+        handle.write('{"event": "torn"')
+    log.record("after_crash", tool="t")
+
+    assert [row["event"] for row in log.entries()] == ["first", "after_crash"]
+    assert path.read_text(encoding="utf-8").endswith("\n")

@@ -857,3 +857,18 @@ def test_malformed_and_oversized_error_codes_are_bounded(tmp_path: Path) -> None
         "unknown",
         "a" * 64,
     ]
+
+
+def test_logged_usage_store_keeps_valid_rows_when_a_line_is_torn(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "usage" / "usage.jsonl"
+    path.parent.mkdir(parents=True)
+    good = {"turn_id": "turn_ok", "total_tokens": 7, "tenant_id": "owner"}
+    path.write_text(
+        json.dumps(good) + "\n" + '{"turn_id": "torn"', encoding="utf-8"
+    )
+
+    rows = LoggedUsageStore(JsonlUsageStore(path)).records()
+
+    assert [row["turn_id"] for row in rows] == ["turn_ok"]

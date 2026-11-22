@@ -313,6 +313,30 @@ def test_torn_usage_line_counts_as_unknown_not_free(tmp_path: Path) -> None:
     assert state.block_reason == "unknown_price"
 
 
+def test_usage_records_skip_torn_and_garbled_lines_across_segments(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "usage.jsonl"
+    segment = tmp_path / "usage.jsonl.20261030T120000000000Z"
+    segment.write_text(
+        json.dumps({"turn_id": "a"}) + "\n"
+        + "garbled}{\n"
+        + json.dumps({"turn_id": "b"}) + "\n",
+        encoding="utf-8",
+    )
+    path.write_text(
+        json.dumps({"turn_id": "c"}) + "\n"
+        + "[]\n"  # valid JSON, not an object
+        + json.dumps({"turn_id": "d"}) + "\n"
+        + '{"turn_id":"torn"',
+        encoding="utf-8",
+    )
+
+    rows = JsonlUsageStore(path).records()
+
+    assert [row["turn_id"] for row in rows] == ["a", "b", "c", "d"]
+
+
 def test_unreadable_usage_blocks_while_a_cap_is_configured(tmp_path: Path) -> None:
     directory = tmp_path / "usage.jsonl"
     directory.mkdir()
@@ -643,3 +667,14 @@ def test_metrics_scrape_republishes_from_records_without_a_new_turn(
     assert rendered['spend_used_usd{window="day"}'] == pytest.approx(0.25)
     assert rendered['spend_cap_ratio{window="day"}'] == pytest.approx(0.25)
     assert provider.requests == []
+
+
+def test_a_usage_row_written_after_a_torn_tail_is_not_lost(tmp_path: Path) -> None:
+    path = tmp_path / "usage.jsonl"
+    store = JsonlUsageStore(path)
+    store.record(usage_record(0.5, turn_id="turn_before"))
+    with path.open("a", encoding="utf-8") as handle:
+        handle.write('{"turn_id": "torn"')
+    store.record(usage_record(0.25, turn_id="turn_after"))
+
+    assert [row["turn_id"] for row in store.records()] == ["turn_before", "turn_after"]
