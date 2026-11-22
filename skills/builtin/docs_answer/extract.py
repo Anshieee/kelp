@@ -16,10 +16,23 @@ Stdlib only, no network, no subprocesses. Two readers:
   citation convention in ``docs/CHAT_SPEC.md`` §8.1.
 
 Both readers are deliberately forgiving about syntax and strict about output:
-undecodable content is skipped, never guessed. Byte budgets bound the total
-work: :data:`MAX_ARTIFACT_BYTES` for the file, ``_MAX_DECOMPRESSED_BYTES`` for
-one stream, and ``_TOTAL_DECOMPRESSED_BYTES`` for the whole document — so a
-crafted PDF with many small bombs cannot expand without limit.
+undecodable content is skipped, never guessed. Budgets bound the total work.
+Byte budgets: :data:`MAX_ARTIFACT_BYTES` for the file,
+``_MAX_DECOMPRESSED_BYTES`` for one stream, and ``_TOTAL_DECOMPRESSED_BYTES``
+for the whole document, so a crafted PDF with many small bombs cannot expand
+without limit. Byte budgets alone do not bound CPU, because a tiny ``Form``
+XObject that is invoked from many places (or a form that invokes other forms)
+is cheap to decode yet multiplies the walk. Two further limits are therefore
+shared by every page and nested form of one :func:`extract_pdf` call:
+each form object's stream is decoded and its resources resolved at most once
+(later ``Do`` operators reuse the result and do not charge the byte budget
+again), and ``_MAX_CONTENT_TOKENS`` / ``_MAX_FORM_INVOCATIONS`` cap the content
+tokens read and the forms entered. When either is exhausted the walk stops and
+the text read so far is returned, the same partial-output behaviour as an
+exhausted byte budget; later pages stay in place as empty pages so citation
+page numbers never drift. No wall-clock deadline is used: the caps are
+deterministic and bound the work to a few seconds, so the same file always
+extracts to the same text.
 """
 
 from __future__ import annotations
@@ -50,6 +63,19 @@ _TOTAL_DECOMPRESSED_BYTES = 96 * 1024 * 1024
 #: How deep ``Form`` XObjects may nest before the walk stops. Real documents
 #: stay at one or two levels; the cap keeps a cyclic document finite.
 _MAX_FORM_DEPTH = 4
+#: Ceiling on content-stream tokens read across the whole document (every page
+#: and every nested form). The tokenizer runs at roughly 0.6 M tokens/s, so this
+#: bounds the replay to about 8 s of CPU, well under the 30 s ``docs.answer``
+#: handler timeout (``asyncio.to_thread`` cannot cancel a running thread, so the
+#: work must stop on its own). A dense text page is ~3-5 k tokens, so 5 M covers
+#: a thousand-page book.
+_MAX_CONTENT_TOKENS = 5_000_000
+#: Ceiling on ``Form`` XObject entries (``Do`` that descends) per document.
+#: Without it a form that invokes N forms, nested four deep, costs N**4 walks
+#: from a ~1.5 KB file. Real documents enter a handful of forms per page
+#: (headers, logos, annotations); 50 k is hundreds per page across a 200-page
+#: file, and costs about half a second once the decode is memoised.
+_MAX_FORM_INVOCATIONS = 50_000
 #: How far ``/Resources`` may be inherited up a ``/Parent`` chain.
 _MAX_RESOURCE_DEPTH = 8
 
@@ -108,6 +134,24 @@ class CsvTable:
     header: tuple[str, ...]
     rows: tuple[tuple[str, ...], ...]
     delimiter: str
+
+
+class _Work:
+    """Shared, document-wide work counters and form cache for one extraction.
+
+    ``forms`` maps a form object number to its decoded stream plus the XObject
+    names its own resources expose, or to ``None`` when the form cannot be read.
+    Caching the failure too means an undecodable form is not retried on every
+    ``Do``.
+    """
+
+    __slots__ = ("exhausted", "forms", "invocations", "tokens")
+
+    def __init__(self) -> None:
+        self.tokens = 0
+        self.invocations = 0
+        self.exhausted = False
+        self.forms: dict[int, tuple[bytes, dict[str, int]] | None] = {}
 
 
 class _Array:
@@ -298,6 +342,7 @@ def _page_lines(
     depth: int = 0,
     seen: frozenset[int] = frozenset(),
     budget: list[int] | None = None,
+    work: _Work | None = None,
 ) -> list[str]:
     """Replay a content stream and return its lines in reading order.
 
@@ -305,7 +350,15 @@ def _page_lines(
     own text operators belong at that exact position in the page. The walk stops
     at :data:`_MAX_FORM_DEPTH` and never revisits a form it is already inside, so
     a self-referencing document cannot loop.
+
+    ``work`` is shared by every page and nested form of one document: it caches
+    each form's decoded stream and counts tokens and form entries against
+    :data:`_MAX_CONTENT_TOKENS` / :data:`_MAX_FORM_INVOCATIONS`. Once either is
+    exceeded the replay stops and returns the lines read so far.
     """
+
+    if work is None:
+        work = _Work()
 
     lines: list[str] = []
     parts: list[str] = []
@@ -341,6 +394,12 @@ def _page_lines(
             return None
 
     for match in _TOKEN_RE.finditer(stream):
+        if work.exhausted:
+            break
+        work.tokens += 1
+        if work.tokens > _MAX_CONTENT_TOKENS:
+            work.exhausted = True
+            break
         if match.start() < resume:
             continue
         token = match.group(0)
@@ -427,21 +486,26 @@ def _page_lines(
                     and reference not in seen
                     and depth < _MAX_FORM_DEPTH
                 ):
-                    form = objects.get(reference)
-                    payload = (
-                        _decode_stream(form, budget=budget) if form is not None else None
-                    )
-                    if payload is not None:
+                    if work.invocations >= _MAX_FORM_INVOCATIONS:
+                        work.exhausted = True
+                        break
+                    work.invocations += 1
+                    if reference not in work.forms:
+                        work.forms[reference] = _load_form(objects, reference, budget)
+                    form = work.forms[reference]
+                    if form is not None:
+                        payload, form_xobjects = form
                         # The form's text belongs here, in stream order.
                         flush()
                         lines.extend(
                             _page_lines(
                                 payload,
                                 objects=objects,
-                                xobjects=_xobject_map(objects, form),
+                                xobjects=form_xobjects,
                                 depth=depth + 1,
                                 seen=seen | {reference},
                                 budget=budget,
+                                work=work,
                             )
                         )
                         last_y = None
@@ -452,6 +516,24 @@ def _page_lines(
 
     flush()
     return lines
+
+
+def _load_form(
+    objects: dict[int, bytes], reference: int, budget: list[int] | None
+) -> tuple[bytes, dict[str, int]] | None:
+    """Decode one ``Form`` XObject and resolve its own XObject names.
+
+    Called at most once per form object per document (see :class:`_Work`), so
+    ``budget`` is charged for the first decode only.
+    """
+
+    body = objects.get(reference)
+    if body is None:
+        return None
+    payload = _decode_stream(body, budget=budget)
+    if payload is None:
+        return None
+    return payload, _xobject_map(objects, body)
 
 
 def _page_order(objects: dict[int, bytes]) -> list[int]:
@@ -584,6 +666,7 @@ def extract_pdf(data: bytes) -> list[list[str]]:
     # One budget for the whole document: object streams, page content and the
     # Form XObjects they pull in all pay into the same allowance.
     budget = [_TOTAL_DECOMPRESSED_BYTES]
+    work = _Work()
     objects = _objects(data, budget=budget)
     order = _page_order(objects)
 
@@ -592,6 +675,8 @@ def extract_pdf(data: bytes) -> list[list[str]]:
         lines: list[str] = []
         xobjects = _xobject_map(objects, objects.get(page, b""))
         for stream in _contents(objects, page):
+            if work.exhausted:
+                break
             payload = _decode_stream(stream, budget=budget)
             if payload is not None:
                 lines.extend(
@@ -600,6 +685,7 @@ def extract_pdf(data: bytes) -> list[list[str]]:
                         objects=objects,
                         xobjects=xobjects,
                         budget=budget,
+                        work=work,
                     )
                 )
         pages.append(lines)
@@ -609,11 +695,15 @@ def extract_pdf(data: bytes) -> list[list[str]]:
         # and inventing page numbers would make citations wrong.
         fallback: list[str] = []
         for _, body in sorted(objects.items()):
+            if work.exhausted:
+                break
             if _STREAM_RE.search(body) is None:
                 continue
             payload = _decode_stream(body, budget=budget)
             if payload is not None:
-                fallback.extend(_page_lines(payload, objects=objects, budget=budget))
+                fallback.extend(
+                    _page_lines(payload, objects=objects, budget=budget, work=work)
+                )
         if not fallback:
             raise ValueError("PDF has no readable text")
         pages = [fallback]
