@@ -257,10 +257,15 @@ class RazorpayCheckout:
         ledger: Any = None,
         transport: RazorpayTransport | None = None,
         now_fn: Any = None,
+        egress: Any = None,
     ) -> "RazorpayCheckout":
         source = os.environ if env is None else env
         wallet = RazorpayWallet.from_env(
-            source, ledger=ledger, transport=transport, now_fn=now_fn
+            source,
+            ledger=ledger,
+            transport=transport,
+            now_fn=now_fn,
+            egress=egress,
         )
         return cls(
             wallet=wallet,

@@ -779,15 +779,17 @@ def build_app(
         # Wallet and hosted Checkout share one durable ledger. Razorpay's
         # transport stays lazy inside RazorpayWallet and is never constructed
         # unless both server-side keys are present and a payment call is made.
+        # When it is, every call writes one content-free row to the same egress
+        # ledger the model client and skills use (recipient ``razorpay``).
         wallet_ledger = WalletLedger(
             config.db_path.parent / "wallet" / "wallet.db"
         )
-        wallet = RazorpayWallet.from_env(source, ledger=wallet_ledger)
+        wallet = RazorpayWallet.from_env(source, ledger=wallet_ledger, egress=egress)
         # upstream_authorized: ChatAPI._dispatch_inner runs auth_routes._authorize
         # (auth + CSRF, chat/api.py) before routing any /api/wallet/* request here.
         wallet_api = WalletAPI(wallet, upstream_authorized=True)
         checkout_api = CheckoutAPI(
-            RazorpayCheckout.from_env(source, ledger=wallet_ledger),
+            RazorpayCheckout.from_env(source, ledger=wallet_ledger, egress=egress),
             upstream_authorized=True,
         )
         api = ChatAPI(

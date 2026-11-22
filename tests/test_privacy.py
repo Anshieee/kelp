@@ -174,13 +174,97 @@ def test_privacy_review_relative_links_resolve() -> None:
     assert missing == []
 
 
-def test_payments_are_not_wired_into_the_application() -> None:
-    """The review says Stripe and Razorpay are not constructed by build_app."""
+def _wired_today_cell(recipient: str) -> str:
+    """The last cell (``Wired today?``) of a recipient's §2 table row."""
 
+    section = _doc().split("## 2. Every outbound recipient", 1)[1].split("### 2.1", 1)[0]
+    for line in section.splitlines():
+        if line.startswith(f"| `{recipient}` |"):
+            return line.rstrip().rstrip("|").rsplit("|", 1)[1].strip()
+    raise AssertionError(f"{recipient!r} has no row in §2")
+
+
+def test_privacy_review_states_the_payment_wiring_as_it_is() -> None:
+    """Razorpay is wired and ledgered; Stripe is not constructed. Say both."""
+
+    doc = _doc()
+    assert _wired_today_cell("razorpay").startswith("**Yes**")
+    assert _wired_today_cell("stripe").startswith("**No**")
+    assert "HttpStripeGateway" in _wired_today_cell("stripe")
+    # The stale claims this test replaces: a payment path that is mounted and
+    # reaches api.razorpay.com must not be described as unwired.
+    assert "constructs neither" not in doc
+    assert "Payments are not wired" not in doc
+    assert "Not in this build" not in doc
+    assert "wallet_not_configured" in doc
+
+
+def test_build_app_never_constructs_the_stripe_gateway(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``stripe`` stays an unwired recipient, with or without every key set."""
+
+    import payments.wallet as wallet_module
+
+    def _refuse(self: Any, *args: Any, **kwargs: Any) -> None:
+        raise AssertionError("build_app constructed HttpStripeGateway")
+
+    monkeypatch.setattr(wallet_module.HttpStripeGateway, "__init__", _refuse)
     source = (ROOT / "chat" / "server.py").read_text(encoding="utf-8")
     assert "HttpStripeGateway" not in source
-    assert "HttpRazorpayTransport" not in source
-    assert "RazorpayCheckout(" not in source
+    assert "StripeWallet" not in source
+
+    env = {
+        **_env(tmp_path),
+        "STRIPE_SECRET_KEY": "sk_" + "test_privacyprobe1234",  # split: not a literal key
+        "RAZORPAY_KEY_ID": "rzp_test_privacyprobe1",
+        "RAZORPAY_KEY_SECRET": "-".join(("privacy", "probe", "secret", "123456")),
+    }
+    app = chat_server.build_app(
+        chat_server.ServerConfig.from_env(env), provider=_NoopProvider(), environ=env
+    )
+    try:
+        assert app.wallet_api is not None
+        assert app.checkout_api is not None
+        for wallet in (app.wallet_api.wallet, app.checkout_api.checkout.wallet):
+            assert type(wallet).__name__ == "RazorpayWallet"
+            assert type(wallet._transport()).__name__ == "RazorpayGateway"  # noqa: SLF001
+    finally:
+        app.close()
+
+
+def test_razorpay_transport_records_content_free_egress(tmp_path: Path) -> None:
+    """The one payment recipient that is wired writes a ledger row per call."""
+
+    from payments.razorpay_gateway import HttpRazorpayTransport
+
+    audit, ledger = _ledger(tmp_path)
+    client = httpx.Client(
+        transport=httpx.MockTransport(
+            lambda request: httpx.Response(200, json={"id": "order_privacyprobe1"})
+        )
+    )
+    transport = HttpRazorpayTransport(client=client, egress=ledger)
+
+    transport.create_order(
+        key_id="rzp_test_privacyprobe1",
+        key_secret=API_KEY,
+        amount_cents=424242,
+        currency="inr",
+        notes={"memo": TRANSCRIPT},
+        idempotency_key="-".join(("privacy", "probe", "key", "1")),
+        receipt="privacy-receipt-1",
+    )
+
+    rows = ledger.entries()
+    assert len(rows) == 1
+    extra = rows[0]["extra"]
+    assert set(extra) <= ALLOWED_EXTRA_KEYS
+    assert extra["recipient"] == "razorpay"
+    assert extra["outcome"] == "completed"
+    line = audit.path.read_text(encoding="utf-8")
+    for leaked in (TRANSCRIPT, API_KEY, "424242", "privacy-receipt-1", "order_privacyprobe1"):
+        assert leaked not in line
 
 
 # ---------------------------------------------------------------------------

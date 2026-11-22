@@ -32,7 +32,7 @@ recipient named here that the code no longer knows.
 | Where does the conversation go? | The model provider named by `KELP_PROVIDER_BASE_URL` (OpenRouter on the documented path) — every turn, in full |
 | Does anything else receive conversation text? | Not by default: no analytics, no telemetry, no crash reporter, no CDN, no third-party log sink |
 | Do skills reach the network? | Only through one chokepoint, and only to hosts a manifest declares. `github.write` can create a branch, commit, and pull request in `Anshieee/kelp`, but its handler cannot run before owner approval; other network skills are not implemented |
-| Do payments reach the network? | Not in this build. The Stripe and Razorpay clients exist but `build_app` constructs neither |
+| Do payments reach the network? | Only Razorpay, and only when both `RAZORPAY_KEY_ID` and `RAZORPAY_KEY_SECRET` are set: hosted Checkout (`/api/wallet/checkout`) and saved-card wallet (`/api/wallet`) routes are mounted, and each payment call goes to `api.razorpay.com` and writes an `egress` row (recipient `razorpay`). With no keys those routes answer `503 wallet_not_configured` and nothing is sent. Stripe is never constructed by `build_app` |
 | Where are keys? | Only in the server process environment, or (provider key only) in the private tenant secrets file named by `KELP_TENANT_SECRETS_FILE`. `TAVILY_API_KEY` and `GITHUB_TOKEN` are read from `os.environ` only. Each is sent only to its own recipient and scrubbed from every log line and audit row |
 | What records exist? | Chat content until the owner deletes the thread; audit and usage records on a stated clock; a content-free egress ledger inside the audit trail; a device row per signed-in browser with a short label and timestamps, no credential |
 | Can I audit what left? | Yes: one `egress` line per outbound call — recipient, purpose, byte counts, outcome, no content |
@@ -58,7 +58,7 @@ through one of these rows.
 | `tavily` | `api.tavily.com` | The search query string, plus the API key header | On a `web.search` call | `TAVILY_API_KEY` | **No** — handler raises `not_implemented` |
 | `github` | `api.github.com` | Repository `Anshieee/kelp`, branch/commit metadata, file content, and pull-request title/body; bounded to the manifest's repo/host scope | Only after owner approval of a `github.write` request | `GITHUB_TOKEN` (bearer header) | **Yes**, after approval; the egress ledger records each request without content |
 | `stripe` | `api.stripe.com` | Customer id, payment-method id, amount, currency, description, idempotency key. Card numbers are typed into Stripe's own form and never reach this process | On a saved-card charge | `STRIPE_SECRET_KEY` | **No** — `HttpStripeGateway` is never constructed by `build_app` |
-| `razorpay` | `api.razorpay.com` | Order amount, currency, receipt, and the key id in the auth header; webhook settlement re-reads the order by id. Card numbers are typed on Razorpay's hosted page | On a hosted Checkout order | Key id + key secret | **No** — `HttpRazorpayTransport` is never constructed by `build_app` |
+| `razorpay` | `api.razorpay.com` | Order amount, currency, receipt (the local order id), a description of at most 200 characters with card numbers and keys masked, and an idempotency key; card ids, customer ids, and payment ids in the URL path or body for saved-card charges and for settlement re-reads. The key id and secret travel only in the `Authorization` header. Card numbers are typed on Razorpay's hosted page and never reach this process | On a hosted Checkout order, a saved-card charge, a card list or attach, and a settlement re-read | Key id + key secret (`RAZORPAY_KEY_ID`, `RAZORPAY_KEY_SECRET`) | **Yes**, when both keys are set — `build_app` mounts the routes and `HttpRazorpayTransport` is built on the first payment call. Each call writes one `egress` row (`purpose = "payments.razorpay.<operation>"`, byte counts, outcome, status; no ids, amounts, or credentials). With no keys the routes answer `503 wallet_not_configured` and nothing is sent |
 | `unlisted` | whatever else `KELP_PROVIDER_BASE_URL` points at | Exactly what `openrouter` would receive: the whole transcript | Every turn, when the base URL is another host | `KELP_PROVIDER_API_KEY` | Yes, for any endpoint that is not `openrouter.ai` |
 
 Two consequences worth stating plainly:
@@ -204,13 +204,20 @@ intentions:
    swallowed; a missing ledger is a no-op. The ledger never blocks a request, the
    same rule the rest of the audit trail follows.
 
-Coverage is by path, not by hope. Three call sites write rows in this build: the
+Coverage is by path, not by hope. Four call sites write rows in this build: the
 model client (`purpose = "chat.completions"`), each skill's egress chokepoint
-(`purpose =` the skill name), and the readiness probe (`provider.health`). The
-Stripe and Razorpay transports are the one place a future change could add a
-recipient without a row: they are not constructed today, the `stripe` and
-`razorpay` ids already exist so the day they are wired the gap is visible, and
-§2's table must be updated in that same change.
+(`purpose =` the skill name), the readiness probe (`provider.health`), and the
+Razorpay transport (`purpose = "payments.razorpay.<operation>"`, one of
+`customer.create`, `card.fetch`, `card.list`, `order.create`, `payment.fetch`,
+`payment.create`, `payment.capture`). `build_app` hands its egress ledger to both
+the wallet and the hosted Checkout, so the lazily built `HttpRazorpayTransport`
+writes into the same audit trail; the row's outcome is `completed`,
+`provider_error` (HTTP 400 and up), `unreachable`, or `timeout`, and a call
+refused before it reaches the network (a missing credential, a malformed id)
+writes nothing because nothing left. The Stripe transport is the one place a
+future change could add a recipient without a row: `HttpStripeGateway` is not
+constructed by `build_app` today, the `stripe` id already exists so the day it is
+wired the gap is visible, and §2's table must be updated in that same change.
 
 Read it like any other audit record:
 
@@ -300,9 +307,15 @@ does.
   file and the runbook. The retention table says so rather than pretending.
 - **Chat content has no age timer.** It is removed when the owner deletes the
   thread. The retention table states this instead of implying an expiry.
-- **Payments are not wired.** When they are, `stripe` and `razorpay` become live
-  recipients; the ledger ids already exist so that change shows up in the audit
-  trail on day one, but §2 will need its "Wired today?" column updated with it.
+- **Razorpay is wired; Stripe is not.** With both Razorpay keys set the server
+  calls `api.razorpay.com`, and every call is accounted for as a `razorpay` row
+  (counts and fixed labels only). The row does not say what was bought or for how
+  much; the amount, the description, and the ids are in the wallet's own
+  database, not the audit trail. Setting only one of the two keys is a startup
+  configuration error, not a half-working wallet. If `HttpStripeGateway` is ever
+  constructed by `build_app`, `stripe` becomes a live recipient and §2's "Wired
+  today?" column must change with it; `tests/test_privacy.py` fails if the
+  constructor runs.
 - **A shared thread is deliberately readable by a stranger.** Once the share
   surface ships, the owner can hand a URL to one thread and the holder can read it
   with no account. That is the feature, not a leak: the content is still the owner's,
@@ -336,7 +349,16 @@ does.
 - `chat.cards.EXEC_AVAILABLE` and the wiring agree under AST inspection, and
   `build_app` is run with `ExecGate.__init__` booby-trapped, so a newly wired
   gate fails the test at construction time;
-- an exec card makes no execution promise.
+- an exec card makes no execution promise;
+- the Razorpay transport writes exactly one content-free `razorpay` row per HTTP
+  call (`completed`, `provider_error` with the status, `unreachable`, `timeout`),
+  a failing ledger never breaks the call, and `build_app` hands the app's own
+  egress ledger to both the wallet and hosted Checkout gateways while keeping the
+  transport lazy; with no keys no transport is constructed and the routes answer
+  `503 wallet_not_configured`;
+- `build_app` never constructs `HttpStripeGateway` (booby-trapped constructor),
+  and the §2 "Wired today?" cells for `razorpay` (**Yes**) and `stripe` (**No**)
+  match.
 
 The retention behaviour itself is covered by `tests/test_retention.py`; this
 review references that table rather than restating it.
