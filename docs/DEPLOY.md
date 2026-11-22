@@ -162,7 +162,7 @@ baked into the image; the process refuses to start without all three, exit `2`.
 | `KELP_SPEND_UNKNOWN_PRICE_MODE` | no | `block` | no | `block` or `count_as`: what an unpriced turn means for the cap |
 | `KELP_SPEND_UNKNOWN_PRICE_USD` | no | `0.01` | no | Amount charged per unpriced turn in `count_as` mode |
 | `KELP_ENTITLEMENT_PLAN` | no | `owner-unlimited` | no | Plan id used for tenants without an explicit mapping |
-| `KELP_ENTITLEMENT_PLANS_JSON` | no | built-in `owner-unlimited` | no | JSON object of `plan_id` to `{window, max_turns, max_runs, max_cost_usd, allowed_task_types}`. An unknown tenant or task type is denied; a missing decision is never an allow |
+| `KELP_ENTITLEMENT_PLANS_JSON` | no | built-in `owner-unlimited` | no | JSON object of `plan_id` to `{window, max_turns, max_runs, max_cost_usd, allowed_task_types}`. A tenant with no mapping gets `KELP_ENTITLEMENT_PLAN`; a tenant mapped to a plan id not in this table, or a task type outside the plan's `allowed_task_types`, is denied; a missing decision is never an allow |
 | `KELP_ENTITLEMENT_TENANT_PLANS_JSON` | no | `{}` | no | JSON object mapping `tenant_id` to a configured plan id |
 | `KELP_LOG_LEVEL` | no | `info` | no | `debug` / `info` / `warning` / `error` |
 | `KELP_RATE_LIMIT_ENABLED` | no | `1` | no | Token buckets on; `0` disables them (concurrency caps stay on) |
@@ -214,9 +214,12 @@ The entitlement gate is the third gate after auth and tenant and before spend
 and any provider call. Plans are static configuration: `KELP_ENTITLEMENT_PLANS_JSON`
 defines ceilings and allowed task types, `KELP_ENTITLEMENT_TENANT_PLANS_JSON`
 maps tenants, and `KELP_ENTITLEMENT_PLAN` is the fallback plan id. The built-in
-`owner-unlimited` plan is an explicit unlimited plan, not a bypass: an unknown
-tenant, an unknown task type, or a malformed plan table still fails closed with
-`entitlement_denied` or `entitlement_exhausted`. Billing is an internal terminal
+`owner-unlimited` plan is an explicit unlimited plan, not a bypass. A tenant
+with no entry in `KELP_ENTITLEMENT_TENANT_PLANS_JSON` gets the fallback plan, so
+with the defaults every tenant that passes the tenant gate is unlimited. A tenant
+mapped to a plan id missing from the table, or a task type outside the plan's
+`allowed_task_types`, is denied with `entitlement_denied`; a reached ceiling
+answers `entitlement_exhausted`; a malformed plan table fails startup. Billing is an internal terminal
 hook and needs no environment variable; it receives usage fields and the plan
 snapshot, never prompt text.
 
@@ -1095,7 +1098,7 @@ this gets expensive.
 | `(health: starting)` for the first minute | Normal: 40 s `start_period` plus a 30 s interval | Wait, then re-read `docker inspect --format '{{.State.Health.Status}}' kelp-kelp-1` |
 | Healthy, but `readyz` 503 `provider=timeout` | Egress blocked, DNS broken, or key rejected | Probe the provider from the same network with the key in a 0600 header file (`-H @file`, §12.2), not on the command line |
 | `readyz` 503 `store=unavailable` | `/data` not writable by 10001 | Recreate the volume/dir with owner `10001:10001` |
-| `readyz` 503 `unpriced_models=unpriced` | A usage record finished this month has no known price, so the spend total is incomplete | Add the model to `DEFAULT_PRICING` in `kernel/config.py` (see `docs/KERNEL.md`). `KELP_SPEND_UNKNOWN_PRICE_MODE=count_as` keeps turns running, but this check stays false until the record leaves the month window or rotates out |
+| `readyz` 503 `unpriced_models=unpriced` | A usage record finished this month has no known price, so the spend total is incomplete | Add the model's price to `KELP_PRICING_JSON`, or to `DEFAULT_PRICING` in `kernel/config.py` and rebuild (see `docs/KERNEL.md`). `KELP_SPEND_UNKNOWN_PRICE_MODE=count_as` keeps turns running, but this check stays false until the record leaves the month window or rotates out |
 | `401 unauthorized` on `/api/*` | Token mismatch, or the proxy strips `Authorization` | Send `Authorization: Bearer …`; check the proxy passes request headers untouched |
 | `403 csrf_failed` on a browser mutation | `Origin` and `Host` disagree behind the proxy | Forward the original `Host`; or set `KELP_CSRF_TOKEN` and send `X-CSRF-Token` |
 | Upload fails `413` | Proxy limit below the 20 MiB app cap | Raise `client_max_body_size` / Caddy `max_size` to ~24 MB |

@@ -136,10 +136,17 @@ One `UsageRecord` per turn is appended to the configured store:
  "duration_ms":912,"outcome":"stop"}
 ```
 
-- Pricing comes from `kernel.config.DEFAULT_PRICING` (USD per 1M tokens). It
-  ships the two default models at the documented provider's published list price
-  (`openrouter.ai/api/v1/models`, read 2026-11-02); add any other model id this
-  deployment uses with the provider's current price.
+- Pricing comes from `KernelConfig.pricing` (USD per 1M tokens), which the loop
+  reads through `estimate_cost` and `pricing_for`. That table starts from
+  `kernel.config.DEFAULT_PRICING`, which ships the two default models at the
+  documented provider's published list price (`openrouter.ai/api/v1/models`, read
+  2026-11-02). When `KELP_PRICING_JSON` is set, its rows are merged over those
+  defaults: a row replaces the default with the same model id, and any other model
+  id is added. A model id in neither table is unpriced.
+- A turn whose consumer disconnects or whose task is cancelled mid-turn still
+  writes exactly one usage record, with `outcome: "cancelled"` and the input and
+  output tokens counted up to that point. A `CancelToken` stop writes the same
+  outcome through the normal path.
 - Unknown models record `estimated_cost_usd: null` and `cost_known: false`; the
   kernel never invents a price.
 - `JsonlUsageStore` appends with `fsync` and creates the file `0600`. It contains
