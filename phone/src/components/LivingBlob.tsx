@@ -6,15 +6,13 @@ import { useEffect, useRef } from "react";
  * cropped to its opaque bounds), kept alive with motion.
  *
  * Full WebGL-style morphing would cost a phone GPU for a decorative moment,
- * so the artwork moves the cheap way: a slow breathe (scale + faint roll, on
- * incommensurate periods so it never visibly loops) plus a pointer drift
- * that eases the blob a few pixels toward the cursor. The earlier
- * canvas-drawn sketch is gone; this file keeps its name and props so callers
- * do not change.
- *
- * Motion honors the same contract as the site: transform/opacity only (the
- * compositor does the work, no layout thrash), frozen under
- * `prefers-reduced-motion`, and parked while the artwork is off-screen.
+ * so the artwork moves the cheap way: a slow CSS breathe (scale + faint
+ * roll, on incommensurate periods so it never visibly loops) plus a JS
+ * pointer drift that only ever writes `--drift-x`/`--drift-y`, which the
+ * stylesheet consumes exclusively through `transform` — no layout, no
+ * paint, the compositor does the work. Both layers honor
+ * `prefers-reduced-motion` live (media query + change listener), and the
+ * drift parks while the artwork is off-screen or the tab hides.
  */
 export default function LivingBlob({ size = 260, className }: { size?: number; className?: string }) {
   const ref = useRef<HTMLDivElement | null>(null);
@@ -22,7 +20,10 @@ export default function LivingBlob({ size = 260, className }: { size?: number; c
   useEffect(() => {
     const node = ref.current;
     if (!node) return;
-    if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+    const reduced = window.matchMedia("(prefers-reduced-motion: reduce)");
+    // A static settled frame when motion is off; the CSS keyframes are
+    // separately gated by the same media query, so both layers agree.
+    if (reduced.matches) return;
 
     const pointer = { x: 0, y: 0, tx: 0, ty: 0 };
     let raf = 0;
@@ -80,7 +81,19 @@ export default function LivingBlob({ size = 260, className }: { size?: number; c
     observer.observe(node);
 
     const onVisibility = () => (document.hidden ? stop() : start());
+    const onReducedChange = () => {
+      if (reduced.matches) {
+        // Motion turned off mid-session: park the drift loop and recenter
+        // the artwork; the CSS layer freezes via its own media query.
+        stop();
+        node.style.setProperty("--drift-x", "0px");
+        node.style.setProperty("--drift-y", "0px");
+      } else {
+        start();
+      }
+    };
     document.addEventListener("visibilitychange", onVisibility);
+    reduced.addEventListener?.("change", onReducedChange);
     window.addEventListener("pointermove", onMove, { passive: true });
     document.addEventListener("mouseleave", onLeave);
 
@@ -89,6 +102,7 @@ export default function LivingBlob({ size = 260, className }: { size?: number; c
       stop();
       observer.disconnect();
       document.removeEventListener("visibilitychange", onVisibility);
+      reduced.removeEventListener?.("change", onReducedChange);
       window.removeEventListener("pointermove", onMove);
       document.removeEventListener("mouseleave", onLeave);
     };

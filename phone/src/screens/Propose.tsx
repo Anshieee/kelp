@@ -4,18 +4,20 @@
  * against live limits when available; the server re-checks authoritatively.
  * On success the proposal is handed to the PaymentSheet.
  */
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { ApiError } from "../api";
 import PaymentSheet from "../components/PaymentSheet";
 import {
   formatMoney,
   getLimits,
   mapWalletError,
-  newIdempotencyKey,
   parseAmountToCents,
+  proposalFingerprint,
   proposePayment,
+  resolveIdempotencyKey,
   toSheetProposal,
   WALLET_CURRENCIES,
+  type IdempotencySlot,
   type SheetProposal,
   type WalletLimits,
   type WalletProposal,
@@ -35,6 +37,9 @@ export default function Propose({ onBack }: ProposeProps) {
   const [showRetry, setShowRetry] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [proposal, setProposal] = useState<WalletProposal | null>(null);
+  // Idempotency slot for the in-flight logical proposal; survives retries
+  // and re-renders, cleared on success so a stale form never reuses a key.
+  const keySlot = useRef<IdempotencySlot | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -74,15 +79,24 @@ export default function Propose({ onBack }: ProposeProps) {
       }
     }
     setSubmitting(true);
-    // Fresh idempotency key per attempt (including retry-after-failure),
-    // minted in the handler — never during render, so a re-render of the
-    // same attempt can't mint a new key.
-    const idempotencyKey = newIdempotencyKey();
+    // One key per logical proposal: the first submit mints it, retries of
+    // the same amount/currency/payee reuse it (a lost response replays
+    // against the same pending order instead of reserving cap twice), and
+    // any field edit mints a fresh key for what is now a different payment.
+    // The slot clears on success; a stale form can never reuse a spent key.
+    const fingerprint = proposalFingerprint({
+      amountCents: parsed.cents,
+      currency: currency.toLowerCase(),
+      description: description.trim(),
+    });
+    const resolved = resolveIdempotencyKey(keySlot.current, fingerprint);
+    keySlot.current = { key: resolved.key, fingerprint };
     try {
       const data = await proposePayment(
         { amountCents: parsed.cents, currency: currency.toLowerCase(), description: description.trim() },
-        idempotencyKey,
+        resolved.key,
       );
+      keySlot.current = null;
       setProposal(data.proposal);
     } catch (cause) {
       const view = mapWalletError(cause);

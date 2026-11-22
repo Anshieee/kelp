@@ -15,7 +15,9 @@ import {
   MAX_AMOUNT_CENTS,
   newIdempotencyKey,
   parseAmountToCents,
+  proposalFingerprint,
   proposePayment,
+  resolveIdempotencyKey,
   toSheetProposal,
 } from "../wallet";
 
@@ -97,6 +99,27 @@ describe("newIdempotencyKey", () => {
     expect(first).toMatch(UUID_RE);
     expect(second).toMatch(UUID_RE);
     expect(first).not.toBe(second);
+  });
+
+  it("reuses one key per logical proposal and mints on field edits", () => {
+    const fp = proposalFingerprint({ amountCents: 6630, currency: "usd", description: "Guest & Ribbon order" });
+    // Same fields (modulo cosmetic casing/whitespace) reuse the in-flight key:
+    // a retry after a lost response replays against the same pending order
+    // instead of reserving cap twice.
+    const first = resolveIdempotencyKey(null, fp);
+    expect(first.reused).toBe(false);
+    const retry = resolveIdempotencyKey(
+      { key: first.key, fingerprint: fp },
+      proposalFingerprint({ amountCents: 6630, currency: "USD", description: "  Guest & Ribbon order " }),
+    );
+    expect(retry).toEqual({ key: first.key, reused: true });
+    // Any real field edit is a different payment and mints a fresh key.
+    const edited = resolveIdempotencyKey(
+      { key: first.key, fingerprint: fp },
+      proposalFingerprint({ amountCents: 6640, currency: "usd", description: "Guest & Ribbon order" }),
+    );
+    expect(edited.reused).toBe(false);
+    expect(edited.key).not.toBe(first.key);
   });
 });
 
@@ -301,6 +324,17 @@ describe("extractProposalRef", () => {
     expect(extractProposalRef({ arguments: { command: ["ls"] } })).toBeNull();
     expect(extractProposalRef({})).toBeNull();
     expect(extractProposalRef({ arguments: null })).toBeNull();
+  });
+
+  it("refuses lookalike keys that are not wallet proposal ids", () => {
+    // order_id belongs to provider/checkout orders that must never open the
+    // card sheet; a bare `proposal` string and a generic `payment` nest are
+    // not the documented producer shape either.
+    expect(extractProposalRef({ arguments: { order_id: "order_9" } })).toBeNull();
+    expect(extractProposalRef({ arguments: { proposal: "ord_9" } })).toBeNull();
+    expect(
+      extractProposalRef({ arguments: { payment: { proposal_id: "ord_9" } } }),
+    ).toBeNull();
   });
 });
 

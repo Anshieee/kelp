@@ -82,6 +82,84 @@ describe("reconnect policy", () => {
     expect(reconnectDelayMs(50)).toBe(15000);
   });
 
+  it("ignores server-sent error frames for reconnect purposes", () => {
+    // A failed turn arrives as `event: error` — a MessageEvent carrying data
+    // on a healthy connection. The transport must NOT treat it as a
+    // disconnect: no reconnect is scheduled and the pill must not flip to
+    // "reconnecting" (the reported stuck-pill bug).
+    vi.useFakeTimers();
+    let constructs = 0;
+    const states: string[] = [];
+    const created: Array<{
+      onerror: ((event: unknown) => void) | null;
+    }> = [];
+    class FakeEventSource {
+      static CLOSED = 2;
+      readyState = 0;
+      onopen: (() => void) | null = null;
+      onmessage: ((event: { data: string }) => void) | null = null;
+      onerror: ((event: unknown) => void) | null = null;
+      addEventListener(_type: string, _handler: (event: { data: string }) => void) {}
+      constructor(public url: string) {
+        constructs += 1;
+        created.push(this);
+      }
+      close() {}
+    }
+    vi.stubGlobal("EventSource", FakeEventSource);
+    try {
+      const stream = new ThreadStream("ses_e", {
+        onEvent: () => {},
+        onState: (state) => states.push(state),
+      });
+      stream.open(0);
+      // Server-sent turn failure: MessageEvent WITH data, connection healthy.
+      created[0]?.onerror?.({ data: JSON.stringify({ seq: 4, type: "error" }) });
+      vi.advanceTimersByTime(20_000);
+      expect(constructs).toBe(1);
+      expect(states).not.toContain("reconnecting");
+      stream.close();
+    } finally {
+      vi.unstubAllGlobals();
+      vi.useRealTimers();
+    }
+  });
+
+  it("reconnects on a dataless transport error", () => {
+    // A genuine connection failure arrives as a plain Event with no data.
+    // That MUST schedule a reconnect with backoff.
+    vi.useFakeTimers();
+    let constructs = 0;
+    const created: Array<{
+      onerror: ((event: unknown) => void) | null;
+    }> = [];
+    class FakeEventSource {
+      static CLOSED = 2;
+      readyState = FakeEventSource.CLOSED;
+      onopen: (() => void) | null = null;
+      onmessage: ((event: { data: string }) => void) | null = null;
+      onerror: ((event: unknown) => void) | null = null;
+      addEventListener(_type: string, _handler: (event: { data: string }) => void) {}
+      constructor(public url: string) {
+        constructs += 1;
+        created.push(this);
+      }
+      close() {}
+    }
+    vi.stubGlobal("EventSource", FakeEventSource);
+    try {
+      const stream = new ThreadStream("ses_f", { onEvent: () => {} });
+      stream.open(0);
+      created[0]?.onerror?.({});
+      vi.advanceTimersByTime(1500);
+      expect(constructs).toBe(2);
+      stream.close();
+    } finally {
+      vi.unstubAllGlobals();
+      vi.useRealTimers();
+    }
+  });
+
   it("reconnects with after= set to the last seq seen, then gives up", () => {
     vi.useFakeTimers();
     const seen: Array<number | null> = [];

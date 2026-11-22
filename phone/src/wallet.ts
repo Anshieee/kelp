@@ -105,9 +105,12 @@ export interface ProposeInput {
 }
 
 /**
- * Propose a payment. Generates a fresh `crypto.randomUUID()` idempotency key
- * per attempt — call this from the submit handler (not during render) so a
- * re-render never mints a new key, and every retry-after-failure mints one.
+ * Propose a payment. The caller owns the idempotency key lifecycle: pass an
+ * explicit key per *logical* proposal (see `resolveIdempotencyKey`) so a
+ * retry-after-failure replays against the same pending order instead of
+ * minting a second one that also holds cap. When no key is passed, a fresh
+ * one is generated as a fallback — call this from the submit handler (not
+ * during render) so a re-render never mints a new key.
  */
 export function proposePayment(input: ProposeInput, idempotencyKey?: string): Promise<ProposeResponse> {
   return apiRequest<ProposeResponse>("POST", "/wallet/propose", {
@@ -130,9 +133,45 @@ export function decidePayment(
   return apiRequest<DecideResponse>("POST", "/wallet/approve", { body });
 }
 
-/** One idempotency key per attempt: uuid-shaped, never reused across attempts. */
+/** One idempotency key fallback: uuid-shaped. Prefer `resolveIdempotencyKey` for form flows. */
 export function newIdempotencyKey(): string {
   return crypto.randomUUID();
+}
+
+export interface IdempotencySlot {
+  key: string;
+  fingerprint: string;
+}
+
+/**
+ * Stable fingerprint of a logical proposal: same amount, currency, and
+ * payee means the same intent to pay. Normalized (lowercased currency,
+ * trimmed description) so cosmetic edits do not fork the key.
+ */
+export function proposalFingerprint(input: { amountCents: number; currency: string; description: string }): string {
+  return JSON.stringify([
+    input.amountCents,
+    input.currency.trim().toLowerCase(),
+    input.description.trim(),
+  ]);
+}
+
+/**
+ * One key per logical proposal. The same fields reuse the in-flight key —
+ * so a retry after a lost response replays against the same pending order
+ * instead of reserving cap twice — while any field edit mints a fresh key
+ * for what is now a different payment. No double-charge is possible either
+ * way: each order needs its own single-use approve, but only the
+ * same-fields-reuse-key rule keeps one intent to one reservation.
+ */
+export function resolveIdempotencyKey(
+  previous: IdempotencySlot | null,
+  fingerprint: string,
+): { key: string; reused: boolean } {
+  if (previous && previous.fingerprint === fingerprint) {
+    return { key: previous.key, reused: true };
+  }
+  return { key: newIdempotencyKey(), reused: false };
 }
 
 /* --- money formatting: integer cents + ISO code -> "$66.30" style --- */
@@ -241,7 +280,7 @@ export function mapWalletError(cause: unknown): WalletErrorView {
   if (code === "already_decided" && isCheckoutMessage(message)) {
     return { message, showRetry: false, checkoutBound: true, notConfigured: false };
   }
-  if (code === "approval_expired" || cause.message.includes("approval_expired")) {
+  if (code === "approval_expired") {
     return {
       message: "That approval expired. Start a new payment to try again.",
       showRetry: false,
@@ -414,15 +453,20 @@ function pickAmountCents(source: Record<string, unknown>): number | null {
 
 /**
  * Extract a wallet proposal reference from a chat approval, if it carries
- * one. Looks at `arguments` (flat or nested under `proposal`/`payment`).
+ * one. Accepts ONLY `proposal_id`/`proposalId`, at the top level or nested
+ * under a `proposal` object — the shape a future wallet spend flow (skill or
+ * assistant turn) must produce to link its approval card to the sheet.
+ * Deliberately narrower than the server's vocabulary: `order_id` belongs to
+ * provider/checkout orders that must never open the card sheet, and generic
+ * nests like `payment` risk false positives on unrelated tool arguments.
  * Returns null when there is no proposal id — those cards keep the existing
  * inline Approve/Deny and never open the sheet.
  */
 export function extractProposalRef(approval: { arguments?: unknown }): ProposalRef | null {
   const args = asRecord(approval.arguments);
   if (!args) return null;
-  const nested = asRecord(args.proposal) ?? asRecord(args.payment) ?? args;
-  const proposalId = pickString(nested, "proposal_id", "proposalId", "order_id", "proposal");
+  const nested = asRecord(args.proposal) ?? args;
+  const proposalId = pickString(nested, "proposal_id", "proposalId");
   if (!proposalId) return null;
   const currency = pickString(nested, "currency") ?? pickString(args, "currency") ?? "usd";
   const description = pickString(nested, "description") ?? pickString(args, "description") ?? "";

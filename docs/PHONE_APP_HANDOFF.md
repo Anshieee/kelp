@@ -2,8 +2,18 @@
 
 Date: 2026-11-22. Branch: `kel-29-phone-site-match` (site theme, blob + grain,
 payment sheet, stream live-update fix). Baseline: full suite 1246 passed + 4
-skipped, phone vitest 63 passed, `npm run build` clean, `ruff` clean. Every
-claim below was observed live against a local server unless marked otherwise.
+skipped, phone vitest 75 passed across 7 files (pre-existing chat/api/
+metrics suites; wallet suite incl. key-lifecycle + lookalike-ref refusal;
+stream suite incl. named-dispatch + onerror-guard regressions; payment
+component suite pinning the receipt-status branching), `npm run build`
+clean, `ruff` clean. Every claim below was observed live against a local
+server unless marked otherwise. Live API sweep 36/37 on an isolated DB;
+the single miss was a one-time `/readyz` 503 on the first call ~3s after
+cold boot (unreproducible in 5 follow-ups with a fully green checks
+payload) — almost certainly a warm-up race, and defensible either way
+since readiness is allowed to refuse until checks pass. Refs:
+https://github.com/Anshieee/kelp/issues/2 (KEL-29 tracking issue — items
+2, 4, 5: scheduler counter fix, device audit rows, share projection).
 
 ## How to run it
 

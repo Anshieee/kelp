@@ -8,7 +8,6 @@
  * exactly once (single-use proposal + idempotency key).
  */
 import { useEffect, useMemo, useState, type ReactNode } from "react";
-import { ApiError } from "../api";
 import {
   buildReceiptModel,
   buildSheetModel,
@@ -106,11 +105,12 @@ export default function PaymentSheet({ proposal, initialCards, initialLimits, on
   const working = phase.name === "working";
   const errorPhase = phase.name === "error" ? phase : null;
   const receiptPhase = phase.name === "receipt" ? phase : null;
+  // The receipt view renders ONLY from a real receipt model built from the
+  // returned proposal. There is deliberately no fallback to the requested
+  // amount: showing "Paid $X" without a receipt would fabricate a charge
+  // (e.g. an approve replayed onto an already-denied order answers 200
+  // with status "denied").
   const receipt = receiptPhase && !receiptPhase.denied && decided ? buildReceiptModel(decided) : null;
-  // A retried approve that already paid answers 409 with no receipt body;
-  // fall back to the proposal's own amount so the screen shows only what it
-  // actually knows.
-  const receiptAmount = receipt?.amountDisplay ?? model.amountDisplay;
   const noSavedCard = cards !== null && cards.length === 0;
 
   const decide = async (decision: "approve" | "deny") => {
@@ -131,16 +131,43 @@ export default function PaymentSheet({ proposal, initialCards, initialLimits, on
         decision,
         decision === "approve" ? (model.selectedCardId ?? undefined) : undefined,
       );
-      setDecided(data.proposal);
+      // Branch on the RETURNED proposal status, never on the requested
+      // decision. Same-decision replays answer 200 with the stored status:
+      // an approve replayed onto an already-denied order comes back
+      // "denied", and paid replays come back "paid" *with* their receipt.
+      // Rendering "Paid" from the request alone would fabricate a receipt.
+      const returned = data.proposal;
+      setDecided(returned);
       onDecided?.(proposal.id, decision);
-      setPhase({ name: "receipt", denied: decision === "deny" });
-    } catch (cause) {
-      if (cause instanceof ApiError && isAlreadyPaidReplay(cause)) {
-        // Idempotent replay: the charge happened exactly once already.
-        onDecided?.(proposal.id, decision);
+      if (returned.status === "paid") {
+        if (!buildReceiptModel(returned)) {
+          setPhase({
+            name: "error",
+            message: "The charge was accepted but no receipt came back. Check the order before retrying.",
+            showRetry: false,
+            checkoutBound: false,
+          });
+          return;
+        }
         setPhase({ name: "receipt", denied: false });
         return;
       }
+      if (returned.status === "denied") {
+        setPhase({ name: "receipt", denied: true });
+        return;
+      }
+      setPhase({
+        name: "error",
+        message: `The order came back "${returned.status}". No charge was confirmed — check the order before retrying.`,
+        showRetry: false,
+        checkoutBound: false,
+      });
+    } catch (cause) {
+      // No isAlreadyPaidReplay branch by design: paid replays answer 200
+      // (handled above); every 409 (`already_decided`: blocked, failed,
+      // checkout claims, conflicting answers) is a NOT-paid outcome and
+      // belongs in the error phase. The checkout-bound message is preserved
+      // by mapWalletError.
       const view = mapWalletError(cause);
       setPhase({
         name: "error",
@@ -171,7 +198,7 @@ export default function PaymentSheet({ proposal, initialCards, initialLimits, on
 
         {receiptPhase ? (
           <div className="pay-receipt">
-            {receiptPhase.denied ? (
+            {receiptPhase.denied || !receipt ? (
               <>
                 <p className="pay-receipt-mark" aria-hidden="true">
                   ✕
@@ -184,26 +211,22 @@ export default function PaymentSheet({ proposal, initialCards, initialLimits, on
                 <p className="pay-receipt-mark ok" aria-hidden="true">
                   ✓
                 </p>
-                <h2 id="pay-sheet-title">Paid {receiptAmount ?? ""}</h2>
+                <h2 id="pay-sheet-title">Paid {receipt.amountDisplay}</h2>
                 <dl className="pay-receipt-rows">
-                  {receipt?.last4 && (
+                  {receipt.last4 && (
                     <div>
                       <dt>Card</dt>
                       <dd>···· {receipt.last4}</dd>
                     </div>
                   )}
-                  {receipt && (
-                    <div>
-                      <dt>Paid</dt>
-                      <dd>{receipt.paidAt}</dd>
-                    </div>
-                  )}
-                  {receipt && (
-                    <div>
-                      <dt>Order</dt>
-                      <dd className="digest">{receipt.orderId}</dd>
-                    </div>
-                  )}
+                  <div>
+                    <dt>Paid</dt>
+                    <dd>{receipt.paidAt}</dd>
+                  </div>
+                  <div>
+                    <dt>Order</dt>
+                    <dd className="digest">{receipt.orderId}</dd>
+                  </div>
                 </dl>
               </>
             )}
@@ -395,10 +418,4 @@ function ExpandableRow({
       {open && <div className="pay-row-body">{children}</div>}
     </div>
   );
-}
-
-function isAlreadyPaidReplay(cause: ApiError): boolean {
-  // A retried approve that already paid answers 409 with no receipt body;
-  // the charge happened exactly once, so showing the paid state is honest.
-  return cause.code === "already_decided" && cause.status === 409 && !/checkout/i.test(cause.message);
 }

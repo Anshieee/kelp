@@ -8,7 +8,7 @@
  *
  * Bump VERSION whenever the app shell changes shape.
  */
-const VERSION = "kelp-phone-v2";
+const VERSION = "kelp-phone-v3";
 const SHELL_CACHE = `${VERSION}-shell`;
 const ASSET_CACHE = `${VERSION}-assets`;
 const BASE = "/phone/";
@@ -22,6 +22,14 @@ self.addEventListener("install", (event) => {
         `${BASE}manifest.webmanifest`,
         `${BASE}icons/icon-192.png`,
         `${BASE}icons/icon-512.png`,
+        // Render-critical and small: without these precached, first paint
+        // flashes fallback fonts and a missing hero. Same-origin statics,
+        // so they add no install-failure surface beyond the shell itself.
+        // (Review response: precache fonts + hero image.)
+        `${BASE}fonts/inter-latin.woff2`,
+        `${BASE}fonts/newsreader-latin.woff2`,
+        `${BASE}fonts/newsreader-italic-latin.woff2`,
+        `${BASE}blob.png`,
       ]);
       await self.skipWaiting();
     })(),

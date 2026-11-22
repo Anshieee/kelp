@@ -56,7 +56,10 @@ makes enforces the owner session.
 
 Wallet → New payment takes an amount, currency, and payee line, then
 proposes the order (`POST /api/wallet/propose`, one idempotency key per
-attempt so a retried tap cannot double-charge) and opens the review sheet:
+logical proposal — same amount/currency/payee reuses the key so a retried
+tap replays against the same pending order instead of reserving cap twice,
+while any field edit mints a fresh key; the real double-charge protection
+is the server's single-use approve) and opens the review sheet:
 the big amount, the payee, and expandable rows for the amount, the card
 (switchable when more than one saved card exists), the caps impact, the
 ~30-minute approval window, and the retry safety note. Approve charges the

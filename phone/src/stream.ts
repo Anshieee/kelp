@@ -20,13 +20,20 @@ export interface StreamEvent {
 export type StreamState = "connecting" | "live" | "reconnecting";
 
 /**
- * Every event type the server frames on the thread stream. The server names
- * each frame (`event: <type>`), so a listener must exist per name: the
- * generic `onmessage` handler fires ONLY for unnamed frames (or
- * `event: message`), and without these registrations the app would connect
- * successfully yet never render a single live update. Keep this list in step
- * with the reducer in chatState.ts and the `kind` values in kernel/events.py
- * (plus the store-level approval/thread events the stream also carries).
+ * Every event type the server frames on the thread stream that this client
+ * acts on. The server names each frame (`event: <type>`), so a listener must
+ * exist per name: the generic `onmessage` handler fires ONLY for unnamed
+ * frames (or `event: message`), and without these registrations the app
+ * would connect successfully yet never render a single live update. Keep
+ * this list in step with the reducer in chatState.ts and the `kind` values
+ * in kernel/events.py plus the store-level events the stream carries.
+ *
+ * Deliberately NOT listened (verified against the server on 2026-11-22):
+ * - `usage_updated`, `sources_ready`, `artifact_ready`, `schedule_trigger`
+ *   are framed but the v1 reducer ignores them (chatState.ts default case);
+ *   registering listeners would change nothing observable.
+ * - `cancelled` is never a frame at all — it is a turn *reason* surfaced via
+ *   `turn_finished`/message status (see `statusForReason` in chatState.ts).
  */
 const SERVER_EVENT_TYPES = [
   "message_created",
@@ -36,11 +43,9 @@ const SERVER_EVENT_TYPES = [
   "tool_call_finished",
   "approval_requested",
   "approval_resolved",
-  "usage_updated",
   "thread_updated",
   "error",
   "turn_finished",
-  "cancelled",
 ] as const;
 
 /**
@@ -176,12 +181,11 @@ export class ThreadStream {
       if (this.closed) return;
       // A server-sent `event: error` frame (a failed turn, a refused tool
       // call) ALSO dispatches here, because it shares the name with the DOM
-      // error event — but it arrives as a MessageEvent carrying data, on a
-      // perfectly healthy connection. Only a dataless error means the
-      // transport itself failed. Treating the former as a disconnect leaves
-      // the pill stuck on "reconnecting" after every failed turn, which is
-      // exactly what users reported ("switch chats to see updates").
-      if (event instanceof MessageEvent && event.data !== undefined) return;
+      // error event — but it arrives carrying data, on a perfectly healthy
+      // connection. Only a dataless error means the transport itself failed.
+      // Duck-typed (`in`), not instanceof: MessageEvent identity does not
+      // survive realm boundaries, and the unit fakes are plain objects.
+      if (event !== null && typeof event === "object" && "data" in event) return;
       // While CONNECTING the browser retries on its own (it also replays with
       // Last-Event-ID). Once it gives up (CLOSED), we reconnect ourselves with
       // an explicit after= cursor and backoff.

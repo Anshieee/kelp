@@ -54,31 +54,16 @@ wordmark in app chrome; pill buttons and rounded cards.
 - The film-grain page overlay (`body::after` in `src/styles.css`) adapts the
   site's static `feTurbulence` data-URI (`landing/styles.css`), with an
   inverted speckle for the dark theme. The empty-state artwork
-  (`src/components/LivingBlob.tsx`) is an original canvas re-imagining of the
-  site hero field's look — layered sine-warped contour rings over a
-  peach/gold/mint wash, drifting on incommensurate tides with pointer
-  follow — written fresh for the phone's performance budget (~30fps,
-  reduced backing store, DPR cap, pausing when hidden, off-screen, or
-  reduced-motion), not a port of the site's WebGL shader.
+  (`public/blob.png`, rendered by `src/components/LivingBlob.tsx`) is a
+  frame captured from the site's live hero field canvas (`landing/`
+  `#kelp-field`), cropped to its opaque bounds; the in-app motion (slow
+  breathe + pointer drift, transform-only, frozen under reduced-motion) is
+  original.
 - `public/fonts/newsreader-latin.woff2`, `newsreader-italic-latin.woff2`,
   and `inter-latin.woff2` are the SIL Open Font License 1.1 faces the site
   loads from Google Fonts, vendored here so the offline-first PWA never
-  needs the CDN. The previously bundled `geist-latin.woff2` was removed
-  with the redesign.
+  needs the CDN; the license text ships alongside them in
+  `public/fonts/OFL.txt`. The previously bundled `geist-latin.woff2` was
+  removed with the redesign.
 - The Midnight dark theme is retained as an option; the Meadow theme was
   retired with the redesign.
-
-## In-repo design adaptation (Midnight/Meadow, Geist, drawer UI)
-
-The current visual language (Midnight and Meadow color tokens, Geist
-typography, conversation drawer, rounded composer, approval-card and task
-bubble patterns, kelp-avatar motif) is adapted from the OpenMausBot-derived
-design already in this repository at `netlify/mobile/` (see
-`third-party/OpenMausBot/` for the upstream license and notice). Token values
-and component patterns were re-expressed in this app's own stylesheet
-(`src/styles.css`) and components; nothing was copied wholesale, and no shared
-asset files were referenced or moved.
-
-The bundled font `public/fonts/geist-latin.woff2` is Geist, Copyright 2026
-The Geist Project Authors, under the SIL Open Font License 1.1 (see
-`third-party/Geist/`). The same subset ships in the in-repo demo client.
