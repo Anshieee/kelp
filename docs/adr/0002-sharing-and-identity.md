@@ -406,7 +406,7 @@ of them may be inferred from this ADR.
 
 | Topic | Status | Why it is not decided here |
 |---|---|---|
-| **Payments and wallet** (`payments/wallet.py`) | Deferred | Payments are not wired (`HttpStripeGateway` is never constructed). The invariant this ADR does fix: a share cannot initiate a payment, and no non-owner can approve one. Whether a share surfaces a receipt, and whether a future paid share exists, is a separate decision with legal and pricing input |
+| **Payments and wallet** (`payments/wallet.py`) | Deferred | Stripe is not wired (`HttpStripeGateway` is never constructed); Razorpay hosted Checkout and the saved-card wallet are mounted and call `api.razorpay.com` only when both Razorpay keys are set (`docs/PRIVACY.md` §2). The invariant this ADR does fix: a share cannot initiate a payment, and no non-owner can approve one. Whether a share surfaces a receipt, and whether a future paid share exists, is a separate decision with legal and pricing input |
 | **Telegram mirror identity** | Deferred | The mirror is the owner's own channel (Q7). A share link deep-linked into Telegram is just a URL in a message; it creates no identity and no new egress recipient. If the mirror ever accepts inbound commands, that is a new principal and needs its own ADR |
 | **Plugin identity** | Deferred to KEL-25 | A plugin has no identity, no credential, and no budget of its own: it borrows the owner's turn and is constrained by its manifest plus the approval gate. Per-plugin credentials and per-plugin sub-caps are not part of the digest-pin slice |
 | **Named collaborators, roles, invites** | Not admitted (§12) | Trigger above |
