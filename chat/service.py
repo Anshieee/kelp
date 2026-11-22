@@ -11,6 +11,7 @@ the turn exactly once. Approvals come from two places and share one card:
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import re
 import threading
 import time
@@ -1258,19 +1259,25 @@ class ChatService:
                 now_fn=self._now,
             )
             token = self._cancel.get(turn_id)
-            async for event in loop.run_turn(
-                [{"role": "user", "content": text}],
-                tools=self._tools,
-                turn_id=turn_id,
-                session_id=state.thread_id,
-                model=self._model,
-                cancel=token,
-            ):
-                if self.store.get_thread(
-                    state.thread_id, tenant_id=state.tenant.tenant_id
-                ) is None:
-                    break
-                self._handle_kernel_event(state, event)
+            # ``aclosing`` makes the ``break`` below close the generator here,
+            # in this task and request context, so the loop's cancelled-usage
+            # record is written now instead of by the asyncgen finalizer later.
+            async with contextlib.aclosing(
+                loop.run_turn(
+                    [{"role": "user", "content": text}],
+                    tools=self._tools,
+                    turn_id=turn_id,
+                    session_id=state.thread_id,
+                    model=self._model,
+                    cancel=token,
+                )
+            ) as kernel_events:
+                async for event in kernel_events:
+                    if self.store.get_thread(
+                        state.thread_id, tenant_id=state.tenant.tenant_id
+                    ) is None:
+                        break
+                    self._handle_kernel_event(state, event)
             if not state.finished:
                 self._finalize(
                     state,

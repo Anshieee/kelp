@@ -12,6 +12,7 @@ Contract highlights (KEL-6 / P0-1):
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import hashlib
 import json
 import threading
@@ -26,7 +27,7 @@ from skills.context import ApprovalRequest
 from skills.loader import find_pinned_plugin, plugin_review_warnings
 
 from . import events
-from .config import KernelConfig, estimate_cost, pricing_for
+from .config import KernelConfig
 from .provider import (
     ChatRequest,
     ProviderFailure,
@@ -322,225 +323,248 @@ class AgentLoop:
         approval_paused_ms = 0
         transcript: list[dict[str, Any]] = [dict(message) for message in messages]
 
-        yield events.TurnStarted(
-            turn_id=turn_id,
-            session_id=session_id,
-            model=model,
-            max_steps=budget.max_steps,
-            max_output_tokens=budget.max_output_tokens,
-            max_tool_calls=budget.max_tool_calls,
-            max_wall_seconds=budget.max_wall_seconds,
-        )
-
-        while True:
-            if cancel is not None and cancel.cancelled:
-                reason = "cancelled"
-                break
-
-            if steps >= budget.max_steps:
-                reason = "budget"
-                yield _budget_error(
-                    "max_steps",
-                    f"Turn stopped after {steps} model step(s); limit is {budget.max_steps}.",
-                    steps,
-                )
-                break
-
-            elapsed = (self._time() - started_mono) - (approval_paused_ms / 1000.0)
-            if elapsed >= budget.max_wall_seconds:
-                reason = "budget"
-                yield _budget_error(
-                    "max_wall_seconds",
-                    f"Turn stopped after {elapsed:.1f}s; limit is {budget.max_wall_seconds:.1f}s.",
-                    steps,
-                )
-                break
-
-            remaining = budget.max_output_tokens - output_tokens
-            if remaining <= 0:
-                reason = "budget"
-                yield _budget_error(
-                    "max_output_tokens",
-                    f"Turn stopped after {output_tokens} output tokens; limit is {budget.max_output_tokens}.",
-                    steps,
-                )
-                break
-
-            steps += 1
-            step_max_tokens = min(budget.max_tokens_per_step, remaining)
-            request = ChatRequest(
+        recorded = False
+        abort_outcome = "cancelled"
+        try:
+            yield events.TurnStarted(
+                turn_id=turn_id,
+                session_id=session_id,
                 model=model,
-                messages=transcript,
-                tools=tools,
-                max_tokens=step_max_tokens,
+                max_steps=budget.max_steps,
+                max_output_tokens=budget.max_output_tokens,
+                max_tool_calls=budget.max_tool_calls,
+                max_wall_seconds=budget.max_wall_seconds,
             )
 
-            content_parts: list[str] = []
-            pending: dict[int, ToolCall] = {}
-            failure: ProviderFailure | None = None
-            finish_reason = "stop"
-            cancelled = False
-
-            async for event in self._provider.stream(request):
+            while True:
                 if cancel is not None and cancel.cancelled:
-                    cancelled = True
+                    reason = "cancelled"
                     break
-                if isinstance(event, TextDelta):
-                    content_parts.append(event.text)
-                    yield events.TokenDelta(text=event.text, step=steps)
-                elif isinstance(event, ToolCallReady):
-                    pending[event.index] = ToolCall(
-                        call_id=event.call_id,
-                        name=event.name,
-                        arguments=dict(event.arguments),
+
+                if steps >= budget.max_steps:
+                    reason = "budget"
+                    yield _budget_error(
+                        "max_steps",
+                        f"Turn stopped after {steps} model step(s); limit is {budget.max_steps}.",
+                        steps,
                     )
-                elif isinstance(event, UsageReport):
-                    usage_reported = True
-                    input_tokens += event.input_tokens
-                    output_tokens += event.output_tokens
-                    yield events.UsageUpdated(
-                        model=model,
-                        input_tokens=event.input_tokens,
-                        output_tokens=event.output_tokens,
-                        total_input_tokens=input_tokens,
-                        total_output_tokens=output_tokens,
-                        estimated_cost_usd=estimate_cost(model, input_tokens, output_tokens),
+                    break
+
+                elapsed = (self._time() - started_mono) - (approval_paused_ms / 1000.0)
+                if elapsed >= budget.max_wall_seconds:
+                    reason = "budget"
+                    yield _budget_error(
+                        "max_wall_seconds",
+                        f"Turn stopped after {elapsed:.1f}s; limit is {budget.max_wall_seconds:.1f}s.",
+                        steps,
+                    )
+                    break
+
+                remaining = budget.max_output_tokens - output_tokens
+                if remaining <= 0:
+                    reason = "budget"
+                    yield _budget_error(
+                        "max_output_tokens",
+                        f"Turn stopped after {output_tokens} output tokens; limit is {budget.max_output_tokens}.",
+                        steps,
+                    )
+                    break
+
+                steps += 1
+                step_max_tokens = min(budget.max_tokens_per_step, remaining)
+                request = ChatRequest(
+                    model=model,
+                    messages=transcript,
+                    tools=tools,
+                    max_tokens=step_max_tokens,
+                )
+
+                content_parts: list[str] = []
+                pending: dict[int, ToolCall] = {}
+                failure: ProviderFailure | None = None
+                finish_reason = "stop"
+                cancelled = False
+
+                # Close the provider stream deterministically so its own
+                # cleanup (egress ledger row, HTTP stream release) runs when
+                # this turn is closed or cancelled, not at GC.
+                async with _closing(self._provider.stream(request)) as stream:
+                    async for event in stream:
+                        if cancel is not None and cancel.cancelled:
+                            cancelled = True
+                            break
+                        if isinstance(event, TextDelta):
+                            content_parts.append(event.text)
+                            yield events.TokenDelta(text=event.text, step=steps)
+                        elif isinstance(event, ToolCallReady):
+                            pending[event.index] = ToolCall(
+                                call_id=event.call_id,
+                                name=event.name,
+                                arguments=dict(event.arguments),
+                            )
+                        elif isinstance(event, UsageReport):
+                            usage_reported = True
+                            input_tokens += event.input_tokens
+                            output_tokens += event.output_tokens
+                            yield events.UsageUpdated(
+                                model=model,
+                                input_tokens=event.input_tokens,
+                                output_tokens=event.output_tokens,
+                                total_input_tokens=input_tokens,
+                                total_output_tokens=output_tokens,
+                                estimated_cost_usd=self._config.estimate_cost(model, input_tokens, output_tokens),
+                                step=steps,
+                            )
+                        elif isinstance(event, ProviderFailure):
+                            failure = event
+                            break
+                        elif isinstance(event, StreamEnd):
+                            finish_reason = event.finish_reason
+
+                if cancelled:
+                    reason = "cancelled"
+                    break
+
+                if failure is not None:
+                    reason = "error"
+                    details = {"status": failure.status} if failure.status is not None else None
+                    yield events.Error(
+                        code=failure.code,
+                        message=failure.message,
+                        retryable=failure.retryable,
                         step=steps,
+                        details=details,
                     )
-                elif isinstance(event, ProviderFailure):
-                    failure = event
-                    break
-                elif isinstance(event, StreamEnd):
-                    finish_reason = event.finish_reason
-
-            if cancelled:
-                reason = "cancelled"
-                break
-
-            if failure is not None:
-                reason = "error"
-                details = {"status": failure.status} if failure.status is not None else None
-                yield events.Error(
-                    code=failure.code,
-                    message=failure.message,
-                    retryable=failure.retryable,
-                    step=steps,
-                    details=details,
-                )
-                break
-
-            if not pending:
-                final_message = "".join(content_parts)
-                reason = "length" if finish_reason == "length" else "stop"
-                break
-
-            calls = [pending[index] for index in sorted(pending)]
-            transcript.append(
-                {
-                    "role": "assistant",
-                    "content": "".join(content_parts) or None,
-                    "tool_calls": [
-                        {
-                            "id": call.call_id,
-                            "type": "function",
-                            "function": {
-                                "name": call.name,
-                                "arguments": json.dumps(
-                                    dict(call.arguments),
-                                    sort_keys=True,
-                                    separators=(",", ":"),
-                                    default=str,
-                                ),
-                            },
-                        }
-                        for call in calls
-                    ],
-                }
-            )
-
-            budget_exceeded = False
-            for call in calls:
-                if cancel is not None and cancel.cancelled:
-                    cancelled = True
-                    break
-                if tool_calls_made >= budget.max_tool_calls:
-                    budget_exceeded = True
                     break
 
-                yield events.ToolCallStarted(
-                    call_id=call.call_id,
-                    name=call.name,
-                    arguments=dict(call.arguments),
-                    step=steps,
-                )
-                call_started = self._time()
-                result, error = await self._execute(call)
-                ok = bool(result.get("ok", True)) if result is not None else False
-                if error is None and result is not None:
-                    raw_error = result.get("error")
-                    if isinstance(raw_error, Mapping):
-                        error = dict(raw_error)
-                duration_ms = _elapsed_ms(call_started, self._time())
-                waited_ms = _approval_wait_ms(self._tool_executor, call.call_id, duration_ms)
-                approval_paused_ms += waited_ms
-                tool_calls_made += 1
-                yield events.ToolCallFinished(
-                    call_id=call.call_id,
-                    name=call.name,
-                    ok=ok,
-                    duration_ms=duration_ms,
-                    step=steps,
-                    result=_bounded(result),
-                    error=error,
-                    waited_ms=waited_ms,
-                )
+                if not pending:
+                    final_message = "".join(content_parts)
+                    reason = "length" if finish_reason == "length" else "stop"
+                    break
+
+                calls = [pending[index] for index in sorted(pending)]
                 transcript.append(
                     {
-                        "role": "tool",
-                        "tool_call_id": call.call_id,
-                        "name": call.name,
-                        "content": _tool_content(result),
+                        "role": "assistant",
+                        "content": "".join(content_parts) or None,
+                        "tool_calls": [
+                            {
+                                "id": call.call_id,
+                                "type": "function",
+                                "function": {
+                                    "name": call.name,
+                                    "arguments": json.dumps(
+                                        dict(call.arguments),
+                                        sort_keys=True,
+                                        separators=(",", ":"),
+                                        default=str,
+                                    ),
+                                },
+                            }
+                            for call in calls
+                        ],
                     }
                 )
 
-            if cancelled:
-                reason = "cancelled"
-                break
+                budget_exceeded = False
+                for call in calls:
+                    if cancel is not None and cancel.cancelled:
+                        cancelled = True
+                        break
+                    if tool_calls_made >= budget.max_tool_calls:
+                        budget_exceeded = True
+                        break
 
-            if budget_exceeded:
-                reason = "budget"
-                yield _budget_error(
-                    "max_tool_calls",
-                    f"Turn stopped at {tool_calls_made} tool call(s); limit is {budget.max_tool_calls}.",
-                    steps,
+                    yield events.ToolCallStarted(
+                        call_id=call.call_id,
+                        name=call.name,
+                        arguments=dict(call.arguments),
+                        step=steps,
+                    )
+                    call_started = self._time()
+                    result, error = await self._execute(call)
+                    ok = bool(result.get("ok", True)) if result is not None else False
+                    if error is None and result is not None:
+                        raw_error = result.get("error")
+                        if isinstance(raw_error, Mapping):
+                            error = dict(raw_error)
+                    duration_ms = _elapsed_ms(call_started, self._time())
+                    waited_ms = _approval_wait_ms(self._tool_executor, call.call_id, duration_ms)
+                    approval_paused_ms += waited_ms
+                    tool_calls_made += 1
+                    yield events.ToolCallFinished(
+                        call_id=call.call_id,
+                        name=call.name,
+                        ok=ok,
+                        duration_ms=duration_ms,
+                        step=steps,
+                        result=_bounded(result),
+                        error=error,
+                        waited_ms=waited_ms,
+                    )
+                    transcript.append(
+                        {
+                            "role": "tool",
+                            "tool_call_id": call.call_id,
+                            "name": call.name,
+                            "content": _tool_content(result),
+                        }
+                    )
+
+                if cancelled:
+                    reason = "cancelled"
+                    break
+
+                if budget_exceeded:
+                    reason = "budget"
+                    yield _budget_error(
+                        "max_tool_calls",
+                        f"Turn stopped at {tool_calls_made} tool call(s); limit is {budget.max_tool_calls}.",
+                        steps,
+                    )
+                    break
+
+            recorded = True
+            cost, duration_ms, persisted = self._record_usage(
+                turn_id=turn_id,
+                session_id=session_id,
+                model=model,
+                input_tokens=input_tokens,
+                output_tokens=output_tokens,
+                usage_reported=usage_reported,
+                steps=steps,
+                tool_calls=tool_calls_made,
+                started_mono=started_mono,
+                started_at=started_at,
+                outcome=reason,
+            )
+        except (GeneratorExit, asyncio.CancelledError):
+            # The consumer closed the generator or the task was cancelled.
+            abort_outcome = "cancelled"
+            raise
+        except BaseException:
+            # Any other escape (e.g. the provider stream raised) is a failed
+            # turn, not a cancelled one.
+            abort_outcome = "error"
+            raise
+        finally:
+            if not recorded:
+                # The turn ended before the normal accounting path.
+                # Provider-billed steps must still be accounted, and nothing
+                # may be yielded or awaited from here.
+                self._record_usage(
+                    turn_id=turn_id,
+                    session_id=session_id,
+                    model=model,
+                    input_tokens=input_tokens,
+                    output_tokens=output_tokens,
+                    usage_reported=usage_reported,
+                    steps=steps,
+                    tool_calls=tool_calls_made,
+                    started_mono=started_mono,
+                    started_at=started_at,
+                    outcome=abort_outcome,
                 )
-                break
-
-        duration_ms = _elapsed_ms(started_mono, self._time())
-        cost = estimate_cost(model, input_tokens, output_tokens)
-        record = UsageRecord(
-            turn_id=turn_id,
-            session_id=session_id,
-            model=model,
-            input_tokens=input_tokens,
-            output_tokens=output_tokens,
-            total_tokens=input_tokens + output_tokens,
-            estimated_cost_usd=cost,
-            cost_known=pricing_for(model) is not None,
-            usage_reported=usage_reported,
-            steps=steps,
-            tool_calls=tool_calls_made,
-            started_at=started_at.isoformat(),
-            finished_at=self._now().isoformat(),
-            duration_ms=duration_ms,
-            outcome=reason,
-        )
-        persisted = self._usage_store is not None
-        if self._usage_store is not None:
-            try:
-                self._usage_store.record(record)
-            except Exception:  # pragma: no cover - accounting must not kill a turn
-                persisted = False
 
         yield events.TurnFinished(
             turn_id=turn_id,
@@ -554,6 +578,55 @@ class AgentLoop:
             message=final_message,
             usage_persisted=persisted,
         )
+
+    def _record_usage(
+        self,
+        *,
+        turn_id: str,
+        session_id: str | None,
+        model: str,
+        input_tokens: int,
+        output_tokens: int,
+        usage_reported: bool,
+        steps: int,
+        tool_calls: int,
+        started_mono: float,
+        started_at: datetime,
+        outcome: str,
+    ) -> tuple[float | None, int, bool]:
+        """Build and persist the turn's one ``UsageRecord``.
+
+        Returns:
+            ``(estimated_cost_usd, duration_ms, persisted)``. A store failure
+            never raises.
+        """
+
+        duration_ms = _elapsed_ms(started_mono, self._time())
+        cost = self._config.estimate_cost(model, input_tokens, output_tokens)
+        record = UsageRecord(
+            turn_id=turn_id,
+            session_id=session_id,
+            model=model,
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+            total_tokens=input_tokens + output_tokens,
+            estimated_cost_usd=cost,
+            cost_known=self._config.pricing_for(model) is not None,
+            usage_reported=usage_reported,
+            steps=steps,
+            tool_calls=tool_calls,
+            started_at=started_at.isoformat(),
+            finished_at=self._now().isoformat(),
+            duration_ms=duration_ms,
+            outcome=outcome,
+        )
+        persisted = self._usage_store is not None
+        if self._usage_store is not None:
+            try:
+                self._usage_store.record(record)
+            except Exception:  # pragma: no cover - accounting must not kill a turn
+                persisted = False
+        return cost, duration_ms, persisted
 
     async def _execute(
         self, call: ToolCall
@@ -595,6 +668,19 @@ def _budget_error(limit: str, message: str, step: int) -> events.Error:
         step=step,
         details={"limit": limit},
     )
+
+
+def _closing(stream: Any) -> Any:
+    """Async context manager that ``aclose()``s ``stream`` on exit when it can.
+
+    Provider streams are normally async generators, whose ``finally`` blocks
+    (egress ledger row, HTTP stream release) must run when a turn is closed or
+    cancelled. Plain async iterators without ``aclose`` are left alone.
+    """
+
+    if callable(getattr(stream, "aclose", None)):
+        return contextlib.aclosing(stream)
+    return contextlib.nullcontext(stream)
 
 
 def _elapsed_ms(started: float, now: float) -> int:
