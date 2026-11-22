@@ -318,13 +318,16 @@ a ContextVar-scoped socket guard refuses direct `socket`/`urllib`/HTTP-library c
 a handler runs, so an ignoring handler fails closed. It covers `getaddrinfo`, `gethostbyname`,
 `gethostbyname_ex`, `gethostbyaddr`, `create_connection`,
 `socket.connect`/`connect_ex`/`sendto`/`sendmsg`, and it propagates into threads and executor
-tasks started during the invocation. `connect`/`connect_ex` is bound to the IPs resolved for
-allowed hosts within the current `EgressClient.request` call. If a lookup returns any address
+tasks started during the invocation. `connect`/`connect_ex`, and `sendto`/`sendmsg` with an
+address, are bound to the IPs resolved for allowed hosts within the current
+`EgressClient.request` call; a hostname passed straight to them is refused, because CPython
+would resolve it past the guard. If a lookup returns any address
 that is not publicly routable (loopback, RFC 1918, link-local such as `169.254.169.254`, CGNAT,
 unspecified, or an IPv4-mapped form of those), the whole answer is refused with
 `egress:non_public_address` and nothing is recorded. The scope ends when the request returns, so
-a thread started inside a transport can no longer resolve or connect afterwards
-(`egress:scope_closed`). The guard is cooperative: a raw `_socket` object, a child
+a thread started inside a transport can no longer resolve, connect or `sendto` afterwards
+(`egress:scope_closed`); `send`/`sendall` on a socket it connected during the request are not
+intercepted. The guard is cooperative: a raw `_socket` object, a child
 process, a C extension calling `connect(2)`, or a thread that was already running before the
 invocation and gets work through a queue rather than `submit` is outside its reach and must be
 stopped at the deployment boundary. A test scans `skills/builtin` for direct egress imports

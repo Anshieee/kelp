@@ -134,6 +134,9 @@ that means no request was accepted for billing: a failure carrying an HTTP statu
 (the provider answered with an error status), or a failure raised before any
 request (`missing_base_url`, `missing_api_key`, and `tenant_mismatch` from
 `kernel.providers.base.tenant_failure`). Every other unmetered step is bounded.
+An error status is treated as unbilled even when a gateway in front of the model
+(a 502 or 504 from a proxy) may have let upstream work happen; that is the one
+case where the record can undercount.
 That includes a timeout, an unreachable endpoint, and a protocol error that
 carry no HTTP status. An unreachable endpoint usually billed nothing, so its
 bound overcounts; the loop cannot tell a refused connection from a dropped one,

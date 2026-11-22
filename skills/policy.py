@@ -366,13 +366,32 @@ def _guarded_connect_ex(self: socket.socket, address: Any) -> Any:
     return _REAL_SOCKET_CONNECT_EX(self, address)
 
 
+def _guard_datagram(address: Any) -> None:
+    """Check a datagram send; ``address`` is ``None`` for a connected socket.
+
+    Inside an egress request a datagram follows the ``connect`` rule: the
+    target must be an IP literal resolved in this scope. A hostname would be
+    resolved inside CPython, past the guarded lookup and the non-public check.
+    """
+
+    if _ACTIVE.get() is None:
+        return
+    if not _EGRESS_ALLOWED.get():
+        if address is None:
+            # Connected socket with no address: ``connect`` predates the
+            # invocation, so refuse the direct send itself.
+            _refuse_direct_egress()
+        _guard_address(address)
+        return
+    if address is None:
+        _open_scope()
+        return
+    _guard_connect_address(address)
+
+
 def _guarded_sendto(self: socket.socket, data: Any, *args: Any) -> Any:
-    if args:
-        _guard_address(args[0])
-    elif _ACTIVE.get() is not None and not _EGRESS_ALLOWED.get():
-        # Connected socket with no address: ``connect`` predates the
-        # invocation, so refuse the direct send itself.
-        _refuse_direct_egress()
+    # ``sendto(data, address)`` or ``sendto(data, flags, address)``.
+    _guard_datagram(args[-1] if args else None)
     return _REAL_SOCKET_SENDTO(self, data, *args)
 
 
@@ -383,10 +402,7 @@ def _guarded_sendmsg(
     flags: int = 0,
     address: Any = None,
 ) -> Any:
-    if address is not None:
-        _guard_address(address)
-    elif _ACTIVE.get() is not None and not _EGRESS_ALLOWED.get():
-        _refuse_direct_egress()
+    _guard_datagram(address)
     return _REAL_SOCKET_SENDMSG(self, buffers, ancdata, flags, address)
 
 

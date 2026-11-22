@@ -518,3 +518,109 @@ def test_real_httpx_to_loopback_is_refused_by_default(
         _fetch_loopback(tmp_path)
     assert raised.value.blast_radius == ("net:localhost", "egress:non_public_address")
     assert HITS == []
+
+
+# ---------------------------------------------------------------------------
+# Datagram sends follow the same binding as connect
+# ---------------------------------------------------------------------------
+
+
+SENDS: list[Any] = []
+
+
+@pytest.fixture
+def stub_sends(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Record datagram sends instead of putting them on the wire."""
+
+    SENDS.clear()
+
+    def fake_sendto(self: socket.socket, data: Any, *args: Any) -> int:
+        SENDS.append(("sendto", args[-1] if args else None))
+        return len(data)
+
+    def fake_sendmsg(
+        self: socket.socket,
+        buffers: Any,
+        ancdata: Any = (),
+        flags: int = 0,
+        address: Any = None,
+    ) -> int:
+        SENDS.append(("sendmsg", address))
+        return 0
+
+    monkeypatch.setattr(policy_module, "_REAL_SOCKET_SENDTO", fake_sendto)
+    monkeypatch.setattr(policy_module, "_REAL_SOCKET_SENDMSG", fake_sendmsg)
+
+
+def _udp(call: Callable[[socket.socket], Any]) -> BaseException | None:
+    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        return _attempt(lambda: call(sock))
+    finally:
+        sock.close()
+
+
+DATAGRAM_SENDS: dict[str, Callable[[socket.socket, Any], Any]] = {
+    "sendto": lambda sock, address: sock.sendto(b"x", address),
+    "sendmsg": lambda sock, address: sock.sendmsg([b"x"], [], 0, address),
+}
+
+
+@pytest.mark.parametrize("send", list(DATAGRAM_SENDS))
+def test_datagram_to_an_allowlisted_hostname_is_refused(
+    stub_dns: None, stub_sends: None, tmp_path: Path, send: str
+) -> None:
+    # A hostname would be resolved inside CPython, bypassing the guarded
+    # lookup and the non-public check, so it is refused outright.
+    ADDRS[:] = ["169.254.169.254"]
+
+    def body() -> None:
+        CAUGHT.append(
+            _udp(lambda sock: DATAGRAM_SENDS[send](sock, (ALLOWED_HOST, 53)))
+        )
+
+    assert _run(tmp_path, body=body)["ok"] is True
+    (error,) = CAUGHT
+    assert isinstance(error, PolicyDenied), error
+    assert error.blast_radius == ("net:unresolved", "egress:unresolved")
+    assert SENDS == []
+
+
+@pytest.mark.parametrize("send", list(DATAGRAM_SENDS))
+def test_datagram_to_a_resolved_public_ip_is_allowed(
+    stub_dns: None, stub_sends: None, tmp_path: Path, send: str
+) -> None:
+    ADDRS[:] = [PUBLIC_V4]
+
+    def body() -> None:
+        _lookup_getaddrinfo(ALLOWED_HOST)
+        CAUGHT.append(_udp(lambda sock: DATAGRAM_SENDS[send](sock, (PUBLIC_V4, 443))))
+
+    assert _run(tmp_path, body=body)["ok"] is True
+    assert CAUGHT == [None]
+    assert SENDS == [(send, (PUBLIC_V4, 443))]
+
+
+async def scope_less_datagram(
+    arguments: Mapping[str, Any], context: Any
+) -> Mapping[str, Any]:
+    """Address-less datagram sends with the egress flag but no live scope."""
+
+    token = policy_module._EGRESS_ALLOWED.set(True)
+    try:
+        CAUGHT.append(("sendto", _udp(lambda sock: sock.sendto(b"x"))))  # type: ignore[call-overload]
+        CAUGHT.append(("sendmsg", _udp(lambda sock: sock.sendmsg([b"x"]))))
+    finally:
+        policy_module._EGRESS_ALLOWED.reset(token)
+    return {"value": "done"}
+
+
+def test_address_less_datagram_without_a_live_scope_is_refused(
+    stub_dns: None, stub_sends: None, tmp_path: Path
+) -> None:
+    assert _run(tmp_path, "scope_less_datagram")["ok"] is True
+    assert [name for name, _ in CAUGHT] == ["sendto", "sendmsg"], CAUGHT
+    for name, error in CAUGHT:
+        assert isinstance(error, PolicyDenied), (name, error)
+        assert error.blast_radius == ("net:direct", "egress:scope_closed"), name
+    assert SENDS == []
