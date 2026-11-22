@@ -33,11 +33,12 @@ recipient named here that the code no longer knows.
 | Does anything else receive conversation text? | Not by default: no analytics, no telemetry, no crash reporter, no CDN, no third-party log sink |
 | Do skills reach the network? | Only through one chokepoint, and only to hosts a manifest declares. `github.write` can create a branch, commit, and pull request in `Anshieee/kelp`, but its handler cannot run before owner approval; other network skills are not implemented |
 | Do payments reach the network? | Not in this build. The Stripe and Razorpay clients exist but `build_app` constructs neither |
-| Where are keys? | Only in the server process environment. `KELP_PROVIDER_API_KEY`, `TAVILY_API_KEY`, `GITHUB_TOKEN` are read from `os.environ`, sent only to their own recipient, and scrubbed from every log line |
+| Where are keys? | Only in the server process environment, or (provider key only) in the private tenant secrets file named by `KELP_TENANT_SECRETS_FILE`. `TAVILY_API_KEY` and `GITHUB_TOKEN` are read from `os.environ` only. Each is sent only to its own recipient and scrubbed from every log line and audit row |
 | What records exist? | Chat content until the owner deletes the thread; audit and usage records on a stated clock; a content-free egress ledger inside the audit trail; a device row per signed-in browser with a short label and timestamps, no credential |
 | Can I audit what left? | Yes: one `egress` line per outbound call — recipient, purpose, byte counts, outcome, no content |
 
-The provider key is read from `KELP_PROVIDER_API_KEY`; `NEBIUS_API_KEY` is
+The provider key is read from `KELP_PROVIDER_API_KEY` (from the tenant secrets
+file instead, when `KELP_TENANT_SECRETS_FILE` is set); `NEBIUS_API_KEY` is
 accepted only as a legacy alias when the canonical name is blank, and its value
 is scrubbed from logs and audit lines exactly like the canonical one. The
 endpoint itself comes from `KELP_PROVIDER_BASE_URL` (or its legacy alias), so no

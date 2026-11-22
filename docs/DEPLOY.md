@@ -143,7 +143,7 @@ baked into the image; the process refuses to start without all three, exit `2`.
 | `KELP_AUTH_FAILURE_IDLE_SECONDS` | no | `300` | no | Idle-out for an auth-failure record |
 | `KELP_AUTH_FAILURE_MAX_KEYS` | no | `4096` | no | Bound on the hashed auth-failure map |
 | `KELP_PROVIDER_BASE_URL` | **yes** | — | no | OpenAI-compatible provider endpoint, e.g. `https://openrouter.ai/api/v1`. No vendor host is baked in: empty is a typed `missing_base_url`, never a default request |
-| `KELP_TENANT_SECRETS_FILE` | no | unset → use `KELP_PROVIDER_API_KEY` | **yes** (path only) | Path to an optional JSON map of per-tenant secrets. The file must be mode `0600`; a group- or world-readable file is refused before parsing. Values never enter records, logs, metrics, or the admin read model |
+| `KELP_TENANT_SECRETS_FILE` | no | unset → use `KELP_PROVIDER_API_KEY` | **yes** (path only) | Path to an optional JSON map `{tenant_id: {NAME: value}}`. Only `KELP_PROVIDER_API_KEY` is read from it today (it replaces the environment key). Other names are redaction-only: they are scrubbed from logs, metrics, and the audit trail but are not supplied to skills. Skill tokens (`GITHUB_TOKEN`, `TAVILY_API_KEY`) are still read from the process environment. The file must be mode `0600`; a group- or world-readable file is refused before parsing. Values never enter records, logs, metrics, or the admin read model |
 | `KELP_PRIMARY_MODEL` | no | example: `nvidia/nemotron-3.5-super-vl` | no | Conversational model; the id is provider-specific |
 | `KELP_BACKGROUND_MODEL` | no | example: `nvidia/nemotron-3.5-lightning` | no | Titles, summaries, compaction; the id is provider-specific |
 | `KELP_PRICING_JSON` | no | example rows in `kernel/providers/presets.py` | no | Optional USD-per-million price overrides, merged over the example table. An unpriced model keeps cost unknown and fails closed under a spend cap |
@@ -170,7 +170,7 @@ baked into the image; the process refuses to start without all three, exit `2`.
 | `KELP_RATE_LIMIT_CHAT_RPM` / `_BURST` | no | `120` / `30` | no | Thread, turn, and approval calls per client |
 | `KELP_RATE_LIMIT_UPLOAD_RPM` / `_BURST` | no | `60` / `20` | no | Attachment uploads per client |
 | `KELP_RATE_LIMIT_READ_RPM` / `_BURST` | no | `600` / `200` | no | Read calls per client |
-| `KELP_RATE_LIMIT_ADMIN_RPM` / `_BURST` | no | `1200` / `300` | no | Metrics and readiness per client; keep it above the probe rate |
+| `KELP_RATE_LIMIT_ADMIN_RPM` / `_BURST` | no | `1200` / `300` | no | Metrics, readiness, and every `GET /api/admin/*` read, per client; keep it above the probe and admin polling rate |
 | `KELP_RATE_LIMIT_SHARE_RPM` / `_BURST` | no | `30` / `10` | no | Anonymous share reads per link; keyed on the hashed link token |
 | `KELP_RATE_LIMIT_SHARE_GLOBAL_RPM` / `_BURST` | no | `600` / `200` | no | Process-wide ceiling for anonymous share reads |
 | `KELP_RATE_LIMIT_IDLE_SECONDS` | no | `300` | no | Idle-out before a limiter key starts with a full bucket again |
@@ -205,10 +205,13 @@ falling back to a vendor host. For compatibility, `NEBIUS_BASE_URL` /
 blank. They are aliases, not defaults, and the canonical name always wins.
 
 `KELP_TENANT_SECRETS_FILE` names a JSON file, not a value. It maps tenant ids to
-secret names and supplies the per-tenant credential without baking it into the
-environment contract; the file must be mode `0600`, and only the bound tenant's
-map is retained in memory. With it unset, the owner tenant keeps using
-`KELP_PROVIDER_API_KEY`.
+secret names and supplies the tenant's provider key (`KELP_PROVIDER_API_KEY`)
+without baking it into the environment contract; the file must be mode `0600`,
+and only the bound tenant's map is retained in memory. With it unset, the owner
+tenant keeps using `KELP_PROVIDER_API_KEY` from the environment. Skill tokens
+must still be set in the process environment: a skill token placed only in this
+file is scrubbed from logs and the audit trail but is not given to the skill,
+which then fails with `missing_secret`.
 
 The entitlement gate is the third gate after auth and tenant and before spend
 and any provider call. Plans are static configuration: `KELP_ENTITLEMENT_PLANS_JSON`
@@ -230,7 +233,8 @@ snapshot, never prompt text.
 Rate-limit rejections are `429` JSON with `error.code = "rate_limited"` and a
 `Retry-After` header in whole seconds. They are never a `5xx`: an internal
 limiter fault fails open. The admin bucket must stay comfortably above the
-readiness probe interval, or probes will see `429` instead of `503`. The
+readiness probe interval and the admin API polling rate, or probes will see
+`429` instead of `503`. The
 `/api/metrics` exposition includes `kelp_limiter_in_use`,
 `kelp_limiter_capacity`, and `kelp_limiter_saturation` for the turn, owner
 stream, and share stream (`share_streams`) caps.
@@ -546,6 +550,11 @@ degraded stays up so the audit trail and in-flight turns survive. Alert on
 `/api/readyz` returning 503, then investigate; restart deliberately with
 `docker compose restart kelp`.
 
+Operating the running service: the read-only owner endpoints under
+`/api/admin/*` are described in [`docs/ADMIN_API.md`](ADMIN_API.md), and the
+triage tree, evidence bundle, secret rotation, and rollback steps are in
+[`docs/SUPPORT_RUNBOOK.md`](SUPPORT_RUNBOOK.md).
+
 ---
 
 ## 8. State layout
@@ -848,9 +857,11 @@ curl -sS -X DELETE "https://kelp.example.com/api/auth/session" \
   -H "X-CSRF-Token: ${CSRF_TOKEN}" \
   -H "Cookie: session=${SESSION_COOKIE}; csrf=${CSRF_TOKEN}"
 
-# Every session (bearer path; no cookie needed).
+# Every session (bearer path; no cookie needed). The X-CSRF-Token header is
+# required only when KELP_CSRF_TOKEN is set; without it the call is 403.
 curl -sS -X DELETE "https://kelp.example.com/api/auth/sessions" \
-  -H "Authorization: Bearer ${KELP_AUTH_TOKEN}"
+  -H "Authorization: Bearer ${KELP_AUTH_TOKEN}" \
+  -H "X-CSRF-Token: ${KELP_CSRF_TOKEN}"
 ```
 
 `DELETE /api/auth/session` and `DELETE /api/auth/sessions` always answer with
@@ -868,7 +879,8 @@ request (and its next stream heartbeat) answers `401`.
    `python3 -c 'import secrets; print(secrets.token_urlsafe(48))'`.
 2. Revoke every existing session **before** changing the secret, using the
    current value from `deploy/kelp.env`:
-   `curl -sS -X DELETE .../api/auth/sessions -H "Authorization: Bearer ${KELP_AUTH_TOKEN}"`.
+   `curl -sS -X DELETE .../api/auth/sessions -H "Authorization: Bearer ${KELP_AUTH_TOKEN}" -H "X-CSRF-Token: ${KELP_CSRF_TOKEN}"`
+   (the CSRF header only when `KELP_CSRF_TOKEN` is set).
 3. Put the new value in `deploy/kelp.env` (`KELP_AUTH_TOKEN=...`,
    `KELP_SESSION_SECRET=...`) and keep mode `0600`. Never commit the file.
 4. Restart the one container: `docker compose up -d --no-build` (or
