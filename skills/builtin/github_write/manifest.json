@@ -26,13 +26,13 @@
         "type": "string",
         "minLength": 1,
         "maxLength": 200,
-        "pattern": "^[A-Za-z0-9._/-]+$"
+        "pattern": "^(?![-./])(?!.*\\.\\.)(?!.*//)(?!.*/\\.)(?!.*\\.lock(?:/|$))(?!.*[./]$)[A-Za-z0-9._/-]+$"
       },
       "branch": {
         "type": "string",
         "minLength": 1,
         "maxLength": 200,
-        "pattern": "^[A-Za-z0-9._/-]+$"
+        "pattern": "^(?![-./])(?!.*\\.\\.)(?!.*//)(?!.*/\\.)(?!.*\\.lock(?:/|$))(?!.*[./]$)[A-Za-z0-9._/-]+$"
       },
       "title": {"type": "string", "minLength": 1, "maxLength": 256},
       "body": {"type": "string", "maxLength": 20000},

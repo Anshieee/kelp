@@ -169,3 +169,46 @@ def test_missing_secret_is_typed_after_approval() -> None:
 
     assert result["error"]["code"] == "missing_secret"
     assert "GITHUB_TOKEN" in result["error"]["message"]
+
+
+BAD_REFS = [
+    "../../../../repos/other/repo/git/refs/heads/x",
+    "feature/../main",
+    "a//b",
+    "/main",
+    "main/",
+    "-main",
+    "feature/.hidden",
+    ".hidden",
+    "main.lock",
+    "feature/x.lock",
+    "main.",
+    "@",
+]
+
+
+@pytest.mark.parametrize("field", ["base", "branch"])
+@pytest.mark.parametrize("ref", BAD_REFS)
+def test_ref_names_outside_git_ref_format_are_rejected_before_approval(
+    field: str, ref: str
+) -> None:
+    called = False
+
+    async def approval(_request: Any) -> bool:
+        nonlocal called
+        called = True
+        return True
+
+    args = arguments()
+    args[field] = ref
+    result = invoke(registry(), args, approval=approval, secrets={"GITHUB_TOKEN": TOKEN})
+
+    assert result["error"]["code"] == "invalid_arguments", result
+    assert called is False
+
+
+@pytest.mark.parametrize("ref", ["main", "feature/kel-31", "release/v1.2.3", "a_b-c.d"])
+def test_ordinary_ref_names_pass_the_schema(ref: str) -> None:
+    from skills.builtin.github_write.handler import _valid_ref
+
+    assert _valid_ref(ref) is True
