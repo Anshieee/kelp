@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 from pathlib import Path
-from typing import Any, Mapping, Sequence
+from typing import Any, AsyncIterator, Mapping, Sequence
 
 import httpx
 import pytest
@@ -1397,3 +1397,261 @@ def test_usage_log_line_carries_usage_estimated() -> None:
     assert line["event"] == "usage"
     assert line["usage_reported"] is False
     assert line["usage_estimated"] is True
+
+
+# --- stalled provider streams: wall budget and Stop while waiting -----------
+
+
+class _StallingProvider:
+    """Yields one ``TextDelta`` then awaits forever, like a keepalive-only SSE.
+
+    ``on_stall`` runs once the delta was yielded and the stream is about to
+    wait, so a test can advance its clock or set a cancel token at that point.
+    """
+
+    def __init__(self, on_stall: Any = None) -> None:
+        self.on_stall = on_stall
+        self.closed = False
+        self.requests = 0
+
+    async def stream(self, request: ChatRequest) -> Any:
+        self.requests += 1
+        try:
+            yield TextDelta("partial")
+            if self.on_stall is not None:
+                self.on_stall()
+            await asyncio.Event().wait()
+            yield StreamEnd("stop")  # pragma: no cover - never reached
+        finally:
+            self.closed = True
+
+
+def _stalled_loop(
+    provider: Any, store: InMemoryUsageStore, **kwargs: Any
+) -> AgentLoop:
+    return AgentLoop(
+        provider=provider,
+        config=KernelConfig(api_key="test-key"),
+        usage_store=store,
+        model=MODEL,
+        **kwargs,
+    )
+
+
+def test_wall_budget_fires_while_the_provider_stream_is_stalled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr("kernel.loop._STREAM_POLL_SECONDS", 0.01)
+    clock = _ManualClock()
+    store = InMemoryUsageStore()
+    provider = _StallingProvider(on_stall=lambda: setattr(clock, "value", 100.0))
+    loop = _stalled_loop(
+        provider,
+        store,
+        budget=TurnBudget(max_steps=10, max_wall_seconds=50),
+        time_fn=clock,
+    )
+    messages = [{"role": "user", "content": "hi"}]
+
+    result = asyncio.run(
+        asyncio.wait_for(_collect_async(loop, messages, turn_id="t1"), timeout=5)
+    )
+
+    errors = [e for e in result if e.kind == "error"]
+    assert len(errors) == 1
+    assert errors[0].code == "turn_budget_exceeded"
+    assert errors[0].details == {"limit": "max_wall_seconds"}
+    assert result[-1].kind == "turn_finished"
+    assert result[-1].reason == "budget"
+    assert provider.requests == 1
+    assert provider.closed is True
+    assert len(store.records) == 1
+    record = store.records[0]
+    assert record.outcome == "budget"
+    assert record.usage_reported is False
+    assert record.usage_estimated is True
+    assert record.input_tokens == input_bound(messages)
+    assert record.output_tokens == 1024
+
+
+def test_cancel_token_set_while_the_provider_stream_is_stalled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr("kernel.loop._STREAM_POLL_SECONDS", 0.01)
+    token = CancelToken()
+    store = InMemoryUsageStore()
+    provider = _StallingProvider()
+    loop = _stalled_loop(provider, store)
+
+    async def run() -> list[Any]:
+        seen: list[Any] = []
+        async for event in loop.run_turn([{"role": "user", "content": "hi"}], cancel=token):
+            seen.append(event)
+            if event.kind == "token_delta":
+                # The provider is now parked with no event to deliver.
+                asyncio.get_running_loop().call_later(0.05, token.cancel)
+        return seen
+
+    result = asyncio.run(asyncio.wait_for(run(), timeout=5))
+
+    assert result[-1].kind == "turn_finished"
+    assert result[-1].reason == "cancelled"
+    assert not [e for e in result if e.kind == "error"]
+    assert [e.text for e in result if e.kind == "token_delta"] == ["partial"]
+    assert provider.closed is True
+    assert len(store.records) == 1
+    assert store.records[0].outcome == "cancelled"
+    assert store.records[0].usage_estimated is True
+
+
+def test_stalled_stream_wake_does_not_cancel_the_pending_read(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # A slow provider that answers after several poll intervals must still be
+    # read from the same pending __anext__: no event is lost or repeated.
+    monkeypatch.setattr("kernel.loop._STREAM_POLL_SECONDS", 0.005)
+    store = InMemoryUsageStore()
+
+    class SlowProvider:
+        async def stream(self, request: ChatRequest) -> Any:
+            for text in ("a", "b", "c"):
+                await asyncio.sleep(0.03)
+                yield TextDelta(text)
+            yield UsageReport(4, 3, 7)
+            yield StreamEnd("stop")
+
+    loop = _stalled_loop(SlowProvider(), store)
+    result = asyncio.run(
+        asyncio.wait_for(_collect_async(loop, [{"role": "user", "content": "hi"}]), timeout=5)
+    )
+
+    assert [e.text for e in result if e.kind == "token_delta"] == ["a", "b", "c"]
+    assert result[-1].reason == "stop"
+    assert result[-1].message == "abc"
+    assert store.records[0].usage_estimated is False
+
+
+def test_many_event_stream_yields_the_same_events_in_order() -> None:
+    chunks = [f"w{i} " for i in range(200)]
+    script = [TextDelta(c) for c in chunks] + [UsageReport(9, 200, 209), StreamEnd("stop")]
+    loop, _ = build([script], store=InMemoryUsageStore())
+
+    result = collect(loop, [{"role": "user", "content": "hi"}], turn_id="t1")
+
+    assert kinds(result) == (
+        ["turn_started"] + ["token_delta"] * 200 + ["usage_updated", "turn_finished"]
+    )
+    assert [e.text for e in result if e.kind == "token_delta"] == chunks
+    assert [e.step for e in result if e.kind == "token_delta"] == [1] * 200
+    assert result[-1].message == "".join(chunks)
+    assert result[-1].reason == "stop"
+
+
+def test_provider_exception_from_anext_propagates_through_the_polling_wrapper(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr("kernel.loop._STREAM_POLL_SECONDS", 0.005)
+    store = InMemoryUsageStore()
+    state = {"closed": False}
+
+    class LateExplodingProvider:
+        async def stream(self, request: ChatRequest) -> Any:
+            try:
+                yield TextDelta("partial")
+                await asyncio.sleep(0.03)  # several poll wakes, then fail
+                raise RuntimeError("socket reset")
+            finally:
+                state["closed"] = True
+
+    loop = _stalled_loop(LateExplodingProvider(), store)
+
+    with pytest.raises(RuntimeError, match="socket reset"):
+        asyncio.run(
+            asyncio.wait_for(
+                _collect_async(loop, [{"role": "user", "content": "hi"}], turn_id="t1"),
+                timeout=5,
+            )
+        )
+
+    assert state["closed"] is True
+    assert len(store.records) == 1
+    assert store.records[0].outcome == "error"
+    assert store.records[0].usage_estimated is True
+
+
+def test_consumer_aclose_while_the_stream_is_stalled_closes_the_provider(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr("kernel.loop._STREAM_POLL_SECONDS", 0.01)
+    store = InMemoryUsageStore()
+    provider = _StallingProvider()
+    loop = _stalled_loop(provider, store)
+
+    async def run() -> None:
+        gen = loop.run_turn([{"role": "user", "content": "hi"}])
+        await gen.__anext__()  # turn_started
+        await gen.__anext__()  # token_delta
+        pending = asyncio.ensure_future(gen.__anext__())  # parked on the stalled read
+        await asyncio.sleep(0.05)
+        pending.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await pending
+
+    asyncio.run(asyncio.wait_for(run(), timeout=5))
+
+    assert provider.closed is True
+    assert len(store.records) == 1
+    assert store.records[0].outcome == "cancelled"
+
+
+async def _collect_async(
+    loop: AgentLoop, messages: Sequence[Mapping[str, Any]], **kwargs: Any
+) -> list[Any]:
+    return [event async for event in loop.run_turn(messages, **kwargs)]
+
+
+class _TricklingProvider:
+    """Sends a token on every read, advancing the clock one second each time."""
+
+    def __init__(self, clock: _ManualClock) -> None:
+        self._clock = clock
+        self.requests = 0
+        self.sent = 0
+        self.closed = False
+
+    async def stream(self, request: ChatRequest) -> AsyncIterator[Any]:
+        self.requests += 1
+        try:
+            for _ in range(1000):
+                self._clock.value += 1.0
+                self.sent += 1
+                yield TextDelta("x")
+            yield StreamEnd("stop")
+        finally:
+            self.closed = True
+
+
+def test_wall_budget_fires_while_the_provider_trickles_events() -> None:
+    clock = _ManualClock()
+    store = InMemoryUsageStore()
+    provider = _TricklingProvider(clock)
+    loop = _stalled_loop(
+        provider,
+        store,
+        budget=TurnBudget(max_steps=10, max_wall_seconds=5),
+        time_fn=clock,
+    )
+
+    result = asyncio.run(
+        asyncio.wait_for(
+            _collect_async(loop, [{"role": "user", "content": "hi"}], turn_id="t1"),
+            timeout=5,
+        )
+    )
+
+    errors = [e for e in result if e.kind == "error"]
+    assert [e.details for e in errors] == [{"limit": "max_wall_seconds"}]
+    assert result[-1].reason == "budget"
+    assert provider.sent < 10
+    assert provider.closed is True
+    assert len(store.records) == 1

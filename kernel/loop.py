@@ -15,6 +15,7 @@ import asyncio
 import contextlib
 import hashlib
 import json
+import sys
 import threading
 import time
 import uuid
@@ -52,6 +53,11 @@ __all__ = [
 ]
 
 MAX_TOOL_CONTENT_CHARS = 20_000
+
+# Longest the loop waits on a provider stream before it re-checks the wall
+# budget and the cancel token. A provider that only sends keepalives, or
+# trickles tokens, would otherwise hold a step open indefinitely.
+_STREAM_POLL_SECONDS = 1.0
 
 # Codes of failures a provider raises before it makes any request: missing
 # configuration, and the defensive tenant check in kernel.providers.base.
@@ -417,52 +423,82 @@ class AgentLoop:
                 # Close the provider stream deterministically so its own
                 # cleanup (egress ledger row, HTTP stream release) runs when
                 # this turn is closed or cancelled, not at GC.
+                wall_exceeded = False
+                wall_elapsed = 0.0
                 async with _closing(self._provider.stream(request)) as stream:
-                    async for event in stream:
-                        step_events += 1
-                        if cancel is not None and cancel.cancelled:
-                            cancelled = True
-                            break
-                        if isinstance(event, TextDelta):
-                            content_parts.append(event.text)
-                            yield events.TokenDelta(text=event.text, step=steps)
-                        elif isinstance(event, ToolCallReady):
-                            pending[event.index] = ToolCall(
-                                call_id=event.call_id,
-                                name=event.name,
-                                arguments=dict(event.arguments),
-                            )
-                        elif isinstance(event, UsageReport):
-                            usage_reported = True
-                            step_metered = True
-                            input_tokens += event.input_tokens
-                            output_tokens += event.output_tokens
-                            yield events.UsageUpdated(
-                                model=model,
-                                input_tokens=event.input_tokens,
-                                output_tokens=event.output_tokens,
-                                total_input_tokens=input_tokens,
-                                total_output_tokens=output_tokens,
-                                estimated_cost_usd=self._config.estimate_cost(model, input_tokens, output_tokens),
-                                step=steps,
-                            )
-                        elif isinstance(event, ProviderFailure):
-                            failure = event
-                            # Exempt from the bound only when no request was
-                            # accepted for billing: the step's first and only
-                            # event is an HTTP status failure (the provider
-                            # answered with an error status) or a failure in
-                            # _UNBILLED_FAILURE_CODES (no request was made). Timeouts,
-                            # transport errors and protocol errors carry no
-                            # status and can follow an HTTP 200, so they are
-                            # bounded.
-                            step_unbilled_failure = step_events == 1 and (
-                                event.status is not None
-                                or event.code in _UNBILLED_FAILURE_CODES
-                            )
-                            break
-                        elif isinstance(event, StreamEnd):
-                            finish_reason = event.finish_reason
+                    polled = _PolledStream(stream)
+                    try:
+                        while True:
+                            wall_elapsed = (self._time() - started_mono) - (approval_paused_ms / 1000.0)
+                            wall_left = budget.max_wall_seconds - wall_elapsed
+                            if wall_left <= 0 and step_events > 0:
+                                # Also catches a provider that trickles events
+                                # faster than the poll interval. The first read
+                                # of a step follows the top-of-step check.
+                                wall_exceeded = True
+                                break
+                            event = await polled.next(min(_STREAM_POLL_SECONDS, max(wall_left, 0.0)))
+                            if event is _IDLE:
+                                # No event within the poll interval: the stream is
+                                # silent (keepalives only, or a stall). Re-check
+                                # Stop and the wall budget without touching the
+                                # pending read.
+                                if cancel is not None and cancel.cancelled:
+                                    cancelled = True
+                                    break
+                                wall_elapsed = (self._time() - started_mono) - (approval_paused_ms / 1000.0)
+                                if wall_elapsed >= budget.max_wall_seconds:
+                                    wall_exceeded = True
+                                    break
+                                continue
+                            if event is _STREAM_DONE:
+                                break
+                            step_events += 1
+                            if cancel is not None and cancel.cancelled:
+                                cancelled = True
+                                break
+                            if isinstance(event, TextDelta):
+                                content_parts.append(event.text)
+                                yield events.TokenDelta(text=event.text, step=steps)
+                            elif isinstance(event, ToolCallReady):
+                                pending[event.index] = ToolCall(
+                                    call_id=event.call_id,
+                                    name=event.name,
+                                    arguments=dict(event.arguments),
+                                )
+                            elif isinstance(event, UsageReport):
+                                usage_reported = True
+                                step_metered = True
+                                input_tokens += event.input_tokens
+                                output_tokens += event.output_tokens
+                                yield events.UsageUpdated(
+                                    model=model,
+                                    input_tokens=event.input_tokens,
+                                    output_tokens=event.output_tokens,
+                                    total_input_tokens=input_tokens,
+                                    total_output_tokens=output_tokens,
+                                    estimated_cost_usd=self._config.estimate_cost(model, input_tokens, output_tokens),
+                                    step=steps,
+                                )
+                            elif isinstance(event, ProviderFailure):
+                                failure = event
+                                # Exempt from the bound only when no request was
+                                # accepted for billing: the step's first and only
+                                # event is an HTTP status failure (the provider
+                                # answered with an error status) or a failure in
+                                # _UNBILLED_FAILURE_CODES (no request was made). Timeouts,
+                                # transport errors and protocol errors carry no
+                                # status and can follow an HTTP 200, so they are
+                                # bounded.
+                                step_unbilled_failure = step_events == 1 and (
+                                    event.status is not None
+                                    or event.code in _UNBILLED_FAILURE_CODES
+                                )
+                                break
+                            elif isinstance(event, StreamEnd):
+                                finish_reason = event.finish_reason
+                    finally:
+                        await polled.discard()
 
                 if step_open and not step_metered and not step_unbilled_failure:
                     estimated_input_tokens += step_input_bound
@@ -472,6 +508,15 @@ class AgentLoop:
 
                 if cancelled:
                     reason = "cancelled"
+                    break
+
+                if wall_exceeded:
+                    reason = "budget"
+                    yield _budget_error(
+                        "max_wall_seconds",
+                        f"Turn stopped after {wall_elapsed:.1f}s; limit is {budget.max_wall_seconds:.1f}s.",
+                        steps,
+                    )
                     break
 
                 if failure is not None:
@@ -739,6 +784,76 @@ def _budget_error(limit: str, message: str, step: int) -> events.Error:
         step=step,
         details={"limit": limit},
     )
+
+
+_IDLE = object()
+_STREAM_DONE = object()
+
+
+def _start_read(coro: Any) -> asyncio.Task[Any]:
+    """Start ``coro`` as a task, running it to its first suspension at once.
+
+    On Python 3.12+ an eager task whose read needs no suspension (a provider
+    that already has its next event buffered) finishes before this returns, so
+    the common path costs no event-loop round trip and yields no scheduling
+    point beyond what iterating the stream directly had. Python 3.11 has no
+    eager start and falls back to a regular task.
+    """
+
+    if sys.version_info >= (3, 12):
+        return asyncio.Task(coro, loop=asyncio.get_running_loop(), eager_start=True)
+    return asyncio.ensure_future(coro)  # type: ignore[no-any-return]
+
+
+class _PolledStream:
+    """Reads a provider stream so the caller can wake while it is silent.
+
+    Each read is an ``asyncio`` task over ``__anext__``. ``next`` waits on it
+    for at most ``timeout`` seconds and returns ``_IDLE`` if nothing arrived;
+    the same task is waited on again by the next call, so a slow read is never
+    cancelled just to poll. ``discard`` cancels a read still in flight, for an
+    early exit, so the provider's own ``finally`` can run.
+    """
+
+    def __init__(self, stream: Any) -> None:
+        self._iterator = stream.__aiter__()
+        self._task: asyncio.Task[Any] | None = None
+
+    async def _read(self) -> Any:
+        return await self._iterator.__anext__()
+
+    async def next(self, timeout: float) -> Any:
+        """Return the next event, ``_IDLE`` on timeout, or ``_STREAM_DONE``.
+
+        Any exception the provider raises from ``__anext__`` propagates.
+        """
+
+        if self._task is None:
+            self._task = _start_read(self._read())
+        if not self._task.done():
+            done, _ = await asyncio.wait({self._task}, timeout=timeout)
+            if not done:
+                return _IDLE
+        task, self._task = self._task, None
+        try:
+            return task.result()
+        except StopAsyncIteration:
+            return _STREAM_DONE
+
+    async def discard(self) -> None:
+        """Cancel and reap a read still in flight; never raises its outcome."""
+
+        task, self._task = self._task, None
+        if task is None:
+            return
+        if not task.done():
+            task.cancel()
+            # asyncio.wait does not re-raise the task's outcome, and still
+            # propagates a cancellation aimed at the caller.
+            await asyncio.wait({task})
+        if not task.cancelled():
+            # Mark any late provider exception as retrieved.
+            task.exception()
 
 
 def _closing(stream: Any) -> Any:

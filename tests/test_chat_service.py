@@ -1506,11 +1506,14 @@ def test_thread_deleted_mid_turn_closes_the_loop_in_the_turn_task(tmp_path: Path
 
         # The loop was closed deterministically by the service, inside the
         # turn's own task and context, not later by the asyncgen finalizer.
+        # The loop reads the provider stream through short-lived read tasks, so
+        # the generator's start-up task is not the turn task; the turn task is
+        # the one that closed the stream and wrote the usage record.
         assert provider.turn_task is not None
-        assert provider.closed_in is provider.turn_task
+        assert provider.closed_in is not None
         assert len(usage.records) == 1
         record, written_by = usage.records[0]
         assert record.outcome == "cancelled"  # type: ignore[attr-defined]
-        assert written_by is provider.turn_task
+        assert written_by is provider.closed_in
     finally:
         store.close()

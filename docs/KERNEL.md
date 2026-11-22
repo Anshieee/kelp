@@ -96,11 +96,15 @@ async for event in loop.run_turn(messages, tools=tool_schemas, session_id="s-1")
 | `max_output_tokens` | 4096 | sum of reported completion tokens |
 | `max_tokens_per_step` | 1024 | `max_tokens` sent to the provider |
 | `max_tool_calls` | 8 | executed tool calls per turn |
-| `max_wall_seconds` | 120 | wall clock, checked between steps |
+| `max_wall_seconds` | 120 | wall clock, checked between steps and while waiting on the provider stream |
 
 Exceeding a limit emits `error.code = "turn_budget_exceeded"` with
 `details.limit` set to the limit name, then `turn_finished` with
 `reason = "budget"`. The turn stops; the session and loop stay usable.
+
+The wall budget and Stop are also checked while the loop waits on the provider
+stream, at least once a second, so a provider that sends only keepalives or
+trickles tokens cannot hold a step open past the limit or ignore a cancel.
 
 Token budgeting consumes the provider's reported usage only. If a backend does
 not report usage, only the step, tool-call, and wall-clock limits bound the
