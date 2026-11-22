@@ -316,6 +316,21 @@ class AgentLoop:
         input_tokens = 0
         output_tokens = 0
         usage_reported = False
+        # Upper bounds for steps that reached the provider without a
+        # UsageReport. Kept apart from input_tokens/output_tokens on purpose:
+        # ``remaining`` below must keep measuring reported output only.
+        estimated_input_tokens = 0
+        estimated_output_tokens = 0
+        usage_estimated = False
+        # State of the step whose stream is open (or just ended). The
+        # finally-block reads it to bound a step that a cancel or an
+        # exception cut short.
+        step_open = False
+        step_metered = False
+        step_sole_failure = False
+        step_events = 0
+        step_input_bound = 0
+        step_output_bound = 0
         reason = "stop"
         final_message: str | None = None
         # Approval waiting is paused time for the wall budget, not for the
@@ -378,6 +393,14 @@ class AgentLoop:
                     tools=tools,
                     max_tokens=step_max_tokens,
                 )
+                # The transcript is mutated after the step, so the bound is
+                # taken from the request as sent, now.
+                step_input_bound = _request_input_bound(transcript, tools)
+                step_output_bound = step_max_tokens
+                step_open = True
+                step_metered = False
+                step_sole_failure = False
+                step_events = 0
 
                 content_parts: list[str] = []
                 pending: dict[int, ToolCall] = {}
@@ -390,6 +413,7 @@ class AgentLoop:
                 # this turn is closed or cancelled, not at GC.
                 async with _closing(self._provider.stream(request)) as stream:
                     async for event in stream:
+                        step_events += 1
                         if cancel is not None and cancel.cancelled:
                             cancelled = True
                             break
@@ -404,6 +428,7 @@ class AgentLoop:
                             )
                         elif isinstance(event, UsageReport):
                             usage_reported = True
+                            step_metered = True
                             input_tokens += event.input_tokens
                             output_tokens += event.output_tokens
                             yield events.UsageUpdated(
@@ -417,9 +442,18 @@ class AgentLoop:
                             )
                         elif isinstance(event, ProviderFailure):
                             failure = event
+                            # A failure that is the step's only event means
+                            # nothing was generated (HTTP status, unreachable).
+                            step_sole_failure = step_events == 1
                             break
                         elif isinstance(event, StreamEnd):
                             finish_reason = event.finish_reason
+
+                if step_open and not step_metered and not step_sole_failure:
+                    estimated_input_tokens += step_input_bound
+                    estimated_output_tokens += step_output_bound
+                    usage_estimated = True
+                step_open = False
 
                 if cancelled:
                     reason = "cancelled"
@@ -531,7 +565,10 @@ class AgentLoop:
                 model=model,
                 input_tokens=input_tokens,
                 output_tokens=output_tokens,
+                estimated_input_tokens=estimated_input_tokens,
+                estimated_output_tokens=estimated_output_tokens,
                 usage_reported=usage_reported,
+                usage_estimated=usage_estimated,
                 steps=steps,
                 tool_calls=tool_calls_made,
                 started_mono=started_mono,
@@ -551,14 +588,22 @@ class AgentLoop:
             if not recorded:
                 # The turn ended before the normal accounting path.
                 # Provider-billed steps must still be accounted, and nothing
-                # may be yielded or awaited from here.
+                # may be yielded or awaited from here. A step whose stream was
+                # open and unmetered at exit may already have been billed.
+                if step_open and not step_metered and not step_sole_failure:
+                    estimated_input_tokens += step_input_bound
+                    estimated_output_tokens += step_output_bound
+                    usage_estimated = True
                 self._record_usage(
                     turn_id=turn_id,
                     session_id=session_id,
                     model=model,
                     input_tokens=input_tokens,
                     output_tokens=output_tokens,
+                    estimated_input_tokens=estimated_input_tokens,
+                    estimated_output_tokens=estimated_output_tokens,
                     usage_reported=usage_reported,
+                    usage_estimated=usage_estimated,
                     steps=steps,
                     tool_calls=tool_calls_made,
                     started_mono=started_mono,
@@ -587,7 +632,10 @@ class AgentLoop:
         model: str,
         input_tokens: int,
         output_tokens: int,
+        estimated_input_tokens: int,
+        estimated_output_tokens: int,
         usage_reported: bool,
+        usage_estimated: bool,
         steps: int,
         tool_calls: int,
         started_mono: float,
@@ -596,12 +644,19 @@ class AgentLoop:
     ) -> tuple[float | None, int, bool]:
         """Build and persist the turn's one ``UsageRecord``.
 
+        ``input_tokens``/``output_tokens`` are provider-reported counts; the
+        ``estimated_*`` bounds cover steps that reached the provider without a
+        ``UsageReport``. The record and its cost use the sum, so billed work is
+        never recorded as ``$0``; ``None`` stays ``None`` for an unpriced model.
+
         Returns:
             ``(estimated_cost_usd, duration_ms, persisted)``. A store failure
             never raises.
         """
 
         duration_ms = _elapsed_ms(started_mono, self._time())
+        input_tokens += estimated_input_tokens
+        output_tokens += estimated_output_tokens
         cost = self._config.estimate_cost(model, input_tokens, output_tokens)
         record = UsageRecord(
             turn_id=turn_id,
@@ -619,6 +674,7 @@ class AgentLoop:
             finished_at=self._now().isoformat(),
             duration_ms=duration_ms,
             outcome=outcome,
+            usage_estimated=usage_estimated,
         )
         persisted = self._usage_store is not None
         if self._usage_store is not None:
@@ -681,6 +737,27 @@ def _closing(stream: Any) -> Any:
     if callable(getattr(stream, "aclose", None)):
         return contextlib.aclosing(stream)
     return contextlib.nullcontext(stream)
+
+
+def _request_input_bound(
+    transcript: Sequence[Mapping[str, Any]], tools: Sequence[Mapping[str, Any]]
+) -> int:
+    """Upper bound on a request's input tokens: its serialized UTF-8 size.
+
+    A token covers at least one byte, and the JSON keys and quotes outweigh
+    chat-template tokens, so the byte count of the messages and tools is above
+    the billed input for what the loop sends (an adapter's own system prompt
+    is not counted).
+    """
+
+    payload = {"messages": transcript, "tools": tools}
+    try:
+        text = json.dumps(payload, ensure_ascii=False, separators=(",", ":"), default=str)
+    except (TypeError, ValueError):
+        # Non-serializable keys or a cycle: still count something finite
+        # rather than let accounting fail the turn.
+        text = repr(payload)
+    return len(text.encode("utf-8", errors="replace"))
 
 
 def _elapsed_ms(started: float, now: float) -> int:

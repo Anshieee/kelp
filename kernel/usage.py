@@ -95,6 +95,12 @@ class UsageRecord:
     #: never be mistaken for another tenant's; the global caps still total
     #: every row, because only ``owner`` is admitted today.
     tenant_id: str = DEFAULT_TENANT_ID
+    #: ``True`` when at least one step reached the provider without a
+    #: ``UsageReport`` and was recorded at its upper bound (the request's
+    #: serialized size in bytes as input tokens, the step's ``max_tokens`` as
+    #: output tokens). ``input_tokens``/``output_tokens`` then include that
+    #: bound, so the cost is a ceiling rather than ``$0``.
+    usage_estimated: bool = False
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)

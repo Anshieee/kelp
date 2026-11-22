@@ -96,6 +96,36 @@ def build(
     return loop, provider
 
 
+def input_bound(messages: Sequence[Mapping[str, Any]], tools: Sequence[Mapping[str, Any]] = ()) -> int:
+    """Independent restatement of the documented input upper bound (bytes)."""
+
+    return len(
+        json.dumps(
+            {"messages": list(messages), "tools": list(tools)},
+            ensure_ascii=False,
+            separators=(",", ":"),
+            default=str,
+        ).encode("utf-8")
+    )
+
+
+class SnapshotProvider(StubProvider):
+    """``StubProvider`` that records the input bound as each request arrives.
+
+    The loop mutates the transcript after a step, so the bound for a step can
+    only be computed when that step's request is made.
+    """
+
+    def __init__(self, scripts: Sequence[Sequence[Any]]):
+        super().__init__(scripts)
+        self.bounds: list[int] = []
+
+    async def stream(self, request: ChatRequest) -> Any:
+        self.bounds.append(input_bound(request.messages, request.tools))
+        async for event in super().stream(request):
+            yield event
+
+
 def kinds(events_list: Sequence[Any]) -> list[str]:
     return [event.kind for event in events_list]
 
@@ -692,11 +722,16 @@ def test_aclose_mid_turn_writes_one_cancelled_usage_record() -> None:
     assert record.steps == 1
     assert record.tool_calls == 0
     # The closed turn consumed only the TextDelta; the UsageReport had not
-    # been read yet, so nothing is claimed as provider-reported.
-    assert record.input_tokens == 0
-    assert record.output_tokens == 0
-    assert record.total_tokens == 0
+    # been read yet, so nothing is claimed as provider-reported. The step
+    # reached the provider, so it is recorded at its upper bound, not as 0.
+    bound_in = input_bound([{"role": "user", "content": "hi"}])
+    assert record.input_tokens == bound_in
+    assert record.output_tokens == 1024
+    assert record.total_tokens == bound_in + 1024
     assert record.usage_reported is False
+    assert record.usage_estimated is True
+    assert record.estimated_cost_usd == pytest.approx(KernelConfig(api_key="k").estimate_cost(MODEL, bound_in, 1024))
+    assert record.estimated_cost_usd is not None and record.estimated_cost_usd > 0
 
 
 def test_task_cancellation_while_provider_awaits_writes_one_usage_record() -> None:
@@ -872,3 +907,340 @@ def test_plain_async_iterator_provider_stream_still_works() -> None:
     assert result[-1].reason == "stop"
     assert result[-1].message == "plain"
     assert [record.outcome for record in store.records] == ["stop"]
+
+
+# --- unreported usage: provider-billed steps are never recorded as $0 ---------
+
+NO_USAGE_TEXT = [TextDelta("Hello"), StreamEnd("stop")]
+
+
+def test_unreported_usage_is_recorded_as_the_upper_bound() -> None:
+    store = InMemoryUsageStore()
+    config = KernelConfig(api_key="test-key")
+    messages = [{"role": "user", "content": "h\u00e9llo \u4f60\u597d"}]
+    loop, provider = build([NO_USAGE_TEXT], store=store, config=config)
+
+    result = collect(loop, messages, turn_id="t1")
+
+    bound_in = input_bound(messages)
+    assert bound_in > len(json.dumps(messages))  # bytes, not characters, not ASCII-escaped
+    record = store.records[0]
+    assert provider.requests[0].max_tokens == 1024
+    assert record.input_tokens == bound_in
+    assert record.output_tokens == 1024
+    assert record.total_tokens == bound_in + 1024
+    assert record.estimated_cost_usd == config.estimate_cost(MODEL, bound_in, 1024)
+    assert record.estimated_cost_usd is not None and record.estimated_cost_usd > 0
+    assert record.cost_known is True
+    assert record.usage_reported is False
+    assert record.usage_estimated is True
+    assert record.to_dict()["usage_estimated"] is True
+    finished = result[-1]
+    assert finished.estimated_cost_usd == record.estimated_cost_usd
+    # TurnFinished token fields stay the provider-reported counts.
+    assert finished.input_tokens == 0
+    assert finished.output_tokens == 0
+    assert finished.reason == "stop"
+
+
+def test_input_bound_covers_the_tools_sent_with_the_request() -> None:
+    store = InMemoryUsageStore()
+    tools = [{"type": "function", "function": {"name": "web.search", "parameters": {"type": "object"}}}]
+    messages = [{"role": "user", "content": "hi"}]
+    loop, _ = build([NO_USAGE_TEXT], store=store)
+
+    collect(loop, messages, tools=tools)
+
+    assert store.records[0].input_tokens == input_bound(messages, tools)
+    assert input_bound(messages, tools) > input_bound(messages)
+
+
+def test_unmetered_step_after_a_metered_step_adds_only_its_own_bound() -> None:
+    store = InMemoryUsageStore()
+    provider = SnapshotProvider([tool_script("stub.tool", {"n": 1}, usage=(10, 5)), NO_USAGE_TEXT])
+    loop = AgentLoop(
+        provider=provider,
+        config=KernelConfig(api_key="test-key"),
+        tool_executor=CallableToolExecutor(lambda call: _ok()),
+        usage_store=store,
+        model=MODEL,
+    )
+
+    result = collect(loop, [{"role": "user", "content": "go"}])
+
+    second_bound = provider.bounds[1]
+    assert provider.requests[1].max_tokens == 1024
+    record = store.records[0]
+    assert record.steps == 2
+    assert record.input_tokens == 10 + second_bound
+    assert record.output_tokens == 5 + 1024
+    assert record.total_tokens == 10 + second_bound + 5 + 1024
+    assert record.usage_reported is True
+    assert record.usage_estimated is True
+    # The reported counts are preserved exactly on the finished event.
+    assert result[-1].input_tokens == 10
+    assert result[-1].output_tokens == 5
+    assert result[-1].estimated_cost_usd == record.estimated_cost_usd
+
+
+def test_provider_failure_as_the_only_event_adds_no_bound() -> None:
+    store = InMemoryUsageStore()
+    failing = [ProviderFailure("provider_http_error", "HTTP 503", retryable=True, status=503)]
+    loop, _ = build([failing], store=store)
+
+    result = collect(loop, [{"role": "user", "content": "hi"}])
+
+    assert result[-1].reason == "error"
+    record = store.records[0]
+    assert record.input_tokens == 0
+    assert record.output_tokens == 0
+    assert record.estimated_cost_usd == 0.0
+    assert record.cost_known is True
+    assert record.usage_reported is False
+    assert record.usage_estimated is False
+
+
+def test_provider_failure_after_text_is_estimated() -> None:
+    store = InMemoryUsageStore()
+    failing = [TextDelta("par"), ProviderFailure("provider_timeout", "timed out", retryable=True)]
+    messages = [{"role": "user", "content": "hi"}]
+    loop, _ = build([failing], store=store)
+
+    result = collect(loop, messages)
+
+    assert result[-1].reason == "error"
+    record = store.records[0]
+    assert record.input_tokens == input_bound(messages)
+    assert record.output_tokens == 1024
+    assert record.usage_estimated is True
+    assert record.estimated_cost_usd is not None and record.estimated_cost_usd > 0
+
+
+def test_provider_failure_after_a_tool_call_is_estimated() -> None:
+    store = InMemoryUsageStore()
+    failing = [
+        ToolCallReady(index=0, call_id="c1", name="stub.tool", arguments={}),
+        ProviderFailure("provider_timeout", "timed out", retryable=True),
+    ]
+    loop, _ = build([failing], store=store)
+
+    collect(loop, [{"role": "user", "content": "hi"}])
+
+    assert store.records[0].usage_estimated is True
+    assert store.records[0].output_tokens == 1024
+
+
+def test_aclose_before_usage_records_the_bound_on_the_cancelled_turn() -> None:
+    store = InMemoryUsageStore()
+    messages = [{"role": "user", "content": "hi"}]
+    loop, _ = build([[TextDelta("a"), TextDelta("b"), UsageReport(3, 2, 5), StreamEnd("stop")]], store=store)
+
+    async def run() -> None:
+        gen = loop.run_turn(messages, turn_id="t1")
+        assert (await gen.__anext__()).kind == "turn_started"
+        assert (await gen.__anext__()).kind == "token_delta"
+        await gen.aclose()
+
+    asyncio.run(run())
+
+    assert len(store.records) == 1
+    record = store.records[0]
+    assert record.outcome == "cancelled"
+    assert record.input_tokens == input_bound(messages)
+    assert record.output_tokens == 1024
+    assert record.usage_reported is False
+    assert record.usage_estimated is True
+
+
+def test_aclose_after_usage_does_not_add_a_bound() -> None:
+    store = InMemoryUsageStore()
+    loop, _ = build([text_script("Hello there", usage=(7, 3))], store=store)
+
+    async def run() -> None:
+        gen = loop.run_turn([{"role": "user", "content": "hi"}])
+        kinds_seen = [(await gen.__anext__()).kind for _ in range(3)]
+        assert kinds_seen == ["turn_started", "token_delta", "usage_updated"]
+        await gen.aclose()
+
+    asyncio.run(run())
+
+    record = store.records[0]
+    assert (record.input_tokens, record.output_tokens) == (7, 3)
+    assert record.usage_reported is True
+    assert record.usage_estimated is False
+
+
+def test_cancel_token_mid_stream_before_usage_includes_the_bound() -> None:
+    token = CancelToken()
+    store = InMemoryUsageStore()
+    messages = [{"role": "user", "content": "hi"}]
+
+    class CancellingProvider:
+        async def stream(self, request: ChatRequest) -> Any:
+            yield TextDelta("partial")
+            token.cancel()
+            yield TextDelta("after cancel")
+            yield UsageReport(1, 1, 2)
+            yield StreamEnd("stop")
+
+    loop = AgentLoop(
+        provider=CancellingProvider(),
+        config=KernelConfig(api_key="test-key"),
+        usage_store=store,
+        model=MODEL,
+    )
+    result = collect(loop, messages, cancel=token)
+
+    assert result[-1].reason == "cancelled"
+    record = store.records[0]
+    assert record.outcome == "cancelled"
+    assert record.input_tokens == input_bound(messages)
+    assert record.output_tokens == 1024
+    assert record.usage_reported is False
+    assert record.usage_estimated is True
+    assert result[-1].estimated_cost_usd == record.estimated_cost_usd
+
+
+def test_provider_exception_before_usage_records_the_bound_with_error_outcome() -> None:
+    store = InMemoryUsageStore()
+    messages = [{"role": "user", "content": "hi"}]
+
+    class ExplodingProvider:
+        async def stream(self, request: ChatRequest) -> Any:
+            yield TextDelta("partial")
+            raise RuntimeError("socket reset")
+
+    loop = AgentLoop(
+        provider=ExplodingProvider(),
+        config=KernelConfig(api_key="test-key"),
+        usage_store=store,
+        model=MODEL,
+    )
+
+    with pytest.raises(RuntimeError, match="socket reset"):
+        collect(loop, messages)
+
+    assert len(store.records) == 1
+    record = store.records[0]
+    assert record.outcome == "error"
+    assert record.input_tokens == input_bound(messages)
+    assert record.output_tokens == 1024
+    assert record.usage_estimated is True
+
+
+def test_task_cancellation_before_usage_records_the_bound() -> None:
+    store = InMemoryUsageStore()
+    messages = [{"role": "user", "content": "hi"}]
+
+    class HangingProvider:
+        async def stream(self, request: ChatRequest) -> Any:
+            yield TextDelta("partial")
+            await asyncio.Event().wait()
+            yield StreamEnd("stop")  # pragma: no cover - never reached
+
+    loop = AgentLoop(
+        provider=HangingProvider(),
+        config=KernelConfig(api_key="test-key"),
+        usage_store=store,
+        model=MODEL,
+    )
+
+    async def run() -> None:
+        seen: list[str] = []
+
+        async def consume() -> None:
+            async for event in loop.run_turn(messages, turn_id="t1"):
+                seen.append(event.kind)
+
+        async def wait_for_text() -> None:
+            while "token_delta" not in seen:
+                await asyncio.sleep(0)
+
+        task = asyncio.create_task(consume())
+        await asyncio.wait_for(wait_for_text(), timeout=5)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+    asyncio.run(run())
+
+    assert len(store.records) == 1
+    record = store.records[0]
+    assert record.outcome == "cancelled"
+    assert record.input_tokens == input_bound(messages)
+    assert record.output_tokens == 1024
+    assert record.usage_estimated is True
+
+
+def test_unpriced_model_without_usage_stays_unknown_not_estimated_cost() -> None:
+    store = InMemoryUsageStore()
+    loop, _ = build([NO_USAGE_TEXT], store=store, model="unknown/model")
+
+    result = collect(loop, [{"role": "user", "content": "hi"}])
+
+    record = store.records[0]
+    assert record.estimated_cost_usd is None
+    assert record.cost_known is False
+    assert result[-1].estimated_cost_usd is None
+    # The token bound is still recorded; only the price is unknown.
+    assert record.usage_estimated is True
+    assert record.output_tokens == 1024
+
+
+def test_metered_turn_is_unchanged_and_not_marked_estimated() -> None:
+    store = InMemoryUsageStore()
+    loop, _ = build([text_script("Hello there")], store=store)
+
+    result = collect(loop, [{"role": "user", "content": "hi"}])
+
+    record = store.records[0]
+    assert (record.input_tokens, record.output_tokens, record.total_tokens) == (10, 5, 15)
+    assert record.estimated_cost_usd == pytest.approx(4.0e-06)
+    assert record.usage_reported is True
+    assert record.usage_estimated is False
+    assert result[-1].estimated_cost_usd == record.estimated_cost_usd
+
+
+def test_unmetered_step_does_not_consume_the_output_token_budget() -> None:
+    # Step 1 reports nothing; step 2 must still be offered the full remaining
+    # budget, because TurnBudget is measured in reported usage only.
+    unmetered_tool = [
+        ToolCallReady(index=0, call_id="call_1", name="stub.tool", arguments={}),
+        StreamEnd("tool_calls"),
+    ]
+    store = InMemoryUsageStore()
+    loop, provider = build(
+        [unmetered_tool, text_script("done", usage=(10, 20))],
+        budget=TurnBudget(max_steps=5, max_output_tokens=300, max_tokens_per_step=1024, max_tool_calls=5),
+        executor=CallableToolExecutor(lambda call: _ok()),
+        store=store,
+    )
+
+    result = collect(loop, [{"role": "user", "content": "go"}])
+
+    assert [request.max_tokens for request in provider.requests] == [300, 300]
+    assert result[-1].reason == "stop"
+    assert result[-1].output_tokens == 20
+    record = store.records[0]
+    assert record.output_tokens == 300 + 20
+    assert record.usage_reported is True
+    assert record.usage_estimated is True
+
+
+def test_usage_log_line_carries_usage_estimated() -> None:
+    import io
+
+    from chat.logging import configure_logging
+    from chat.metrics import LoggedUsageStore
+
+    stream = io.StringIO()
+    configure_logging(level="debug", stream=stream)
+    store = LoggedUsageStore(InMemoryUsageStore())
+    loop, _ = build([NO_USAGE_TEXT], store=store)
+
+    collect(loop, [{"role": "user", "content": "hi"}])
+
+    line = json.loads(stream.getvalue().splitlines()[-1])
+    assert line["event"] == "usage"
+    assert line["usage_reported"] is False
+    assert line["usage_estimated"] is True

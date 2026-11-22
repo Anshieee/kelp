@@ -102,9 +102,37 @@ Exceeding a limit emits `error.code = "turn_budget_exceeded"` with
 `details.limit` set to the limit name, then `turn_finished` with
 `reason = "budget"`. The turn stops; the session and loop stay usable.
 
-Token budgeting consumes the provider's reported usage. If a backend does not
-report usage, only the step, tool-call, and wall-clock limits bound the turn;
-the record keeps `usage_reported: false` so this is visible.
+Token budgeting consumes the provider's reported usage only. If a backend does
+not report usage, only the step, tool-call, and wall-clock limits bound the
+turn, and `max_output_tokens` is not consumed by that step. The record keeps
+`usage_reported: false` so this is visible. The same applies when a stream is
+cancelled or fails before its final usage chunk (the last chunk in OpenAI-style
+streams).
+
+The step still reached the provider, so its cost is not recorded as `$0`. A step
+that ends without a `UsageReport` is recorded at an upper bound, and the record
+carries `usage_estimated: true`:
+
+- input tokens: the UTF-8 byte length of the compact JSON of
+  `{"messages": <transcript sent in that request>, "tools": <tools>}`. A token
+  covers at least one byte and the JSON keys and quotes add far more bytes than
+  a chat template adds tokens, so this is above the billed input for what the
+  loop sends. A system prompt added by a provider adapter is not counted;
+- output tokens: that step's `max_tokens`, which the provider cannot exceed.
+
+The record's `input_tokens`, `output_tokens`, `total_tokens`, and
+`estimated_cost_usd` are the reported counts plus these bounds. The bound is
+generally well above the real usage, so the cost is a ceiling. A model with no
+price still records `estimated_cost_usd: null`. `usage_reported` stays `true`
+only if some step reported usage. `turn_finished` keeps the reported token
+counts, and its `estimated_cost_usd` equals the record's.
+
+A step is not estimated when its first and only event is a provider failure
+(HTTP status error, unreachable endpoint): nothing was generated. A failure
+after any text or tool call, a cancel, or an exception while the stream was open
+is estimated. A timeout before the first streamed byte is a sole
+failure too, so it adds no bound even if the provider started work; that is
+the one known gap.
 
 ### Tool calls
 
@@ -132,6 +160,7 @@ One `UsageRecord` per turn is appended to the configured store:
 {"turn_id":"turn_…","session_id":"s-1","model":"nvidia/nemotron-3.5-super-vl",
  "input_tokens":812,"output_tokens":143,"total_tokens":955,
  "estimated_cost_usd":null,"cost_known":false,"usage_reported":true,
+ "usage_estimated":false,
  "steps":2,"tool_calls":1,"started_at":"…","finished_at":"…",
  "duration_ms":912,"outcome":"stop"}
 ```

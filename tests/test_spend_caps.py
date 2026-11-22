@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
@@ -94,6 +95,22 @@ def samples(text: str) -> dict[str, float]:
 
 
 # -- windows and boundaries ------------------------------------------------
+
+
+def test_estimated_usage_record_counts_toward_the_cap(tmp_path: Path) -> None:
+    # A turn whose provider reported no usage is recorded at an upper bound
+    # (usage_estimated=True) with a finite cost; the guard must count it.
+    path = tmp_path / "estimated.jsonl"
+    store = JsonlUsageStore(path)
+    record = replace(usage_record(0.10), usage_reported=False, usage_estimated=True)
+    store.record(record)
+
+    state = guard(path, SpendCaps(day_usd=0.10)).evaluate()
+
+    assert record.usage_estimated is True
+    assert state.day.used_usd == pytest.approx(0.10)
+    assert state.blocked is True
+    assert state.block_reason == "cap"
 
 
 def test_day_cap_is_refused_exactly_at_the_limit(tmp_path: Path) -> None:
