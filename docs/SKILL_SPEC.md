@@ -318,7 +318,16 @@ a ContextVar-scoped socket guard refuses direct `socket`/`urllib`/HTTP-library c
 a handler runs, so an ignoring handler fails closed. It covers `getaddrinfo`, `gethostbyname`,
 `gethostbyname_ex`, `gethostbyaddr`, `create_connection`,
 `socket.connect`/`connect_ex`/`sendto`/`sendmsg`, and it propagates into threads and executor
-tasks started during the invocation. The guard is cooperative: a raw `_socket` object, a child
+tasks started during the invocation. `connect`/`connect_ex`, and `sendto`/`sendmsg` with an
+address, are bound to the IPs resolved for allowed hosts within the current
+`EgressClient.request` call; a hostname passed straight to them is refused, because CPython
+would resolve it past the guard. If a lookup returns any address
+that is not publicly routable (loopback, RFC 1918, link-local such as `169.254.169.254`, CGNAT,
+unspecified, or an IPv4-mapped form of those), the whole answer is refused with
+`egress:non_public_address` and nothing is recorded. The scope ends when the request returns, so
+a thread started inside a transport can no longer resolve, connect or `sendto` afterwards
+(`egress:scope_closed`); `send`/`sendall` on a socket it connected during the request are not
+intercepted. The guard is cooperative: a raw `_socket` object, a child
 process, a C extension calling `connect(2)`, or a thread that was already running before the
 invocation and gets work through a queue rather than `submit` is outside its reach and must be
 stopped at the deployment boundary. A test scans `skills/builtin` for direct egress imports
@@ -371,7 +380,7 @@ invoke(tool, arguments)
   │    ├─ hook false/raises          → approval_denied
   │    └─ hook true                  → continue
   ├─ handler under timeout
-  │    ├─ timeout                    → timeout (retryable)
+  │    ├─ timeout                    → timeout (retryable only if idempotent)
   │    ├─ SkillHandlerError          → its code
   │    └─ other exception            → handler_error
   ├─ output is object + serializable → else invalid_output
@@ -432,7 +441,7 @@ invoke(tool, arguments)
 | `approval_denied` | no | no | A human declined; nothing ran. |
 | `policy_denied` | no | no | The concrete call escaped the declared effects/scope. Terminal; never approvable. |
 | `invalid_output` | no | no | Handler violated its output schema; a bug. |
-| `timeout` | yes | no | Handler exceeded `timeout_ms`; side effects may be partial. |
+| `timeout` | only if the manifest sets `idempotent: true` | no | Handler exceeded `timeout_ms`; side effects may be partial, so a non-idempotent skill is never marked retryable. |
 | `handler_error` | no | no | Unhandled handler failure (handler may opt in to retryable). |
 | `missing_secret` | no | no | A declared secret is not configured. |
 | `not_implemented` | no | no | Prototype stub; the handler is not built yet. |

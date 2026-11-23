@@ -803,6 +803,58 @@ def test_retry_reuses_the_user_message_without_duplicating_it(tmp_path: Path) ->
         store.close()
 
 
+@pytest.mark.parametrize("reason", ["cancelled", "budget", "error", "interrupted"])
+def test_retry_is_allowed_for_every_turn_reason_that_ends_in_a_retryable_status(
+    tmp_path: Path, reason: str
+) -> None:
+    """CHAT_SPEC §5.4: error, stopped (client Stop) and interrupted may retry.
+
+    A turn stores the *reason* (``cancelled``, ``budget``, ...), and the
+    message status derived from it decides retryability.
+    """
+
+    service, store, _provider = make_service(
+        tmp_path, [text_script("first"), text_script("second")]
+    )
+    try:
+        thread = service.create_thread()
+
+        async def scenario() -> None:
+            payload = await send_and_wait(service, thread["id"], "question")
+            store.update_turn(payload["turn_id"], state="finished", reason=reason)
+
+            retried = await service.retry(payload["turn_id"])
+            await service.wait_for_turn(retried["turn_id"])
+            assert retried["retry_of"] == payload["turn_id"]
+            assert retried["turn_id"] != payload["turn_id"]
+
+        asyncio.run(scenario())
+    finally:
+        store.close()
+
+
+@pytest.mark.parametrize("reason", ["stop", "length", "stopped", "bogus"])
+def test_retry_is_refused_for_completed_or_unknown_reasons(
+    tmp_path: Path, reason: str
+) -> None:
+    service, store, _provider = make_service(tmp_path, [text_script("first")])
+    try:
+        thread = service.create_thread()
+
+        async def scenario() -> None:
+            payload = await send_and_wait(service, thread["id"], "question")
+            store.update_turn(payload["turn_id"], state="finished", reason=reason)
+
+            with pytest.raises(ChatErrorType) as refused:
+                await service.retry(payload["turn_id"])
+            assert refused.value.code == "turn_not_retryable"
+            assert refused.value.status == 409
+
+        asyncio.run(scenario())
+    finally:
+        store.close()
+
+
 def test_retry_rejects_a_non_latest_or_unfinished_turn(tmp_path: Path) -> None:
     service, store, _provider = make_service(tmp_path, [text_script("one"), text_script("two")])
     try:
@@ -1384,6 +1436,114 @@ def test_an_expired_approval_marks_the_card_expired_not_denied(tmp_path: Path) -
             ]
             assert resolved[-1]["status"] == "expired"
             assert resolved[-1]["executed"] is False
+
+        asyncio.run(scenario())
+    finally:
+        store.close()
+
+
+class _RecordingUsageStore:
+    """Usage store that remembers which asyncio task wrote each record."""
+
+    def __init__(self) -> None:
+        self.records: list[tuple[object, asyncio.Task[object] | None]] = []
+
+    def record(self, record: object) -> None:
+        self.records.append((record, asyncio.current_task()))
+
+
+class _ArmingProvider:
+    """Streams two text deltas, calling ``arm`` between them."""
+
+    def __init__(self, arm: object) -> None:
+        self._arm = arm
+        self.turn_task: asyncio.Task[object] | None = None
+        self.closed_in: asyncio.Task[object] | None = None
+
+    async def stream(self, request: object) -> object:
+        self.turn_task = asyncio.current_task()
+        try:
+            yield TextDelta("a")
+            self._arm()  # type: ignore[operator]
+            yield TextDelta("b")
+            yield StreamEnd("stop")
+        finally:
+            self.closed_in = asyncio.current_task()
+
+
+def test_thread_deleted_mid_turn_closes_the_loop_in_the_turn_task(tmp_path: Path) -> None:
+    store = ChatStore(tmp_path / "chat.db")
+    usage = _RecordingUsageStore()
+    armed = {"on": False}
+    provider = _ArmingProvider(lambda: armed.update(on=True))
+    service = ChatService(
+        store=store,
+        provider=provider,
+        model="nvidia/nemotron-3.5-super-vl",
+        usage_store=usage,  # type: ignore[arg-type]
+    )
+    try:
+        thread = service.create_thread()
+        original_get_thread = store.get_thread
+
+        def get_thread_deleted_once_armed(thread_id: str, **kwargs: object) -> object:
+            # One-shot: the thread vanishes for exactly the loop's liveness
+            # check, as if another request had hard-deleted it mid-turn.
+            if armed["on"] and thread_id == thread["id"]:
+                armed["on"] = False
+                return None
+            return original_get_thread(thread_id, **kwargs)  # type: ignore[arg-type]
+
+        store.get_thread = get_thread_deleted_once_armed  # type: ignore[method-assign]
+
+        async def scenario() -> None:
+            payload, _created = await service.send(
+                thread["id"], text="go", client_turn_id="ct-gone-mid-turn"
+            )
+            await service.wait_for_turn(payload["turn_id"], timeout=5)
+
+        asyncio.run(scenario())
+
+        # The loop was closed deterministically by the service, inside the
+        # turn's own task and context, not later by the asyncgen finalizer.
+        # The loop reads the provider stream through short-lived read tasks, so
+        # the generator's start-up task is not the turn task; the turn task is
+        # the one that closed the stream and wrote the usage record.
+        assert provider.turn_task is not None
+        assert provider.closed_in is not None
+        assert len(usage.records) == 1
+        record, written_by = usage.records[0]
+        assert record.outcome == "cancelled"  # type: ignore[attr-defined]
+        assert written_by is provider.closed_in
+    finally:
+        store.close()
+
+
+def test_scrub_values_are_redacted_but_never_supplied_to_skills(tmp_path: Path) -> None:
+    # Tenant-file values are redaction-only: chat records must not carry them,
+    # and they must not join the mapping that supplies skill secrets.
+    tenant_value = "tenant-file-only-value"
+
+    async def executor(call: object) -> dict:
+        return {"ok": True, "output": {"echo": f"leaked {tenant_value}"}}
+
+    service, store, _provider = make_service(
+        tmp_path,
+        [tool_script("stub.tool", {"q": tenant_value}), text_script("done")],
+        secrets={"DEMO_TOKEN": "boot-secret-value"},
+        scrub_values=(tenant_value,),
+        tool_executor_factory=executor_factory(executor),
+    )
+    try:
+        assert tenant_value not in service._secrets.values()
+        thread = service.create_thread()
+
+        async def scenario() -> None:
+            payload = await send_and_wait(service, thread["id"], "go")
+            assert tenant_value not in json.dumps(
+                store.get_message(payload["assistant_message_id"])["blocks"]
+            )
+            assert tenant_value not in json.dumps(store.events_after(thread["id"]))
 
         asyncio.run(scenario())
     finally:

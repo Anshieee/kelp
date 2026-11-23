@@ -1,6 +1,10 @@
 # Dashboard chat surface (KEL-8 / P0-2)
 
-- **Status:** spec only, 2026-10-29. **No UI code and no server code in this slice.**
+- **Status:** specified 2026-10-29; the server it describes is implemented in `chat/`
+  (store, service, HTTP API, SSE stream, approvals, share links). UI code is outside
+  this document. Some planning passages (the §1.1 dependency table and the §14 deltas)
+  keep their original wording; where this text and the code
+  disagree, the code and `tests/` win.
 - **Branch:** `kel-8` (from `main` at `daf3b14`, after KEL-6 + KEL-7 merged)
 - **Builds on:** `docs/KERNEL.md` (loop, events, budgets, usage), `docs/OPENSHELL.md`
   (policy, approvals, audit), `docs/SKILL_SPEC.md` v1.0 (manifests, envelopes)
@@ -47,7 +51,7 @@ Out of scope (unchanged from the plan):
 
 ### 1.1 Honest dependencies
 
-These are not built yet either, and KEL-8 acceptance depends on them:
+The *State* column is what was true when KEL-8 was written; rows that have since shipped say so:
 
 | Dependency | State | Effect on KEL-8 |
 |---|---|---|
@@ -55,10 +59,10 @@ These are not built yet either, and KEL-8 acceptance depends on them:
 | `web.search` handler | stub (`SkillNotImplementedError`) | No live results or web source chips. The demo path needs a fixture-backed handler or a recorded success envelope; a failed stub yields only the failed-search chip (§9.1). |
 | `github.read` handler | stub (`SkillNotImplementedError`) | No real sweeps or GitHub source chips. Same fixture requirement: a recorded envelope must satisfy the manifest output schema and the §6.1 card shape. |
 | `github.write` handler | implemented with manifest-level approval | Creates a scoped branch, commit, and pull request only after the existing skill approval hook returns true; denied or missing approval runs no handler. |
-| Cancellation in `run_turn` | absent | "Stop" needs the kernel delta in §14.1 |
-| Approval wait vs. wall-clock budget | approval wait counts against `max_wall_seconds` | A 10-minute approval can never finish inside a 120 s budget; see §14.2 |
-| Durable chat store | absent (KEL-6 persists usage only) | Resume and non-duplication need §13 |
-| Auth for the dashboard | not in this slice | Contract assumes a single owner; §12 states the minimum |
+| Cancellation in `run_turn` | built (`CancelToken` in `kernel/loop.py`) | "Stop" needed the kernel delta in §14.1 |
+| Approval wait vs. wall-clock budget | built: the loop subtracts approval wait (`waited_ms`) from the wall budget | A 10-minute approval would otherwise never finish inside a 120 s budget; see §14.2 |
+| Durable chat store | built (`chat/store.py`, SQLite) | Resume and non-duplication use §13 |
+| Auth for the dashboard | built (`chat/routers/auth.py`: owner bearer, device sessions) | Contract assumes a single owner; §12 states the rules |
 
 ---
 
@@ -361,7 +365,7 @@ duplicating messages" true even when the POST response was lost.
 `POST /api/turns/{turn_id}/stop` → `202`.
 
 - Kernel delta D1 (§14.1) makes the loop stop between provider chunks/steps.
-- Terminates with `error.code = "turn_cancelled"`? No — no error. Persist
+- A stop is not an error: no `turn_cancelled` error is raised. Persist
   `turn_finished.reason = "cancelled"`, message status `stopped`, usage record
   `outcome: "cancelled"`. Partial text stays exactly as streamed; cards stay.
 - Stop on a finished turn → `409 turn_not_running` (idempotent no-op for the UI).
@@ -1197,7 +1201,8 @@ tests/test_chat_api.py
 ## 14. Deltas this spec requires from KEL-6 / KEL-7
 
 The spec is written against the merged KEL-6/KEL-7 code and cannot be implemented without
-these small, additive changes. They are listed so the implementation slice budgets for
+these small, additive changes. They have since landed (`CancelToken` and the approval-wait
+accounting in `kernel/loop.py`); the text below is the original requirement. They are listed so the implementation slice budgets for
 them and does not quietly work around them.
 
 ### 14.1 D1 — Cancellation (KEL-6)
@@ -1263,7 +1268,7 @@ on the client.
 | `POST` | `/threads` | `{ title? }` | `201 { thread }` | First send creates the thread, then posts the turn; no body → title from the first user message |
 | `GET` | `/threads/{id}` | `?limit=50&before=` | `{ thread, messages, last_seq, has_more }` | History snapshot (§10.1) |
 | `PATCH` | `/threads/{id}` | `{ title }` | `{ thread }` | Rename |
-| `DELETE` | `/threads/{id}` | — | `{ ok: true }` | Soft delete; stops a running turn |
+| `DELETE` | `/threads/{id}` | — | `{ ok, thread_id, deleted, … }` (§10.5) | Hard purge, not a soft delete. Stops a running turn first; `409 turn_in_progress` if it is still settling; a repeat delete is `404 unknown_thread` |
 | `GET` | `/threads/{id}/stream` | `Last-Event-ID` or `?after=` | `text/event-stream` | §4.2 |
 
 One id space, one name on the wire: `thread_id`. The kernel calls the same value

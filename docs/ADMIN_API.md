@@ -27,7 +27,9 @@
    field in any response.
 5. **Bounded.** The run index and run counts cover the store's newest-first
    500-row window (`window: 500`). They are not lifetime counters. The audit
-   index pages through the persisted audit log with `limit` and `offset`.
+   index is not bounded by that window: it pages through the whole
+   tenant-scoped audit log with `limit` and `offset`. `window` in an audit
+   response is the same run-index constant (`500`), not an audit-log size.
 6. **Observable.** Every response carries `X-Request-Id`; the JSON body repeats
    the same value as `request_id`. Admin reads are charged to the existing
    `admin` rate-limiter class (the same generous bucket used by `GET
@@ -50,8 +52,11 @@ A session cookie works the same way for `GET` requests:
 curl -sS --cookie "$KELP_COOKIE_JAR" "$KELP_BASE_URL/api/admin/summary"
 ```
 
-Admin routes are `GET`-only. A non-`GET` method on a known admin path returns a
-typed `405` with `Allow: GET`.
+Admin routes are `GET`-only. A mutating method (`POST`, `PATCH`, `DELETE`) that
+passes the ordinary owner auth and CSRF check on a known admin path returns a
+typed `405` with `Allow: GET`; without a valid CSRF token it is refused earlier
+with `403 csrf_failed`. Any other method (for example `PUT`) is refused by the
+dispatcher with `405` and `Allow: GET, POST, PATCH, DELETE`.
 
 ## Common response envelope
 
@@ -226,6 +231,10 @@ Query parameters:
 | `thread_id` (or `thread`) | string | — | Restrict to one thread |
 | `status` | frozen status | — | Restrict to one status |
 
+An integer outside its range is clamped to the nearest bound (`limit=9999` is
+treated as `200`, `offset=-3` as `0`), not rejected. A value that is not an
+integer returns `400 invalid_request`.
+
 ```json
 {
   "ok": true,
@@ -296,8 +305,15 @@ Query parameters:
 | Name | Type | Default | Meaning |
 |---|---|---|---|
 | `limit` | integer 1–200 | `50` | Rows in this page |
-| `offset` | integer 0–500 | `0` | Offset in the newest-first index |
+| `offset` | integer 0 or more | `0` | Offset in the newest-first index; not capped at the run window |
 | `event` | string | — | Exact event name filter |
+
+A `limit` outside 1–200 is clamped to the nearest bound and a negative `offset`
+is treated as `0`; a value that is not an integer returns `400 invalid_request`.
+An `offset` past the end of the log returns an empty page with `next_offset:
+null`, so a client can page until `next_offset` is `null`. `window` is always
+`500` here: it is the run-index window constant and says nothing about how many
+audit rows exist.
 
 ```json
 {
@@ -327,10 +343,10 @@ Query parameters:
 | Status | Code | Cause |
 |---|---|---|
 | `400` | `invalid_request` | `limit`/`offset` not an integer, or an unknown `status` |
-| `401` | `unauthenticated` | Missing or invalid owner credential |
-| `403` | `forbidden` / `csrf_failed` | Owner auth failure on a mutation attempt |
+| `401` | `unauthorized` | Missing or invalid owner credential (the frozen contract name is `unauthenticated`; the wire code is `unauthorized`) |
+| `403` | `csrf_failed` | A mutating method without a valid CSRF token or same-origin check (refused before the `405`) |
 | `404` | `not_found` | Unknown admin path, unknown run, or another tenant's run/tenant id |
-| `405` | `method_not_allowed` | A non-`GET` method on a known admin path |
+| `405` | `method_not_allowed` | A non-`GET` method on a known admin path (`Allow: GET`), or an unsupported method such as `PUT` (`Allow: GET, POST, PATCH, DELETE`) |
 | `429` | `rate_limited` | The `admin` limiter class refused the request |
 
 ## Known P5 interactions
@@ -338,13 +354,18 @@ Query parameters:
 These are surfaced here so an operator does not misread the numbers; none is
 changed by P6.
 
-- **Entitlement counter increments twice per accepted `POST /api/runs`.** The
-  submission path checks the entitlement gate once at the HTTP boundary and the
-  service checks it again inside `send`. Both use the same injected counter. The
+- **The entitlement gate is consulted twice per accepted `POST /api/runs`.** The
+  submission path checks it once at the HTTP boundary and the service checks it
+  again inside `send`. In the shipped server no usage counter is injected into
+  the entitlement store, so plan ceilings (`max_turns`, `max_runs`,
+  `max_cost_usd`) are parsed but not enforced and `entitlement_exhausted` is
+  never returned (see `docs/DEPLOY.md` §3). If an embedder injects a counter
+  that increments per gate check, each accepted run would be counted twice. The
   admin usage/spend views read persisted usage records, so they do not expose a
   synthetic "checks" count.
 - **`max_turns` and `max_runs` share one injected usage counter.** A plan that
-  sets both to the same value is not counting two independent series.
+  sets both to the same value is not counting two independent series. This
+  matters only once a counter is injected.
 - **Plan snapshots are recorder-side.** The frozen `TaskRun` field order has no
   plan column. `GET /api/admin/tenants/{tenant_id}` reports the current plan
   configuration; it does not invent per-run plan history.

@@ -12,7 +12,13 @@ import pytest
 from chat import ChatAPI, ChatService, ChatStore, Request
 from chat.api import RateLimiter
 from chat.runs import RunRecorder
-from kernel.usage import InMemoryUsageStore, SpendCaps, SpendGuard, UsageRecord
+from kernel.usage import (
+    InMemoryUsageStore,
+    JsonlUsageStore,
+    SpendCaps,
+    SpendGuard,
+    UsageRecord,
+)
 from openshell.audit import AuditLog
 from payments.entitlements import PlanLimits, StaticEntitlementStore
 
@@ -355,7 +361,6 @@ def test_admin_rows_use_the_frozen_field_list_and_leak_no_prompt_or_secret(
         serialized = json.dumps(audit_rows)
         assert PROMPT not in serialized
         assert SECRET_VALUE not in serialized
-        assert service is not None
     finally:
         api.close()
         store.close()
@@ -397,6 +402,101 @@ def test_admin_invalid_input_is_typed_and_creates_nothing(tmp_path: Path) -> Non
 
         assert store.list_threads(tenant_id="owner")[0] == []
         assert store.list_runs(tenant_id="owner") == []
+    finally:
+        api.close()
+        store.close()
+
+
+# -- audit pagination ------------------------------------------------------
+
+
+def test_admin_audit_next_offset_pages_through_every_row_once(
+    tmp_path: Path,
+) -> None:
+    audit = AuditLog(tmp_path / "audit" / "audit.jsonl")
+    for index in range(900):
+        audit.record(
+            "tool_call", tenant_id="owner", request_id=f"req_{index:04d}"
+        )
+    api, _service, store = _make_api(tmp_path, audit=audit)
+    try:
+        seen: list[str] = []
+        offset: int | None = 0
+        pages = 0
+        while offset is not None:
+            pages += 1
+            assert pages <= 10, "next_offset never reached null"
+            body = _body(
+                _call(
+                    api,
+                    "GET",
+                    "/api/admin/audit",
+                    query={
+                        "limit": ["200"],
+                        "offset": [str(offset)],
+                        "event": ["tool_call"],
+                    },
+                )
+            )
+            assert body["window"] == 500
+            seen.extend(row["request_id"] for row in body["audit"])
+            next_offset = body["next_offset"]
+            assert next_offset is None or next_offset > offset
+            offset = next_offset
+
+        assert seen == [f"req_{index:04d}" for index in range(899, -1, -1)]
+
+        past_end = _body(
+            _call(
+                api,
+                "GET",
+                "/api/admin/audit",
+                query={"offset": ["5000"], "event": ["tool_call"]},
+            )
+        )
+        assert past_end["audit"] == []
+        assert past_end["next_offset"] is None
+    finally:
+        api.close()
+        store.close()
+
+
+# -- torn JSONL lines ------------------------------------------------------
+
+
+def test_admin_views_keep_valid_rows_when_a_log_line_is_torn(
+    tmp_path: Path,
+) -> None:
+    audit = AuditLog(tmp_path / "audit" / "audit.jsonl")
+    audit.record("tool_call", tenant_id="owner", request_id="req_one")
+    with audit.path.open("a", encoding="utf-8") as handle:
+        handle.write("garbled}{\n")
+    audit.record("tool_call", tenant_id="owner", request_id="req_two")
+    with audit.path.open("a", encoding="utf-8") as handle:
+        handle.write('{"event": "tool_call", "tenant_id": "owner"')
+
+    usage_path = tmp_path / "usage" / "usage.jsonl"
+    usage = JsonlUsageStore(usage_path)
+    stamp = datetime.now(timezone.utc).isoformat()
+    usage.record(_usage("owner", cost=1.25, finished_at=stamp))
+    with usage_path.open("a", encoding="utf-8") as handle:
+        handle.write('{"turn_id": "torn"')
+
+    api, _service, store = _make_api(tmp_path, usage_store=usage, audit=audit)
+    try:
+        rows = _body(
+            _call(
+                api,
+                "GET",
+                "/api/admin/audit",
+                query={"event": ["tool_call"]},
+            )
+        )["audit"]
+        assert [row["request_id"] for row in rows] == ["req_two", "req_one"]
+
+        summary = _body(_call(api, "GET", "/api/admin/summary"))["summary"]
+        assert summary["usage"]["records"] == 1
+        assert summary["spend"]["month"]["used_usd"] == 1.25
     finally:
         api.close()
         store.close()

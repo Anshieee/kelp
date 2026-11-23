@@ -15,7 +15,13 @@ answers from a plan table and an optional usage counter:
 
 * the owner plan is an explicit ``PlanLimits`` object with no ceilings, not a
   special case that silently bypasses the store;
-* an unknown tenant or an unknown task type is denied rather than admitted;
+* a tenant with no entry in ``KELP_ENTITLEMENT_TENANT_PLANS_JSON`` gets the
+  default plan (the owner plan unless ``KELP_ENTITLEMENT_PLAN`` names another);
+  a tenant mapped to a plan id that is missing from the plan table gets no plan
+  and is denied with ``plan_id`` ``None``;
+* a task type outside a plan's ``allowed_task_types`` is denied with
+  ``entitlement_denied``; ``allowed_task_types`` of ``None`` puts no restriction
+  on task types, which is the owner plan's setting;
 * a configured ceiling is checked against a caller-injected counter, so the
   plan limit and the persisted usage source stay separate concerns.
 
@@ -401,7 +407,8 @@ class StaticEntitlementStore:
         del actor_id, role, surface
         plan = self.plan_for(tenant_id=tenant_id, task_type=task_type)
         if plan is None:
-            # Fail closed: an unknown tenant has no plan, which is a denial.
+            # Fail closed: a tenant mapped to a plan id missing from the
+            # table has no plan, which is a denial.
             return EntitlementDecision(
                 decision="deny",
                 code="entitlement_denied",

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from pathlib import Path
 from typing import Any
 
@@ -10,6 +11,7 @@ import httpx
 import pytest
 
 from chat import ChatService, ChatStore
+from chat.errors import ChatError
 from chat.server import _tool_specs
 from kernel.provider import StreamEnd, ToolCallReady, UsageReport
 from openshell.audit import AuditLog
@@ -112,20 +114,46 @@ def test_model_is_offered_github_write_and_pending_approval_has_no_egress(
             assert card["scopes"]["repos"] == ["Anshieee/kelp"]
             assert card["arguments_digest"].startswith("sha256:")
             service.decide(card["id"], "approve")
-            # A second approval cannot authorize a second invocation.
-            try:
-                service.decide(card["id"], "approve")
-            except Exception as exc:
-                assert getattr(exc, "code", None) in {"already_used", "not_approved"}
+            # A repeat approval while the card is still "approved" is an
+            # idempotent replay of the same decision. It must not raise, and it
+            # must not queue a second invocation (checked below: one PR).
+            replay = service.decide(card["id"], "approve")
+            assert replay["approval"]["status"] == "approved"
             await service.wait_for_turn(payload["turn_id"])
             assert sum(request.url.path.endswith("/pulls") for request in requests) == 1
             assert len(requests) == 8
             assert all(request.url.host == "api.github.com" for request in requests)
             settled = store.get_approval(card["id"])
             assert settled["status"] == "consumed"
+            # Once the invocation has consumed the card, approving it again is
+            # refused (409 already_used) and still starts nothing.
+            with pytest.raises(ChatError) as reused:
+                service.decide(card["id"], "approve")
+            assert reused.value.code == "already_used"
+            assert reused.value.status == 409
+            assert len(requests) == 8
+            # The token really was in play (so the absence checks below can
+            # fail), and it must not appear in anything the service persisted.
+            assert all(
+                request.headers["authorization"].endswith(TOKEN)
+                for request in requests
+            )
+            persisted = json.dumps(
+                {
+                    "approvals": store.list_approvals(status="consumed"),
+                    "events": store.events_after(thread["id"]),
+                    "messages": store.get_message(payload["assistant_message_id"]),
+                },
+                default=str,
+            )
+            assert card["id"] in persisted
+            assert TOKEN not in persisted
 
         asyncio.run(scenario())
         assert any(row.get("event") == "skill_egress" for row in audit.entries())
+        audit_text = (tmp_path / "audit.jsonl").read_text(encoding="utf-8")
+        assert "skill_egress" in audit_text
+        assert TOKEN not in audit_text
     finally:
         store.close()
 

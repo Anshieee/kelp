@@ -1,6 +1,6 @@
 # Kelp
 
-Kelp is a private, always-on assistant for chat, approval-gated work, scheduled tasks, and spend caps. Saved-card payment flows are present in the codebase but are not wired into the running service yet. Kelp stores chat and working data locally; model requests go to the provider configured by the operator. The documented provider endpoint is OpenRouter.
+Kelp is a private, always-on assistant for chat, approval-gated work, scheduled tasks, and spend caps. The wallet and Razorpay Checkout routes are mounted by the server, but they respond `503 wallet_not_configured` until the operator sets both `RAZORPAY_KEY_ID` and `RAZORPAY_KEY_SECRET`; setting only one of them stops the server at startup with `invalid_config`. Kelp stores chat and working data locally; model requests go to the provider configured by the operator. The documented provider endpoint is OpenRouter.
 
 ## Current status
 
@@ -14,12 +14,14 @@ Kelp is live as a single-owner, single-provider service. Today it provides:
 
 The phone and landing demos are live. The browser chat UI and the dashboard page at `/` are not built yet; the API is the interface.
 
-What just landed: **P0-1 froze the service control layer's contract** (2026-11-09). This is a design freeze, not a runtime change — no code behavior changed. The frozen shapes cover the single owner tenant, the provider stream contract, the `TaskRun` record, the gate order (auth → tenant → entitlement → spend → provider), and the admin read model. Read them at:
+What just landed: the **P0–P6 control layer** (2026-11-09): the frozen contract, the provider seam, tenant scope, a per-tenant provider key, `TaskRun` records, the entitlement gate, and a read-only admin API with a support runbook. The frozen shapes cover the single owner tenant, the provider stream contract, the `TaskRun` record, the gate order (auth → tenant → entitlement → spend → provider), and the admin read model. Start from the operator documents, then the contract:
 
+- [`docs/ADMIN_API.md`](docs/ADMIN_API.md) — the read-only `GET /api/admin/*` endpoints
+- [`docs/SUPPORT_RUNBOOK.md`](docs/SUPPORT_RUNBOOK.md) — triage, evidence, rotation, and rollback
 - [`docs/SERVICE_CONTRACT.md`](docs/SERVICE_CONTRACT.md) — the frozen contract (normative)
 - [`docs/adr/0003-service-control-layer.md`](docs/adr/0003-service-control-layer.md) — the decision record
 
-The contract is machine-checked by `tests/test_service_contract.py`, which is green (13 tests).
+The contract is machine-checked by `tests/test_service_contract.py`, which is green (17 tests).
 
 ## Quick start
 
@@ -140,12 +142,12 @@ Run the deterministic offline evaluations with `python -m evals`.
 
 The control-layer contract (P0-1) is the foundation the work below builds on. Each item implements against the frozen shapes in [`docs/SERVICE_CONTRACT.md`](docs/SERVICE_CONTRACT.md).
 
-- **P1** — provider neutrality and bring-your-own model keys: routes model calls through a provider-agnostic seam so the operator's own keys and endpoints work, not just OpenRouter.
-- **P2** — tenant isolation boundaries: harden the single-tenant model into explicit per-tenant scope so a later second tenant cannot read another tenant's data.
-- **P3** — task-run records and API: persist each run's identity, gate decisions, and outcome in the `TaskRun` shape and expose them over the API.
-- **P4** — per-tenant secrets: store provider credentials and tokens per tenant instead of one shared credential.
-- **P5** — entitlements and billing hooks: wire plan limits and windows into the gates and emit billing events at the seams.
-- **P6** — admin visibility and support runbook: expose the admin read model and publish a runbook for diagnosing incidents.
+- **P1** (done) — provider neutrality and bring-your-own model keys: routes model calls through a provider-agnostic seam so the operator's own keys and endpoints work, not just OpenRouter.
+- **P2** (done) — tenant isolation boundaries: harden the single-tenant model into explicit per-tenant scope so a later second tenant cannot read another tenant's data.
+- **P3** (done) — task-run records and API: persist each run's identity, gate decisions, and outcome in the `TaskRun` shape and expose them over the API.
+- **P4** (partly done) — per-tenant secrets: the tenant's provider key comes from `KELP_TENANT_SECRETS_FILE`. Per-tenant skill tokens are not supplied yet: `GITHUB_TOKEN` and `TAVILY_API_KEY` are still read from the process environment.
+- **P5** (partly done) — entitlements and billing hooks: the entitlement gate (allowed task types per plan) and the terminal billing hook are wired. Plan ceilings (`max_turns`, `max_runs`, `max_cost_usd`) are parsed but not enforced until a usage counter is injected.
+- **P6** (done) — admin visibility and support runbook: the read-only admin API (`GET /api/admin/...`, [`docs/ADMIN_API.md`](docs/ADMIN_API.md)) and the [support runbook](docs/SUPPORT_RUNBOOK.md).
 
 Boat and Steel infrastructure pilots come only after the bot control layer is built; they are not a prerequisite for the work above.
 
@@ -164,15 +166,12 @@ The repo rules: no force-push, no remote deletions, plain merges only.
 
 These are small, self-contained items for a first contribution. All of them assume you have read the frozen contract first: [`docs/SERVICE_CONTRACT.md`](docs/SERVICE_CONTRACT.md).
 
-- **P1-2 config/env generalization** — move provider config (base URL, key) behind a general env scheme so a second provider can be configured without forking the code.
-- **Tenant slug validation tests** — add tests that tenant ids are valid URL-safe slugs, matching the contract's slug rule (ADR 0003 §3).
-- **TaskRun recorder** — a minimal module that writes run records in the frozen `TaskRun` shape, covered by tests.
-- **Secret-presence admin endpoint** — an admin-only check that reports whether a secret is present without revealing it.
-- **Support runbook triage entries** — draft triage steps in the support runbook for the gate failures the contract defines (auth, tenant, entitlement, spend, provider).
 - **Extra eval scenarios** — add offline evaluation cases that exercise the frozen contract's edge cases, keeping `python -m evals` deterministic.
 
 ## More
 
 - [Deployment guide](docs/DEPLOY.md)
 - [Privacy review](docs/PRIVACY.md)
+- [Admin API](docs/ADMIN_API.md)
+- [Support runbook](docs/SUPPORT_RUNBOOK.md)
 - [Chat and authentication spec](docs/CHAT_SPEC.md#12-security-and-privacy)

@@ -124,13 +124,20 @@ def test_cli_live_without_key_exits_two_and_prints_no_secret(
 
 
 def test_offline_guard_blocks_connections_and_name_resolution() -> None:
+    original_create_connection = socket.create_connection
+    original_getaddrinfo = socket.getaddrinfo
+    original_connect = socket.socket.connect
     with block_network():
+        assert socket.create_connection is not original_create_connection
         with pytest.raises(OfflineViolation):
             socket.create_connection(("example.com", 80))
         with pytest.raises(OfflineViolation):
             socket.getaddrinfo("example.com", 80)
-    # Restored after the context.
-    assert socket.create_connection is not None
+    # Restored after the context: the very same callables, not merely
+    # something non-None (the blocker itself is also non-None).
+    assert socket.create_connection is original_create_connection
+    assert socket.getaddrinfo is original_getaddrinfo
+    assert socket.socket.connect is original_connect
 
 
 def test_cli_list_does_not_run_the_suite(

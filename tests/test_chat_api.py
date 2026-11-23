@@ -796,3 +796,35 @@ def test_stdlib_http_server_adapter(tmp_path: Path) -> None:
         thread.join(timeout=2)
         api.close()
         store.close()
+
+
+def test_retry_after_client_stop_over_http(tmp_path: Path) -> None:
+    api, service, store = make_api(
+        tmp_path, [text_script("one"), text_script("two")]
+    )
+    try:
+        thread = create_thread(api)
+        first = send(api, service, thread["id"])
+        store.update_turn(first["turn_id"], state="finished", reason="cancelled")
+
+        retry = call(api, "POST", f"/api/turns/{first['turn_id']}/retry", {})
+        assert retry.status == 202, retry.body
+        retried = body(retry)
+        assert retried["retry_of"] == first["turn_id"]
+        api.runner.run(service.wait_for_turn(retried["turn_id"]))
+    finally:
+        api.close()
+        store.close()
+
+
+def test_retry_of_a_completed_turn_is_409_over_http(tmp_path: Path) -> None:
+    api, service, store = make_api(tmp_path)
+    try:
+        thread = create_thread(api)
+        first = send(api, service, thread["id"])
+        retry = call(api, "POST", f"/api/turns/{first['turn_id']}/retry", {})
+        assert retry.status == 409
+        assert body(retry)["error"]["code"] == "turn_not_retryable"
+    finally:
+        api.close()
+        store.close()

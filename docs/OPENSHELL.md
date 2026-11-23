@@ -1,6 +1,8 @@
 # OpenShell: approvals, audit, and gated exec (KEL-7 / P0-3)
 
-- **Status:** scaffold, 2026-10-28
+- **Status:** implemented (KEL-7, 2026-10-28). The policy gate, approvals, and audit log
+  are used by the chat server. `ExecGate` exists but is not wired into the server, so no
+  command runs in this build (§3 below, [`PRIVACY.md`](PRIVACY.md) §5).
 - **Branch:** `kel-7`
 - **Contract:** consumes `docs/SKILL_SPEC.md` manifests; adds the policy gate the spec defers to P0-3
 - **Tests:** `tests/test_openshell_policy.py`, `tests/test_openshell_approvals.py`,
@@ -132,22 +134,29 @@ Redaction:
 
 - exact values of secret-looking environment variables are replaced with
   `[redacted]` before serialization (the gate adds them automatically);
-- `Bearer …`, `sk_live_…` / `sk_test_…`, and `token=…` / `password: …` patterns
+- `Bearer …`, provider key shapes (`sk_live_…` / `sk_test_…`, OpenRouter `sk-or-v1-…`,
+  GitHub `ghp_…` / `github_pat_…`, AWS `AKIA…`), and `token=…` / `password: …` patterns
   are redacted even when the value was not declared;
 - commands, actor names, and nested `extra` fields all pass through the scrubber.
 
 The log never contains stdout/stderr bodies, environment dumps, or raw secrets.
 
-## 5. Payments placeholder
+## 5. Payments
 
-`payments/stripe_wallet.py` reads `STRIPE_SECRET_KEY` from the server environment
-only. It has no network calls and no SDK yet; the account owner is providing a
-test key. `repr`, `str`, and `status()` expose only the mode (`test` / `live` /
-`unknown`), never the key. `payments/.env.example` holds an empty value.
+This document does not describe what the payments package sends over the network;
+[`PRIVACY.md`](PRIVACY.md) §2 is the source of truth. In short: Razorpay is wired
+when both `RAZORPAY_KEY_ID` and `RAZORPAY_KEY_SECRET` are set, and every call writes
+an `egress` row; Stripe is never constructed by `build_app`.
+
+`payments/stripe_wallet.py` is the original placeholder. It reads
+`STRIPE_SECRET_KEY` from the server environment only and makes no network calls.
+`repr`, `str`, and `status()` expose only the mode (`test` / `live` / `unknown`),
+never the key. `payments/.env.example` holds an empty value.
 
 ## 6. Not in this slice
 
 - Approval UI / inbox rendering (no UI build).
 - Policy-editor configuration surface; policy is process configuration.
 - Container or OS-level sandboxing (M3).
-- Stripe API calls, saved cards, and webhooks (awaiting the test key).
+- Stripe in the server: `HttpStripeGateway` (`payments/wallet.py`) exists, but
+  `build_app` never constructs it (PRIVACY §2). Razorpay is the wired provider.

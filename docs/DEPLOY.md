@@ -5,9 +5,9 @@
 - **Branch:** `main` (head `f7ed9d1`; deploy slice `7addf56`)
 - **Scope:** one container image, one Compose service, one systemd wrapper, one
   health probe, one `/data` volume. No application code changed.
-- **Tests:** `tests/test_deploy_healthcheck.py` (25 cases) and
-  `tests/test_deploy_assets.py` (40 cases); full suite **1045** passed on
-  `main`
+- **Tests:** `tests/test_deploy_healthcheck.py` and `tests/test_deploy_assets.py`;
+  run `python -m pytest` for the current counts (the numbers in §12.3 and §17 are
+  a record from the date shown there, not a gate)
 - **Not in scope:** evals, chat/turn logic, payments, and any
   actual server. Nothing here was deployed to a hosted VM; every command below
   was executed locally against this image and is reported with its measured
@@ -33,6 +33,11 @@ browser ──TLS──▶ Caddy/nginx on :443 ──HTTP──▶ kelp containe
                                           /data (named volume)
                                   chat.db · workspace/ · audit/ · usage/
 ```
+
+The image does not contain the phone web app. The Dockerfile copies no `phone/`
+directory, so inside the container `/phone/` answers `404 phone_not_built`. A
+source checkout serves `phone/dist` after `make phone` (`KELP_PHONE_ROOT`
+overrides the directory), and `phone/dist` is not committed.
 
 The image is CPU-only. The "GPU" in the milestone is the *model host*: this
 service is a thin client of a hosted model endpoint, so a 2 vCPU / 8 GB VM is
@@ -143,7 +148,7 @@ baked into the image; the process refuses to start without all three, exit `2`.
 | `KELP_AUTH_FAILURE_IDLE_SECONDS` | no | `300` | no | Idle-out for an auth-failure record |
 | `KELP_AUTH_FAILURE_MAX_KEYS` | no | `4096` | no | Bound on the hashed auth-failure map |
 | `KELP_PROVIDER_BASE_URL` | **yes** | — | no | OpenAI-compatible provider endpoint, e.g. `https://openrouter.ai/api/v1`. No vendor host is baked in: empty is a typed `missing_base_url`, never a default request |
-| `KELP_TENANT_SECRETS_FILE` | no | unset → use `KELP_PROVIDER_API_KEY` | **yes** (path only) | Path to an optional JSON map of per-tenant secrets. The file must be mode `0600`; a group- or world-readable file is refused before parsing. Values never enter records, logs, metrics, or the admin read model |
+| `KELP_TENANT_SECRETS_FILE` | no | unset → use `KELP_PROVIDER_API_KEY` | **yes** (path only) | Path to an optional JSON map `{tenant_id: {NAME: value}}`. Only `KELP_PROVIDER_API_KEY` is read from it today (it replaces the environment key). Other names are redaction-only: they are scrubbed from logs, metrics, and the audit trail but are not supplied to skills. Skill tokens (`GITHUB_TOKEN`, `TAVILY_API_KEY`) are still read from the process environment. The file must be mode `0600`; a group- or world-readable file is refused before parsing. Values never enter records, logs, metrics, or the admin read model |
 | `KELP_PRIMARY_MODEL` | no | example: `nvidia/nemotron-3.5-super-vl` | no | Conversational model; the id is provider-specific |
 | `KELP_BACKGROUND_MODEL` | no | example: `nvidia/nemotron-3.5-lightning` | no | Titles, summaries, compaction; the id is provider-specific |
 | `KELP_PRICING_JSON` | no | example rows in `kernel/providers/presets.py` | no | Optional USD-per-million price overrides, merged over the example table. An unpriced model keeps cost unknown and fails closed under a spend cap |
@@ -162,7 +167,7 @@ baked into the image; the process refuses to start without all three, exit `2`.
 | `KELP_SPEND_UNKNOWN_PRICE_MODE` | no | `block` | no | `block` or `count_as`: what an unpriced turn means for the cap |
 | `KELP_SPEND_UNKNOWN_PRICE_USD` | no | `0.01` | no | Amount charged per unpriced turn in `count_as` mode |
 | `KELP_ENTITLEMENT_PLAN` | no | `owner-unlimited` | no | Plan id used for tenants without an explicit mapping |
-| `KELP_ENTITLEMENT_PLANS_JSON` | no | built-in `owner-unlimited` | no | JSON object of `plan_id` to `{window, max_turns, max_runs, max_cost_usd, allowed_task_types}`. An unknown tenant or task type is denied; a missing decision is never an allow |
+| `KELP_ENTITLEMENT_PLANS_JSON` | no | built-in `owner-unlimited` | no | JSON object of `plan_id` to `{window, max_turns, max_runs, max_cost_usd, allowed_task_types}`. A tenant with no mapping gets `KELP_ENTITLEMENT_PLAN`; a tenant mapped to a plan id not in this table, or a task type outside the plan's `allowed_task_types`, is denied; a missing decision is never an allow |
 | `KELP_ENTITLEMENT_TENANT_PLANS_JSON` | no | `{}` | no | JSON object mapping `tenant_id` to a configured plan id |
 | `KELP_LOG_LEVEL` | no | `info` | no | `debug` / `info` / `warning` / `error` |
 | `KELP_RATE_LIMIT_ENABLED` | no | `1` | no | Token buckets on; `0` disables them (concurrency caps stay on) |
@@ -170,7 +175,7 @@ baked into the image; the process refuses to start without all three, exit `2`.
 | `KELP_RATE_LIMIT_CHAT_RPM` / `_BURST` | no | `120` / `30` | no | Thread, turn, and approval calls per client |
 | `KELP_RATE_LIMIT_UPLOAD_RPM` / `_BURST` | no | `60` / `20` | no | Attachment uploads per client |
 | `KELP_RATE_LIMIT_READ_RPM` / `_BURST` | no | `600` / `200` | no | Read calls per client |
-| `KELP_RATE_LIMIT_ADMIN_RPM` / `_BURST` | no | `1200` / `300` | no | Metrics and readiness per client; keep it above the probe rate |
+| `KELP_RATE_LIMIT_ADMIN_RPM` / `_BURST` | no | `1200` / `300` | no | Metrics, readiness, and every `GET /api/admin/*` read, per client; keep it above the probe and admin polling rate |
 | `KELP_RATE_LIMIT_SHARE_RPM` / `_BURST` | no | `30` / `10` | no | Anonymous share reads per link; keyed on the hashed link token |
 | `KELP_RATE_LIMIT_SHARE_GLOBAL_RPM` / `_BURST` | no | `600` / `200` | no | Process-wide ceiling for anonymous share reads |
 | `KELP_RATE_LIMIT_IDLE_SECONDS` | no | `300` | no | Idle-out before a limiter key starts with a full bucket again |
@@ -205,25 +210,36 @@ falling back to a vendor host. For compatibility, `NEBIUS_BASE_URL` /
 blank. They are aliases, not defaults, and the canonical name always wins.
 
 `KELP_TENANT_SECRETS_FILE` names a JSON file, not a value. It maps tenant ids to
-secret names and supplies the per-tenant credential without baking it into the
-environment contract; the file must be mode `0600`, and only the bound tenant's
-map is retained in memory. With it unset, the owner tenant keeps using
-`KELP_PROVIDER_API_KEY`.
+secret names and supplies the tenant's provider key (`KELP_PROVIDER_API_KEY`)
+without baking it into the environment contract; the file must be mode `0600`,
+and only the bound tenant's map is retained in memory. With it unset, the owner
+tenant keeps using `KELP_PROVIDER_API_KEY` from the environment. Skill tokens
+must still be set in the process environment: a skill token placed only in this
+file is scrubbed from logs and the audit trail but is not given to the skill,
+which then fails with `missing_secret`.
 
 The entitlement gate is the third gate after auth and tenant and before spend
 and any provider call. Plans are static configuration: `KELP_ENTITLEMENT_PLANS_JSON`
 defines ceilings and allowed task types, `KELP_ENTITLEMENT_TENANT_PLANS_JSON`
 maps tenants, and `KELP_ENTITLEMENT_PLAN` is the fallback plan id. The built-in
-`owner-unlimited` plan is an explicit unlimited plan, not a bypass: an unknown
-tenant, an unknown task type, or a malformed plan table still fails closed with
-`entitlement_denied` or `entitlement_exhausted`. Billing is an internal terminal
+`owner-unlimited` plan is an explicit unlimited plan, not a bypass. A tenant
+with no entry in `KELP_ENTITLEMENT_TENANT_PLANS_JSON` gets the fallback plan, so
+with the defaults every tenant that passes the tenant gate is unlimited. A tenant
+mapped to a plan id missing from the table, or a task type outside the plan's
+`allowed_task_types`, is denied with `entitlement_denied`; a malformed plan table
+fails startup. The ceilings (`max_turns`, `max_runs`, `max_cost_usd`) are parsed
+and validated, but this build does not wire a usage counter into
+`StaticEntitlementStore`, so a configured ceiling is not enforced yet and never
+answers `entitlement_exhausted` in the running server. Use the spend caps (§13.1)
+to bound cost today. Billing is an internal terminal
 hook and needs no environment variable; it receives usage fields and the plan
 snapshot, never prompt text.
 
 Rate-limit rejections are `429` JSON with `error.code = "rate_limited"` and a
 `Retry-After` header in whole seconds. They are never a `5xx`: an internal
 limiter fault fails open. The admin bucket must stay comfortably above the
-readiness probe interval, or probes will see `429` instead of `503`. The
+readiness probe interval and the admin API polling rate, or probes will see
+`429` instead of `503`. The
 `/api/metrics` exposition includes `kelp_limiter_in_use`,
 `kelp_limiter_capacity`, and `kelp_limiter_saturation` for the turn, owner
 stream, and share stream (`share_streams`) caps.
@@ -487,6 +503,54 @@ Notes:
   if buffering were left on; keep it off anyway.
 - Do not add authentication at the proxy as a replacement for
   `KELP_AUTH_TOKEN`. Both are expected; the token is what the API checks.
+
+**Keep share-link tokens out of the proxy access log.** A read-only share link
+(`GET /api/shared/{token}` and `GET /api/shared/{token}/stream`, CHAT_SPEC §12.3)
+carries its bearer token as a URL path segment, and a link stays valid for 7 days
+by default (30 at most). The app never logs the raw token: its own access line
+records the route label `/api/shared/{id}`, and `log_message` on the stdlib
+handler is a no-op. A reverse proxy has no such rule: nginx's default access log
+format writes the full request line (`$request`), and Caddy writes
+`request.uri` as soon as a `log` directive is enabled. Anyone who can read that
+log can then open every live link in it. Turn access logging off for that prefix
+and leave it on for the rest:
+
+```caddyfile
+# Caddy 2.8 or later (`log_skip`). Only matters if the site has a `log` directive.
+kelp.example.com {
+    @share path /api/shared/*
+    log_skip @share
+    # ... encode, request_body and reverse_proxy exactly as above ...
+}
+```
+
+```nginx
+# Inside the same `server { ... }` block, next to `location /`. A longer prefix
+# wins over `/`, so the proxy settings must be repeated: SSE still needs
+# buffering off and the 300 s timeouts for `/api/shared/{token}/stream`.
+location /api/shared/ {
+    access_log off;
+    proxy_pass http://127.0.0.1:8765;
+    proxy_http_version 1.1;
+    proxy_set_header Host $host;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto $scheme;
+    proxy_buffering off;
+    proxy_cache off;
+    proxy_read_timeout 300s;
+    proxy_send_timeout 300s;
+    add_header X-Content-Type-Options nosniff always;
+}
+```
+
+- This silences the access log only. A proxy's *error* log can still contain the
+  request line of a failed upstream call (nginx `error_log`, Caddy's runtime
+  log), so keep those logs readable by the operator alone.
+- Do not forward the proxy's access log to a third-party log service without
+  the same exclusion.
+- ADR 0002 §10 originally called this route `/s/{token}`; the shipped path is
+  `/api/shared/{token}` (ADR 0002 §14.1), so the rule is on `/api/shared/`.
 - Behind the proxy, readiness and metrics are still owner-token routes. Use the
   token in `curl`, not a browser cookie, for those.
 
@@ -538,6 +602,11 @@ Readiness is **not** wired into Docker restart: a process that is alive but
 degraded stays up so the audit trail and in-flight turns survive. Alert on
 `/api/readyz` returning 503, then investigate; restart deliberately with
 `docker compose restart kelp`.
+
+Operating the running service: the read-only owner endpoints under
+`/api/admin/*` are described in [`docs/ADMIN_API.md`](ADMIN_API.md), and the
+triage tree, evidence bundle, secret rotation, and rollback steps are in
+[`docs/SUPPORT_RUNBOOK.md`](SUPPORT_RUNBOOK.md).
 
 ---
 
@@ -841,9 +910,11 @@ curl -sS -X DELETE "https://kelp.example.com/api/auth/session" \
   -H "X-CSRF-Token: ${CSRF_TOKEN}" \
   -H "Cookie: session=${SESSION_COOKIE}; csrf=${CSRF_TOKEN}"
 
-# Every session (bearer path; no cookie needed).
+# Every session (bearer path; no cookie needed). The X-CSRF-Token header is
+# required only when KELP_CSRF_TOKEN is set; without it the call is 403.
 curl -sS -X DELETE "https://kelp.example.com/api/auth/sessions" \
-  -H "Authorization: Bearer ${KELP_AUTH_TOKEN}"
+  -H "Authorization: Bearer ${KELP_AUTH_TOKEN}" \
+  -H "X-CSRF-Token: ${KELP_CSRF_TOKEN}"
 ```
 
 `DELETE /api/auth/session` and `DELETE /api/auth/sessions` always answer with
@@ -861,7 +932,8 @@ request (and its next stream heartbeat) answers `401`.
    `python3 -c 'import secrets; print(secrets.token_urlsafe(48))'`.
 2. Revoke every existing session **before** changing the secret, using the
    current value from `deploy/kelp.env`:
-   `curl -sS -X DELETE .../api/auth/sessions -H "Authorization: Bearer ${KELP_AUTH_TOKEN}"`.
+   `curl -sS -X DELETE .../api/auth/sessions -H "Authorization: Bearer ${KELP_AUTH_TOKEN}" -H "X-CSRF-Token: ${KELP_CSRF_TOKEN}"`
+   (the CSRF header only when `KELP_CSRF_TOKEN` is set).
 3. Put the new value in `deploy/kelp.env` (`KELP_AUTH_TOKEN=...`,
    `KELP_SESSION_SECRET=...`) and keep mode `0600`. Never commit the file.
 4. Restart the one container: `docker compose up -d --no-build` (or
@@ -925,8 +997,9 @@ BASE=${BASE:-http://127.0.0.1:8765}
 # reads headers from a file with `-H @file`.
 umask 077
 HDRS=$(mktemp)
+SSE=$(mktemp)
 printf 'Authorization: Bearer %s\n' "$KELP_AUTH_TOKEN" > "$HDRS"
-trap 'rm -f "$HDRS"' EXIT
+trap 'rm -f "$HDRS" "$SSE"' EXIT
 
 THREAD=$(curl -fsS -X POST "$BASE/api/threads" \
   -H @"$HDRS" -H 'Content-Type: application/json' \
@@ -940,22 +1013,37 @@ curl -fsS -X POST "$BASE/api/threads/$THREAD/turns" \
 
 # Replay from the start; the stream tails until idle, so cap it.
 timeout 60 curl -N -sS "$BASE/api/threads/$THREAD/stream?after=0" \
-  -H @"$HDRS" > /tmp/kelp-smoke.sse || true
+  -H @"$HDRS" > "$SSE" || true
 
-grep -c '^event: text' /tmp/kelp-smoke.sse
-grep -A1 '^event: turn_finished' /tmp/kelp-smoke.sse | grep -o '"reason":"[a-z]*"'
-grep -A1 '^event: turn_finished' /tmp/kelp-smoke.sse | grep -o '"estimated_cost_usd":[^,}]*'
+# Each SSE frame is four lines in this order: `id:`, `event:`, `retry:`,
+# `data:` (`format_event` in chat/stream.py). The JSON the checks need is on the
+# `data:` line, two lines below the `event:` line, so `grep -A3` is required;
+# `-A1` would stop at `retry: 2000`.
+grep -c '^event: token_delta' "$SSE"
+grep -A3 '^event: turn_finished' "$SSE" | grep -o '"reason":"[a-z_]*"'
+grep -A3 '^event: turn_finished' "$SSE" | grep -o '"estimated_cost_usd":[^,}]*'
+if grep -q '^event: token_delta' "$SSE" \
+   && grep -A3 '^event: turn_finished' "$SSE" | grep -q '"reason":"stop"'; then
+  echo 'smoke: PASS'
+else
+  echo 'smoke: FAIL (no token_delta, or turn_finished did not carry reason=stop)'
+fi
 ```
 
-The `trap` deletes the header file when the shell exits, including on `Ctrl-C`.
+The `trap` deletes both temporary files (the header file and the captured stream)
+when the shell exits, including on `Ctrl-C`.
 If your curl predates 8.2, use `--config` with a `header = "Authorization: …"`
 line in the same 0600 file instead of `-H @`; do not fall back to argv.
 
 Expected:
 
-- at least one `event: text` line — the model answered;
-- `"reason":"complete"` on `turn_finished` (the failure path prints `"error"`);
-- `"estimated_cost_usd"` greater than `0.0`;
+- at least one `event: token_delta` line (the first command prints a count of 1
+  or more) — the model answered;
+- `"reason":"stop"` on `turn_finished` (a normal completion; the failure path
+  prints `"error"`, and a budget stop prints `"budget"`), followed by the line
+  `smoke: PASS`;
+- `"estimated_cost_usd"` greater than `0.0` (a small cost prints in exponent form,
+  for example `4e-06`);
 - a matching line in `docker compose logs kelp` with `"event":"turn_finished"`,
   and one new record in `/data/usage/usage.jsonl`.
 
@@ -987,10 +1075,12 @@ nothing about the image. Run the same two commands on the VM after a deploy only
 if the VM is also the checkout you tested; otherwise record the numbers from the
 build host next to the commit, and treat the VM as proven by §12.1 and §12.2.
 
-Measured on the verification host: **68 passed in 0.74 s** for the
-retrieval/answer suites and **1066 passed** for the full suite on the current
-`main`. Record this number next to the commit in the release note; a drop means
-the deploy is not the code you tested.
+At the time of writing (2 November 2026, `main` at `f7ed9d1`) the verification
+host measured **68 passed in 0.74 s** for the retrieval/answer suites and **1066
+passed** for the full suite. Those numbers go stale with every commit: run both
+commands on your build host and record your own result next to the commit in the
+release note; a drop from one release to the next means the deploy is not the
+code you tested.
 
 ---
 
@@ -1051,6 +1141,19 @@ a restart neither forgets the total nor the warning already sent. Behaviour:
   a record sits in a capped window, because an unmeasurable total is not a cap.
   `count_as` instead charges each such record `KELP_SPEND_UNKNOWN_PRICE_USD`, and
   reports the count in the gauge and the error details.
+- **Unreported usage** — a step that reached the provider but ended without a
+  usage report (a backend that never reports usage, a stream cancelled before
+  its final usage chunk, a timeout, or a stream that failed mid-step, including
+  after an HTTP 200) is recorded at an upper bound with `usage_estimated: true`:
+  input is the request's serialized size in bytes and output is the step's
+  `max_tokens`. For a priced model the cost is therefore a finite ceiling that
+  counts toward the caps, not `$0`, and not an unknown price, so it does not
+  lock the window under `block`. An unpriced model still records
+  `estimated_cost_usd: null` and follows the unknown-price rule above. Only a
+  step whose first and only event is an HTTP-status failure, or a failure
+  raised before any request (`missing_base_url`, `missing_api_key`,
+  `tenant_mismatch`), adds no bound, because no request was accepted for
+  billing. An unreachable provider is bounded too, which overcounts.
 - **Unreadable usage** — if `usage.jsonl` cannot be read while a cap is set, new
   turns are refused with reason `usage_unavailable` (fail closed), not allowed
   through at an unknown spend.
@@ -1095,7 +1198,7 @@ this gets expensive.
 | `(health: starting)` for the first minute | Normal: 40 s `start_period` plus a 30 s interval | Wait, then re-read `docker inspect --format '{{.State.Health.Status}}' kelp-kelp-1` |
 | Healthy, but `readyz` 503 `provider=timeout` | Egress blocked, DNS broken, or key rejected | Probe the provider from the same network with the key in a 0600 header file (`-H @file`, §12.2), not on the command line |
 | `readyz` 503 `store=unavailable` | `/data` not writable by 10001 | Recreate the volume/dir with owner `10001:10001` |
-| `readyz` 503 `unpriced_models=unpriced` | A usage record finished this month has no known price, so the spend total is incomplete | Add the model to `DEFAULT_PRICING` in `kernel/config.py` (see `docs/KERNEL.md`). `KELP_SPEND_UNKNOWN_PRICE_MODE=count_as` keeps turns running, but this check stays false until the record leaves the month window or rotates out |
+| `readyz` 503 `unpriced_models=unpriced` | A usage record finished this month has no known price, so the spend total is incomplete | Add the model's price to `KELP_PRICING_JSON`, or to `DEFAULT_PRICING` in `kernel/config.py` and rebuild (see `docs/KERNEL.md`). `KELP_SPEND_UNKNOWN_PRICE_MODE=count_as` keeps turns running, but this check stays false until the record leaves the month window or rotates out |
 | `401 unauthorized` on `/api/*` | Token mismatch, or the proxy strips `Authorization` | Send `Authorization: Bearer …`; check the proxy passes request headers untouched |
 | `403 csrf_failed` on a browser mutation | `Origin` and `Host` disagree behind the proxy | Forward the original `Host`; or set `KELP_CSRF_TOKEN` and send `X-CSRF-Token` |
 | Upload fails `413` | Proxy limit below the 20 MiB app cap | Raise `client_max_body_size` / Caddy `max_size` to ~24 MB |
@@ -1169,6 +1272,10 @@ the probe sends the token as a header and never prints it.
 
 ## 17. Verification record
 
+Counts and timings in this table were measured at the time of writing (30 October
+to 2 November 2026) and are a record, not a gate: the suites have grown since.
+Re-run the commands for current numbers.
+
 | Check | Command | Result | Time |
 |---|---|---|---|
 | Image build | `docker build --no-cache … -t kelp:<tag> .` | 194.5 MiB, non-root `10001:10001`, 656 kB context | 6 s |
@@ -1188,11 +1295,11 @@ the probe sends the token as a header and never prints it.
 | Restart persistence | stop + `up -d`, count rows | 2 threads / 2 turns before and after | — |
 | Backup | tar of `/data` into a host backup dir | archive with numeric owners | 1 s |
 | Restore | fresh volume + `tar --numeric-owner` | 2 threads / 2 turns, uid 10001 | < 1 s |
-| Offline eval | `pytest tests/test_docs_answer*.py` | 68 passed | 0.74 s |
-| Full suite | `python -m pytest` | 1066 passed on `main` | — |
-| Asset tests | `pytest tests/test_deploy_assets.py` | 40 passed | 0.12 s |
-| Probe tests | `pytest tests/test_deploy_healthcheck.py` | 25 passed | 4.08 s |
-| Live checkout receipt | test-mode order `order_TtyLUT5JHr4pdK`, ₹1 (100 paise) netbanking payment `pay_TtyOkNxvfHSKFS` captured; confirm → HTTP 200 `idempotent=false` with receipt `pi_rzpTtyOkNxvfHSKFS`; replay idempotent; ledger shows one paid proposal + one provider payment | verified | 2026-10-30 |
+| Offline eval | `pytest tests/test_docs_answer*.py` | 68 passed (at the time of writing) | 0.74 s |
+| Full suite | `python -m pytest` | 1066 passed on `main` (at the time of writing) | — |
+| Asset tests | `pytest tests/test_deploy_assets.py` | 40 passed (at the time of writing) | 0.12 s |
+| Probe tests | `pytest tests/test_deploy_healthcheck.py` | 25 passed (at the time of writing) | 4.08 s |
+| Test-mode checkout receipt | test-mode order `order_TtyLUT5JHr4pdK`, ₹1 (100 paise) netbanking payment `pay_TtyOkNxvfHSKFS` captured; confirm → HTTP 200 `idempotent=false` with receipt `pi_rzpTtyOkNxvfHSKFS`; replay idempotent; ledger shows one paid proposal + one provider payment | verified | 2026-10-30 |
 
 Re-run on 30 October 2026 for the `--no-build` change: build, compose
 resolution, both failure paths, the unit guard, boot-to-healthy, the container's

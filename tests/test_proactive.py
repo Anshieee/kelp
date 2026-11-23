@@ -340,6 +340,21 @@ def test_headless_approval_denies_and_parks_the_schedule(tmp_path: Path) -> None
         rig.close()
 
 
+def test_known_run_ids_survive_a_torn_audit_line(tmp_path: Path) -> None:
+    rig = Rig(tmp_path)
+    try:
+        rig.audit.record("schedule_run", extra={"run_id": "run_before"})
+        with rig.audit.path.open("a", encoding="utf-8") as handle:
+            handle.write("garbled}{\n")
+        rig.audit.record("schedule_run", extra={"run_id": "run_after"})
+        with rig.audit.path.open("a", encoding="utf-8") as handle:
+            handle.write('{"event": "schedule_run", "extra": {"run_id": "run_torn"')
+
+        assert rig.proactive._known_run_ids() == {"run_before", "run_after"}
+    finally:
+        rig.close()
+
+
 def test_twenty_due_tasks_are_capped_not_queued(tmp_path: Path) -> None:
     provider = GateProvider()
     rig = Rig(

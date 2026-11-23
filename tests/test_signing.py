@@ -9,6 +9,8 @@ other conforming implementation, not just self-consistent.
 from __future__ import annotations
 
 import json
+import os
+import stat
 from pathlib import Path
 
 import pytest
@@ -136,13 +138,64 @@ def test_malformed_key_files_are_refused(tmp_path: Path) -> None:
         signing._read_hex_key(short, signing.PUBLIC_KEY_BYTES, "public")
 
 
-def test_sign_digest_refuses_a_malformed_digest(tmp_path: Path) -> None:
+def test_a_malformed_digest_is_signed_as_given_but_never_verifies(tmp_path: Path) -> None:
     private, public = signing.write_keypair(
         tmp_path / "operator.key", tmp_path / "operator.pub"
     )
-    # A digest that does not match the package_digest shape is signed as
-    # given: the caller's contract is the exact pinned string. But verify
-    # refuses it, so a malformed digest can never round-trip.
+    # sign_digest does not police the digest shape: the caller's contract is the
+    # exact pinned string. verify_digest refuses anything that is not
+    # ``sha256:<64 lowercase hex>``, so a malformed digest can never round-trip
+    # even though its raw Ed25519 signature is mathematically valid.
+    for malformed in ("sha256:abc", "md5:" + "a" * 64, "sha256:" + "A" * 64, ""):
+        signature = signing.sign_digest(malformed, private)
+        public_bytes = signing._read_hex_key(public, signing.PUBLIC_KEY_BYTES, "public")
+        assert signing._verify_raw(
+            public_bytes, malformed.encode("utf-8"), bytes.fromhex(signature)
+        ), malformed
+        assert signing.verify_digest(malformed, signature, public) is False, malformed
+
+
+def test_a_well_formed_digest_round_trips_only_for_its_own_signature(
+    tmp_path: Path,
+) -> None:
+    private, public = signing.write_keypair(
+        tmp_path / "operator.key", tmp_path / "operator.pub"
+    )
     signature = signing.sign_digest("sha256:" + "a" * 64, private)
     assert signing.verify_digest("sha256:" + "a" * 64, signature, public) is True
     assert signing.verify_digest("sha256:" + "b" * 64, signature, public) is False
+
+
+@pytest.mark.skipif(os.name != "posix", reason="POSIX file modes")
+class TestPrivateKeyMode:
+    def test_private_key_is_written_0600_under_a_permissive_umask(
+        self, tmp_path: Path
+    ) -> None:
+        previous = os.umask(0o022)
+        try:
+            private, public = signing.write_keypair(
+                tmp_path / "keys" / "operator.key", tmp_path / "keys" / "operator.pub"
+            )
+        finally:
+            os.umask(previous)
+        assert stat.S_IMODE(private.stat().st_mode) == 0o600
+        # The public key is not secret and keeps the default (umask-derived) mode.
+        assert stat.S_IMODE(public.stat().st_mode) == 0o644
+
+    def test_existing_world_readable_private_key_is_tightened_on_rewrite(
+        self, tmp_path: Path
+    ) -> None:
+        path = tmp_path / "operator.key"
+        path.write_text("old\n", encoding="utf-8")
+        path.chmod(0o644)
+        signing.write_keypair(path, tmp_path / "operator.pub")
+        assert stat.S_IMODE(path.stat().st_mode) == 0o600
+        assert len(path.read_text(encoding="utf-8").strip()) == signing.PRIVATE_KEY_BYTES * 2
+
+    def test_a_longer_existing_file_is_truncated_not_appended_to(
+        self, tmp_path: Path
+    ) -> None:
+        path = tmp_path / "operator.key"
+        path.write_text("x" * 500, encoding="utf-8")
+        signing.write_keypair(path, tmp_path / "operator.pub")
+        assert len(path.read_text(encoding="utf-8")) == signing.PRIVATE_KEY_BYTES * 2 + 1

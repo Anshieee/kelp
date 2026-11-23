@@ -2,18 +2,24 @@ import { useCallback, useEffect, useState } from "react";
 import { onUnauthorized } from "./api";
 import Chat from "./screens/Chat";
 import Pair from "./screens/Pair";
+import Propose from "./screens/Propose";
 import Settings from "./screens/Settings";
 import Threads from "./screens/Threads";
+import Wallet from "./screens/Wallet";
 import { getSession, setSession, type SessionInfo } from "./state";
 
 export type Route =
   | { screen: "threads" }
   | { screen: "chat"; threadId: string }
-  | { screen: "settings" };
+  | { screen: "settings" }
+  | { screen: "wallet" }
+  | { screen: "propose" };
 
 function parseHash(): Route {
   const hash = window.location.hash.replace(/^#\/?/, "");
   if (hash === "settings") return { screen: "settings" };
+  if (hash === "wallet") return { screen: "wallet" };
+  if (hash === "wallet/new") return { screen: "propose" };
   const chatMatch = /^t\/([A-Za-z0-9_-]+)$/.exec(hash);
   if (chatMatch) return { screen: "chat", threadId: chatMatch[1] };
   return { screen: "threads" };
@@ -23,6 +29,10 @@ export function routeToHash(route: Route): string {
   switch (route.screen) {
     case "settings":
       return "#/settings";
+    case "wallet":
+      return "#/wallet";
+    case "propose":
+      return "#/wallet/new";
     case "chat":
       return `#/t/${route.threadId}`;
     default:
@@ -78,11 +88,18 @@ export default function App() {
       );
     case "settings":
       return <Settings onBack={() => navigate({ screen: "threads" })} onSignedOut={() => setSessionState(null)} />;
+    case "wallet":
+      return (
+        <Wallet onBack={() => navigate({ screen: "threads" })} onNewPayment={() => navigate({ screen: "propose" })} />
+      );
+    case "propose":
+      return <Propose onBack={() => navigate({ screen: "wallet" })} />;
     default:
       return (
         <Threads
           onOpenThread={(threadId) => navigate({ screen: "chat", threadId })}
           onOpenSettings={() => navigate({ screen: "settings" })}
+          onOpenWallet={() => navigate({ screen: "wallet" })}
         />
       );
   }

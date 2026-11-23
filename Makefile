@@ -1,7 +1,6 @@
-DEMO_STATE ?= var/demo
 EVAL_ARGS ?=
 
-.PHONY: serve check-serve test audit eval clean-demo phone
+.PHONY: serve check-serve test audit eval phone
 
 # One command to run the server. Loads .env when present; every value stays
 # server-side. Use `make check-serve` to validate configuration without
@@ -27,11 +26,9 @@ audit:
 eval:
 	python -m evals $(EVAL_ARGS)
 
-clean-demo:
-	rm -rf "$(DEMO_STATE)"
-
 # Build the phone web app (PWA) into phone/dist/, which the server mounts at
-# /phone/. Requires node/npm on the build host; the committed dist/ means the
-# mount works without this step until the next app change.
+# /phone/. Requires node/npm on the build host. phone/dist/ is not committed, so
+# until this target has run, /phone/ answers 404 phone_not_built. The Docker
+# image does not include the phone app (docs/DEPLOY.md section 1).
 phone:
 	cd phone && npm ci && npm run build

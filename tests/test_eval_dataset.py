@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import re
 from pathlib import Path
 
 import pytest
@@ -17,6 +16,7 @@ from evals.dataset import (
     load_dataset,
 )
 from evals.fixtures import FixtureError, load_recorded_fixtures, make_pdf
+from openshell.audit import _PROVIDER_KEY_RE
 
 
 def _raw_dataset() -> dict:
@@ -59,7 +59,21 @@ def test_dataset_and_fixtures_contain_no_credential_shaped_text() -> None:
     text = Path(DEFAULT_DATASET).read_text(encoding="utf-8")
     text += Path(DEFAULT_FIXTURES).read_text(encoding="utf-8")
     assert "KELP_PROVIDER_API_KEY" not in text
-    assert not re.search(r"\b(?:sk|rk|pk)_(?:live|test)_[A-Za-z0-9]{4,}", text)
+    # Same pattern production redaction uses, so the two cannot drift apart.
+    assert not _PROVIDER_KEY_RE.search(text)
+
+
+def test_credential_guard_pattern_flags_every_known_key_shape() -> None:
+    # Positive control: the guard above is only meaningful if it can fire.
+    samples = (
+        "sk_" + "live_abcdef123456",  # split so the source holds no key literal
+        "sk-or-v1-" + "0123456789abcdef" * 4,
+        "ghp_" + "A1b2C3d4E5f6G7h8I9j0K1l2",
+        "github_pat_" + "11ABCDEFG0abcdefgh_ijklmnop" + "QRSTUVWXYZ",
+        "AKIA" + "IOSFODNN7EXAMPLE",
+    )
+    for sample in samples:
+        assert _PROVIDER_KEY_RE.search(f"prefix {sample} suffix"), sample
 
 
 def test_duplicate_task_id_is_rejected(tmp_path: Path) -> None:

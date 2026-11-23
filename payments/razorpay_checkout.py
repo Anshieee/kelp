@@ -83,9 +83,10 @@ from .razorpay_gateway import (
     wallet_payment_intent_id,
 )
 from .wallet import (
-    APPROVAL_EXPIRED_REASON,
+    PAYMENT_ATTEMPT_FAILED_REASON,
     Proposal,
     WalletError,
+    reason_is_late_settleable,
     redact_payload,
 )
 
@@ -256,10 +257,15 @@ class RazorpayCheckout:
         ledger: Any = None,
         transport: RazorpayTransport | None = None,
         now_fn: Any = None,
+        egress: Any = None,
     ) -> "RazorpayCheckout":
         source = os.environ if env is None else env
         wallet = RazorpayWallet.from_env(
-            source, ledger=ledger, transport=transport, now_fn=now_fn
+            source,
+            ledger=ledger,
+            transport=transport,
+            now_fn=now_fn,
+            egress=egress,
         )
         return cls(
             wallet=wallet,
@@ -668,7 +674,11 @@ class RazorpayCheckout:
                 )
 
         if status == "failed":
-            self._fail(proposal.id, _safe_code(payment.get("error_code")) or "failed")
+            # Razorpay lets the payer retry on the same order, so a failed
+            # attempt releases the reservation but stays settleable by a later
+            # successful payment (see ``reason_is_late_settleable``).
+            code = _safe_code(payment.get("error_code")) or "failed"
+            self._fail(proposal.id, f"{PAYMENT_ATTEMPT_FAILED_REASON}:{code}")
             raise WalletError(
                 "payment_failed",
                 retryable=False,
@@ -951,11 +961,15 @@ def _verified_ids(
 
 
 def _settleable(proposal: Proposal) -> bool:
-    """Approved, or a reservation that expired before a late hosted payment."""
+    """Approved, or a failed order that a later payment may still settle.
+
+    That covers a reservation that expired before a late hosted payment and an
+    order whose earlier payment attempt failed (the payer can retry on the same
+    Razorpay order).
+    """
 
     return proposal.status == "approved" or (
-        proposal.status == "failed"
-        and proposal.reason == APPROVAL_EXPIRED_REASON
+        proposal.status == "failed" and reason_is_late_settleable(proposal.reason)
     )
 
 

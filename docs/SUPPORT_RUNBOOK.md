@@ -59,6 +59,11 @@ export KELP_AUDIT_DIR="var/audit"
 export KELP_USAGE_DIR="var/usage"
 ```
 
+In the Compose deployment these live in the `kelp-data` volume and default to
+`/data/chat.db`, `/data/audit`, `/data/usage` (`docs/DEPLOY.md` §3). Run the
+file commands in this runbook inside the container (`docker compose exec kelp
+...`) or against the volume path, and set the three variables to those values.
+
 ## Triage tree
 
 Work top-down. Stop at the first branch whose symptom matches. Every branch names
@@ -79,8 +84,9 @@ Interpretation:
   configuration. Fix the environment or the tenant secrets file, then rerun the
   same command. Do not print the key.
 - `missing_auth_token`: `KELP_AUTH_TOKEN` is unset. Set a non-empty value, rerun.
-- `database_locked`: another live process owns `var/chat.db.lock`. Find it with
-  `pgrep -af "chat.server"`; stop the stale process before starting a second.
+- `database_locked` (a real start, not `--check`): another live process owns
+  `<KELP_DB_PATH>.lock`. Find it with `pgrep -af "chat.server"` (bare metal) or
+  `docker compose ps` (container); stop the stale one before starting a second.
 - `invalid_secret_file`: the tenant secrets file is missing, malformed, or not
   mode `0600`. See “Secret rotation” below.
 - Any other `startup_failed`: run `python -m pytest -q` before changing anything;
@@ -104,7 +110,8 @@ Interpretation:
   `x-csrf-token` or same-origin `Origin`. Read-only admin calls should never hit
   this; if one does, check the reverse proxy for header rewriting.
 - `200`: auth is healthy; continue to the branch for the actual symptom.
-- A lockout after repeated failures clears after
+- A lockout after repeated failures answers `429`, not `401`/`403`, with a
+  `Retry-After` header and `error.details.reason: "locked"`. It clears after
   `KELP_AUTH_LOCKOUT_SECONDS` (default `300`).
 
 ### Branch 3 — Admin calls return `429`
@@ -122,7 +129,15 @@ The admin surface uses the `admin` class (`KELP_RATE_LIMIT_ADMIN_RPM`,
 budget or a scrape loop; the default is 1200/minute with a 300 burst. Wait for
 `Retry-After`, or fix the scraper. Do not disable the limiter permanently.
 
-### Branch 4 — Spend looks wrong or a turn is refused with `spend_cap_exceeded`
+### Branch 4 — Spend looks wrong or a turn is refused with `spend_cap_reached`
+
+The chat API refuses the turn with HTTP `402` and `error.code: "spend_cap_reached"`
+(`chat/service.py`). `spend_cap_exceeded` is the frozen control-layer code in
+`docs/SERVICE_CONTRACT.md` §5 for a `TaskRun.error_code`; today a spend refusal
+happens before any `TaskRun` exists, so the API code is the one you will see. A
+scheduled run skipped by the cap writes a `schedule_run` audit row with
+`reason: "spend_cap"` (`chat/proactive.py`). The `reason` is stored under
+`extra`, which `GET /api/admin/audit` never returns; read it from `audit.jsonl`.
 
 **First command** — read the tenant summary and the persisted windows:
 
@@ -145,11 +160,22 @@ wc -l "$KELP_USAGE_DIR"/usage.jsonl \
   "$KELP_USAGE_DIR"/usage.jsonl.* 2>/dev/null | tail -n 5
 ```
 
+4. Estimated rows, which are ceilings and not provider-reported spend:
+
+```bash
+grep -c '"usage_estimated":true' "$KELP_USAGE_DIR"/usage.jsonl*
+```
+
+A nonzero count means some turns were recorded at an upper bound because the
+provider reported no usage for a step (a timeout, a cut stream, a backend that
+never reports usage). Those rows are expected to be above the provider invoice;
+compare the invoice against the cap total with that in mind.
+
 If the totals disagree with the file, capture an evidence bundle (below) and
 compare the newest rotated segment timestamps. Do not delete usage records to
 “reset” spend; that is a policy change and hides the real total.
 
-### Branch 5 — A task type is denied or `entitlement_exhausted`
+### Branch 5 — A task type is denied (`entitlement_denied`)
 
 **First command** — read the current plan and the run counts:
 
@@ -158,14 +184,18 @@ curl -sS -H "Authorization: Bearer $KELP_AUTH_TOKEN" \
   "$KELP_BASE_URL/api/admin/tenants/owner" | python -m json.tool
 ```
 
-Compare `plan.allowed_task_types`, `plan.max_turns`, `plan.max_runs`, and
-`plan.window` with `runs.total` / `usage.records`. Two known P5 facts:
+Compare `plan.allowed_task_types` with the task type being refused. Two known
+P5 facts:
 
-- The entitlement counter increments **twice** per accepted `POST /api/runs`
-  (boundary check plus service check). A limit of 10 can therefore stop work
-  after roughly 5 submissions. This is documented, not rewired in P6.
-- `max_turns` and `max_runs` share the same injected counter; they are not
-  independent budgets.
+- In this build no usage counter is wired into the entitlement store, so
+  `max_turns`, `max_runs`, and `max_cost_usd` are parsed but not enforced and
+  `entitlement_exhausted` is never returned (`docs/DEPLOY.md` §3). Only
+  `entitlement_denied` occurs: the tenant's plan is missing, or the task type is
+  outside `allowed_task_types`. Use the spend caps to bound cost.
+- The gate is consulted **twice** per accepted `POST /api/runs` (boundary check
+  plus service check), and `max_turns` and `max_runs` share one injected counter
+  rather than being independent budgets. This matters only if a counter is
+  injected; it is documented, not rewired in P6.
 
 A plan change is configuration, not a contract change: update
 `KELP_ENTITLEMENT_PLANS_JSON` / `KELP_ENTITLEMENT_TENANT_PLANS_JSON`, validate,
@@ -204,11 +234,15 @@ curl -sS -H "Authorization: Bearer $KELP_AUTH_TOKEN" \
   "$KELP_BASE_URL/api/readyz" | python -m json.tool
 ```
 
-`checks.provider` is cached for 30 seconds. A `provider_auth`/`missing_api_key`
-failure points at rotation (below); `provider_unreachable`/`provider_timeout`
-points at network or base URL configuration; `provider_rate_limited` points at
-the upstream. The readiness body carries stable codes only, never a response
-body or a key.
+`checks.provider` is cached for 30 seconds. Its `detail` is `timeout` or
+`unavailable` (a non-2xx from the provider's `/models`, a connection error, or a
+timeout) or `not_configured`; it never names the cause, a response body, or a
+key. To tell a rejected key from a network fault, look at the failed run's
+`error_code` (`GET /api/admin/runs?status=failed`: `provider_auth` points at
+rotation (below), `provider_unreachable`/`provider_timeout` at network or base
+URL configuration, `provider_rate_limited` at the upstream) or at the
+`GET /api/admin/audit?event=egress` rows from the provider probe, whose
+`outcome` is `provider_error` (a rejected status) or `unreachable`.
 
 ### Branch 8 — Audit or usage files grow, rotate, or look torn
 
@@ -219,9 +253,9 @@ ls -l "$KELP_AUDIT_DIR"/audit.jsonl* "$KELP_USAGE_DIR"/usage.jsonl* 2>/dev/null
 ```
 
 The retention pass renames the active file to a timestamped segment and expires
-whole segments. A torn final line is ignored by the usage reader and counted as
-unknown-price spend; the audit reader skips a segment it cannot read. Do not
-truncate or rewrite an audit file. If a segment is unexpectedly large, check the
+whole segments. A torn final line is skipped by the readers; the spend guard
+also counts it as an unknown-price record. Do not truncate or rewrite an audit
+file. If a segment is unexpectedly large, check the
 retention policy and the process log for `retention_boot_failed`.
 
 ### Branch 9 — Database integrity or lock suspicion
@@ -303,8 +337,11 @@ python -m chat.server --check
 2. Roll the process so it reads the new value:
 
 ```bash
-systemctl --user restart kelp.service
-# or, for a foreground process: send SIGTERM to the PID from pgrep -af "chat.server"
+docker compose up -d --no-build   # Compose: re-reads an edited deploy/kelp.env
+# or the systemd wrapper that runs the same Compose command:
+sudo systemctl restart kelp.service
+# or, for a bare-metal foreground process: send SIGTERM to the PID from
+# pgrep -af "chat.server", then start it again
 ```
 
 3. Prove presence and a healthy provider probe without printing the key:
@@ -316,10 +353,12 @@ curl -sS -H "Authorization: Bearer $KELP_AUTH_TOKEN" \
 ```
 
 4. Rotate the owner token the same way. Existing sessions remain valid until
-   they expire; revoke them explicitly if the token was exposed:
+   they expire; revoke them explicitly if the token was exposed. The
+   `X-CSRF-Token` header is needed only when `KELP_CSRF_TOKEN` is set:
 
 ```bash
 curl -sS -X DELETE -H "Authorization: Bearer $KELP_AUTH_TOKEN" \
+  -H "X-CSRF-Token: $KELP_CSRF_TOKEN" \
   "$KELP_BASE_URL/api/auth/sessions"
 ```
 
@@ -349,7 +388,7 @@ history intact while refusing new work through the ordinary entitlement gate.
 export KELP_ENTITLEMENT_PLANS_JSON='{"suspended":{"plan_id":"suspended","allowed_task_types":[]}}'
 export KELP_ENTITLEMENT_TENANT_PLANS_JSON='{"tenant-b":"suspended"}'
 python -m chat.server --check
-systemctl --user restart kelp.service
+docker compose up -d --no-build   # or: sudo systemctl restart kelp.service
 ```
 
 Verify the refusal and the plan id:
@@ -360,15 +399,23 @@ curl -sS -H "Authorization: Bearer $KELP_AUTH_TOKEN" \
 ```
 
 (Suspension is still tenant-scoped: the current credential resolves `owner`, so
-a request for `tenant-b` returns `404` from the admin detail route. Use the
-service log and the returned `entitlement_denied` code to confirm the gate.)
+a request for `tenant-b` returns `404` from the admin detail route.)
+
+In this single-owner build only the `owner` tenant is reachable, so the
+procedure above has no live effect today: no credential resolves to
+`tenant-b`, and no request can receive `entitlement_denied` for it. To refuse
+new work for the running tenant, map `owner` to the deny-all plan
+(`KELP_ENTITLEMENT_TENANT_PLANS_JSON='{"owner":"suspended"}'`) and restart;
+verify with `POST /api/runs` returning `403 entitlement_denied`.
 
 ### Offboarding
 
-1. Revoke every owner session so no cookie survives the change:
+1. Revoke every owner session so no cookie survives the change (the
+   `X-CSRF-Token` header is needed only when `KELP_CSRF_TOKEN` is set):
 
 ```bash
 curl -sS -X DELETE -H "Authorization: Bearer $KELP_AUTH_TOKEN" \
+  -H "X-CSRF-Token: $KELP_CSRF_TOKEN" \
   "$KELP_BASE_URL/api/auth/sessions"
 ```
 
@@ -427,7 +474,8 @@ git log --oneline -10
 git switch --detach <previous-known-good-commit>
 python -m chat.server --check
 python -m pytest -q
-systemctl --user restart kelp.service
+# bare metal: restart the foreground process. Compose: rebuild and roll the image
+# as in docs/DEPLOY.md section 11 (a restart alone keeps the running image).
 ```
 
 After restart:
@@ -457,6 +505,7 @@ delete `var/chat.db` to “start clean” without a backup and owner approval.
       are rotated on the pilot's schedule.
 - [ ] The operator knows the six admin endpoints, the triage tree above, and how
       to build an evidence bundle.
-- [ ] The on-call owner has read the known P5 interactions: double entitlement
-      increments per accepted run, shared `max_turns`/`max_runs` counter, and
-      current-plan-not-history in the tenant view.
+- [ ] The on-call owner has read the known P5 interactions: the entitlement gate
+      is consulted twice per accepted run, `max_turns`/`max_runs`/`max_cost_usd`
+      are not enforced in this build (shared counter if one is injected), and
+      the tenant view shows the current plan, not history.

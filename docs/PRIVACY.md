@@ -1,7 +1,8 @@
 # Privacy review — what leaves the machine, and what does not (KEL-22 / M3-E)
 
 - **Status:** written review, 2026-10-30; sharing cross-references added 2026-10-30
-- **Branch:** `kel-22`; `kel-26` adds the ADR 0002 material and the share rows below
+- **Branch:** `kel-22`; `kel-26` added the ADR 0002 material; the share rows below describe the
+  shipped KEL-28 surface (ADR 0002 §14.1)
 - **Scope:** the server process in `chat/`, `kernel/`, `skills/`, `openshell/`, and `payments/`
 - **Companions:** the retention rule ([`docs/DEPLOY.md`](DEPLOY.md) §8.1, `chat/retention.py`),
   the policy gate ([`docs/OPENSHELL.md`](OPENSHELL.md)), the chat spec
@@ -32,12 +33,14 @@ recipient named here that the code no longer knows.
 | Where does the conversation go? | The model provider named by `KELP_PROVIDER_BASE_URL` (OpenRouter on the documented path) — every turn, in full |
 | Does anything else receive conversation text? | Not by default: no analytics, no telemetry, no crash reporter, no CDN, no third-party log sink |
 | Do skills reach the network? | Only through one chokepoint, and only to hosts a manifest declares. `github.write` can create a branch, commit, and pull request in `Anshieee/kelp`, but its handler cannot run before owner approval; other network skills are not implemented |
-| Do payments reach the network? | Not in this build. The Stripe and Razorpay clients exist but `build_app` constructs neither |
-| Where are keys? | Only in the server process environment. `KELP_PROVIDER_API_KEY`, `TAVILY_API_KEY`, `GITHUB_TOKEN` are read from `os.environ`, sent only to their own recipient, and scrubbed from every log line |
+| Do payments reach the network? | Only Razorpay, and only when both `RAZORPAY_KEY_ID` and `RAZORPAY_KEY_SECRET` are set: hosted Checkout (`/api/wallet/checkout`) and saved-card wallet (`/api/wallet`) routes are mounted, and each payment call goes to `api.razorpay.com` and writes an `egress` row (recipient `razorpay`). With no keys those routes answer `503 wallet_not_configured` and nothing is sent. Stripe is never constructed by `build_app` |
+| Where are keys? | Only in the server process environment, or (provider key only) in the private tenant secrets file named by `KELP_TENANT_SECRETS_FILE`. `TAVILY_API_KEY` and `GITHUB_TOKEN` are read from `os.environ` only. Each is sent only to its own recipient and scrubbed from every log line and audit row |
 | What records exist? | Chat content until the owner deletes the thread; audit and usage records on a stated clock; a content-free egress ledger inside the audit trail; a device row per signed-in browser with a short label and timestamps, no credential |
+| Who can read a shared thread? | Whoever holds a share URL the owner created (`GET /api/shared/{token}`): no account, one frozen snapshot of one thread, until the link is revoked or expires (7 days by default, 30 at most). A share read is inbound, so it adds no recipient and no egress row; the store keeps a per-link daily view count and the audit one `share_viewed` record per link per day, with no viewer identity (§2.3) |
 | Can I audit what left? | Yes: one `egress` line per outbound call — recipient, purpose, byte counts, outcome, no content |
 
-The provider key is read from `KELP_PROVIDER_API_KEY`; `NEBIUS_API_KEY` is
+The provider key is read from `KELP_PROVIDER_API_KEY` (from the tenant secrets
+file instead, when `KELP_TENANT_SECRETS_FILE` is set); `NEBIUS_API_KEY` is
 accepted only as a legacy alias when the canonical name is blank, and its value
 is scrubbed from logs and audit lines exactly like the canonical one. The
 endpoint itself comes from `KELP_PROVIDER_BASE_URL` (or its legacy alias), so no
@@ -57,7 +60,7 @@ through one of these rows.
 | `tavily` | `api.tavily.com` | The search query string, plus the API key header | On a `web.search` call | `TAVILY_API_KEY` | **No** — handler raises `not_implemented` |
 | `github` | `api.github.com` | Repository `Anshieee/kelp`, branch/commit metadata, file content, and pull-request title/body; bounded to the manifest's repo/host scope | Only after owner approval of a `github.write` request | `GITHUB_TOKEN` (bearer header) | **Yes**, after approval; the egress ledger records each request without content |
 | `stripe` | `api.stripe.com` | Customer id, payment-method id, amount, currency, description, idempotency key. Card numbers are typed into Stripe's own form and never reach this process | On a saved-card charge | `STRIPE_SECRET_KEY` | **No** — `HttpStripeGateway` is never constructed by `build_app` |
-| `razorpay` | `api.razorpay.com` | Order amount, currency, receipt, and the key id in the auth header; webhook settlement re-reads the order by id. Card numbers are typed on Razorpay's hosted page | On a hosted Checkout order | Key id + key secret | **No** — `HttpRazorpayTransport` is never constructed by `build_app` |
+| `razorpay` | `api.razorpay.com` | Order amount, currency, receipt (the local order id), a description of at most 200 characters with card numbers and keys masked, and an idempotency key; card ids, customer ids, and payment ids in the URL path or body for saved-card charges and for settlement re-reads. The key id and secret travel only in the `Authorization` header. Card numbers are typed on Razorpay's hosted page and never reach this process | On a hosted Checkout order, a saved-card charge, a card list or attach, and a settlement re-read | Key id + key secret (`RAZORPAY_KEY_ID`, `RAZORPAY_KEY_SECRET`) | **Yes**, when both keys are set — `build_app` mounts the routes and `HttpRazorpayTransport` is built on the first payment call. Each call writes one `egress` row (`purpose = "payments.razorpay.<operation>"`, byte counts, outcome, status; no ids, amounts, or credentials). With no keys the routes answer `503 wallet_not_configured` and nothing is sent |
 | `unlisted` | whatever else `KELP_PROVIDER_BASE_URL` points at | Exactly what `openrouter` would receive: the whole transcript | Every turn, when the base URL is another host | `KELP_PROVIDER_API_KEY` | Yes, for any endpoint that is not `openrouter.ai` |
 
 Two consequences worth stating plainly:
@@ -100,18 +103,20 @@ holds the URL.
 - **It adds no recipient.** A share read writes no egress row, opens no socket,
   starts no turn, calls no tool, and reads no artifact bytes. The list in §2 is
   unchanged by sharing.
-- **It does add a reader.** When the share surface lands (ADR 0002, KEL-28), the
-  owner can hand out a URL that shows one thread's snapshot to anyone who holds it,
-  with no account, until it is revoked or expires. That person receives the owner's
+- **It does add a reader.** The owner can hand out a URL
+  (`POST /api/threads/{id}/share`, then `GET /api/shared/{token}`; ADR 0002,
+  KEL-28) that shows one thread's snapshot to anyone who holds it, with no
+  account, until it is revoked or expires. That person receives the owner's
   content. They are not tracked: the audit records the link, not the viewer, and
   aggregate daily view counts are the only usage record. No IP, no user agent, no
   cookie.
 - **It is a copy.** Revocation stops the next request; it cannot recall a page
   already delivered to a browser. Sharing is a decision to hand someone a copy, and
   the UI says so.
-- **It is not in this build.** Nothing in §1, §3, or §4 depends on the share
-  surface existing. This subsection exists so that when it does land, no reader has
-  to guess whether the recipient list grew. It does not.
+- **It is live in this build.** The routes are mounted by `chat/api.py` and
+  specified in [`docs/CHAT_SPEC.md`](CHAT_SPEC.md) §12.3. This subsection exists so
+  that no reader has to guess whether the recipient list grew when sharing shipped.
+  It did not.
 
 ---
 
@@ -120,7 +125,7 @@ holds the URL.
 | Data | Location | Removed by | Retention row |
 |---|---|---|---|
 | Chat content — threads, messages, blocks, events, turns, approvals | `KELP_DB_PATH` (`chat.db`) | `ChatStore.purge_thread` — immediate hard delete, no `deleted_at` shadow | **Chat content** |
-| Share snapshot and daily view counts (not in this build) | `KELP_DB_PATH` (`chat.db`), `shares` and `share_views` | `ChatStore.purge_thread` deletes both in the thread's transaction; revoked and expired rows are pruned by KEL-28's share sweep (boot and daily), never on the read path. The snapshot holds no artifact bytes, so it has nothing to delete when an artifact is purged | **Chat content** (no separate row) |
+| Share snapshot and daily view counts | `KELP_DB_PATH` (`chat.db`), `shares` and `share_views` | `ChatStore.purge_thread` deletes both in the thread's transaction; revoked and expired rows are pruned by the share sweep (`ChatStore.share_sweep`, run by `RetentionMaintenance` at boot and daily), never on the read path. The snapshot holds no artifact bytes, so it has nothing to delete when an artifact is purged | **Chat content** (no separate row) |
 | Owner device sessions — hashed session id, short label, timestamps, revocation | `KELP_DB_PATH` (`chat.db`), `sessions` table | `DELETE /api/auth/devices/{id_short}`, `DELETE /api/auth/session(s)`; expired and evicted rows pruned on use | Not in the retention table; bounded by the session TTL and `KELP_SESSION_MAX` |
 | Uploaded files | `KELP_ARTIFACT_DIR` (default `workspace/var/artifacts`) | `ArtifactRegistry.purge` when the thread goes; `sweep_orphans` when parentless | **Uploaded files** |
 | Derived document index | `workspace/var/index` | Removed eagerly with the artifact; orphan directories swept | **Derived index** |
@@ -135,19 +140,19 @@ The row names in the last column are the `class` values of
 That table is the contract; this one says which of its rows hold what this review
 talks about, so a reader can move between the two without guessing.
 
-**Where a share snapshot will sit.** A share link (§2.3) is a second copy of one
+**Where a share snapshot sits.** A share link (§2.3) is a second copy of one
 thread's content, and its per-day view counter (`share_views`) is a small aggregate
 keyed by the link's token hash. Both belong to the **Chat content** row and inherit
 that row's rule: they are removed in the same transaction that purges the thread,
 and neither is retained after the thread is gone. So sharing adds **no** row to
 `chat.retention.RETENTION_ROWS` or to `docs/DEPLOY.md` §8.1. Revoked and expired
-links are pruned by KEL-28's share sweep (boot and daily), never on the read path,
+links are pruned by the share sweep (boot and daily), never on the read path,
 and a revoked row is kept until that prune rather than deleted at revoke. The
 snapshot never contains artifact bytes — the projection drops storage paths,
 hashes, and artifact handles — so a purged artifact leaves nothing behind inside a
 share row.
 
-If KEL-28 instead gives share rows their own retention window, that window must be
+If share rows are ever given their own retention window, that window must be
 added to `RETENTION_ROWS`, `docs/DEPLOY.md` §8.1, and this table in the same
 change. The test binding is one-directional, so that change still needs a reviewer:
 `tests/test_privacy.py` asserts that every `RETENTION_ROWS` class name appears in
@@ -203,13 +208,21 @@ intentions:
    swallowed; a missing ledger is a no-op. The ledger never blocks a request, the
    same rule the rest of the audit trail follows.
 
-Coverage is by path, not by hope. Three call sites write rows in this build: the
+Coverage is by path, not by hope. Four call sites write rows in this build: the
 model client (`purpose = "chat.completions"`), each skill's egress chokepoint
-(`purpose =` the skill name), and the readiness probe (`provider.health`). The
-Stripe and Razorpay transports are the one place a future change could add a
-recipient without a row: they are not constructed today, the `stripe` and
-`razorpay` ids already exist so the day they are wired the gap is visible, and
-§2's table must be updated in that same change.
+(`purpose =` the skill name), the readiness probe (`provider.health`), and the
+Razorpay transport (`purpose = "payments.razorpay.<operation>"`, one of
+`customer.create`, `card.fetch`, `card.list`, `order.create`, `payment.fetch`,
+`payment.create`, `payment.capture`). `build_app` hands its egress ledger to both
+the wallet and the hosted Checkout, so the lazily built `HttpRazorpayTransport`
+writes into the same audit trail; the row's outcome is `completed`,
+`provider_error` (HTTP 400 and up), `unreachable`, `timeout`, or `error` (an
+unexpected client-side fault), and a call
+refused before it reaches the network (a missing credential, a malformed id)
+writes nothing because nothing left. The Stripe transport is the one place a
+future change could add a recipient without a row: `HttpStripeGateway` is not
+constructed by `build_app` today, the `stripe` id already exists so the day it is
+wired the gap is visible, and §2's table must be updated in that same change.
 
 Read it like any other audit record:
 
@@ -299,11 +312,17 @@ does.
   file and the runbook. The retention table says so rather than pretending.
 - **Chat content has no age timer.** It is removed when the owner deletes the
   thread. The retention table states this instead of implying an expiry.
-- **Payments are not wired.** When they are, `stripe` and `razorpay` become live
-  recipients; the ledger ids already exist so that change shows up in the audit
-  trail on day one, but §2 will need its "Wired today?" column updated with it.
-- **A shared thread is deliberately readable by a stranger.** Once the share
-  surface ships, the owner can hand a URL to one thread and the holder can read it
+- **Razorpay is wired; Stripe is not.** With both Razorpay keys set the server
+  calls `api.razorpay.com`, and every call is accounted for as a `razorpay` row
+  (counts and fixed labels only). The row does not say what was bought or for how
+  much; the amount, the description, and the ids are in the wallet's own
+  database, not the audit trail. Setting only one of the two keys is a startup
+  configuration error, not a half-working wallet. If `HttpStripeGateway` is ever
+  constructed by `build_app`, `stripe` becomes a live recipient and §2's "Wired
+  today?" column must change with it; `tests/test_privacy.py` fails if the
+  constructor runs.
+- **A shared thread is deliberately readable by a stranger.** Because the share
+  surface is live, the owner can hand a URL to one thread and the holder can read it
   with no account. That is the feature, not a leak: the content is still the owner's,
   the model provider already has it, and the only promise is that the link dies on
   revocation or expiry. The page cannot be un-rendered once it has been seen.
@@ -335,7 +354,16 @@ does.
 - `chat.cards.EXEC_AVAILABLE` and the wiring agree under AST inspection, and
   `build_app` is run with `ExecGate.__init__` booby-trapped, so a newly wired
   gate fails the test at construction time;
-- an exec card makes no execution promise.
+- an exec card makes no execution promise;
+- the Razorpay transport writes exactly one content-free `razorpay` row per HTTP
+  call (`completed`, `provider_error` with the status, `unreachable`, `timeout`),
+  a failing ledger never breaks the call, and `build_app` hands the app's own
+  egress ledger to both the wallet and hosted Checkout gateways while keeping the
+  transport lazy; with no keys no transport is constructed and the routes answer
+  `503 wallet_not_configured`;
+- `build_app` never constructs `HttpStripeGateway` (booby-trapped constructor),
+  and the §2 "Wired today?" cells for `razorpay` (**Yes**) and `stripe` (**No**)
+  match.
 
 The retention behaviour itself is covered by `tests/test_retention.py`; this
 review references that table rather than restating it.

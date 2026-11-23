@@ -11,6 +11,7 @@ the turn exactly once. Approvals come from two places and share one card:
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import re
 import threading
 import time
@@ -86,7 +87,11 @@ MESSAGE_STATUS_BY_REASON = {
     "interrupted": "interrupted",
 }
 
-_TERMINAL_RETRY_REASONS = frozenset({"error", "stopped", "interrupted"})
+#: CHAT_SPEC §5.4: a finished turn may be retried when the *message status* its
+#: reason maps to is one of these. Turns store the reason (``cancelled``,
+#: ``budget``, ...), not the status, so the lookup goes through
+#: ``MESSAGE_STATUS_BY_REASON``; an unknown reason is not retryable.
+_RETRYABLE_MESSAGE_STATUSES = frozenset({"error", "stopped", "interrupted"})
 
 #: P3-1: how a finished chat turn settles its run. ``stop`` and ``length`` are
 #: normal completions; a budget stop and a crash are failures; a client Stop is
@@ -317,6 +322,7 @@ class ChatService:
         runs: RunRecorder | None = None,
         entitlements: EntitlementStore | None = None,
         billing: BillingSink | None = None,
+        scrub_values: Sequence[str] = (),
     ):
         self.store = store
         self.bus = EventBus()
@@ -353,8 +359,15 @@ class ChatService:
         self._config = config or KernelConfig.from_env()
         self._model = model or self._config.primary_model
         self._secrets = dict(secrets or {})
+        # ``secrets`` also supplies skills (by declared name); ``scrub_values``
+        # are redaction-only, e.g. tenant-secrets-file values that no skill
+        # receives but that must still never land in a chat record.
         self._secret_values = tuple(
-            value for value in self._secrets.values() if isinstance(value, str) and len(value) >= 4
+            dict.fromkeys(
+                value
+                for value in (*self._secrets.values(), *scrub_values)
+                if isinstance(value, str) and len(value) >= 4
+            )
         )
         self._workspace_root = workspace_root
         self._tool_executor_factory = tool_executor_factory
@@ -1072,7 +1085,11 @@ class ChatService:
         latest = self.store.latest_turn(thread_id)
         if latest is None or latest["id"] != turn_id:
             raise ChatError("not_latest_turn", status=409)
-        if turn["state"] != "finished" or turn["reason"] not in _TERMINAL_RETRY_REASONS:
+        if (
+            turn["state"] != "finished"
+            or MESSAGE_STATUS_BY_REASON.get(turn["reason"])
+            not in _RETRYABLE_MESSAGE_STATUSES
+        ):
             raise ChatError("turn_not_retryable", status=409)
 
         user_message = self.store.get_message(turn["user_message_id"])
@@ -1258,19 +1275,25 @@ class ChatService:
                 now_fn=self._now,
             )
             token = self._cancel.get(turn_id)
-            async for event in loop.run_turn(
-                [{"role": "user", "content": text}],
-                tools=self._tools,
-                turn_id=turn_id,
-                session_id=state.thread_id,
-                model=self._model,
-                cancel=token,
-            ):
-                if self.store.get_thread(
-                    state.thread_id, tenant_id=state.tenant.tenant_id
-                ) is None:
-                    break
-                self._handle_kernel_event(state, event)
+            # ``aclosing`` makes the ``break`` below close the generator here,
+            # in this task and request context, so the loop's cancelled-usage
+            # record is written now instead of by the asyncgen finalizer later.
+            async with contextlib.aclosing(
+                loop.run_turn(
+                    [{"role": "user", "content": text}],
+                    tools=self._tools,
+                    turn_id=turn_id,
+                    session_id=state.thread_id,
+                    model=self._model,
+                    cancel=token,
+                )
+            ) as kernel_events:
+                async for event in kernel_events:
+                    if self.store.get_thread(
+                        state.thread_id, tenant_id=state.tenant.tenant_id
+                    ) is None:
+                        break
+                    self._handle_kernel_event(state, event)
             if not state.finished:
                 self._finalize(
                     state,

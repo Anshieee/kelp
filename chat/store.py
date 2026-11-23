@@ -1271,12 +1271,14 @@ class ChatStore:
                 "VALUES (?, ?, ?, ?, ?)",
                 (thread_id, seq, event_type, _dump(body), stamp),
             )
+        # Row values are authoritative: a payload key named like a reserved
+        # column must not be able to rewrite the envelope.
         return {
+            **body,
             "seq": seq,
             "thread_id": thread_id,
             "type": event_type,
             "ts": stamp,
-            **body,
         }
 
     def events_after(
@@ -1290,13 +1292,16 @@ class ChatStore:
             ).fetchall()
         events: list[dict[str, Any]] = []
         for row in rows:
-            event = {
-                "seq": row["seq"],
-                "thread_id": row["thread_id"],
-                "type": row["type"],
-                "ts": row["ts"],
-            }
-            event.update(_load(row["payload_json"], {}))
+            event = dict(_load(row["payload_json"], {}))
+            # Row values are authoritative over any same-named payload key.
+            event.update(
+                {
+                    "seq": row["seq"],
+                    "thread_id": row["thread_id"],
+                    "type": row["type"],
+                    "ts": row["ts"],
+                }
+            )
             events.append(event)
         return events
 

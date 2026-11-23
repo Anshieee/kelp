@@ -276,6 +276,9 @@ def test_create_use_list_and_revoke(tmp_path: Path) -> None:
         if block.get("type") == "text"
     ]
     assert any(str(text).startswith("What is in") for text in texts)
+    # Cookies travel in ``Response.cookies`` (the adapter turns each entry into
+    # its own Set-Cookie line), so ``headers`` alone can never show one.
+    assert response.cookies == []
     assert "Set-Cookie" not in response.headers
     assert response.headers["Cache-Control"] == "no-store"
     assert response.headers["Referrer-Policy"] == "no-referrer"

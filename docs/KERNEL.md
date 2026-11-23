@@ -1,6 +1,8 @@
 # Kernel agent loop (KEL-6 / P0-1)
 
-- **Status:** scaffold, 2026-10-28
+- **Status:** implemented (KEL-6, 2026-10-28). The loop is driven by the chat server
+  (`chat/service.py`); this document describes the loop and its events, not the
+  surfaces built on it. Where a section reads as a plan, the code and its tests win.
 - **Branch:** `kel-6`
 - **Contract:** `docs/SKILL_SPEC.md` for tools; this doc for the loop
 - **Tests:** `tests/test_kernel_provider.py`, `tests/test_kernel_loop.py`
@@ -96,15 +98,70 @@ async for event in loop.run_turn(messages, tools=tool_schemas, session_id="s-1")
 | `max_output_tokens` | 4096 | sum of reported completion tokens |
 | `max_tokens_per_step` | 1024 | `max_tokens` sent to the provider |
 | `max_tool_calls` | 8 | executed tool calls per turn |
-| `max_wall_seconds` | 120 | wall clock, checked between steps |
+| `max_wall_seconds` | 120 | wall clock, checked between steps and while waiting on the provider stream |
 
 Exceeding a limit emits `error.code = "turn_budget_exceeded"` with
 `details.limit` set to the limit name, then `turn_finished` with
 `reason = "budget"`. The turn stops; the session and loop stay usable.
 
-Token budgeting consumes the provider's reported usage. If a backend does not
-report usage, only the step, tool-call, and wall-clock limits bound the turn;
-the record keeps `usage_reported: false` so this is visible.
+The wall budget and Stop are also checked while the loop waits on the provider
+stream, at least once a second, so a provider that sends only keepalives or
+trickles tokens cannot hold a step open past the limit or ignore a cancel.
+
+Token budgeting consumes the provider's reported usage only. If a backend does
+not report usage, only the step, tool-call, and wall-clock limits bound the
+turn, and `max_output_tokens` is not consumed by that step. The record keeps
+`usage_reported: false` so this is visible. The same applies when a stream is
+cancelled or fails before its final usage chunk (the last chunk in OpenAI-style
+streams).
+
+The step still reached the provider, so its cost is not recorded as `$0`. A step
+that ends without a `UsageReport` is recorded at an upper bound, and the record
+carries `usage_estimated: true`:
+
+- input tokens: the UTF-8 byte length of the compact JSON of
+  `{"messages": <transcript sent in that request>, "tools": <tools>}`. A token
+  covers at least one byte and the JSON keys and quotes add far more bytes than
+  a chat template adds tokens, so this is above the billed input for text
+  messages. An image or other non-text part could bill more than its bytes; the
+  chat service sends text only today. A system prompt added by a provider
+  adapter is not counted;
+- output tokens: that step's `max_tokens`, which the provider cannot exceed.
+
+The record's `input_tokens`, `output_tokens`, `total_tokens`, and
+`estimated_cost_usd` are the reported counts plus these bounds. The bound is
+generally well above the real usage, so the cost is a ceiling. A model with no
+price still records `estimated_cost_usd: null`. `usage_reported` stays `true`
+only if some step reported usage. `turn_finished` keeps the reported token
+counts, and its `estimated_cost_usd` equals the record's.
+
+A step is not estimated only when its first and only event is a provider failure
+that means no request was accepted for billing: a failure carrying an HTTP status
+(the provider answered with an error status), or a failure raised before any
+request (`missing_base_url`, `missing_api_key`, and `tenant_mismatch` from
+`kernel.providers.base.tenant_failure`). Every other unmetered step is bounded.
+An error status is treated as unbilled even when a gateway in front of the model
+(a 502 or 504 from a proxy) may have let upstream work happen; that is the one
+case where the record can undercount.
+That includes a timeout, an unreachable endpoint, and a protocol error that
+carry no HTTP status. An unreachable endpoint usually billed nothing, so its
+bound overcounts; the loop cannot tell a refused connection from a dropped one,
+and overcounting is the safe direction for a cap. The rule also
+includes a failure after an HTTP 200 (a truncated stream, a malformed first
+chunk, a transport error mid-body, an error chunk inside the body), when the
+provider may already have billed. A failure after any text or tool call, a
+cancel, or an exception while the stream was open is bounded too.
+
+`TurnFinished` and `UsageUpdated` token fields are reported-only; they never
+include the bound. `UsageUpdated.estimated_cost_usd` is likewise priced from
+reported tokens only, while `TurnFinished.estimated_cost_usd` equals the record's.
+When the turn exits through `CancelledError` or an exception, the loop still
+writes the record with the bound, but no `TurnFinished` reaches the chat layer.
+`chat/service.py` then finalizes from the last `UsageUpdated` it saw
+(`state.estimated_cost_usd`), so the turn's `usage` and the `TaskRun` `cost_usd`
+can be lower than the `usage.jsonl` record (and `cost_usd` is `0.0` when no
+`UsageUpdated` arrived). Spend caps read `usage.jsonl`, so enforcement uses the
+bound.
 
 ### Tool calls
 
@@ -132,14 +189,22 @@ One `UsageRecord` per turn is appended to the configured store:
 {"turn_id":"turn_…","session_id":"s-1","model":"nvidia/nemotron-3.5-super-vl",
  "input_tokens":812,"output_tokens":143,"total_tokens":955,
  "estimated_cost_usd":null,"cost_known":false,"usage_reported":true,
+ "usage_estimated":false,
  "steps":2,"tool_calls":1,"started_at":"…","finished_at":"…",
  "duration_ms":912,"outcome":"stop"}
 ```
 
-- Pricing comes from `kernel.config.DEFAULT_PRICING` (USD per 1M tokens). It
-  ships the two default models at the documented provider's published list price
-  (`openrouter.ai/api/v1/models`, read 2026-11-02); add any other model id this
-  deployment uses with the provider's current price.
+- Pricing comes from `KernelConfig.pricing` (USD per 1M tokens), which the loop
+  reads through `estimate_cost` and `pricing_for`. That table starts from
+  `kernel.config.DEFAULT_PRICING`, which ships the two default models at the
+  documented provider's published list price (`openrouter.ai/api/v1/models`, read
+  2026-11-02). When `KELP_PRICING_JSON` is set, its rows are merged over those
+  defaults: a row replaces the default with the same model id, and any other model
+  id is added. A model id in neither table is unpriced.
+- A turn whose consumer disconnects or whose task is cancelled mid-turn still
+  writes exactly one usage record, with `outcome: "cancelled"` and the input and
+  output tokens counted up to that point. A `CancelToken` stop writes the same
+  outcome through the normal path.
 - Unknown models record `estimated_cost_usd: null` and `cost_known: false`; the
   kernel never invents a price.
 - `JsonlUsageStore` appends with `fsync` and creates the file `0600`. It contains

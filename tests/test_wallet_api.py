@@ -26,6 +26,8 @@ from tests.test_wallet import (
 
 TOKEN = "test-session-token"
 CSRF = "test-csrf-token"
+# Distinctive so it cannot match an id, timestamp or status in a response body.
+CVC = "737"
 
 
 @pytest.fixture
@@ -110,8 +112,63 @@ def test_mutations_require_csrf(api: WalletAPI) -> None:
     assert payload(response)["error"]["code"] == "csrf_failed"
 
 
+def test_no_token_and_no_upstream_authorization_fails_closed(
+    gateway: FakeGateway,
+) -> None:
+    unconfigured = WalletAPI(make_wallet(gateway=gateway))
+
+    read = call(unconfigured, "GET", "/api/wallet", auth=False)
+    write = call(unconfigured, "POST", "/api/wallet/setup-intent", auth=False)
+
+    assert read.status == 401
+    assert payload(read)["error"]["code"] == "unauthorized"
+    assert write.status == 401
+
+
+def test_upstream_authorized_allows_a_request_without_a_token(
+    gateway: FakeGateway,
+) -> None:
+    trusted = WalletAPI(make_wallet(gateway=gateway), upstream_authorized=True)
+
+    response = call(trusted, "GET", "/api/wallet", auth=False)
+
+    assert response.status == 200
+
+
+def test_upstream_authorized_still_enforces_csrf(gateway: FakeGateway) -> None:
+    trusted = WalletAPI(
+        make_wallet(gateway=gateway), upstream_authorized=True, csrf_token=CSRF
+    )
+
+    response = call(
+        trusted, "POST", "/api/wallet/setup-intent", auth=False, csrf=False
+    )
+
+    assert response.status == 403
+    assert payload(response)["error"]["code"] == "csrf_failed"
+
+
+def test_upstream_authorized_is_an_or_with_a_configured_token(
+    gateway: FakeGateway,
+) -> None:
+    # The gate is "token matches OR upstream_authorized": a wrong bearer does
+    # not veto a caller the upstream router already authenticated.
+    both = WalletAPI(
+        make_wallet(gateway=gateway),
+        auth_token=TOKEN,
+        csrf_token=CSRF,
+        upstream_authorized=True,
+    )
+
+    response = call(
+        both, "GET", "/api/wallet", auth=False, headers={"authorization": "Bearer nope"}
+    )
+
+    assert response.status == 200
+
+
 def test_cross_origin_mutation_is_rejected_without_a_token(gateway: FakeGateway) -> None:
-    open_api = WalletAPI(make_wallet(gateway=gateway))
+    open_api = WalletAPI(make_wallet(gateway=gateway), upstream_authorized=True)
     response = call(
         open_api,
         "POST",
@@ -209,13 +266,15 @@ def test_attach_rejects_card_details_and_never_echoes_them(api: WalletAPI) -> No
         api,
         "POST",
         "/api/wallet/attach",
-        body={"payment_method_id": PM_ID, "number": PAN, "cvc": "123"},
+        body={"payment_method_id": PM_ID, "number": PAN, "cvc": CVC},
     )
 
     assert response.status == 422
     assert payload(response)["error"]["code"] == "unstorable_card"
+    # Both values were really sent (see the request above), so absence from the
+    # whole response body, not from a dict's keys, is what proves no echo.
     assert PAN not in text(response)
-    assert "123" not in payload(response)["error"].get("details", {})
+    assert CVC not in text(response)
     assert payload(call(api, "GET", "/api/wallet/cards"))["cards"] == []
 
 

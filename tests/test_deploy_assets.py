@@ -16,6 +16,7 @@ properties that are cheap to lose in a later edit:
 
 from __future__ import annotations
 
+import ast
 import re
 from pathlib import Path
 
@@ -184,7 +185,6 @@ def test_compose_healthcheck_matches_the_image() -> None:
 
 def test_compose_pins_the_project_and_volume_names() -> None:
     text = COMPOSE.read_text(encoding="utf-8")
-    assert text.splitlines()[0].startswith("#") or "name: kelp" in text
     assert "name: kelp" in text
     assert "name: kelp-data" in text
 
@@ -330,3 +330,113 @@ def test_deploy_steps_never_build_via_compose() -> None:
     for match in re.finditer(r"docker compose up -d[^\n]*", text):
         assert "--no-build" in match.group(0), match.group(0)
     assert "docker compose build" not in text
+
+
+# -- docs/DEPLOY.md §12.2 smoke test and §6 share-link logging ----------------
+
+
+def _emitted_event_types() -> set[str]:
+    """Stream event names the chat layer can append, read from the source.
+
+    Every event on ``GET /api/threads/{id}/stream`` goes through
+    ``ChatService._emit`` or ``ChatStore.append_event`` with the event type as
+    the second positional argument, so the literal names are the emitted set.
+    """
+
+    names: set[str] = set()
+    sources = [*(ROOT / "chat").glob("*.py"), *(ROOT / "chat" / "routers").glob("*.py")]
+    for source in sources:
+        tree = ast.parse(source.read_text(encoding="utf-8"))
+        for node in ast.walk(tree):
+            if (
+                isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Attribute)
+                and node.func.attr in {"_emit", "append_event"}
+                and len(node.args) >= 2
+                and isinstance(node.args[1], ast.Constant)
+                and isinstance(node.args[1].value, str)
+            ):
+                names.add(node.args[1].value)
+    return names
+
+
+def _smoke_section() -> str:
+    """The body of DEPLOY ``### 12.2`` up to ``### 12.3``."""
+
+    text = _section("12")
+    start = text.index("### 12.2")
+    return text[start : text.index("### 12.3")]
+
+
+def test_smoke_test_names_only_events_the_stream_emits() -> None:
+    from chat.stream import format_event
+
+    smoke = _smoke_section()
+    emitted = _emitted_event_types()
+    # Control: the scan found the events the smoke test depends on.
+    assert {"token_delta", "turn_finished", "turn_started"} <= emitted
+
+    named = set(re.findall(r"event: ([A-Za-z_]+)", smoke))
+    assert {"token_delta", "turn_finished"} <= named
+    assert named <= emitted, f"not emitted by the server: {sorted(named - emitted)}"
+
+    # The sample-output list on the verification box uses real names too.
+    listed = re.search(r'`\[("message_created".*?)\]`', smoke)
+    assert listed is not None
+    assert set(re.findall(r'"([a-z_]+)"', listed.group(1))) <= emitted
+
+    # The names the first version of this section used do not exist.
+    assert "event: text" not in smoke
+    assert "text" not in emitted
+
+    # Frame order comes from the formatter: grep -A must reach the data line.
+    frame = format_event({"seq": 1, "type": "turn_finished"}).splitlines()
+    assert [line.split(":", 1)[0] for line in frame[:4]] == ["id", "event", "retry", "data"]
+    data_offset = [line.split(":", 1)[0] for line in frame].index("data") - 1
+    after = [int(n) for n in re.findall(r"grep -A(\d+) '\^event: turn_finished'", smoke)]
+    assert after, "the smoke test must read the turn_finished data line"
+    assert all(n >= data_offset for n in after), (after, data_offset)
+
+
+def test_smoke_test_reasons_are_real_turn_reasons() -> None:
+    from chat.service import MESSAGE_STATUS_BY_REASON
+
+    smoke = _smoke_section()
+    reasons = set(re.findall(r'"reason":"([a-z_]+)"', smoke))
+    assert reasons, "the smoke test must state the turn reason it expects"
+    assert reasons <= set(MESSAGE_STATUS_BY_REASON), sorted(reasons - set(MESSAGE_STATUS_BY_REASON))
+    # The success path ends in a message status of ``complete``.
+    assert '"reason":"stop"' in smoke
+    assert MESSAGE_STATUS_BY_REASON["stop"] == "complete"
+    # ``complete`` is a message status, not a turn reason.
+    assert "complete" not in MESSAGE_STATUS_BY_REASON
+    assert '"reason":"complete"' not in smoke
+
+
+def test_smoke_test_uses_a_private_temp_file_removed_by_the_trap() -> None:
+    smoke = _smoke_section()
+    assert "/tmp/kelp-smoke" not in smoke
+    assert "SSE=$(mktemp)" in smoke
+    assert re.search(r"trap 'rm -f \"\$HDRS\" \"\$SSE\"' EXIT", smoke)
+
+
+def test_provider_change_smoke_expects_the_real_reason() -> None:
+    text = (ROOT / "docs" / "PROVIDER_CHANGE.md").read_text(encoding="utf-8")
+    assert '"reason":"complete"' not in text
+    assert '"reason":"stop"' in text
+
+
+def test_reverse_proxy_section_keeps_share_tokens_out_of_access_logs() -> None:
+    from chat.routers.shared import _is_share_path
+
+    section = _section("6")
+    # The documented prefix is the route the server really serves.
+    assert _is_share_path("/api/shared/token")
+    assert "/api/shared" in section
+    # Both proxies the section configures get an access-log exclusion for it.
+    assert re.search(r"location /api/shared/ \{\s*access_log off;", section)
+    assert re.search(r"@share path /api/shared/\*\s*log_skip @share", section)
+    assert "Caddy 2.8" in section
+    # The retired `/s/` spelling is not what operators are told to exclude.
+    assert "location /s/" not in section
+

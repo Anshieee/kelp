@@ -27,6 +27,13 @@ from openshell.audit import AuditLog
 from skills import SkillContext
 from skills.builtin.docs_answer.handler import run as docs_answer_run
 
+from .request_checks import (
+    check_followup_last,
+    check_history,
+    check_retry_prompt,
+    check_tool_results,
+    check_tool_specs,
+)
 from .results import Observation
 from .tools import (
     ToolRecorder,
@@ -102,6 +109,31 @@ def _event_statuses(store: ChatStore, thread_id: str) -> list[str]:
 
 def _event_types(store: ChatStore, thread_id: str) -> list[str]:
     return [str(event.get("type")) for event in store.events_after(thread_id)]
+
+
+def _sent_requests(ctx: ScenarioContext) -> list[Any]:
+    """Provider requests as sent, in order (snapshotted by ``CountingProvider``)."""
+
+    return list(getattr(ctx.provider, "requests", []) or [])
+
+
+def _add_tool_request_checks(obs: Observation, ctx: ScenarioContext) -> None:
+    """Check the requests carried the tool specs and the tool results.
+
+    Replayed provider output cannot reveal a request that dropped the tools or
+    never fed a result back, so this looks at what was sent. No-op for tasks
+    that expect no tool calls.
+    """
+
+    if not ctx.expected_tool_calls:
+        return
+    requests = _sent_requests(ctx)
+    names = [str(call.get("name")) for call in ctx.expected_tool_calls if call.get("name")]
+    ok, detail = check_tool_specs(requests, names)
+    obs.add("request_tool_specs", ok, detail)
+    call_ids = [str(call["call_id"]) for call in ctx.recorder.calls if call.get("call_id")]
+    ok, detail = check_tool_results(requests, call_ids)
+    obs.add("request_tool_results", ok, detail)
 
 
 # ---------------------------------------------------------------------------
@@ -192,6 +224,7 @@ async def run_tool_turn(ctx: ScenarioContext) -> Observation:
     if expect.get("tool_output_contains"):
         haystack = "\n".join(_text(item) for item in ctx.recorder.outputs)
         _add_terms(obs, "tool_output_terms", haystack, expect.get("tool_output_contains"))
+    _add_tool_request_checks(obs, ctx)
     return obs
 
 
@@ -366,6 +399,7 @@ async def run_approval(ctx: ScenarioContext, mode: str) -> Observation:
         obs.add("replay_rejected", code == expected_code, code or "no error")
         if isinstance(obs.approval, dict):
             obs.approval["replay_code"] = code
+    _add_tool_request_checks(obs, ctx)
     return obs
 
 
@@ -612,6 +646,8 @@ async def run_resume_retry(ctx: ScenarioContext) -> Observation:
         str(requests),
     )
     _add_terms(obs, "retry_answer_terms", new_text, expected.get("assistant_contains"))
+    ok, detail = check_retry_prompt(_sent_requests(ctx), str(ctx.task["prompt"]))
+    obs.add("retry_request_prompt", ok, detail)
     return obs
 
 
@@ -674,6 +710,13 @@ async def run_multi_turn_two(ctx: ScenarioContext) -> Observation:
         requests == int(expect.get("provider_requests") or 2),
         str(requests),
     )
+    ok, detail = check_followup_last(_sent_requests(ctx), str(ctx.task.get("followup") or ""))
+    obs.add("followup_sent_last", ok, detail)
+    # The conversation service does not assemble model context from stored
+    # history yet (docs/CHAT_SPEC.md section 1), so this stays opt-in per task.
+    if expect.get("history_in_request") is True:
+        ok, detail = check_history(_sent_requests(ctx), str(ctx.task["prompt"]), first_text)
+        obs.add("history_sent", ok, detail)
     return obs
 
 

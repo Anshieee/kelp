@@ -23,7 +23,6 @@ inside :class:`payments.razorpay_checkout.RazorpayCheckout`.
 
 from __future__ import annotations
 
-import hmac
 import json
 from typing import Any, Mapping
 from urllib.parse import unquote, urlsplit
@@ -33,6 +32,7 @@ from payments.stripe_wallet import WalletNotConfigured
 from payments.wallet import MAX_AMOUNT_CENTS, WalletError, contains_raw_card_data
 
 from .api import Request, Response
+from .compare import constant_time_equals
 
 __all__ = ["CheckoutAPI"]
 
@@ -54,10 +54,15 @@ class CheckoutAPI:
         *,
         auth_token: str | None = None,
         csrf_token: str | None = None,
+        upstream_authorized: bool = False,
     ) -> None:
         self.checkout = checkout
         self.auth_token = auth_token
         self.csrf_token = csrf_token
+        # True only when the caller (ChatAPI) has already authenticated every
+        # request it routes here. Without it and without an auth_token the
+        # API fails closed instead of treating "no token" as "open".
+        self.upstream_authorized = upstream_authorized
 
     # -- dispatch ----------------------------------------------------------
 
@@ -203,22 +208,24 @@ class CheckoutAPI:
             raise WalletError("csrf_failed", status=403)
 
     def _authorized_for(self, request: Request) -> bool:
-        if not self.auth_token:
+        if self.upstream_authorized:
             return True
+        if not self.auth_token:
+            return False
         header = request.header("authorization") or ""
         prefix = "Bearer "
-        if header.startswith(prefix) and hmac.compare_digest(
+        if header.startswith(prefix) and constant_time_equals(
             header[len(prefix) :], self.auth_token
         ):
             return True
         cookies = _parse_cookies(request.header("cookie"))
         session = cookies.get("session")
-        return bool(session) and hmac.compare_digest(session, self.auth_token)
+        return bool(session) and constant_time_equals(session, self.auth_token)
 
     def _csrf_ok(self, request: Request) -> bool:
         if self.csrf_token:
             supplied = request.header("x-csrf-token") or ""
-            return hmac.compare_digest(supplied, self.csrf_token)
+            return constant_time_equals(supplied, self.csrf_token)
         origin = request.header("origin")
         if not origin:
             return True

@@ -167,7 +167,7 @@ this deployment actually calls, and re-check the row when you switch endpoints.
    ```
 
 6. **Deploy as usual** (`docs/DEPLOY.md` §11) and run the §12.2 smoke: one real
-   turn must end `"reason":"complete"` with `"estimated_cost_usd"` greater than
+   turn must end `"reason":"stop"` with `"estimated_cost_usd"` greater than
    `0.0`, and `/api/metrics` must show
    `spend_unknown_price_records{window="day"}` at `0` (§13.2). A `null` cost or
    a non-zero unknown count means the pricing row and the model id do not

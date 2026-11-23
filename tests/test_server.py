@@ -951,3 +951,25 @@ def test_kill_9_mid_turn_then_restart_settles_the_turn(tmp_path: Path) -> None:
         assert store.list_approvals(status="pending") == []
     finally:
         store.close()
+
+
+def test_tenant_file_values_are_scrubbed_but_not_supplied_to_skills(tmp_path: Path) -> None:
+    # Only the provider key is read from KELP_TENANT_SECRETS_FILE. Any other
+    # value in it is redaction-only: it must reach the chat scrubber and must
+    # not join the mapping that supplies skill secrets (docs/DEPLOY.md §3).
+    skill_token = "tenant-file-github-token-value"
+    secrets_file = tmp_path / "tenant-secrets.json"
+    secrets_file.write_text(
+        json.dumps({"owner": {"KELP_PROVIDER_API_KEY": "tenant-provider-key", "GITHUB_TOKEN": skill_token}}),
+        encoding="utf-8",
+    )
+    os.chmod(secrets_file, 0o600)
+    env = _env(tmp_path, KELP_TENANT_SECRETS_FILE=str(secrets_file))
+    env.pop("GITHUB_TOKEN", None)
+    app = build_app(ServerConfig.from_env(env), provider=NoopProvider(), environ=env)
+    try:
+        assert skill_token not in app.service._secrets.values()
+        assert "GITHUB_TOKEN" not in app.service._secrets
+        assert app.service._scrub(f"echo {skill_token}") == "echo [redacted]"
+    finally:
+        app.close()

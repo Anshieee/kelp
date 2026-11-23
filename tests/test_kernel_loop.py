@@ -5,8 +5,9 @@ from __future__ import annotations
 import asyncio
 import json
 from pathlib import Path
-from typing import Any, Mapping, Sequence
+from typing import Any, AsyncIterator, Mapping, Sequence
 
+import httpx
 import pytest
 
 from kernel import (
@@ -19,8 +20,10 @@ from kernel import (
     RegistryToolExecutor,
     TurnBudget,
 )
+from kernel.loop import _request_input_bound
 from kernel.provider import (
     ChatRequest,
+    OpenAICompatibleClient,
     ProviderFailure,
     StreamEnd,
     TextDelta,
@@ -94,6 +97,36 @@ def build(
         **kwargs,
     )
     return loop, provider
+
+
+def input_bound(messages: Sequence[Mapping[str, Any]], tools: Sequence[Mapping[str, Any]] = ()) -> int:
+    """Independent restatement of the documented input upper bound (bytes)."""
+
+    return len(
+        json.dumps(
+            {"messages": list(messages), "tools": list(tools)},
+            ensure_ascii=False,
+            separators=(",", ":"),
+            default=str,
+        ).encode("utf-8")
+    )
+
+
+class SnapshotProvider(StubProvider):
+    """``StubProvider`` that records the input bound as each request arrives.
+
+    The loop mutates the transcript after a step, so the bound for a step can
+    only be computed when that step's request is made.
+    """
+
+    def __init__(self, scripts: Sequence[Sequence[Any]]):
+        super().__init__(scripts)
+        self.bounds: list[int] = []
+
+    async def stream(self, request: ChatRequest) -> Any:
+        self.bounds.append(input_bound(request.messages, request.tools))
+        async for event in super().stream(request):
+            yield event
 
 
 def kinds(events_list: Sequence[Any]) -> list[str]:
@@ -621,3 +654,1004 @@ def test_cancel_during_a_tool_call_stops_before_the_next_model_step() -> None:
 
 async def _ok() -> Mapping[str, Any]:
     return {"ok": True}
+
+
+# --- review fixes: pricing source and cancellation accounting -----------------
+
+
+def test_usage_record_uses_config_pricing_for_model_missing_from_defaults() -> None:
+    from kernel.config import DEFAULT_PRICING, ModelPricing
+
+    custom = "acme/private-model-1"
+    assert custom not in DEFAULT_PRICING
+    config = KernelConfig(
+        api_key="test-key",
+        pricing={custom: ModelPricing(input_per_million=2.0, output_per_million=4.0)},
+    )
+    store = InMemoryUsageStore()
+    loop, _ = build([text_script("hi", usage=(1000, 500))], store=store, config=config, model=custom)
+
+    result = collect(loop, [{"role": "user", "content": "hi"}], turn_id="t1")
+
+    expected = (1000 / 1_000_000) * 2.0 + (500 / 1_000_000) * 4.0
+    record = store.records[0]
+    assert record.cost_known is True
+    assert record.estimated_cost_usd == pytest.approx(expected)
+    assert result[-1].estimated_cost_usd == pytest.approx(expected)
+    updated = [event for event in result if event.kind == "usage_updated"][0]
+    assert updated.estimated_cost_usd == pytest.approx(expected)
+
+
+def test_usage_record_uses_config_override_for_default_model() -> None:
+    from kernel.config import DEFAULT_PRICING, ModelPricing
+
+    assert MODEL in DEFAULT_PRICING
+    config = KernelConfig(
+        api_key="test-key",
+        pricing={MODEL: ModelPricing(input_per_million=100.0, output_per_million=200.0)},
+    )
+    store = InMemoryUsageStore()
+    loop, _ = build([text_script("hi", usage=(1000, 500))], store=store, config=config)
+
+    result = collect(loop, [{"role": "user", "content": "hi"}])
+
+    expected = (1000 / 1_000_000) * 100.0 + (500 / 1_000_000) * 200.0
+    default_cost = DEFAULT_PRICING[MODEL].estimate(1000, 500)
+    assert expected != pytest.approx(default_cost)
+    assert store.records[0].estimated_cost_usd == pytest.approx(expected)
+    assert result[-1].estimated_cost_usd == pytest.approx(expected)
+    updated = [event for event in result if event.kind == "usage_updated"][0]
+    assert updated.estimated_cost_usd == pytest.approx(expected)
+
+
+def test_aclose_mid_turn_writes_one_cancelled_usage_record() -> None:
+    store = InMemoryUsageStore()
+    loop, _ = build([text_script("Hello there")], store=store)
+
+    async def run() -> None:
+        gen = loop.run_turn([{"role": "user", "content": "hi"}], turn_id="t1")
+        first = await gen.__anext__()
+        second = await gen.__anext__()
+        assert first.kind == "turn_started"
+        assert second.kind == "token_delta"
+        await gen.aclose()
+
+    asyncio.run(run())
+
+    assert len(store.records) == 1
+    record = store.records[0]
+    assert record.turn_id == "t1"
+    assert record.outcome == "cancelled"
+    assert record.steps == 1
+    assert record.tool_calls == 0
+    # The closed turn consumed only the TextDelta; the UsageReport had not
+    # been read yet, so nothing is claimed as provider-reported. The step
+    # reached the provider, so it is recorded at its upper bound, not as 0.
+    bound_in = input_bound([{"role": "user", "content": "hi"}])
+    assert record.input_tokens == bound_in
+    assert record.output_tokens == 1024
+    assert record.total_tokens == bound_in + 1024
+    assert record.usage_reported is False
+    assert record.usage_estimated is True
+    assert record.estimated_cost_usd == pytest.approx(KernelConfig(api_key="k").estimate_cost(MODEL, bound_in, 1024))
+    assert record.estimated_cost_usd is not None and record.estimated_cost_usd > 0
+
+
+def test_task_cancellation_while_provider_awaits_writes_one_usage_record() -> None:
+    store = InMemoryUsageStore()
+
+    class HangingProvider:
+        async def stream(self, request: ChatRequest) -> Any:
+            yield UsageReport(7, 3, 10)
+            await asyncio.Event().wait()
+            yield StreamEnd("stop")  # pragma: no cover - never reached
+
+    loop = AgentLoop(
+        provider=HangingProvider(),
+        config=KernelConfig(api_key="test-key"),
+        usage_store=store,
+        model=MODEL,
+    )
+
+    async def run() -> None:
+        seen: list[str] = []
+
+        async def consume() -> None:
+            async for event in loop.run_turn([{"role": "user", "content": "hi"}], turn_id="t1"):
+                seen.append(event.kind)
+
+        async def wait_for_usage() -> None:
+            while "usage_updated" not in seen:
+                await asyncio.sleep(0)
+
+        task = asyncio.create_task(consume())
+        await asyncio.wait_for(wait_for_usage(), timeout=5)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+    asyncio.run(run())
+
+    assert len(store.records) == 1
+    record = store.records[0]
+    assert record.outcome == "cancelled"
+    assert record.steps == 1
+    assert record.input_tokens == 7
+    assert record.output_tokens == 3
+    assert record.usage_reported is True
+
+
+def test_completed_turn_writes_exactly_one_usage_record() -> None:
+    store = InMemoryUsageStore()
+    loop, _ = build([text_script("done")], store=store)
+
+    result = collect(loop, [{"role": "user", "content": "hi"}], turn_id="t1")
+
+    assert kinds(result)[-1] == "turn_finished"
+    assert len(store.records) == 1
+    assert store.records[0].outcome == "stop"
+
+
+def test_cancelled_record_store_failure_does_not_raise() -> None:
+    class BrokenStore:
+        def record(self, record: Any) -> None:
+            raise RuntimeError("disk full")
+
+    loop, _ = build([text_script("Hello there")], store=BrokenStore())
+
+    async def run() -> None:
+        gen = loop.run_turn([{"role": "user", "content": "hi"}])
+        await gen.__anext__()
+        await gen.__anext__()
+        await gen.aclose()
+
+    asyncio.run(run())
+
+
+def test_provider_exception_mid_stream_records_error_outcome_and_propagates() -> None:
+    store = InMemoryUsageStore()
+
+    class ExplodingProvider:
+        async def stream(self, request: ChatRequest) -> Any:
+            yield TextDelta("partial")
+            yield UsageReport(7, 3, 10)
+            raise RuntimeError("socket reset")
+
+    loop = AgentLoop(
+        provider=ExplodingProvider(),
+        config=KernelConfig(api_key="test-key"),
+        usage_store=store,
+        model=MODEL,
+    )
+    seen: list[str] = []
+
+    async def run() -> None:
+        async for event in loop.run_turn([{"role": "user", "content": "hi"}], turn_id="t1"):
+            seen.append(event.kind)
+
+    with pytest.raises(RuntimeError, match="socket reset"):
+        asyncio.run(run())
+
+    assert seen == ["turn_started", "token_delta", "usage_updated"]
+    assert len(store.records) == 1
+    record = store.records[0]
+    assert record.turn_id == "t1"
+    assert record.outcome == "error"
+    assert record.steps == 1
+    assert record.input_tokens == 7
+    assert record.output_tokens == 3
+    assert record.usage_reported is True
+
+
+def test_aclose_mid_turn_closes_provider_stream_immediately() -> None:
+    state = {"closed": False}
+
+    class TrackingProvider:
+        async def stream(self, request: ChatRequest) -> Any:
+            try:
+                yield TextDelta("Hello")
+                yield TextDelta(" there")
+                yield StreamEnd("stop")
+            finally:
+                state["closed"] = True
+
+    loop = AgentLoop(
+        provider=TrackingProvider(),
+        config=KernelConfig(api_key="test-key"),
+        usage_store=InMemoryUsageStore(),
+        model=MODEL,
+    )
+    closed_after_aclose: list[bool] = []
+
+    async def run() -> None:
+        gen = loop.run_turn([{"role": "user", "content": "hi"}], turn_id="t1")
+        assert (await gen.__anext__()).kind == "turn_started"
+        assert (await gen.__anext__()).kind == "token_delta"
+        assert state["closed"] is False
+        await gen.aclose()
+        # Observed before the event loop gets a chance to run GC finalizers.
+        closed_after_aclose.append(state["closed"])
+
+    asyncio.run(run())
+
+    assert closed_after_aclose == [True]
+
+
+def test_plain_async_iterator_provider_stream_still_works() -> None:
+    class PlainStream:
+        """Async iterator with no ``aclose`` (not an async generator)."""
+
+        def __init__(self, items: Sequence[Any]) -> None:
+            self._items = iter(items)
+
+        def __aiter__(self) -> PlainStream:
+            return self
+
+        async def __anext__(self) -> Any:
+            try:
+                return next(self._items)
+            except StopIteration:
+                raise StopAsyncIteration from None
+
+    class PlainProvider:
+        def stream(self, request: ChatRequest) -> Any:
+            return PlainStream(text_script("plain"))
+
+    store = InMemoryUsageStore()
+    loop = AgentLoop(
+        provider=PlainProvider(),
+        config=KernelConfig(api_key="test-key"),
+        usage_store=store,
+        model=MODEL,
+    )
+
+    result = collect(loop, [{"role": "user", "content": "hi"}], turn_id="t1")
+
+    assert result[-1].reason == "stop"
+    assert result[-1].message == "plain"
+    assert [record.outcome for record in store.records] == ["stop"]
+
+
+# --- unreported usage: provider-billed steps are never recorded as $0 ---------
+
+NO_USAGE_TEXT = [TextDelta("Hello"), StreamEnd("stop")]
+
+
+def test_unreported_usage_is_recorded_as_the_upper_bound() -> None:
+    store = InMemoryUsageStore()
+    config = KernelConfig(api_key="test-key")
+    messages = [{"role": "user", "content": "h\u00e9llo \u4f60\u597d"}]
+    loop, provider = build([NO_USAGE_TEXT], store=store, config=config)
+
+    result = collect(loop, messages, turn_id="t1")
+
+    bound_in = input_bound(messages)
+    assert bound_in > len(json.dumps(messages))  # bytes, not characters, not ASCII-escaped
+    record = store.records[0]
+    assert provider.requests[0].max_tokens == 1024
+    assert record.input_tokens == bound_in
+    assert record.output_tokens == 1024
+    assert record.total_tokens == bound_in + 1024
+    assert record.estimated_cost_usd == config.estimate_cost(MODEL, bound_in, 1024)
+    assert record.estimated_cost_usd is not None and record.estimated_cost_usd > 0
+    assert record.cost_known is True
+    assert record.usage_reported is False
+    assert record.usage_estimated is True
+    assert record.to_dict()["usage_estimated"] is True
+    finished = result[-1]
+    assert finished.estimated_cost_usd == record.estimated_cost_usd
+    # TurnFinished token fields stay the provider-reported counts.
+    assert finished.input_tokens == 0
+    assert finished.output_tokens == 0
+    assert finished.reason == "stop"
+
+
+def test_input_bound_covers_the_tools_sent_with_the_request() -> None:
+    store = InMemoryUsageStore()
+    tools = [{"type": "function", "function": {"name": "web.search", "parameters": {"type": "object"}}}]
+    messages = [{"role": "user", "content": "hi"}]
+    loop, _ = build([NO_USAGE_TEXT], store=store)
+
+    collect(loop, messages, tools=tools)
+
+    assert store.records[0].input_tokens == input_bound(messages, tools)
+    assert input_bound(messages, tools) > input_bound(messages)
+
+
+def test_unmetered_step_after_a_metered_step_adds_only_its_own_bound() -> None:
+    store = InMemoryUsageStore()
+    provider = SnapshotProvider([tool_script("stub.tool", {"n": 1}, usage=(10, 5)), NO_USAGE_TEXT])
+    loop = AgentLoop(
+        provider=provider,
+        config=KernelConfig(api_key="test-key"),
+        tool_executor=CallableToolExecutor(lambda call: _ok()),
+        usage_store=store,
+        model=MODEL,
+    )
+
+    result = collect(loop, [{"role": "user", "content": "go"}])
+
+    second_bound = provider.bounds[1]
+    assert provider.requests[1].max_tokens == 1024
+    record = store.records[0]
+    assert record.steps == 2
+    assert record.input_tokens == 10 + second_bound
+    assert record.output_tokens == 5 + 1024
+    assert record.total_tokens == 10 + second_bound + 5 + 1024
+    assert record.usage_reported is True
+    assert record.usage_estimated is True
+    # The reported counts are preserved exactly on the finished event.
+    assert result[-1].input_tokens == 10
+    assert result[-1].output_tokens == 5
+    assert result[-1].estimated_cost_usd == record.estimated_cost_usd
+
+
+def test_http_status_failure_as_the_only_event_adds_no_bound() -> None:
+    # An HTTP status failure means the provider answered the request with an
+    # error status, so no request was accepted for billing.
+    store = InMemoryUsageStore()
+    failing = [ProviderFailure("provider_http_error", "HTTP 503", retryable=True, status=503)]
+    loop, _ = build([failing], store=store)
+
+    result = collect(loop, [{"role": "user", "content": "hi"}])
+
+    assert result[-1].reason == "error"
+    record = store.records[0]
+    assert record.input_tokens == 0
+    assert record.output_tokens == 0
+    assert record.estimated_cost_usd == 0.0
+    assert record.cost_known is True
+    assert record.usage_reported is False
+    assert record.usage_estimated is False
+
+
+@pytest.mark.parametrize("code", ["missing_api_key", "missing_base_url", "tenant_mismatch"])
+def test_missing_config_failure_as_the_only_event_adds_no_bound(code: str) -> None:
+    # The client refuses before any request is made (missing configuration,
+    # or kernel.providers.base.tenant_failure), so nothing was billable.
+    store = InMemoryUsageStore()
+    failing = [ProviderFailure(code, "not configured", retryable=False)]
+    loop, _ = build([failing], store=store)
+
+    result = collect(loop, [{"role": "user", "content": "hi"}])
+
+    assert result[-1].reason == "error"
+    record = store.records[0]
+    assert record.input_tokens == 0
+    assert record.output_tokens == 0
+    assert record.estimated_cost_usd == 0.0
+    assert record.usage_estimated is False
+
+
+@pytest.mark.parametrize(
+    "code", ["provider_timeout", "provider_unreachable", "provider_protocol_error"]
+)
+def test_sole_failure_without_a_status_is_bounded(code: str) -> None:
+    # No HTTP status: the failure can follow an HTTP 200 or a request the
+    # provider already accepted, so the step may have been billed.
+    store = InMemoryUsageStore()
+    messages = [{"role": "user", "content": "hi"}]
+    failing = [ProviderFailure(code, "failed", retryable=True)]
+    loop, _ = build([failing], store=store)
+
+    result = collect(loop, messages)
+
+    assert result[-1].reason == "error"
+    record = store.records[0]
+    assert record.input_tokens == input_bound(messages)
+    assert record.output_tokens == 1024
+    assert record.usage_estimated is True
+    assert record.estimated_cost_usd is not None and record.estimated_cost_usd > 0
+    # The finished event keeps reported counts only.
+    assert result[-1].input_tokens == 0
+    assert result[-1].output_tokens == 0
+
+
+def test_http_status_failure_after_a_metered_step_adds_no_bound() -> None:
+    store = InMemoryUsageStore()
+    failing = [ProviderFailure("provider_http_error", "HTTP 503", retryable=True, status=503)]
+    loop, _ = build(
+        [tool_script("stub.tool", {"n": 1}, usage=(10, 5)), failing],
+        store=store,
+        executor=CallableToolExecutor(lambda call: _ok()),
+    )
+
+    result = collect(loop, [{"role": "user", "content": "go"}])
+
+    assert result[-1].reason == "error"
+    record = store.records[0]
+    assert record.steps == 2
+    assert record.input_tokens == 10
+    assert record.output_tokens == 5
+    assert record.total_tokens == 15
+    assert record.usage_reported is True
+    assert record.usage_estimated is False
+
+
+def _sse_body(*chunks: Any, done: bool = True) -> str:
+    body = "\n\n".join(f"data: {json.dumps(chunk)}" for chunk in chunks)
+    if done:
+        body += "\n\ndata: [DONE]"
+    return body + "\n\n"
+
+
+class _DiesMidBody(httpx.AsyncByteStream):
+    """A 200 response whose body raises a transport error after one chunk."""
+
+    async def __aiter__(self) -> Any:
+        yield b'data: {"choices":[{"delta":{"role":"assistant"}}]}\n\n'
+        raise httpx.ReadError("connection reset")
+
+
+ROLE_ONLY_CHUNK = {"choices": [{"delta": {"role": "assistant"}}]}
+
+
+@pytest.mark.parametrize(
+    ("make_response", "code"),
+    [
+        pytest.param(
+            lambda: httpx.Response(200, text=_sse_body(ROLE_ONLY_CHUNK, done=False)),
+            "provider_protocol_error",
+            id="truncated-no-done-no-finish-reason",
+        ),
+        pytest.param(
+            lambda: httpx.Response(200, text="data: {not json\n\n"),
+            "provider_protocol_error",
+            id="malformed-first-chunk",
+        ),
+        pytest.param(
+            lambda: httpx.Response(200, stream=_DiesMidBody()),
+            "provider_unreachable",
+            id="transport-error-mid-body",
+        ),
+    ],
+)
+def test_failure_after_http_200_through_the_real_client_is_bounded(
+    make_response: Any, code: str
+) -> None:
+    # The real client yields a lone first-event ProviderFailure (status None)
+    # after an HTTP 200, when the provider may already have billed the step.
+    def handler(request: httpx.Request) -> httpx.Response:
+        return make_response()
+
+    config = KernelConfig(api_key="test-key", base_url="https://provider.example.test/v1")
+    client = OpenAICompatibleClient(
+        config, client=httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    )
+    store = InMemoryUsageStore()
+    messages = [{"role": "user", "content": "hi"}]
+    loop = AgentLoop(provider=client, config=config, usage_store=store, model=MODEL)
+
+    async def run() -> list[Any]:
+        async with client:
+            return [event async for event in loop.run_turn(messages, turn_id="t1")]
+
+    result = asyncio.run(run())
+
+    errors = [event for event in result if event.kind == "error"]
+    assert [event.code for event in errors] == [code]
+    assert result[-1].reason == "error"
+    record = store.records[0]
+    assert record.usage_estimated is True
+    assert record.usage_reported is False
+    assert record.input_tokens == input_bound(messages)
+    assert record.output_tokens == 1024
+    assert record.estimated_cost_usd is not None and record.estimated_cost_usd > 0
+    assert record.estimated_cost_usd == config.estimate_cost(MODEL, record.input_tokens, 1024)
+
+
+def test_request_input_bound_falls_back_to_repr_for_unserializable_keys() -> None:
+    # json.dumps cannot sort or encode a tuple key; accounting must not fail.
+    messages = [{"role": "user", "content": "hi", ("a", 1): "tuple key"}]
+
+    with pytest.raises(TypeError):
+        json.dumps({"messages": messages, "tools": []})
+
+    bound = _request_input_bound(messages, [])
+
+    assert isinstance(bound, int)
+    assert bound > 0
+
+
+def test_provider_failure_after_text_is_estimated() -> None:
+    store = InMemoryUsageStore()
+    failing = [TextDelta("par"), ProviderFailure("provider_timeout", "timed out", retryable=True)]
+    messages = [{"role": "user", "content": "hi"}]
+    loop, _ = build([failing], store=store)
+
+    result = collect(loop, messages)
+
+    assert result[-1].reason == "error"
+    record = store.records[0]
+    assert record.input_tokens == input_bound(messages)
+    assert record.output_tokens == 1024
+    assert record.usage_estimated is True
+    assert record.estimated_cost_usd is not None and record.estimated_cost_usd > 0
+
+
+def test_provider_failure_after_a_tool_call_is_estimated() -> None:
+    store = InMemoryUsageStore()
+    failing = [
+        ToolCallReady(index=0, call_id="c1", name="stub.tool", arguments={}),
+        ProviderFailure("provider_timeout", "timed out", retryable=True),
+    ]
+    loop, _ = build([failing], store=store)
+
+    collect(loop, [{"role": "user", "content": "hi"}])
+
+    assert store.records[0].usage_estimated is True
+    assert store.records[0].output_tokens == 1024
+
+
+def test_aclose_before_usage_records_the_bound_on_the_cancelled_turn() -> None:
+    store = InMemoryUsageStore()
+    messages = [{"role": "user", "content": "hi"}]
+    loop, _ = build([[TextDelta("a"), TextDelta("b"), UsageReport(3, 2, 5), StreamEnd("stop")]], store=store)
+
+    async def run() -> None:
+        gen = loop.run_turn(messages, turn_id="t1")
+        assert (await gen.__anext__()).kind == "turn_started"
+        assert (await gen.__anext__()).kind == "token_delta"
+        await gen.aclose()
+
+    asyncio.run(run())
+
+    assert len(store.records) == 1
+    record = store.records[0]
+    assert record.outcome == "cancelled"
+    assert record.input_tokens == input_bound(messages)
+    assert record.output_tokens == 1024
+    assert record.usage_reported is False
+    assert record.usage_estimated is True
+
+
+def test_aclose_after_usage_does_not_add_a_bound() -> None:
+    store = InMemoryUsageStore()
+    loop, _ = build([text_script("Hello there", usage=(7, 3))], store=store)
+
+    async def run() -> None:
+        gen = loop.run_turn([{"role": "user", "content": "hi"}])
+        kinds_seen = [(await gen.__anext__()).kind for _ in range(3)]
+        assert kinds_seen == ["turn_started", "token_delta", "usage_updated"]
+        await gen.aclose()
+
+    asyncio.run(run())
+
+    record = store.records[0]
+    assert (record.input_tokens, record.output_tokens) == (7, 3)
+    assert record.usage_reported is True
+    assert record.usage_estimated is False
+
+
+def test_cancel_token_mid_stream_before_usage_includes_the_bound() -> None:
+    token = CancelToken()
+    store = InMemoryUsageStore()
+    messages = [{"role": "user", "content": "hi"}]
+
+    class CancellingProvider:
+        async def stream(self, request: ChatRequest) -> Any:
+            yield TextDelta("partial")
+            token.cancel()
+            yield TextDelta("after cancel")
+            yield UsageReport(1, 1, 2)
+            yield StreamEnd("stop")
+
+    loop = AgentLoop(
+        provider=CancellingProvider(),
+        config=KernelConfig(api_key="test-key"),
+        usage_store=store,
+        model=MODEL,
+    )
+    result = collect(loop, messages, cancel=token)
+
+    assert result[-1].reason == "cancelled"
+    record = store.records[0]
+    assert record.outcome == "cancelled"
+    assert record.input_tokens == input_bound(messages)
+    assert record.output_tokens == 1024
+    assert record.usage_reported is False
+    assert record.usage_estimated is True
+    assert result[-1].estimated_cost_usd == record.estimated_cost_usd
+
+
+def test_provider_exception_before_usage_records_the_bound_with_error_outcome() -> None:
+    store = InMemoryUsageStore()
+    messages = [{"role": "user", "content": "hi"}]
+
+    class ExplodingProvider:
+        async def stream(self, request: ChatRequest) -> Any:
+            yield TextDelta("partial")
+            raise RuntimeError("socket reset")
+
+    loop = AgentLoop(
+        provider=ExplodingProvider(),
+        config=KernelConfig(api_key="test-key"),
+        usage_store=store,
+        model=MODEL,
+    )
+
+    with pytest.raises(RuntimeError, match="socket reset"):
+        collect(loop, messages)
+
+    assert len(store.records) == 1
+    record = store.records[0]
+    assert record.outcome == "error"
+    assert record.input_tokens == input_bound(messages)
+    assert record.output_tokens == 1024
+    assert record.usage_estimated is True
+
+
+def test_task_cancellation_before_usage_records_the_bound() -> None:
+    store = InMemoryUsageStore()
+    messages = [{"role": "user", "content": "hi"}]
+
+    class HangingProvider:
+        async def stream(self, request: ChatRequest) -> Any:
+            yield TextDelta("partial")
+            await asyncio.Event().wait()
+            yield StreamEnd("stop")  # pragma: no cover - never reached
+
+    loop = AgentLoop(
+        provider=HangingProvider(),
+        config=KernelConfig(api_key="test-key"),
+        usage_store=store,
+        model=MODEL,
+    )
+
+    async def run() -> None:
+        seen: list[str] = []
+
+        async def consume() -> None:
+            async for event in loop.run_turn(messages, turn_id="t1"):
+                seen.append(event.kind)
+
+        async def wait_for_text() -> None:
+            while "token_delta" not in seen:
+                await asyncio.sleep(0)
+
+        task = asyncio.create_task(consume())
+        await asyncio.wait_for(wait_for_text(), timeout=5)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+    asyncio.run(run())
+
+    assert len(store.records) == 1
+    record = store.records[0]
+    assert record.outcome == "cancelled"
+    assert record.input_tokens == input_bound(messages)
+    assert record.output_tokens == 1024
+    assert record.usage_estimated is True
+
+
+def test_unpriced_model_without_usage_stays_unknown_not_estimated_cost() -> None:
+    store = InMemoryUsageStore()
+    loop, _ = build([NO_USAGE_TEXT], store=store, model="unknown/model")
+
+    result = collect(loop, [{"role": "user", "content": "hi"}])
+
+    record = store.records[0]
+    assert record.estimated_cost_usd is None
+    assert record.cost_known is False
+    assert result[-1].estimated_cost_usd is None
+    # The token bound is still recorded; only the price is unknown.
+    assert record.usage_estimated is True
+    assert record.output_tokens == 1024
+
+
+def test_metered_turn_is_unchanged_and_not_marked_estimated() -> None:
+    store = InMemoryUsageStore()
+    loop, _ = build([text_script("Hello there")], store=store)
+
+    result = collect(loop, [{"role": "user", "content": "hi"}])
+
+    record = store.records[0]
+    assert (record.input_tokens, record.output_tokens, record.total_tokens) == (10, 5, 15)
+    assert record.estimated_cost_usd == pytest.approx(4.0e-06)
+    assert record.usage_reported is True
+    assert record.usage_estimated is False
+    assert result[-1].estimated_cost_usd == record.estimated_cost_usd
+
+
+def test_unmetered_step_does_not_consume_the_output_token_budget() -> None:
+    # Step 1 reports nothing; step 2 must still be offered the full remaining
+    # budget, because TurnBudget is measured in reported usage only.
+    unmetered_tool = [
+        ToolCallReady(index=0, call_id="call_1", name="stub.tool", arguments={}),
+        StreamEnd("tool_calls"),
+    ]
+    store = InMemoryUsageStore()
+    loop, provider = build(
+        [unmetered_tool, text_script("done", usage=(10, 20))],
+        budget=TurnBudget(max_steps=5, max_output_tokens=300, max_tokens_per_step=1024, max_tool_calls=5),
+        executor=CallableToolExecutor(lambda call: _ok()),
+        store=store,
+    )
+
+    result = collect(loop, [{"role": "user", "content": "go"}])
+
+    assert [request.max_tokens for request in provider.requests] == [300, 300]
+    assert result[-1].reason == "stop"
+    assert result[-1].output_tokens == 20
+    record = store.records[0]
+    assert record.output_tokens == 300 + 20
+    assert record.usage_reported is True
+    assert record.usage_estimated is True
+
+
+def test_usage_log_line_carries_usage_estimated() -> None:
+    import io
+
+    from chat.logging import configure_logging
+    from chat.metrics import LoggedUsageStore
+
+    stream = io.StringIO()
+    configure_logging(level="debug", stream=stream)
+    store = LoggedUsageStore(InMemoryUsageStore())
+    loop, _ = build([NO_USAGE_TEXT], store=store)
+
+    collect(loop, [{"role": "user", "content": "hi"}])
+
+    line = json.loads(stream.getvalue().splitlines()[-1])
+    assert line["event"] == "usage"
+    assert line["usage_reported"] is False
+    assert line["usage_estimated"] is True
+
+
+# --- stalled provider streams: wall budget and Stop while waiting -----------
+
+
+class _StallingProvider:
+    """Yields one ``TextDelta`` then awaits forever, like a keepalive-only SSE.
+
+    ``on_stall`` runs once the delta was yielded and the stream is about to
+    wait, so a test can advance its clock or set a cancel token at that point.
+    """
+
+    def __init__(self, on_stall: Any = None) -> None:
+        self.on_stall = on_stall
+        self.closed = False
+        self.requests = 0
+
+    async def stream(self, request: ChatRequest) -> Any:
+        self.requests += 1
+        try:
+            yield TextDelta("partial")
+            if self.on_stall is not None:
+                self.on_stall()
+            await asyncio.Event().wait()
+            yield StreamEnd("stop")  # pragma: no cover - never reached
+        finally:
+            self.closed = True
+
+
+def _stalled_loop(
+    provider: Any, store: InMemoryUsageStore, **kwargs: Any
+) -> AgentLoop:
+    return AgentLoop(
+        provider=provider,
+        config=KernelConfig(api_key="test-key"),
+        usage_store=store,
+        model=MODEL,
+        **kwargs,
+    )
+
+
+def test_wall_budget_fires_while_the_provider_stream_is_stalled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr("kernel.loop._STREAM_POLL_SECONDS", 0.01)
+    clock = _ManualClock()
+    store = InMemoryUsageStore()
+    provider = _StallingProvider(on_stall=lambda: setattr(clock, "value", 100.0))
+    loop = _stalled_loop(
+        provider,
+        store,
+        budget=TurnBudget(max_steps=10, max_wall_seconds=50),
+        time_fn=clock,
+    )
+    messages = [{"role": "user", "content": "hi"}]
+
+    result = asyncio.run(
+        asyncio.wait_for(_collect_async(loop, messages, turn_id="t1"), timeout=5)
+    )
+
+    errors = [e for e in result if e.kind == "error"]
+    assert len(errors) == 1
+    assert errors[0].code == "turn_budget_exceeded"
+    assert errors[0].details == {"limit": "max_wall_seconds"}
+    assert result[-1].kind == "turn_finished"
+    assert result[-1].reason == "budget"
+    assert provider.requests == 1
+    assert provider.closed is True
+    assert len(store.records) == 1
+    record = store.records[0]
+    assert record.outcome == "budget"
+    assert record.usage_reported is False
+    assert record.usage_estimated is True
+    assert record.input_tokens == input_bound(messages)
+    assert record.output_tokens == 1024
+
+
+def test_cancel_token_set_while_the_provider_stream_is_stalled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr("kernel.loop._STREAM_POLL_SECONDS", 0.01)
+    token = CancelToken()
+    store = InMemoryUsageStore()
+    provider = _StallingProvider()
+    loop = _stalled_loop(provider, store)
+
+    async def run() -> list[Any]:
+        seen: list[Any] = []
+        async for event in loop.run_turn([{"role": "user", "content": "hi"}], cancel=token):
+            seen.append(event)
+            if event.kind == "token_delta":
+                # The provider is now parked with no event to deliver.
+                asyncio.get_running_loop().call_later(0.05, token.cancel)
+        return seen
+
+    result = asyncio.run(asyncio.wait_for(run(), timeout=5))
+
+    assert result[-1].kind == "turn_finished"
+    assert result[-1].reason == "cancelled"
+    assert not [e for e in result if e.kind == "error"]
+    assert [e.text for e in result if e.kind == "token_delta"] == ["partial"]
+    assert provider.closed is True
+    assert len(store.records) == 1
+    assert store.records[0].outcome == "cancelled"
+    assert store.records[0].usage_estimated is True
+
+
+def test_stalled_stream_wake_does_not_cancel_the_pending_read(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # A slow provider that answers after several poll intervals must still be
+    # read from the same pending __anext__: no event is lost or repeated.
+    monkeypatch.setattr("kernel.loop._STREAM_POLL_SECONDS", 0.005)
+    store = InMemoryUsageStore()
+
+    class SlowProvider:
+        async def stream(self, request: ChatRequest) -> Any:
+            for text in ("a", "b", "c"):
+                await asyncio.sleep(0.03)
+                yield TextDelta(text)
+            yield UsageReport(4, 3, 7)
+            yield StreamEnd("stop")
+
+    loop = _stalled_loop(SlowProvider(), store)
+    result = asyncio.run(
+        asyncio.wait_for(_collect_async(loop, [{"role": "user", "content": "hi"}]), timeout=5)
+    )
+
+    assert [e.text for e in result if e.kind == "token_delta"] == ["a", "b", "c"]
+    assert result[-1].reason == "stop"
+    assert result[-1].message == "abc"
+    assert store.records[0].usage_estimated is False
+
+
+def test_many_event_stream_yields_the_same_events_in_order() -> None:
+    chunks = [f"w{i} " for i in range(200)]
+    script = [TextDelta(c) for c in chunks] + [UsageReport(9, 200, 209), StreamEnd("stop")]
+    loop, _ = build([script], store=InMemoryUsageStore())
+
+    result = collect(loop, [{"role": "user", "content": "hi"}], turn_id="t1")
+
+    assert kinds(result) == (
+        ["turn_started"] + ["token_delta"] * 200 + ["usage_updated", "turn_finished"]
+    )
+    assert [e.text for e in result if e.kind == "token_delta"] == chunks
+    assert [e.step for e in result if e.kind == "token_delta"] == [1] * 200
+    assert result[-1].message == "".join(chunks)
+    assert result[-1].reason == "stop"
+
+
+def test_provider_exception_from_anext_propagates_through_the_polling_wrapper(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr("kernel.loop._STREAM_POLL_SECONDS", 0.005)
+    store = InMemoryUsageStore()
+    state = {"closed": False}
+
+    class LateExplodingProvider:
+        async def stream(self, request: ChatRequest) -> Any:
+            try:
+                yield TextDelta("partial")
+                await asyncio.sleep(0.03)  # several poll wakes, then fail
+                raise RuntimeError("socket reset")
+            finally:
+                state["closed"] = True
+
+    loop = _stalled_loop(LateExplodingProvider(), store)
+
+    with pytest.raises(RuntimeError, match="socket reset"):
+        asyncio.run(
+            asyncio.wait_for(
+                _collect_async(loop, [{"role": "user", "content": "hi"}], turn_id="t1"),
+                timeout=5,
+            )
+        )
+
+    assert state["closed"] is True
+    assert len(store.records) == 1
+    assert store.records[0].outcome == "error"
+    assert store.records[0].usage_estimated is True
+
+
+def test_consumer_aclose_while_the_stream_is_stalled_closes_the_provider(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr("kernel.loop._STREAM_POLL_SECONDS", 0.01)
+    store = InMemoryUsageStore()
+    provider = _StallingProvider()
+    loop = _stalled_loop(provider, store)
+
+    async def run() -> None:
+        gen = loop.run_turn([{"role": "user", "content": "hi"}])
+        await gen.__anext__()  # turn_started
+        await gen.__anext__()  # token_delta
+        pending = asyncio.ensure_future(gen.__anext__())  # parked on the stalled read
+        await asyncio.sleep(0.05)
+        pending.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await pending
+
+    asyncio.run(asyncio.wait_for(run(), timeout=5))
+
+    assert provider.closed is True
+    assert len(store.records) == 1
+    assert store.records[0].outcome == "cancelled"
+
+
+async def _collect_async(
+    loop: AgentLoop, messages: Sequence[Mapping[str, Any]], **kwargs: Any
+) -> list[Any]:
+    return [event async for event in loop.run_turn(messages, **kwargs)]
+
+
+class _TricklingProvider:
+    """Sends a token on every read, advancing the clock one second each time."""
+
+    def __init__(self, clock: _ManualClock) -> None:
+        self._clock = clock
+        self.requests = 0
+        self.sent = 0
+        self.closed = False
+
+    async def stream(self, request: ChatRequest) -> AsyncIterator[Any]:
+        self.requests += 1
+        try:
+            for _ in range(1000):
+                self._clock.value += 1.0
+                self.sent += 1
+                yield TextDelta("x")
+            yield StreamEnd("stop")
+        finally:
+            self.closed = True
+
+
+def test_wall_budget_fires_while_the_provider_trickles_events() -> None:
+    clock = _ManualClock()
+    store = InMemoryUsageStore()
+    provider = _TricklingProvider(clock)
+    loop = _stalled_loop(
+        provider,
+        store,
+        budget=TurnBudget(max_steps=10, max_wall_seconds=5),
+        time_fn=clock,
+    )
+
+    result = asyncio.run(
+        asyncio.wait_for(
+            _collect_async(loop, [{"role": "user", "content": "hi"}], turn_id="t1"),
+            timeout=5,
+        )
+    )
+
+    errors = [e for e in result if e.kind == "error"]
+    assert [e.details for e in errors] == [{"limit": "max_wall_seconds"}]
+    assert result[-1].reason == "budget"
+    assert provider.sent < 10
+    assert provider.closed is True
+    assert len(store.records) == 1

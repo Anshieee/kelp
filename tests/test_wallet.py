@@ -22,6 +22,7 @@ from payments.wallet import (
     CUSTOMER_ID_ENV,
     DEFAULT_APPROVAL_TTL,
     MONTHLY_CAP_ENV,
+    PAYMENT_ATTEMPT_FAILED_REASON,
     PER_PURCHASE_CAP_ENV,
     Card,
     SpendCaps,
@@ -31,6 +32,7 @@ from payments.wallet import (
     WalletLedger,
     card_from_payment_method,
     contains_raw_card_data,
+    reason_is_late_settleable,
     redact_payload,
     redact_text,
 )
@@ -775,7 +777,10 @@ def test_two_approvals_cannot_both_fit_inside_the_cap() -> None:
 
     assert caught.value.code == "monthly_cap_exceeded"
     assert wallet.ledger.get_proposal(second.id).status == "blocked"
-    assert gateway.intents == {}  # the second order never reached Stripe
+    # ``intents`` is only written on success and the fake raises first, so it is
+    # always empty here. ``payments`` records every call that reached the
+    # gateway: exactly the first order's 5000-cent attempt, never the second's.
+    assert [p["amount_cents"] for p in gateway.payments] == [5000]
 
 
 def test_stale_approval_is_swept_and_frees_the_monthly_cap() -> None:
@@ -816,6 +821,79 @@ def test_stale_approval_is_swept_and_frees_the_monthly_cap() -> None:
     paid, _ = wallet.approve(second.id)
     assert paid.status == "paid"
     assert wallet.limits("usd")["spent_cents"] == 2000
+
+
+@pytest.mark.parametrize(
+    "reason,settleable",
+    [
+        (APPROVAL_EXPIRED_REASON, True),
+        (PAYMENT_ATTEMPT_FAILED_REASON, True),
+        (f"{PAYMENT_ATTEMPT_FAILED_REASON}:failed", True),
+        (f"{PAYMENT_ATTEMPT_FAILED_REASON}:BAD_REQUEST_ERROR", True),
+        (f"{PAYMENT_ATTEMPT_FAILED_REASON}:", True),
+        ("refunded", False),
+        ("amount_mismatch", False),
+        ("currency_mismatch", False),
+        ("order_mismatch", False),
+        ("failed", False),
+        ("BAD_REQUEST_ERROR", False),
+        # Near-misses: the SQL prefix match must not treat ``_`` as a wildcard
+        # or accept a longer/shorter/shifted token.
+        (f"{PAYMENT_ATTEMPT_FAILED_REASON}x", False),
+        ("payment_attempt_faile", False),
+        ("paymentXattemptXfailed:code", False),
+        (f"x{PAYMENT_ATTEMPT_FAILED_REASON}:code", False),
+        ("PAYMENT_ATTEMPT_FAILED:code", False),
+    ],
+)
+def test_checkout_settles_only_late_settleable_failure_reasons(
+    reason: str, settleable: bool
+) -> None:
+    """The Python helper and the SQL guard in ``settle_checkout`` must agree."""
+
+    wallet = make_wallet()
+    proposal, _ = wallet.propose(1500, idempotency_key="order-late-settle-1")
+    ledger = wallet.ledger
+    ledger.decide(
+        proposal.id,
+        decision="approve",
+        payment_method_id="rzp_checkout",
+        monthly_cap_cents=20_000,
+        monthly_since="2000-01-01T00:00:00+00:00",
+    )
+    ledger.register_checkout_order(
+        provider="razorpay",
+        provider_order_id="order_late0001",
+        proposal_id=proposal.id,
+        receipt=proposal.id,
+    )
+    ledger.mark_failed(proposal.id, reason=reason)
+    stored = ledger.get_proposal(proposal.id)
+    assert stored.status == "failed"
+    assert reason_is_late_settleable(stored.reason) is settleable
+
+    def settle() -> Any:
+        return ledger.settle_checkout(
+            provider="razorpay",
+            provider_order_id="order_late0001",
+            provider_payment_id="pay_late0001",
+        )
+
+    if settleable:
+        settled, replay = settle()
+        assert replay is False
+        assert settled.status == "paid"
+        assert settled.reason is None
+    else:
+        with pytest.raises(WalletError) as caught:
+            settle()
+        assert caught.value.code == "already_decided"
+        assert ledger.get_proposal(proposal.id).status == "failed"
+
+
+@pytest.mark.parametrize("value", [None, "", 7, b"approval_expired"])
+def test_late_settleable_helper_rejects_non_reasons(value: Any) -> None:
+    assert reason_is_late_settleable(value) is False
 
 
 def test_each_order_gets_its_own_intent_and_retries_share_one() -> None:

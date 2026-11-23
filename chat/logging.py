@@ -94,6 +94,7 @@ _ALLOWED_FIELDS = frozenset(
         "approval_id",
         "skill",
         "usage_reported",
+        "usage_estimated",
         "cost_known",
         # A one-way digest of the rejected credential or peer. The raw value
         # never reaches a log record; this is the auth-failure correlation key.

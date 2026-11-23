@@ -13,11 +13,12 @@ P2-1 only makes the tenant explicit in storage and at the boundary.
 from __future__ import annotations
 
 import contextvars
-import hmac
 import re
 from contextlib import contextmanager
 from dataclasses import dataclass
 from typing import Final, Iterator
+
+from .compare import constant_time_equals
 
 __all__ = [
     "ACTOR_IDS",
@@ -259,7 +260,7 @@ class StaticTenantResolver:
 
         if self._owner_token is not None:
             presented = "" if token is None else str(token)
-            if not hmac.compare_digest(presented, self._owner_token):
+            if not constant_time_equals(presented, self._owner_token):
                 raise TenantMismatchError()
         return self.context_for(
             actor_id=actor_id, role=role, surface=surface

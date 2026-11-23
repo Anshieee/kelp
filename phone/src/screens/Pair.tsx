@@ -6,6 +6,7 @@
 import { useState, type FormEvent } from "react";
 import { ApiError, pair } from "../api";
 import { setSession, type SessionInfo } from "../state";
+import SproutMark from "../components/SproutMark";
 
 interface PairProps {
   onPaired: (session: SessionInfo) => void;
@@ -48,9 +49,9 @@ export default function Pair({ onPaired }: PairProps) {
     <main className="screen pair-screen">
       <div className="pair-card">
         <div className="pair-logo" aria-hidden="true">
-          <KelpMark />
+          <SproutMark size={40} />
         </div>
-        <h1>Kelp</h1>
+        <h1 className="wordmark-title">kelp</h1>
         <p className="pair-lede">
           Your private assistant. Pair this phone once with your server's auth token.
         </p>
@@ -97,34 +98,5 @@ export default function Pair({ onPaired }: PairProps) {
         </p>
       </div>
     </main>
-  );
-}
-
-function KelpMark() {
-  return (
-    <svg viewBox="0 0 48 48" width="56" height="56" role="img" aria-label="Kelp">
-      <rect x="1" y="1" width="46" height="46" rx="11" fill="#0a0e0c" stroke="#222228" />
-      <path
-        d="M14 40c0-8 3-10 3-16s-2-6-2-10"
-        stroke="#268e63"
-        strokeWidth="3.4"
-        strokeLinecap="round"
-        fill="none"
-      />
-      <path
-        d="M24 42c0-10 3-12 3-20s-2-8-2-14"
-        stroke="#3ecf8e"
-        strokeWidth="3.4"
-        strokeLinecap="round"
-        fill="none"
-      />
-      <path
-        d="M34 40c0-7 2-9 2-13s-1-5-1-8"
-        stroke="#268e63"
-        strokeWidth="3.4"
-        strokeLinecap="round"
-        fill="none"
-      />
-    </svg>
   );
 }
