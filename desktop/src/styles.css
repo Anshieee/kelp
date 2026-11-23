@@ -67,7 +67,6 @@ li { padding: 6px 4px; border-bottom: 1px solid #f0ece3; display: flex; justify-
   .e-orb-canvas { display: none; }
   .e-orb-face { display: block; }
 }
-.demo-banner { background: #fdf0d5; border: 1px solid #e0a100; border-radius: 8px; padding: 8px; font-weight: bold; }
 
 /* SVG desk pet (pet.svg, inlined in pet.html). State tints mirror the
    website orb flavours; blink matches the 6.4s website cadence. */
