@@ -55,8 +55,8 @@ The *State* column is what was true when KEL-8 was written; rows that have since
 
 | Dependency | State | Effect on KEL-8 |
 |---|---|---|
-| `docs.answer` handler | stub (`SkillNotImplementedError`) | No real PDF/CSV artifact until a handler exists. The demo path needs a fixture-backed handler or a recorded model fixture. |
-| `web.search` handler | stub (`SkillNotImplementedError`) | No live results or web source chips. The demo path needs a fixture-backed handler or a recorded success envelope; a failed stub yields only the failed-search chip (§9.1). |
+| `docs.answer` handler | stub (`SkillNotImplementedError`); shipped since (`skills/builtin/docs_answer/handler.py`) | Answers questions about uploaded PDF and CSV artifacts with `page N` / `row N` citations. |
+| `web.search` handler | stub (`SkillNotImplementedError`) | No live results or web source chips. A scripted run needs a fixture-backed handler or a recorded success envelope; a failed stub yields only the failed-search chip (§9.1). |
 | `github.read` handler | stub (`SkillNotImplementedError`) | No real sweeps or GitHub source chips. Same fixture requirement: a recorded envelope must satisfy the manifest output schema and the §6.1 card shape. |
 | `github.write` handler | implemented with manifest-level approval | Creates a scoped branch, commit, and pull request only after the existing skill approval hook returns true; denied or missing approval runs no handler. |
 | Cancellation in `run_turn` | built (`CancelToken` in `kernel/loop.py`) | "Stop" needed the kernel delta in §14.1 |
@@ -1241,9 +1241,8 @@ Needed:
 - Approval objects already carry `expires_at`, `single_use`, `argument_hash`, and
   `to_dict()`; the chat layer adds ids and rationale only.
 - Persisting `seq` is the chat layer's job; kernel events stay sequence-free.
-- `docs.answer` must stop being a stub for artifact acceptance. Until then, the demo path
-  needs a fixture-backed handler or a recorded provider fixture (the same deferred item
-  `KERNEL.md` §4 names).
+- `docs.answer` is no longer a stub; artifact acceptance uses the real handler. A recorded
+  provider fixture is still the deferred item `KERNEL.md` §4 names.
 
 ---
 
