@@ -3,6 +3,9 @@
 - **Status:** written review, 2026-11-02
 - **Branch:** `kel-29-threat-model`
 - **Scope:** the server process started by `python -m chat.server` — `kernel/`, `skills/`, `openshell/`, and `chat/`
+  and, as planned rules, the desktop companion (screen, voice, self-setup, local brain)
+- **Companion sections:** added 2026-11-24, see [`docs/PRODUCT_BRIEF.md`](PRODUCT_BRIEF.md) and
+  [ADR 0004](adr/0004-desktop-companion.md)
 - **Companions:** the recipient table ([`docs/PRIVACY.md`](PRIVACY.md) §2), the principal table and
   share-link threat model ([ADR 0002](adr/0002-sharing-and-identity.md) §4 and §10), the policy gate
   ([`docs/OPENSHELL.md`](OPENSHELL.md)), and the skill contract ([`docs/SKILL_SPEC.md`](SKILL_SPEC.md))
@@ -15,6 +18,10 @@ asks **who receives data**; this one asks **which parts of the system are truste
 enforce the rules, and what each boundary actually stops**. Every claim names the
 file and function that enforces it, so a reader can check the claim against the code
 instead of trusting the prose.
+
+Sections 1 to 5 follow that rule. Sections 6 to 9 are planned rules: they name
+the component that will enforce them, they are marked as unenforced, and no code
+backs them yet.
 
 ---
 
@@ -231,7 +238,10 @@ decision and its reversal procedure are in `docs/PRIVACY.md` §5.
   server process. An attacker with code execution inside it can read the
   environment, the database, and the audit trail directly. The boundaries above
   constrain what the *model* and *skills* can cause, not what a compromised
-  process can do.
+  process can do. In Local mode of the desktop companion the "process" is a
+  sidecar running as the user on the user's own machine, so this boundary moves
+  to that machine. The planned rules for it are in
+  [§6 Local brain boundary](#6-local-brain-boundary-local-mode).
 - **The share surface.** The first unauthenticated read path has its own threat
   model — token leakage, enumeration, revocation latency, cross-read — in
   [ADR 0002 §10](adr/0002-sharing-and-identity.md). This document does not repeat
@@ -240,7 +250,268 @@ decision and its reversal procedure are in `docs/PRIVACY.md` §5.
 
 ---
 
-## 6. Cross-references
+## 6. Local brain boundary (Local mode)
+
+Status: planned. No code enforces this yet. Must land before the code it governs.
+
+Sections 1 to 5 describe the server process on a host the operator controls. In
+Local mode of the desktop companion ([ADR 0004](adr/0004-desktop-companion.md)
+decision 2) the same brain runs as a sidecar on the user's own machine, and Boat
+mode runs it in a sandbox the user owns. The rules below cover both. They will be
+enforced in the desktop shell (the Rust bridge and the sidecar launcher), in the
+sidecar's HTTP startup, and in an OS-level confinement layer that has not been
+designed.
+
+- **L1. Loopback only, bearer on every request.** The sidecar binds `127.0.0.1`
+  only, on a random port chosen at each launch, requires the owner bearer on every
+  request, and rejects a request whose Host or Origin is not the expected loopback
+  value (ADR 0004 §2, item 7). Any local process, and any web page open in a
+  browser, can reach a loopback port. The bearer keeps the brain private. The
+  address does not. The checks below will be enforced in the sidecar's HTTP
+  startup and in the desktop shell's sidecar launcher:
+  - The Host header must equal `127.0.0.1:<port>` or `localhost:<port>` exactly.
+    This also defeats DNS rebinding, where a hostile page makes its own name
+    resolve to `127.0.0.1`.
+  - There is no CORS wildcard.
+  - The same checks apply to the SSE stream.
+  - The bearer reaches the sidecar over stdin or an inherited file descriptor,
+    never through argv or the environment, because other processes running as the
+    same user can read both (on Linux through `/proc/<pid>/cmdline` and
+    `/proc/<pid>/environ`).
+- **L2. The bearer stays on the Rust side.** The owner bearer is kept by the Rust
+  side (`bridge_sign_in`). The webview holds it only in memory while the sign-in
+  dialog is open, and the app stores it nowhere (`desktop/README.md`). Any future
+  at-rest storage goes on the Rust side as well. Today the app stores nothing at
+  rest, so the storage location is undecided and is open question 4 in the
+  [product brief](PRODUCT_BRIEF.md) §17. That decision sets how private Local mode
+  is, because any process that can read the chosen location can drive the brain.
+- **L3. OS-level confinement before network-capable skills.** The skill egress
+  guard (`skills/policy.py`) is cooperative at the Python layer, and §5 relies on
+  a deployment boundary behind it (no exec, container egress rules). A sidecar
+  running as the user has neither. Before any network-capable skill runs in Local
+  mode, the sidecar must run under OS-level confinement with three properties:
+  - no process execution outside `openshell`,
+  - outbound network limited to the hosts the skill manifests declare plus the
+    model providers the user configured,
+  - filesystem access limited to Kelp's data directory plus folders the user
+    approved.
+
+  The mechanism on each OS is open. This section does not pick one. Until
+  confinement exists, Local mode does not enable network-capable skills.
+- **L4. Boat mode transport.** TLS only, the owner bearer always required, no
+  pinning by IP address (it changes on resume), and provider keys, the vault key
+  and credentials kept only inside the sandbox (ADR 0004 §2, item 8). Whether the
+  app reaches the sandbox through an exposed port or a tunnel is open question 3
+  in the brief and blocks Boat mode.
+
+| Open decision | Where it is tracked |
+|---|---|
+| Where the owner bearer and vault key live in Local mode | Brief §17, question 4 |
+| Confinement mechanism per OS | Open, no owner decision yet |
+| Boat transport (exposed port or tunnel) | Brief §17, question 3 |
+
+---
+
+## 7. Screen
+
+Status: planned. No code enforces this yet. Must land before the code it governs.
+
+Screen frames come from the desktop capture module, which is part of the local
+body (ADR 0004 §2, item 1). The rules below will be enforced there, before a
+frame is taken, and never delegated to the OS prompt. The capture spike
+([`docs/spikes/2026-11-screen-capture.md`](spikes/2026-11-screen-capture.md)) found
+that on a wlroots compositor (MangoWC) any process can capture the screen with no
+prompt, so Kelp's own code is the only consent gate there. GNOME, KDE, macOS and
+Windows were not tested.
+
+- **S1. Watch scope.** First run shows one screen. It lists app categories with
+  suggested defaults already ticked (editor, terminal, most of the browser) next
+  to the fixed block list (S4). The user changes the list in that one place, once.
+  Kelp captures only apps on the allowed list, and S4 scopes each capture to the
+  focused window. This stays opt-in per app, chosen on a single screen.
+- **S2. Retention.** Frames are never written to disk. They live in memory only.
+  The capture module must not use file-producing APIs, or must delete the file
+  immediately and never write it to a shared directory. The reason is measured:
+  on the wlroots test machine the xdg-desktop-portal Screenshot call left
+  `/tmp/out.png` with mode 0644, readable by every user on the machine. Kelp may
+  keep short text observations (for example "tests failing in VS Code") for at
+  most 24 hours. Anything kept longer enters memory only after the user okays it.
+  Observations are stored as untrusted data and are never promoted to memory or to
+  a rule without the user's confirmation. The 24 hour expiry will be enforced in
+  the brain's store, not in the capture module.
+- **S3. Where frames go.** Kelp the project runs no server that receives frames,
+  audio, transcripts or telemetry. "Cloud" always means a provider the user
+  configured with their own key, or the user's own Boat VM. What leaves the
+  machine depends on the run mode:
+
+  | Run mode | What leaves the machine | Rule |
+  |---|---|---|
+  | Default reaction signals, any mode | Metadata only: the focused app id (11 ms to read on wlroots in the spike), idle time, and the window title, read only after the S4 check passes and never for blocked or private windows | No pixels leave the machine by default. |
+  | Local mode, local vision model | Nothing. Frames stay on the machine. | Used only if a hardware check passes. The spikes did not measure a local vision model, so it is unproven until that check exists. |
+  | Local mode, cloud provider | A downscaled frame, to the provider the user configured | Only for apps the user marked "may send to cloud". That is a separate tick from "may watch". Never for blocked apps. Rate-limited. The indicator shows the destination (for example "watching: sent to <provider>"). Provider retention is out of scope (§5), and the setting says so plainly. The brain enforces the rate limit, because it makes the model call. The desktop app holds the per-app ticks and draws the indicator. |
+  | Boat mode | When the user has enabled frame sending ([product brief](PRODUCT_BRIEF.md) §5), frames go to the user's own VM, on demand only, over the TLS and bearer link (L4) | The VM counts as the user's machine for retention, and the same no-disk rule (S2) applies inside the VM. If the VM's model is a third-party provider, the "may send to cloud" tick applies. |
+- **S4. Block list.** Two tiers, checked against the focused app before any frame
+  is taken:
+  - Always blocked, cannot be lifted: password managers, private or incognito
+    browser windows, Kelp's own credential entry screen
+    ([`docs/CREDENTIAL_HANDOFF.md`](CREDENTIAL_HANDOFF.md) already refuses
+    screenshots during private entry), and 2FA or authenticator apps.
+  - Blocked by default, unlockable one site at a time: banking and payment sites.
+    The unlock happens only in Settings, never from a setup card and never from
+    chat.
+
+  When a blocked app has focus, capture stops before the frame is taken. The
+  focused-app check runs first. Reading the focused app is compositor-specific
+  (the spike used MangoWC's IPC); other compositors need
+  `wlr-foreign-toplevel-management` or their own mechanism.
+
+  Capture scope and failure mode, for both tiers:
+  - A frame covers only the focused allowed window. A full-screen frame would
+    include every visible window, notifications and other monitors. If a blocked
+    window is visible, the frame is dropped. The spike captured the full screen,
+    so window-scoped capture is untested.
+  - The focus check is repeated after the frame is taken. If the focus changed,
+    the frame is discarded.
+  - If the focused app, window or site cannot be determined, no frame is taken.
+    The detection method for private windows and per-site blocks is open.
+- **S5. Auto-pause during sharing and calls.** Capture pauses while the screen is
+  being shared or a call is active. The same condition mutes speech (V5). The
+  detection method on each OS is open.
+- **S6. Screen text is data.** Text read from the screen can never approve an
+  action and can never start a setup step ([product brief](PRODUCT_BRIEF.md)
+  §3). Window titles are untrusted text, the same as screen text. The reaction
+  loop that watches the screen has no tool access (ADR 0004 §2, item 5). If Kelp
+  sees text that looks like instructions aimed at it, it tells the user once per
+  page or window ("this page tried to give me instructions; I ignored them") and
+  does nothing else.
+- **S7. Indicator.** Kelp draws its own watching and listening indicator. On
+  wlroots the OS shows nothing during capture (spike).
+
+Prior art: Windows Recall filters apps and private browsing
+([Microsoft support](https://support.microsoft.com/en-us/windows/ai/ai-features/filtering-apps-websites-and-sensitive-information-in-recall));
+screenpipe records continuously with an exclusion list
+([screenpipe](https://github.com/screenpipe/screenpipe)). Kelp differs: it
+stores no frames.
+
+---
+
+## 8. Voice
+
+Status: planned. No code enforces this yet. Must land before the code it governs.
+
+Microphone capture, speech-to-text and text-to-speech run in the local body, in
+the desktop app. The rules below will be enforced there. The voice spike
+([`docs/spikes/2026-11-voice-latency.md`](spikes/2026-11-voice-latency.md))
+measured the default pipeline and left speech-to-speech untested.
+
+- **V1. Push-to-talk by default.** An optional wake word ("Hey Kelp") is detected
+  by an on-device model. Audio from before the wake word, or from outside
+  push-to-talk, never leaves the machine and is not kept.
+- **V2. Audio is deleted once transcribed.** Only the text is kept, the same as a
+  chat message. The desktop app's voice module holds the audio and deletes it. The
+  brain only ever receives the text.
+- **V3. Speech-to-speech.** What leaves the machine depends on the run mode:
+
+  | Run mode or option | What leaves the machine | Rule |
+  |---|---|---|
+  | Default pipeline, every mode | Text only, and only to wherever the brain's model runs | Local speech-to-text, text to the brain, text back, local text-to-speech. Measured: 3.1 to 3.3 s from end of speech to first audio, with a cloud text model on a CPU-only laptop (voice spike). This excludes endpointing and audio device latency. |
+  | Speech-to-speech realtime API | Raw audio, to a third party | Off by default. Available only as an explicit "fast voice" opt-in with the user's own provider key. The destination is named on the setting and on the listening indicator. Never used for wake-word listening. |
+  | Boat mode | Text only, to the VM | Speech-to-text still runs on the user's machine, because of latency. |
+
+  A self-hoster needs no speech-to-speech provider. The default pipeline works
+  with local models or any text model.
+- **V4. Blocked and private content is not read aloud.** Content from a blocked
+  or private app (S4), and anything read through the credential flow, is shown as
+  text and never spoken. S4 stops capture of such content, so this covers content
+  that reaches Kelp another way, such as a tool result or text the user pastes.
+- **V5. Speech is muted during calls and screen sharing.** The condition is S5.
+  The one-key quiet mode ([product brief](PRODUCT_BRIEF.md) §3) mutes it too.
+
+---
+
+## 9. Self-setup (the capability resolver)
+
+Status: planned. No code enforces this yet. Must land before the code it governs.
+
+The resolver is described in [product brief](PRODUCT_BRIEF.md) §4 and
+[ADR 0004](adr/0004-desktop-companion.md) §2, item 4. It does not exist yet. The
+rules below will be enforced in the resolver, in the approval gate
+(`openshell/`), and in the desktop app, which renders the confirmations.
+
+- **T1. What installs without a card.** Silent install applies only to catalog
+  entries whose pinned catalog metadata sets `grants_new_access: false`. Because
+  the flag is part of the pinned entry, the model cannot change it. Silent
+  install is capped by size and count per turn, and every silent install is shown
+  afterwards in an Installed list the user can open. An install over a cap needs a
+  card. The default caps are open, and the user can set them. Large downloads
+  under the caps show progress and no card. A card appears whenever access grows:
+  a new account or login, a new folder, a new network host, a new OS permission,
+  or spending money. This refines the single approval card in brief §4.2: the
+  card is shown when the plan grants new access, and the plan is still logged.
+  Two further conditions:
+  - Silent install is disabled in a turn whose context includes screen or web
+    text, until the user confirms.
+  - In Local mode, silent install is off until the OS confinement in L3 exists.
+    Until then every install shows a card. In Boat mode silent installs run inside
+    the sandbox.
+- **T2. Sources.** Installs come only from the pinned catalog (digest pinning in
+  `skills/loader.py`; publisher signing is a spike, open question 6 in the brief).
+  Kelp may propose a new catalog entry. It cannot install an arbitrary package,
+  and it never asks the user to paste a command into a terminal. Prior art: a Koi
+  Security audit of 2,857 OpenClaw skills, reported by NeuralTrust, found 341
+  malicious ([NeuralTrust](https://neuraltrust.ai/blog/openclaw-skills)), and a fake skill
+  persuaded users to paste an install command
+  ([Snyk](https://snyk.io/fr/blog/clawhub-malicious-google-skill-openclaw-malware/)).
+- **T3. Logins.** Logins are stored encrypted through the existing credential
+  handoff and vault ([`docs/CREDENTIAL_HANDOFF.md`](CREDENTIAL_HANDOFF.md)), scoped
+  to one site each, and revocable. Disconnecting a source deletes its login and
+  everything Kelp derived from that source: memory entries, observations and
+  cached files. That requires every derived item to be tagged with its source.
+  The tagging is planned and not designed yet.
+- **T4. What always needs a card.**
+  - Anything another person will see: messages, posts, emails, form or assignment
+    submissions, pull request comments.
+  - Anything that costs money. The card states the exact amount.
+  - Anything that cannot be undone: delete, cancel, account changes.
+  - Accepting terms of service or any other agreement. Kelp always shows this as a
+    card.
+
+  Standing rules keep cards rare. They come in two kinds:
+  - **Preferences** only shape or restrict how Kelp works: where logins are
+    stored, when the morning report arrives, tone. An example is "every new login
+    goes into the vault". A preference never waives a card.
+  - **Standing approvals** widen what runs without a card. A standing approval is
+    scoped to one action type and one target, is time-limited (default 30 days),
+    and is listed and revocable in Settings. It can never cover spending money,
+    deletion or any other irreversible act, anything another person will see, or
+    accepting terms. It cannot waive a T1 card for new access (accounts and
+    logins, folders, hosts, OS permissions).
+
+  Both kinds are created only from a confirmation that the desktop app renders
+  from structured fields (action type, target, expiry), never from model-written
+  text. Neither kind can be created from a turn in which screen, web or
+  tool-result text is the source of the request, and neither can be created by a
+  scheduled watch. Every action that runs under a standing approval is logged
+  with the approval id.
+
+  Today's approvals (`openshell/approvals.py`) are single-use, bound to the
+  command and its `argument_hash`, with a 600 s TTL. Standing approvals, and the
+  plan-bound kind from brief §4.2, are new approval kinds. Both are planned. Prior
+  art: OpenAI's agent asks before "actions of consequence"
+  ([OpenAI](https://openai.com/index/introducing-chatgpt-agent/)).
+- **T5. No AI reviewer in version 1.** No AI reviewer approves actions. Revisit
+  with the card approval rate (the "Card approval rate" row in brief §14.1
+  metrics). Prior art: Claude Code's auto mode replaces most per-action prompts
+  with a classifier, after finding that users approved 93% of manual prompts
+  ([Anthropic](https://www.anthropic.com/engineering/claude-code-auto-mode)).
+- **T6. Setup starts only inside a user turn.** A setup plan can start only inside
+  a turn the user started. The card text comes from catalog metadata only (brief
+  §4.2). Resuming after a blocked one-tap user action continues an already
+  approved plan. It never starts a new setup step.
+
+---
+
+## 10. Cross-references
 
 - **Recipient table** — who receives data, and what is sent:
   [`docs/PRIVACY.md`](PRIVACY.md) §2. The `unlisted` recipient and the
@@ -259,6 +530,10 @@ decision and its reversal procedure are in `docs/PRIVACY.md` §5.
 - **Policy gate and audit log** — [`docs/OPENSHELL.md`](OPENSHELL.md).
 - **Skill contract** — manifest rules including the `execute` prohibition:
   [`docs/SKILL_SPEC.md`](SKILL_SPEC.md).
+- **Companion direction**: the product brief and decision record that the
+  planned sections 6 to 9 come from:
+  [`docs/PRODUCT_BRIEF.md`](PRODUCT_BRIEF.md) and
+  [ADR 0004](adr/0004-desktop-companion.md).
 - **Tests** — [`tests/test_privacy.py`](../tests/test_privacy.py),
   [`tests/test_kernel_loop.py`](../tests/test_kernel_loop.py),
   [`tests/test_policy_enforcement.py`](../tests/test_policy_enforcement.py),

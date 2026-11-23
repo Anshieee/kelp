@@ -57,11 +57,12 @@ Split Kelp into a body and a brain, and let the user choose where the brain runs
    `chat/api.py`, with SSE, reached through `bridge.rs`. The body talks to a local
    sidecar and to a Boat brain with the same calls. No second protocol is
    introduced. In Boat mode the body sends only what the user enabled, and screen
-   frames are downscaled, sent on demand, and not stored by default.
+   frames are downscaled, sent on demand, and not written to disk.
 4. **The capability resolver goes through the existing approval gate.** When a
    request needs a model, skill, login or OS permission that Kelp lacks, Kelp
    writes a setup plan and shows it as one approval card in the existing approval
-   flow. It then performs the steps itself and verifies them. The model names
+   flow when the plan grants new access. It then performs the steps itself and
+   verifies them. The model names
    catalog entry ids only; the resolver builds the plan and the card text from
    catalog metadata, so model-written or injected text never appears on the card.
    The card is a new approval kind bound to the hash of the whole plan, because
@@ -69,7 +70,11 @@ Split Kelp into a body and a brain, and let the user choose where the brain runs
    command and argument hash. Installs come from an allowlisted catalog of pinned
    entries (skills, model weights, runtime dependencies), extending the digest
    pinning that `skills/loader.py` applies to skill packages today. Anything
-   outside the catalog needs an extra confirmation.
+   outside the catalog is not installed by Kelp. Kelp may propose a catalog entry
+   for the project to review
+   ([THREAT_MODEL §9, T2](../THREAT_MODEL.md#9-self-setup-the-capability-resolver)).
+   [THREAT_MODEL §9, T1](../THREAT_MODEL.md#9-self-setup-the-capability-resolver)
+   refines this item: the card appears only when the plan grants new access.
 5. **Screen data is untrusted input.** Text from the screen or from a web page
    can never authorise an action and can never trigger a setup step. The
    reaction loop that watches the screen has no tool access.
@@ -81,7 +86,7 @@ Split Kelp into a body and a brain, and let the user choose where the brain runs
    Docker container (brief section 6). The status of this ADR is Proposed, so
    this choice is open until the owner accepts it.
 7. **The local sidecar is never open.** It binds 127.0.0.1 only, on a random
-   per-install port, always requires the owner bearer, and rejects requests whose
+   per-launch port, always requires the owner bearer, and rejects requests whose
    Host or Origin is not the expected loopback value. Any local process or browser
    page can reach loopback, so loopback alone is not an access control.
 8. **Minimum rules for a Boat brain.** TLS only, the owner bearer always
@@ -98,7 +103,8 @@ Split Kelp into a body and a brain, and let the user choose where the brain runs
   [`docs/SERVICE_CONTRACT.md`](../SERVICE_CONTRACT.md) apply to the sidecar and to
   a Boat brain. The gate order (auth, tenant, entitlement, spend, provider) is
   unchanged.
-- **The approval gate.** Every action still goes through `openshell/`: deny by
+- **The approval gate.** Every action, including installs and actions that run under a
+  standing approval, still goes through `openshell/`: deny by
   default, approvals that move from pending to approved to consumed, a 600 s TTL,
   and the append-only scrubbed audit log.
 - **Spend caps.** They keep failing closed (`kernel/usage.py`,
@@ -145,9 +151,13 @@ so Kelp's own capture code must enforce the opt-in and the indicator.
 covers the server process (`kernel/`, `skills/`, `openshell/`, `chat/`). It does
 not cover screen capture, voice, a sidecar on the user's machine, or a resolver
 that installs software. It must gain sections for screen, voice and self-setup
-before any capture code lands. Its section 5 already notes that a compromised
-process is out of scope, and a local sidecar makes that process the user's own
-machine, so that boundary needs to be restated. Section 5 also says the skill
+before any capture code lands. Those sections now exist, with status planned (no
+code enforces them yet): [local brain boundary](../THREAT_MODEL.md#6-local-brain-boundary-local-mode),
+[screen](../THREAT_MODEL.md#7-screen), [voice](../THREAT_MODEL.md#8-voice) and
+[self-setup](../THREAT_MODEL.md#9-self-setup-the-capability-resolver).
+THREAT_MODEL section 5 notes that a compromised process is out of scope, and a
+local sidecar makes that process the user's own machine; section 5 now says so
+and points to section 6. Section 5 also says the skill
 socket guard is cooperative at the Python layer and is backed by the deployment
 boundary (no exec, container egress rules). A sidecar running as the user has no
 such boundary, so Local mode needs OS-level confinement of the sidecar before
@@ -204,8 +214,10 @@ updated on every OS, or measured Boat numbers make Boat mode unworkable.
   4546460, 84fa565) on main by cherry-pick or a fresh PR. Do not merge the
   branch, because it is based on `desktop-demo`, which carries demo fixtures.
 - Capture spikes on Wayland, macOS and Windows, and a local voice spike.
-- Add screen, voice and self-setup sections to `docs/THREAT_MODEL.md`, including
-  OS-level confinement of the local sidecar.
+- Done (2026-11-24): screen, voice, self-setup and local-brain sections written in
+  `docs/THREAT_MODEL.md` (§6 to §9), including OS-level confinement of the local
+  sidecar. Status is planned: the enforcement code is still to build, and the
+  sections must land before it.
 - Design the plan-bound approval kind for the resolver, including what happens
   when a step outlasts the decision window.
 - Decide where the owner bearer and the vault key live in local mode.
