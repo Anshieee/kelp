@@ -227,7 +227,8 @@ is listed in section 17.
 ## 8. Screen and voice privacy rules
 
 - Screen watching is opt-in per app.
-- A visible indicator shows whenever Kelp is watching or listening.
+- A visible indicator shows whenever Kelp is watching or listening. Kelp draws
+  it itself: on wlroots compositors the OS shows nothing during capture.
 - Frames are not written to disk by default.
 - A hard block list is always off-limits, including password managers and banking
   apps. The user cannot lift it by mistake in the setup flow.
@@ -264,9 +265,32 @@ Live2D Cubism SDK is not open source, so check its licence before adopting it.
 Open-LLM-VTuber (Live2D, voice, vision, offline) already solve parts of this.
 Reuse their code where the licences allow, and do not rebuild what they have.
 
-**Voice.** The latency target is about 1 s from the end of the user's speech to
-the start of Kelp's reply. The default is local speech-to-text and text-to-speech:
-Whisper-family models for STT and Piper for TTS.
+**Voice.** The default is local speech-to-text and text-to-speech:
+faster-whisper `tiny.en` for STT and Piper for TTS. The Phase 0 voice spike
+([`docs/spikes/2026-11-voice-latency.md`](spikes/2026-11-voice-latency.md)) showed
+that the earlier target of about 1 s is not reachable with this pipeline on a
+laptop CPU (Intel i7-1255U, no GPU):
+
+| Chain, end of speech to first sentence of audio | Median |
+|---|---|
+| tiny.en + cloud Haiku 5.5 (reasoning off) + Piper | 3.1–3.3 s |
+| tiny.en + local phi4-mini 3.8B (Ollama, CPU) + Piper, estimated from stages | about 6.1 s |
+
+The targets are therefore:
+
+- **Acknowledge in ≤ 200 ms.** The avatar switches to its listening or thinking
+  state as soon as speech ends. The pet already has those states.
+- **First spoken word ≤ 2.5 s p50** in cloud-brain mode on a laptop CPU. Getting
+  there needs streaming STT (transcribing while the user speaks), which the spike
+  did not measure.
+- **Local-only voice** needs a GPU or NPU to be conversational. On a CPU-only
+  machine, local mode uses a configured cloud model for voice replies and says so,
+  or offers text only.
+- Kokoro TTS sounds better but took 3.6 s for the first sentence on this CPU, so
+  Piper stays the default.
+- Speech-to-speech realtime APIs are the other route to sub-second replies. They
+  send raw audio to a provider, which is a threat-model decision, and were not
+  tested.
 
 **What exists today.** `desktop/` is a Tauri app. The Rust bridge
 `desktop/src-tauri/src/bridge.rs` owns the cookies, CSRF and the SSE stream. The
@@ -300,13 +324,20 @@ something to try:
 Screen capture is different on each OS, and each needs a permission the user must
 grant:
 
-- **Linux (Wayland):** capture goes through xdg-desktop-portal, with consent per
-  session.
+- **Linux (Wayland):** it depends on the compositor. The Phase 0 capture spike
+  ([`docs/spikes/2026-11-screen-capture.md`](spikes/2026-11-screen-capture.md))
+  ran on MangoWC, a wlroots compositor. There, `grim` (wlr-screencopy) captured
+  the full 1920×1080 screen in 38 ms with **no prompt at all**, the portal's
+  non-interactive Screenshot also ran without a prompt, and X11 capture through
+  Xwayland returned black frames. GNOME and KDE route capture through the
+  xdg-desktop-portal ScreenCast dialog; that was not tested.
 - **macOS:** Screen Recording and Accessibility permissions.
 - **Windows:** Windows Graphics Capture.
 
 Prototype all three in Phase 0 and Phase 1, before the design assumes that
-capture works without extra steps. The capability resolver can guide the user to a permission
+capture works without extra steps. Because some platforms ask for nothing, the
+rules in section 8 are enforced by Kelp's own capture code, never delegated to
+the OS prompt. The capability resolver can guide the user to a permission
 prompt, but it cannot grant an OS permission for them.
 
 ## 13. Companion risks
@@ -340,8 +371,30 @@ the last task before production.
 - daily minutes with the companion open,
 - reaction feedback, nice versus annoying,
 - approve rate on proposed actions,
-- time to first conversation after install,
-- setup prompts per user per week. The target is near zero after the first run.
+- the setup-friction metrics in section 14.1.
+
+### 14.1 Setup-friction metrics
+
+Section 4 promises that setup is never repeated. These numbers show whether that
+holds, and they are tracked from the first build that has an installer. They are
+counted on the user's machine, exposed on the existing `GET /api/metrics`
+endpoint, and leave the machine only if the user opts in to sharing them.
+
+| Metric | Definition | Target |
+|---|---|---|
+| Time to first conversation | Installer start to the first rendered Kelp reply, in seconds | p50 ≤ 5 min, no config file edited |
+| First-run questions | Questions the user answers before that first reply | 1 (Local or Boat), plus one provider sign-in only when no local model fits |
+| Setup prompts per active week | Resolver plan cards, OS permission prompts and credential handoffs shown, per user per week after the first day | ≤ 1 median, trending to 0 |
+| Repeat asks | A setup prompt for a capability that was already approved and whose scope has not changed | **0.** Any non-zero value is a bug |
+| Resolver success rate | Approved setup plans whose self-check (section 4.2, step 5) passes on the first attempt | ≥ 95% |
+| Setup abandonment | Setup cards dismissed or left to expire, as a share of cards shown | Watched, no target yet |
+| Manual fixes | Times a user had to edit a file or run a command to make a capability work, from bug reports and doctor output | 0 |
+
+Setup prompts are counted from the approval audit rows (`approval_requested`,
+`approval_resolved`) once the resolver gets its own approval kind (section 4.2),
+so setup cards can be counted separately from action approvals. Repeat asks are
+detected by comparing a new plan's capability ids and scopes with the remembered
+grants from section 4.3.
 
 ## 15. Money (later, not now)
 
@@ -373,15 +426,19 @@ None of these are built or priced in Phase 0.
 - [ ] Storm's 3 pet commits are on main by cherry-pick or a fresh PR, without
       the `desktop-demo` fixtures.
 - [ ] A capture spike has run on Wayland, macOS and Windows, with notes on what
-      each permission prompt looks like.
-- [ ] A voice spike has measured the end-of-speech to start-of-reply latency of
-      the local STT and TTS choice against the target of about 1 s.
+      each permission prompt looks like. Wayland (wlroots) is done; GNOME, KDE,
+      macOS and Windows are not.
+- [x] A voice spike has measured the end-of-speech to start-of-reply latency of
+      the local STT and TTS choice. Result: 3.1–3.3 s with a cloud model on one
+      Linux laptop; the target is revised in section 10. A run on Apple Silicon
+      and a Windows laptop is still useful before the number is final.
 - [ ] The Live2D licence has been checked, and the AIRI and Open-LLM-VTuber
       licences have been checked for the parts to be reused.
 - [ ] [`docs/THREAT_MODEL.md`](THREAT_MODEL.md) has a plan for screen, voice and
       self-setup sections, to be written before any capture code lands.
 - [ ] The first pre-register `wish` answers have been read and the first
-      audience in section 2 confirmed or changed.
+      audience in section 2 confirmed or changed. As of 2026-11-23 there are no
+      submissions.
 - [ ] Measured Boat desktop-task durations and cost exist, or the owner has
       accepted going without them.
 
@@ -410,4 +467,5 @@ None of these are built or priced in Phase 0.
 6. Should the resolver's catalog wait for publisher signing
    (`skills/signing.py`), or ship first with digest pinning only?
 7. What is the age and self-description stance (section 13)?
-8. Which Phase 0 spike goes first: capture or voice?
+8. Should voice replies in local mode fall back to a cloud model on machines
+   without a GPU (section 10), or stay local and slower?

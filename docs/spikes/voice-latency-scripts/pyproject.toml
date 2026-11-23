@@ -1,0 +1,14 @@
+[project]
+name = "kelp-voice-latency-spike"
+version = "0.0.1"
+requires-python = ">=3.11,<3.14"
+dependencies = [
+  "faster-whisper",
+  "onnxruntime",
+  "numpy",
+  "soundfile",
+  "piper-tts",
+  "kokoro-onnx",
+  "httpx",
+  "jiwer",
+]

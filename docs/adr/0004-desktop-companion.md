@@ -134,9 +134,12 @@ lifecycle: start, health check, restart, and a loopback port that does not
 collide.
 
 **OS permission work.** Capture differs on each platform: Wayland through
-xdg-desktop-portal with consent per session, macOS Screen Recording and
-Accessibility, and Windows Graphics Capture. Each needs a prototype before the
-design relies on it.
+wlr-screencopy or xdg-desktop-portal depending on the compositor, macOS Screen
+Recording and Accessibility, and Windows Graphics Capture. Each needs a prototype
+before the design relies on it. The first one, on a wlroots compositor, captured
+the screen with no prompt at all
+([`docs/spikes/2026-11-screen-capture.md`](../spikes/2026-11-screen-capture.md)),
+so Kelp's own capture code must enforce the opt-in and the indicator.
 
 **Threat model must grow first.** [`docs/THREAT_MODEL.md`](../THREAT_MODEL.md)
 covers the server process (`kernel/`, `skills/`, `openshell/`, `chat/`). It does
