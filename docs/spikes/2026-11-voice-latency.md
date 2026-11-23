@@ -5,7 +5,7 @@ Phase 0 spike for [`docs/PRODUCT_BRIEF.md`](../PRODUCT_BRIEF.md) section 10.
 **Answer:** the ~1 s voice target in `docs/PRODUCT_BRIEF.md` is not reachable with a
 cascaded STT → LLM → TTS pipeline on this laptop. The best measured chain is
 **3.1 s median** from "the user stopped talking" to "first sentence of audio ready",
-before endpointing. Local-only LLMs are 3–7 s to the first token on this CPU.
+not counting endpointing or speaker latency. Local-only LLMs are 3–7 s to the first token on this CPU.
 
 ## Machine and conditions
 
@@ -75,8 +75,8 @@ OpenRouter calls in this spike: about $0.0003.
 
 ## What this means for the brief
 
-1. **Change the target.** Use "visual acknowledgement in ≤ 200 ms, first spoken word in
-   ≤ 2.5 s p50 on a laptop CPU in cloud-brain mode". The avatar's "listening"/"thinking"
+1. **Change the target.** Use "visual acknowledgement in ≤ 200 ms, first audio in ≤ 2.5 s
+   p50 from the end of endpointing, on a laptop CPU in cloud-brain mode". The avatar's "listening"/"thinking"
    animation covers the gap; it costs nothing and is already a pet state.
 2. **Biggest remaining win is STT.** Transcribing while the user speaks (streaming partials
    with VAD) removes most of the 0.9–1.5 s after speech ends. Not measured here.

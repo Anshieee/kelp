@@ -20,6 +20,12 @@ Windows were **not tested**.
 
 All captures were written to a private temporary folder with `umask 077`, never opened or viewed,
 and deleted in the same command. Content checks used only a 64×36 grayscale average.
+Timings are the median of 6 runs of each command, measured with Python's
+`time.perf_counter()` around `subprocess.run`. The two portal rows below that show
+no command were D-Bus property reads (`busctl --user get-property
+org.freedesktop.portal.Desktop /org/freedesktop/portal/desktop
+org.freedesktop.portal.ScreenCast AvailableSourceTypes`, and the same `version`
+read on `org.freedesktop.portal.RemoteDesktop`, which returned "No such interface").
 
 | Method | Result | Prompt? | Time (median of 6) |
 |---|---|---|---|
@@ -27,7 +33,7 @@ and deleted in the same command. Content checks used only a 64×36 grayscale ave
 | `ffmpeg -i out.ppm -vf scale=1280:-2 -q:v 5 small.jpg` | ~134 KB per frame | — | 170 ms |
 | `grim -t jpeg -q 70 -s 0.5` (capture + scale + encode in one) | 960×540 | None | 304 ms |
 | `ffmpeg -f x11grab -i :0 -frames:v 1 x11.png` (X11 path) | 1920×1080 frame, **all black** (Xwayland is rootless) | None | 223 ms |
-| `gdbus call ... org.freedesktop.portal.Screenshot.Screenshot "" "{'interactive': <false>}"` (portal v2) | Succeeded | **None** | not timed |
+| `gdbus call --session --dest org.freedesktop.portal.Desktop --object-path /org/freedesktop/portal/desktop --method org.freedesktop.portal.Screenshot.Screenshot "" "{'handle_token': <'kelpspike1'>, 'interactive': <false>}"` (portal v2) | Succeeded | **None** | not timed |
 | Portal `ScreenCast` v4 | Advertises `AvailableSourceTypes = 3` (monitor, window) and cursor modes 3; session not started, because the wlr chooser would appear on the user's screen | Chooser (per config) | not run |
 | Portal `RemoteDesktop` (input injection) | **Not available** on this compositor | — | — |
 | `mmsg get focusing-client` (MangoWC IPC) | JSON with `appid`, `title`, `pid`, geometry | None | 11 ms |

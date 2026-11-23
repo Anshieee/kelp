@@ -69,7 +69,8 @@ enabled). Kelp should not ask the user to repeat setup for each new feature.
 
 ### 4.1 First run
 
-- One installer and one choice: Local or Boat.
+- One installer and one choice: Local or Boat. Boat adds one follow-up, the Boat
+  sign-in, which also hands the owner bearer to the sandbox.
 - Defaults come from detected hardware. If the machine can run a local model,
   Kelp picks one. If it cannot, Kelp asks for one provider sign-in, once.
 - The target is talking to Kelp within a few minutes of installing, with no
@@ -99,6 +100,8 @@ The steps are:
    connecting itself. The user does not edit config.
 5. **Verify.** Kelp runs a doctor-style self-check and reports success or the
    exact step that failed.
+   A step that cannot be automated ends the check as `manual_fix_required` and
+   tells the user the exact edit or command.
 
 ### 4.3 Remember once
 
@@ -274,12 +277,13 @@ laptop CPU (Intel i7-1255U, no GPU):
 | Chain, end of speech to first sentence of audio | Median |
 |---|---|
 | tiny.en + cloud Haiku 5.5 (reasoning off) + Piper | 3.1–3.3 s |
-| tiny.en + local phi4-mini 3.8B (Ollama, CPU) + Piper | about 6.1 s, an estimate: 0.98 s STT + 4.68 s LLM first sentence + 0.46 s Piper, stages measured separately, not a chained run |
+| tiny.en + local phi4-mini 3.8B (Ollama, CPU) + Piper | about 6.1 s, an estimate: 0.98 s STT + 4.68 s LLM first sentence + 0.46 s Piper, stages measured separately with STT uncontended, not a chained run; about 6.7 s with the chained run's 1.56 s STT |
 
 Both rows exclude endpointing (typically 0.3–0.8 s of silence before the
 utterance counts as finished), audio device latency and network variance. The
 chained run's STT step was also slowed by other load on the machine (1.43–1.56 s
-against 0.87–0.98 s when run alone).
+against 0.87–0.98 s when run alone). Both rows stop when synthesized audio is ready
+to play, so speaker latency is excluded too.
 
 The targets are therefore:
 
@@ -392,13 +396,13 @@ endpoint, and leave the machine only if the user opts in to sharing them.
 | Metric | Definition | Target |
 |---|---|---|
 | Time to first conversation | Installer start to the first rendered Kelp reply, in seconds | p50 ≤ 5 min, no config file edited |
-| First-run questions | Questions the user answers before that first reply | 1 (Local or Boat), plus one provider sign-in only when no local model fits. Boat adds the Boat sign-in and the owner bearer handoff, counted as one more question |
+| First-run questions | Questions the user answers before that first reply | 1 (Local or Boat), plus one provider sign-in only when no local model fits. Boat adds one question, the Boat sign-in that includes the owner bearer handoff |
 | Setup prompts per active week | Kelp-initiated prompts shown per user per week after the first day: resolver plan cards, credential handoff requests, and resolver steps that ask the OS for a permission | ≤ 1 median, trending to 0 |
-| Repeat asks | A Kelp-initiated setup prompt for a capability that was already approved and whose scope has not changed | **0.** Any non-zero value is a bug |
+| Repeat asks | A Kelp-initiated setup prompt for a capability that was already approved and whose scope has not changed, excluding a re-request after an OS-initiated lapse (counted under OS re-consent) | **0.** Any non-zero value is a bug |
 | OS re-consent | Reminders the OS raises on its own, such as the macOS 15+ "continue to allow" screen-recording prompt. Counted when Kelp detects the permission lapsed | Watched, not a bug |
 | Resolver success rate | Approved setup plans whose self-check (section 4.2, step 5) passes on the first attempt | ≥ 95% |
 | Setup abandonment | Setup cards dismissed or left to expire, as a share of cards shown | Watched, no target yet |
-| Manual fixes | Self-check results that end in `manual_fix_required`, meaning the user must edit a file or run a command. Bug reports with the same cause are tracked by hand | 0 |
+| Manual fixes | Self-check results that end in `manual_fix_required` (section 4.2, step 5). Bug reports with the same cause are tracked by hand | 0 |
 
 Resolver plan cards are counted from the approval audit rows
 (`approval_requested`, `approval_resolved`) once the resolver gets its own
