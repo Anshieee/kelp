@@ -147,13 +147,28 @@ class CredentialWorker:
         if len(token) < 32:
             raise ValueError('worker_token_required')
         self._base = server.rstrip('/') + '/api/credential-worker'
-        self._token = token
+        # The bootstrap token may only register a request. Each registration returns a
+        # token scoped to that one request; every later call for the id uses it.
+        self._root_token = token
+        self._tokens: dict[str, str] = {}
         self._owned = client is None
         self._client = client or httpx.AsyncClient(follow_redirects=False, trust_env=False, timeout=15)
 
+    def _token_for(self, method: str, path: str) -> str:
+        if path == '':
+            if method != 'POST':
+                raise RuntimeError('unknown_credential_request')
+            return self._root_token
+        parts = path.split('/')
+        # Never fall back to the bootstrap token for get/claim/finish.
+        if len(parts) < 2 or parts[0] != '' or parts[1] not in self._tokens:
+            raise RuntimeError('unknown_credential_request')
+        return self._tokens[parts[1]]
+
     async def call(self, method: str, path: str = '', data: dict[str, Any] | None = None) -> dict[str, Any]:
+        token = self._token_for(method, path)
         response = await self._client.request(method, self._base + path,
-                                              headers={'Authorization': 'Bearer ' + self._token}, json=data)
+                                              headers={'Authorization': 'Bearer ' + token}, json=data)
         if response.status_code not in (200, 201):
             raise RuntimeError('credential_service_rejected')
         return response.json()
@@ -161,7 +176,11 @@ class CredentialWorker:
     async def request(self, session: PrivateBrowserSession, fields: list[dict[str, str]],
                       submit: str | None = None) -> dict[str, Any]:
         result = await self.call('POST', data=await session.begin(fields, submit))
-        return result['request']
+        scoped, record = result.get('worker_token'), result.get('request')
+        if not isinstance(scoped, str) or not scoped or not isinstance(record, dict) or not isinstance(record.get('id'), str):
+            raise RuntimeError('credential_service_rejected')
+        self._tokens[record['id']] = scoped
+        return record
 
     async def deliver(self, session: PrivateBrowserSession, request_id: str) -> dict[str, Any]:
         # Validate the *current* browser before asking for the one-use payload.
@@ -181,8 +200,10 @@ class CredentialWorker:
         if record['status'] != 'released' or record['session_id'] != session.session_id:
             raise RuntimeError('owner_release_required')
         await session._release()
+        self._tokens.pop(request_id, None)  # the request is over; drop its bearer token
 
     async def close(self) -> None:
+        self._tokens.clear()
         if self._owned:
             await self._client.aclose()
 

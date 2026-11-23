@@ -6,6 +6,7 @@ worker-only delivery path, consumed transactionally before returning plaintext.
 """
 from __future__ import annotations
 
+import base64
 import hashlib
 import hmac
 import json
@@ -27,6 +28,11 @@ from .errors import ChatError
 MAX_BODY = 16_384
 _ID = re.compile(r"[A-Za-z][A-Za-z0-9_-]{0,63}\Z")
 _BINDING = re.compile(r"[0-9a-f]{64}\Z")
+# Terminal rows are pruned this long after their deadline. A worker token may
+# keep polling status (only) for the same window, so it can see the owner release.
+_RETENTION = 86_400
+_MIN_SIGNING_KEY = 32
+_MAX_TOKEN = 2048
 
 
 def fail(code: str = 'invalid_credential_request', status: int = 400) -> NoReturn:
@@ -74,9 +80,13 @@ def validate_env(env: Mapping[str, str]) -> bool:
     if not enabled:
         return False
     try:
-        Fernet(env.get('KELP_VAULT_KEY', '').encode())
+        vault_key = env.get('KELP_VAULT_KEY', '')
+        Fernet(vault_key.encode())
         token = env.get('KELP_BROWSER_WORKER_TOKEN', '')
-        if len(token) < 32 or token == env.get('KELP_AUTH_TOKEN'):
+        signing_key = env.get('KELP_CREDENTIAL_SIGNING_KEY', '')
+        if (len(token) < 32 or token == env.get('KELP_AUTH_TOKEN')
+                or len(signing_key) < 32
+                or signing_key in {vault_key, token, env.get('KELP_AUTH_TOKEN')}):
             raise ValueError()
         allowed = env.get('KELP_BROWSER_ALLOWED_ORIGINS', '').split(',')
         if not allowed or not all(x.strip() for x in allowed):
@@ -92,9 +102,14 @@ class CredentialBroker:
     """Single-owner store, separate from chat content and excluded from tools."""
 
     def __init__(self, path: Path, key: str, worker_token: str, allowed_origins: list[str],
-                 *, audit: Any = None, clock: Callable[[], float] = time.time):
+                 *, signing_key: str, audit: Any = None, clock: Callable[[], float] = time.time):
+        # validate_env enforces this at startup; repeat it here because an empty or
+        # shared signing key would let the root-token holder mint scoped tokens.
+        if len(signing_key) < _MIN_SIGNING_KEY or signing_key in {key, worker_token}:
+            raise ValueError('Credential signing key must be 32+ characters and distinct.')
         self._cipher = Fernet(key.encode())
         self._worker_digest = hashlib.sha256(worker_token.encode()).digest()
+        self._signing_key = signing_key.encode()
         self.allowed = frozenset(origin(x) for x in allowed_origins)
         self._audit = audit
         self._clock = clock
@@ -112,12 +127,15 @@ class CredentialBroker:
             CREATE TABLE IF NOT EXISTS meta (id INTEGER PRIMARY KEY, check_value BLOB NOT NULL);
             CREATE TABLE IF NOT EXISTS requests (
                 id TEXT PRIMARY KEY, session TEXT NOT NULL, origin TEXT NOT NULL,
-                binding TEXT NOT NULL, spec TEXT NOT NULL, submission TEXT NOT NULL, state TEXT NOT NULL,
+                binding TEXT NOT NULL, device TEXT NOT NULL DEFAULT '', spec TEXT NOT NULL, submission TEXT NOT NULL, state TEXT NOT NULL,
                 created REAL NOT NULL, expires REAL NOT NULL, payload BLOB, result TEXT NOT NULL DEFAULT '');
             CREATE TABLE IF NOT EXISTS vault (
                 id TEXT PRIMARY KEY, origin TEXT NOT NULL, spec TEXT NOT NULL,
                 created REAL NOT NULL, payload BLOB NOT NULL);
         ''')
+        columns = {row['name'] for row in self._db.execute('PRAGMA table_info(requests)')}
+        if 'device' not in columns:
+            self._db.execute("ALTER TABLE requests ADD COLUMN device TEXT NOT NULL DEFAULT ''")
         try:
             row = self._db.execute('SELECT check_value FROM meta WHERE id=1').fetchone()
             if row:
@@ -125,6 +143,12 @@ class CredentialBroker:
                     raise InvalidToken()
             else:
                 self._db.execute('INSERT INTO meta VALUES (1, ?)', (self._cipher.encrypt(b'kelp-vault-v1'),))
+            # Only after the vault key is proven: rows with no recorded device
+            # pre-date request-scoped tokens. No worker holds a token for them and
+            # their payloads are sealed under the old context, so fail live ones
+            # closed rather than attribute them to today's worker.
+            self._db.execute("UPDATE requests SET state='failed',payload=NULL,result='upgraded' "
+                             "WHERE device='' AND state IN ('pending','submitted','claimed')")
             # Never resume a delivered secret after a process crash.
             self._db.execute("UPDATE requests SET state='failed',payload=NULL,result='interrupted' WHERE state='claimed'")
         except InvalidToken:
@@ -138,13 +162,78 @@ class CredentialBroker:
     def worker_authorized(self, token: str) -> bool:
         return hmac.compare_digest(hashlib.sha256(token.encode()).digest(), self._worker_digest)
 
+    @property
+    def _device_id(self) -> str:
+        """Stable server-derived identity for the configured trusted worker.
+
+        Keyed by the server-only signing key: the id is readable in every scoped
+        token, so an unsalted hash of the bootstrap token must not appear there.
+        """
+        return hmac.new(self._signing_key, b'kelp-credential-device-v1:' + self._worker_digest,
+                        hashlib.sha256).hexdigest()
+
+    def _sign(self, encoded: str) -> str:
+        digest = hmac.new(self._signing_key, encoded.encode(), hashlib.sha256).digest()
+        return base64.urlsafe_b64encode(digest).rstrip(b'=').decode()
+
+    def issue_worker_token(self, ident: str) -> str:
+        """Issue a request-only bearer token for a request this worker device created.
+
+        ``exp`` (the request deadline) bounds claim and finish. ``read_exp`` bounds
+        the status poll, which must outlive the deadline so the worker can observe
+        an expiry or the owner's later release.
+        """
+        with self._transaction():
+            row = self._row(ident)
+            if row['device'] != self._device_id:
+                fail('credential_device_mismatch', 403)
+            payload = json.dumps({'v': 1, 'id': ident, 'device': row['device'],
+                                  'target': row['origin'], 'binding': row['binding'],
+                                  'session': row['session'], 'exp': int(row['expires']),
+                                  'read_exp': int(row['expires']) + _RETENTION,
+                                  'scope': ['get', 'claim', 'finish']},
+                                 sort_keys=True, separators=(',', ':')).encode()
+        encoded = base64.urlsafe_b64encode(payload).rstrip(b'=').decode()
+        return encoded + '.' + self._sign(encoded)
+
+    def worker_token_scope(self, token: str, ident: str, operation: str) -> bool:
+        """Verify an unforgeable, unexpired token scoped to one request/device/operation."""
+        try:
+            if len(token) > _MAX_TOKEN or token.count('.') != 1:
+                return False
+            encoded, supplied = token.split('.')
+            # Authenticate the exact bytes before decoding or parsing anything.
+            # Compare the canonical text form: base64's lenient decoder would
+            # otherwise accept many distinct strings for one signature.
+            if not hmac.compare_digest(supplied.encode('ascii'), self._sign(encoded).encode('ascii')):
+                return False
+            claims = json.loads(base64.urlsafe_b64decode(encoded + '=' * (-len(encoded) % 4)))
+            with self._lock:
+                row = self._db.execute('SELECT * FROM requests WHERE id=?', (ident,)).fetchone()
+            if row is None or not isinstance(claims, dict):
+                return False
+            exp, read_exp = claims.get('exp'), claims.get('read_exp')
+            if type(exp) is not int or type(read_exp) is not int:
+                return False
+            deadline = read_exp if operation == 'get' else exp
+            return (claims.get('v') == 1 and claims.get('id') == ident
+                    and claims.get('device') == row['device'] == self._device_id
+                    and claims.get('target') == row['origin']
+                    and claims.get('binding') == row['binding']
+                    and claims.get('session') == row['session']
+                    and operation in claims.get('scope', [])
+                    and exp == int(row['expires']) and read_exp == exp + _RETENTION
+                    and deadline > self._clock())
+        except (ValueError, TypeError, AttributeError):
+            return False
+
     @contextmanager
     def _transaction(self) -> Iterator[None]:
         with self._lock:
             self._db.execute('BEGIN IMMEDIATE')
             try:
                 self._db.execute("UPDATE requests SET state='expired',payload=NULL,result='expired' WHERE expires<=? AND state IN ('pending','submitted','claimed')", (self._clock(),))
-                self._db.execute("DELETE FROM requests WHERE expires<?", (self._clock() - 86400,))
+                self._db.execute("DELETE FROM requests WHERE expires<?", (self._clock() - _RETENTION,))
                 yield
                 self._db.execute('COMMIT')
             except BaseException:
@@ -196,8 +285,8 @@ class CredentialBroker:
             if (self._db.execute("SELECT COUNT(*) FROM requests WHERE state IN ('pending','submitted','claimed','completed')").fetchone()[0] >= 128
                     or self._db.execute('SELECT COUNT(*) FROM requests').fetchone()[0] >= 4096):
                 fail('credential_capacity', 429)
-            self._db.execute('INSERT INTO requests VALUES (?,?,?,?,?,?,?,?,?,?,?)',
-                             (ident, data['session_id'], site, data['binding'], json.dumps(spec), json.dumps(submission), 'pending', now, now + 600, None, ''))
+            self._db.execute('INSERT INTO requests (id,session,origin,binding,device,spec,submission,state,created,expires,payload,result) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)',
+                             (ident, data['session_id'], site, data['binding'], self._device_id, json.dumps(spec), json.dumps(submission), 'pending', now, now + 600, None, ''))
             result = self._public(self._row(ident), worker=True)
         self._event('requested', ident)
         return result
@@ -211,6 +300,9 @@ class CredentialBroker:
             return self._public(self._row(ident), worker=worker)
 
     def _context(self, prefix: str, row: sqlite3.Row, spec: list[Any]) -> str:
+        if prefix == 'request':
+            return json.dumps([prefix, row['id'], row['origin'], row['binding'],
+                               row['session'], row['device'], spec], separators=(',', ':'))
         return json.dumps([prefix, row['id'], row['origin'], spec], separators=(',', ':'))
 
     def _seal(self, context: str, values: dict[str, str]) -> bytes:

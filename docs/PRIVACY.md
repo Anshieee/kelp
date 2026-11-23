@@ -392,9 +392,21 @@ When `KELP_CREDENTIALS_ENABLED=1`, owner input sent to the separate credential
 API is encrypted in `credentials.db` beside `chat.db`. It is never appended to
 chat, tool results, SSE replay, shares or provider requests. A separately
 authenticated trusted browser worker receives it once and enters it into the
-explicit HTTPS site. That site receives the entered values; the trusted server
-and worker briefly hold plaintext. Optional saved values remain encrypted until
-explicit reuse or deletion; verification codes cannot be saved. See
+explicit HTTPS site. Its bootstrap token (`KELP_BROWSER_WORKER_TOKEN`) can only
+register a request. Registration issues a token signed with a separate server-only
+`KELP_CREDENTIAL_SIGNING_KEY` and scoped to that one request's status read, claim
+and finish. Claim and finish stop at the ten-minute request deadline; the status
+read remains for the 24-hour retention window so the worker can see the owner's
+release. Device identity is derived by the
+server from the bootstrap credential, not accepted from the worker body. The
+request ciphertext is bound to its ID, target origin, browser session, authenticated
+device, form fingerprint, and field roles; a changed binding fails closed. These
+handoff tokens and entered values are never copied into history, results, SSE,
+logs, or audit records. Provider credentials remain in the chat server's protected
+environment and existing provider wiring; they are not sent to the browser worker.
+That destination site receives the entered values; the trusted server and worker
+briefly hold plaintext. Optional saved values remain encrypted until explicit
+reuse or deletion; verification codes cannot be saved. See
 [`CREDENTIAL_HANDOFF.md`](CREDENTIAL_HANDOFF.md) for the complete trust boundary,
 retention rules and limits. This optional worker is a separate process from the
 chat server and must pause agent observations during private entry. The earlier
