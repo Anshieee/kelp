@@ -9,7 +9,7 @@ Rev 2026-11-22: demo client retired (owner decision) — §2B struck, DoD revise
 
 - **PRs #53 + #54:** service-control layer P0–P6 (service contract, provider neutrality, tenant boundaries, task-run records, per-tenant secrets, entitlements/billing hooks, admin visibility + support runbook) and phone demo sessions via managed Netlify Identity (demo flow, retired with the demo client — history only).
 - **PR #56 (Storm, merged 2026-11-16):** desktop computer tab with the transport gate (managed Steel/Boat sessions by default, raw RFB only behind `VITE_COMPUTER_TRANSPORT=rfb-stub`), bridge allowlist, fail-closed server defaults, redacted session URLs. Reviewed twice (`CHANGES_REQUESTED` → fixes → `APPROVED`), all 6 CI checks green.
-- **Yours, already merged:** #42 (phone PWA), #48 (mobile polish), #49 (Midnight/Meadow theme). The `phone/` PWA was deliberately spared from cleanup for you. Note: `docs/HACKATHON_DEMO_CONTRACT.md` remains in the tree but the demo client and facade are retired (see §2) — not your lane. (An earlier revision of this handoff also referenced a `HACKATHON_DEMO_PROGRESS.md`; that file never existed — corrected here.)
+- **Yours, already merged:** #42 (phone PWA), #48 (mobile polish), #49 (Midnight/Meadow theme). The `phone/` PWA was deliberately spared from cleanup for you. Note: the demo client, its facade and `docs/HACKATHON_DEMO_CONTRACT.md` were removed in #58 (see §2) — not your lane. (An earlier revision of this handoff also referenced a `HACKATHON_DEMO_PROGRESS.md`; that file never existed — corrected here.)
 
 ## 2. What you own (one item — was two; facade struck on demo retirement)
 
