@@ -208,8 +208,9 @@ updated on every OS, or measured Boat numbers make Boat mode unworkable.
 - Decide where the owner bearer and the vault key live in local mode.
 - Decide how the app reaches a brain inside a Boat sandbox (blocking for Boat
   mode).
-- Confirm the recommendation that publisher signing is wired in before the
-  resolver ships.
+- Confirm the recommendation that publisher signing is wired in before the full
+  resolver ships in Phase 3 (the Phase 1 voice-model resolver uses only entries
+  pinned in Kelp's own release).
 - Licence checks for Live2D, AIRI and Open-LLM-VTuber before any reuse.
 - When accepted, change the Status line here and update the note at the top of
   `docs/DESKTOP_SCOPE.md`.

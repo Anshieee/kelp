@@ -125,8 +125,10 @@ its scope changes.
   wrote it. Publisher signing (Ed25519 over the digest string) exists only as a
   spike in `skills/signing.py`, described in
   [`docs/SPIKE_PLUGIN_SIGNING.md`](SPIKE_PLUGIN_SIGNING.md), and is not wired into
-  the loader. The recommendation is to wire signing in before the resolver ships
-  in Phase 3; open question 6 asks the owner to confirm.
+  the loader. The recommendation is to wire signing in before the full resolver
+  ships in Phase 3; open question 6 asks the owner to confirm. The minimal Phase 1
+  resolver installs only voice models from a short list the project pins by
+  digest in its own release, so it does not depend on publisher signing.
 - Anything outside the catalog needs an explicit extra confirmation on the card.
 - No setup step may be triggered by screen content or web content alone. A setup
   plan can only start inside a turn the user started, and because the card is
@@ -396,7 +398,9 @@ None of these are built or priced in Phase 0.
 4. In local mode, where do the owner secrets live? A local installer has to
    generate the owner bearer (`KELP_AUTH_TOKEN`) and the credential settings
    `KELP_VAULT_KEY`, `KELP_BROWSER_WORKER_TOKEN` and `KELP_CREDENTIAL_SIGNING_KEY`
-   ([`docs/CREDENTIAL_HANDOFF.md`](CREDENTIAL_HANDOFF.md)), and store them. The
+   ([`docs/CREDENTIAL_HANDOFF.md`](CREDENTIAL_HANDOFF.md)), and store them. It also
+   sets the two non-secret settings `KELP_CREDENTIALS_ENABLED` and
+   `KELP_BROWSER_ALLOWED_ORIGINS`. The
    OS keychain is the likely home, but note that `docs/DESKTOP_SCOPE.md` says
    "token in OS keychain only" while `desktop/README.md` records that the old
    `keychain.js` and its Stronghold wiring were removed and nothing is stored at
