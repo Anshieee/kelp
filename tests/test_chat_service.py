@@ -1388,3 +1388,77 @@ def test_an_expired_approval_marks_the_card_expired_not_denied(tmp_path: Path) -
         asyncio.run(scenario())
     finally:
         store.close()
+
+
+class _RecordingUsageStore:
+    """Usage store that remembers which asyncio task wrote each record."""
+
+    def __init__(self) -> None:
+        self.records: list[tuple[object, asyncio.Task[object] | None]] = []
+
+    def record(self, record: object) -> None:
+        self.records.append((record, asyncio.current_task()))
+
+
+class _ArmingProvider:
+    """Streams two text deltas, calling ``arm`` between them."""
+
+    def __init__(self, arm: object) -> None:
+        self._arm = arm
+        self.turn_task: asyncio.Task[object] | None = None
+        self.closed_in: asyncio.Task[object] | None = None
+
+    async def stream(self, request: object) -> object:
+        self.turn_task = asyncio.current_task()
+        try:
+            yield TextDelta("a")
+            self._arm()  # type: ignore[operator]
+            yield TextDelta("b")
+            yield StreamEnd("stop")
+        finally:
+            self.closed_in = asyncio.current_task()
+
+
+def test_thread_deleted_mid_turn_closes_the_loop_in_the_turn_task(tmp_path: Path) -> None:
+    store = ChatStore(tmp_path / "chat.db")
+    usage = _RecordingUsageStore()
+    armed = {"on": False}
+    provider = _ArmingProvider(lambda: armed.update(on=True))
+    service = ChatService(
+        store=store,
+        provider=provider,
+        model="nvidia/nemotron-3.5-super-vl",
+        usage_store=usage,  # type: ignore[arg-type]
+    )
+    try:
+        thread = service.create_thread()
+        original_get_thread = store.get_thread
+
+        def get_thread_deleted_once_armed(thread_id: str, **kwargs: object) -> object:
+            # One-shot: the thread vanishes for exactly the loop's liveness
+            # check, as if another request had hard-deleted it mid-turn.
+            if armed["on"] and thread_id == thread["id"]:
+                armed["on"] = False
+                return None
+            return original_get_thread(thread_id, **kwargs)  # type: ignore[arg-type]
+
+        store.get_thread = get_thread_deleted_once_armed  # type: ignore[method-assign]
+
+        async def scenario() -> None:
+            payload, _created = await service.send(
+                thread["id"], text="go", client_turn_id="ct-gone-mid-turn"
+            )
+            await service.wait_for_turn(payload["turn_id"], timeout=5)
+
+        asyncio.run(scenario())
+
+        # The loop was closed deterministically by the service, inside the
+        # turn's own task and context, not later by the asyncgen finalizer.
+        assert provider.turn_task is not None
+        assert provider.closed_in is provider.turn_task
+        assert len(usage.records) == 1
+        record, written_by = usage.records[0]
+        assert record.outcome == "cancelled"  # type: ignore[attr-defined]
+        assert written_by is provider.turn_task
+    finally:
+        store.close()

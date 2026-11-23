@@ -563,6 +563,7 @@ class LoggedUsageStore:
             cost_usd=getattr(record, "estimated_cost_usd", None),
             cost_known=getattr(record, "cost_known", None),
             usage_reported=getattr(record, "usage_reported", None),
+            usage_estimated=getattr(record, "usage_estimated", None),
             duration_ms=getattr(record, "duration_ms", None),
             status=getattr(record, "outcome", None),
         )

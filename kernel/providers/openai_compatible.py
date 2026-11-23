@@ -414,11 +414,13 @@ class OpenAICompatibleClient:
                     return
 
                 state = _StreamState()
+                saw_done = False
                 async for data in _iter_sse_data(response.aiter_lines()):
                     response_bytes += len(data.encode("utf-8")) + 1
                     if not data.strip():
                         continue
                     if data.strip() == "[DONE]":
+                        saw_done = True
                         break
                     try:
                         chunk = json.loads(data)
@@ -444,6 +446,20 @@ class OpenAICompatibleClient:
                             yield event
                             return
                         yield event
+
+                if not saw_done and state.finish_reason is None:
+                    # Neither a [DONE] marker nor any finish_reason: the
+                    # connection was cut mid-answer. Treating it as a clean
+                    # "stop" would present a truncated answer as complete.
+                    # (A stream with a finish_reason but no [DONE] stays
+                    # accepted for servers that omit the marker.)
+                    outcome = "provider_protocol_error"
+                    yield ProviderFailure(
+                        "provider_protocol_error",
+                        "The model provider ended the stream before completing the response.",
+                        retryable=True,
+                    )
+                    return
 
                 for event in state.finish():
                     # The endpoint sees (and echoes) wire names; the loop and

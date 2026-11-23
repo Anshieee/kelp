@@ -1,6 +1,6 @@
 # Kelp
 
-Kelp is a private, always-on assistant for chat, approval-gated work, scheduled tasks, and spend caps. Saved-card payment flows are present in the codebase but are not wired into the running service yet. Kelp stores chat and working data locally; model requests go to the provider configured by the operator. The documented provider endpoint is OpenRouter.
+Kelp is a private, always-on assistant for chat, approval-gated work, scheduled tasks, and spend caps. The wallet and Razorpay Checkout routes are mounted by the server, but they respond `503 wallet_not_configured` until the operator sets both `RAZORPAY_KEY_ID` and `RAZORPAY_KEY_SECRET`; setting only one of them stops the server at startup with `invalid_config`. Kelp stores chat and working data locally; model requests go to the provider configured by the operator. The documented provider endpoint is OpenRouter.
 
 ## Current status
 
