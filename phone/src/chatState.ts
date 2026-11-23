@@ -34,6 +34,8 @@ export interface Approval {
   effects: string[];
   expires_at: string;
   status: string;
+  /** Raw tool arguments (may carry a wallet proposal ref); opaque to the UI. */
+  arguments?: unknown;
 }
 
 export function initialChatState(
@@ -193,6 +195,7 @@ function reduceApprovalRequested(state: ChatState, event: StreamEvent, lastSeq: 
     effects: Array.isArray(approval.effects) ? approval.effects.map(String) : [],
     expires_at: approval.expires_at ?? "",
     status: approval.status ?? "pending",
+    arguments: approval.arguments,
   });
   return { ...state, lastSeq, approvals };
 }
