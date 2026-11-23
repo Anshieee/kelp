@@ -89,8 +89,13 @@ The steps are:
    may only name catalog entry ids. The resolver builds the plan, and the card's
    text, from catalog metadata. No model-written text appears on the card, so
    injected page or screen text cannot shape what the user approves.
-3. **Show one approval card.** The whole plan is a single card in the existing
-   approval UI. It is not one prompt per step. Today's approvals in
+3. **Show one approval card when the plan grants new access.** The whole plan is
+   a single card in the existing approval UI. It is not one prompt per step. A
+   plan whose catalog entries grant no new access installs without a card, and
+   the plan is still logged. The card appears when the plan adds a new account or
+   login, a new folder, a new network host, a new OS permission, or spending
+   (see [THREAT_MODEL §9, T1](THREAT_MODEL.md#9-self-setup-the-capability-resolver)).
+   Today's approvals in
    `openshell/approvals.py` are single-use, bound to one `command` and its
    `argument_hash`, with a 600 s TTL. A plan of several steps, such as a large
    model download, fits neither rule. The resolver therefore needs a new approval
@@ -145,6 +150,39 @@ its scope changes.
   sidecar running as the user has no such boundary, so Local mode needs OS-level
   confinement of the sidecar (a restricted user or sandbox, no exec, egress rules)
   before skills with network access run there.
+- The rules for what installs silently, which sources are allowed, how logins are
+  stored and removed, and what always needs a card are written as planned rules in
+  [THREAT_MODEL §9](THREAT_MODEL.md#9-self-setup-the-capability-resolver). No code
+  enforces them yet.
+
+### 4.5 Finishing the job
+
+These are requirements for how Kelp works on a request. None is built yet.
+
+1. Check the live source before acting or reporting: the actual site, inbox or
+   repository, not memory.
+2. Follow a fallback ladder before saying no. First an official API or connector.
+   Then an export feed the user already has (for example a Moodle per-user
+   calendar export URL). Then a logged-in browser session, in Kelp's browser or in
+   Boat. Ask one specific question only when every route is blocked.
+3. Give every request a tracked status: Done, Ongoing, Waiting on you, Paused,
+   Dropped, Missed, Declined. Kelp can produce an "everything you asked me" report
+   from it on request.
+4. Support standing jobs ("watches") with a schedule and a stop condition, using
+   the existing scheduler (`SchedulerRuntime` in `chat/`). Examples: a morning
+   brief of classes and deadlines, an hourly check on a server.
+5. Save standing rules the user states in conversation ("every new login goes into
+   the vault", "accept routine terms but flag unusual ones") as user policy, and
+   apply them later without asking again. A standing rule can widen behaviour only
+   inside the card rules in
+   [THREAT_MODEL §9, T4](THREAT_MODEL.md#9-self-setup-the-capability-resolver).
+6. Report honest misses. When Kelp was wrong or late, the report says so plainly.
+7. When blocked on a one-tap user action (a phone 2FA tap, a login save), say
+   exactly what is needed and resume on its own afterwards.
+8. When Kelp declines, name the reason and offer the nearest allowed alternative.
+9. Deliver approvals to the user away from the desk. A late yes loses
+   time-sensitive work. This needs a remote approval channel (a push to the phone
+   or a messaging bridge). It is open question 9 in section 17.
 
 ## 5. Run modes
 
@@ -229,17 +267,28 @@ is listed in section 17.
 
 ## 8. Screen and voice privacy rules
 
-- Screen watching is opt-in per app.
+The detailed rules are written as planned rules in
+[THREAT_MODEL §7 (screen)](THREAT_MODEL.md#7-screen) and
+[§8 (voice)](THREAT_MODEL.md#8-voice). No code enforces them yet. In short:
+
+- Screen watching is opt-in per app, chosen once on a single screen. First run
+  shows app categories with suggested defaults already ticked (editor, terminal,
+  most of the browser), and the user changes them in that one place.
 - A visible indicator shows whenever Kelp is watching or listening. Kelp draws
   it itself: on wlroots compositors the OS shows nothing during capture.
-- Frames are not written to disk by default.
-- A hard block list is always off-limits, including password managers and banking
-  apps. The user cannot lift it by mistake in the setup flow.
+- Frames are never written to disk. Kelp may keep short text observations for at
+  most 24 hours. Anything longer-term enters memory only after the user okays it.
+- Some apps are always blocked and the user cannot lift that: password managers,
+  private browser windows, Kelp's own credential screen, and authenticator apps.
+  Banking and payment sites are blocked by default. The user can unlock one site
+  at a time, only from Settings, never from a setup card or chat.
 - Screen text can never authorise an action. It is data, handled as untrusted
   input like any tool result. The existing credential flow already follows the
   same rule for private entry: the browser wrapper refuses to screenshot while
   private entry is active ([`docs/CREDENTIAL_HANDOFF.md`](CREDENTIAL_HANDOFF.md)).
-- Voice defaults to push-to-talk. Always-listening is an explicit opt-in.
+- Voice defaults to push-to-talk. A wake word ("Hey Kelp") is an optional opt-in
+  and is detected on the device. Audio is deleted once it is transcribed, and
+  only the text is kept.
 
 ## 9. Persona
 
@@ -299,8 +348,9 @@ The targets are therefore:
 - Kokoro TTS sounds better but took 3.6 s for the first sentence on this CPU, so
   Piper stays the default.
 - Speech-to-speech realtime APIs are the other route to sub-second replies. They
-  send raw audio to a provider, which is a threat-model decision, and were not
-  tested.
+  send raw audio to a provider, and they were not tested. They are an explicit
+  opt-in ("fast voice") with the user's own provider key, off by default, decided
+  in [THREAT_MODEL §8, V3](THREAT_MODEL.md#8-voice).
 
 **What exists today.** `desktop/` is a Tauri app. The Rust bridge
 `desktop/src-tauri/src/bridge.rs` owns the cookies, CSRF and the SSE stream. The
@@ -327,7 +377,10 @@ something to try:
 
 - the payments wallet and Razorpay checkout,
 - multi-tenant entitlements,
-- the phone PWA (to be discussed with Ketock).
+- the phone PWA (to be discussed with Ketock). This conflicts with requirement 9
+  in section 4.5: away-from-desk approvals need a remote approval channel, and the
+  phone PWA is one candidate for it. Pausing the PWA leaves that need open
+  (section 17, question 9).
 
 ## 12. Platform permissions risk
 
@@ -451,8 +504,9 @@ None of these are built or priced in Phase 0.
       and a Windows laptop is still useful before the number is final.
 - [ ] The Live2D licence has been checked, and the AIRI and Open-LLM-VTuber
       licences have been checked for the parts to be reused.
-- [ ] [`docs/THREAT_MODEL.md`](THREAT_MODEL.md) has a plan for screen, voice and
-      self-setup sections, to be written before any capture code lands.
+- [x] [`docs/THREAT_MODEL.md`](THREAT_MODEL.md) has a plan for screen, voice and
+      self-setup sections, to be written before any capture code lands. (sections
+      written 2026-11-24, status planned)
 - [ ] The first pre-register `wish` answers have been read and the first
       audience in section 2 confirmed or changed. As of 2026-11-23 there are no
       submissions.
@@ -486,3 +540,11 @@ None of these are built or priced in Phase 0.
 7. What is the age and self-description stance (section 13)?
 8. Should voice replies in local mode fall back to a cloud model on machines
    without a GPU (section 10), or stay local and slower?
+9. How does an approval reach the user away from the desk? A late yes loses
+   time-sensitive work, so Kelp needs a remote approval channel: a push to the
+   phone, or a messaging bridge (section 4.5, requirement 9). This conflicts with
+   pausing the phone PWA (section 11).
+10. Graded and timed work: Kelp never sits timed tests or quizzes. Should Kelp
+    ever submit graded coursework the user reviewed, behind a card that
+    [THREAT_MODEL §9, T4](THREAT_MODEL.md#9-self-setup-the-capability-resolver)
+    requires, or only prepare it and remind the user?

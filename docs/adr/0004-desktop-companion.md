@@ -145,9 +145,13 @@ so Kelp's own capture code must enforce the opt-in and the indicator.
 covers the server process (`kernel/`, `skills/`, `openshell/`, `chat/`). It does
 not cover screen capture, voice, a sidecar on the user's machine, or a resolver
 that installs software. It must gain sections for screen, voice and self-setup
-before any capture code lands. Its section 5 already notes that a compromised
-process is out of scope, and a local sidecar makes that process the user's own
-machine, so that boundary needs to be restated. Section 5 also says the skill
+before any capture code lands. Those sections now exist, with status planned (no
+code enforces them yet): [local brain boundary](../THREAT_MODEL.md#6-local-brain-boundary-local-mode),
+[screen](../THREAT_MODEL.md#7-screen), [voice](../THREAT_MODEL.md#8-voice) and
+[self-setup](../THREAT_MODEL.md#9-self-setup-the-capability-resolver).
+THREAT_MODEL section 5 notes that a compromised process is out of scope, and a
+local sidecar makes that process the user's own machine; section 5 now says so
+and points to section 6. Section 5 also says the skill
 socket guard is cooperative at the Python layer and is backed by the deployment
 boundary (no exec, container egress rules). A sidecar running as the user has no
 such boundary, so Local mode needs OS-level confinement of the sidecar before
@@ -204,8 +208,10 @@ updated on every OS, or measured Boat numbers make Boat mode unworkable.
   4546460, 84fa565) on main by cherry-pick or a fresh PR. Do not merge the
   branch, because it is based on `desktop-demo`, which carries demo fixtures.
 - Capture spikes on Wayland, macOS and Windows, and a local voice spike.
-- Add screen, voice and self-setup sections to `docs/THREAT_MODEL.md`, including
-  OS-level confinement of the local sidecar.
+- Done (2026-11-24): screen, voice, self-setup and local-brain sections written in
+  `docs/THREAT_MODEL.md` (§6 to §9), including OS-level confinement of the local
+  sidecar. Status is planned: the enforcement code is still to build, and the
+  sections must land before it.
 - Design the plan-bound approval kind for the resolver, including what happens
   when a step outlasts the decision window.
 - Decide where the owner bearer and the vault key live in local mode.
