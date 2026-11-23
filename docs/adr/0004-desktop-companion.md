@@ -57,11 +57,12 @@ Split Kelp into a body and a brain, and let the user choose where the brain runs
    `chat/api.py`, with SSE, reached through `bridge.rs`. The body talks to a local
    sidecar and to a Boat brain with the same calls. No second protocol is
    introduced. In Boat mode the body sends only what the user enabled, and screen
-   frames are downscaled, sent on demand, and not stored by default.
+   frames are downscaled, sent on demand, and not written to disk.
 4. **The capability resolver goes through the existing approval gate.** When a
    request needs a model, skill, login or OS permission that Kelp lacks, Kelp
    writes a setup plan and shows it as one approval card in the existing approval
-   flow. It then performs the steps itself and verifies them. The model names
+   flow when the plan grants new access. It then performs the steps itself and
+   verifies them. The model names
    catalog entry ids only; the resolver builds the plan and the card text from
    catalog metadata, so model-written or injected text never appears on the card.
    The card is a new approval kind bound to the hash of the whole plan, because
@@ -69,7 +70,11 @@ Split Kelp into a body and a brain, and let the user choose where the brain runs
    command and argument hash. Installs come from an allowlisted catalog of pinned
    entries (skills, model weights, runtime dependencies), extending the digest
    pinning that `skills/loader.py` applies to skill packages today. Anything
-   outside the catalog needs an extra confirmation.
+   outside the catalog is not installed by Kelp. Kelp may propose a catalog entry
+   for the project to review
+   ([THREAT_MODEL §9, T2](../THREAT_MODEL.md#9-self-setup-the-capability-resolver)).
+   [THREAT_MODEL §9, T1](../THREAT_MODEL.md#9-self-setup-the-capability-resolver)
+   refines this item: the card appears only when the plan grants new access.
 5. **Screen data is untrusted input.** Text from the screen or from a web page
    can never authorise an action and can never trigger a setup step. The
    reaction loop that watches the screen has no tool access.
@@ -81,7 +86,7 @@ Split Kelp into a body and a brain, and let the user choose where the brain runs
    Docker container (brief section 6). The status of this ADR is Proposed, so
    this choice is open until the owner accepts it.
 7. **The local sidecar is never open.** It binds 127.0.0.1 only, on a random
-   per-install port, always requires the owner bearer, and rejects requests whose
+   per-launch port, always requires the owner bearer, and rejects requests whose
    Host or Origin is not the expected loopback value. Any local process or browser
    page can reach loopback, so loopback alone is not an access control.
 8. **Minimum rules for a Boat brain.** TLS only, the owner bearer always
