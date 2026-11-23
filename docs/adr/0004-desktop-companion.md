@@ -103,7 +103,8 @@ Split Kelp into a body and a brain, and let the user choose where the brain runs
   [`docs/SERVICE_CONTRACT.md`](../SERVICE_CONTRACT.md) apply to the sidecar and to
   a Boat brain. The gate order (auth, tenant, entitlement, spend, provider) is
   unchanged.
-- **The approval gate.** Every action still goes through `openshell/`: deny by
+- **The approval gate.** Every action, including installs and actions that run under a
+  standing approval, still goes through `openshell/`: deny by
   default, approvals that move from pending to approved to consumed, a 600 s TTL,
   and the append-only scrubbed audit log.
 - **Spend caps.** They keep failing closed (`kernel/usage.py`,

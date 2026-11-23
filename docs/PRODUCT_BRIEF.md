@@ -50,10 +50,12 @@ recommendation holds.
 
 - **Zero repeated setup.** Setup happens once and Kelp does the work itself (section 4).
 - **Quiet by default.** The default is that Kelp rarely speaks. One key mutes it.
-- **Nothing acts without the user's yes.** Every action goes through the existing
-  approval gate in `openshell/`. Exceptions, all logged: installs that grant no
-  new access ([THREAT_MODEL §9, T1](THREAT_MODEL.md#9-self-setup-the-capability-resolver)) and actions covered by a standing
-  approval the user created ([THREAT_MODEL §9, T4](THREAT_MODEL.md#9-self-setup-the-capability-resolver)).
+- **Nothing acts without the user's yes.** Every action goes through the
+  existing approval gate in `openshell/`. Exceptions, all logged: installs that
+  grant no new access ([THREAT_MODEL §9,
+  T1](THREAT_MODEL.md#9-self-setup-the-capability-resolver)) and actions covered
+  by a standing approval the user created ([THREAT_MODEL §9,
+  T4](THREAT_MODEL.md#9-self-setup-the-capability-resolver)).
 - **Screen content is untrusted input.** Text on screen or on a web page can
   describe a task but can never authorise one, and it can never start a setup step.
 - **Local-first, cloud by choice.** The user picks Local or Boat. Neither is the
@@ -95,11 +97,14 @@ The steps are:
 3. **Show one approval card when the plan grants new access.** The whole plan is
    a single card in the existing approval UI. It is not one prompt per step. A
    plan whose catalog entries are all flagged as granting no new access installs
-   without a card. It is shown afterwards in an Installed list the user can open,
-   and the plan is still logged. In Local mode this waits for OS confinement of
-   the sidecar, and every install shows a card until then. The card appears when the plan adds a new account or
-   login, a new folder, a new network host, a new OS permission, or spending
-   (see [THREAT_MODEL §9, T1](THREAT_MODEL.md#9-self-setup-the-capability-resolver)).
+   without a card, within the per-turn size and count caps in [THREAT_MODEL §9,
+   T1](THREAT_MODEL.md#9-self-setup-the-capability-resolver). It is shown
+   afterwards in an Installed list the user can open, and the plan is still
+   logged. In Local mode this waits for OS confinement of the sidecar, and every
+   install shows a card until then. The card appears when the plan adds a new
+   account or login, a new folder, a new network host, a new OS permission, or
+   spending (see [THREAT_MODEL §9,
+   T1](THREAT_MODEL.md#9-self-setup-the-capability-resolver)).
    Today's approvals in
    `openshell/approvals.py` are single-use, bound to one `command` and its
    `argument_hash`, with a 600 s TTL. A plan of several steps, such as a large
@@ -173,10 +178,10 @@ These are requirements for how Kelp works on a request. None is built yet.
    repository, not memory.
 2. Follow a fallback ladder before saying no. First an official API or connector.
    Then an export feed the user already has (for example a Moodle per-user
-   calendar export URL). Then a logged-in browser session, in Kelp's browser or in
-   Boat. Ask one specific question only when every route is blocked. An export feed URL
-   that embeds a token is stored like a login: in the vault, scoped to one site,
-   and revocable.
+   calendar export URL). Then a logged-in browser session, in Kelp's browser or
+   in Boat. Ask one specific question only when every route is blocked. An
+   export feed URL that embeds a token is stored like a login: in the vault,
+   scoped to one site, and revocable.
 3. Give every request a tracked status: Done, Ongoing, Waiting on you, Paused,
    Dropped, Missed, Declined. Kelp can produce an "everything you asked me" report
    from it on request.
@@ -192,7 +197,7 @@ These are requirements for how Kelp works on a request. None is built yet.
    revocable in Settings. A standing approval never covers spending money,
    deletion or other irreversible acts, anything another person will see, or
    accepting terms of service, and Kelp always shows terms acceptance as a card.
-   It cannot waive a card for new access (logins, folders, hosts, OS
+   It cannot waive a card for new access (accounts and logins, folders, hosts, OS
    permissions). Both kinds are created only from a confirmation that the desktop
    app renders from structured fields (action type, target, expiry), never from
    model-written text, never from a turn in which screen, web or tool-result text
@@ -308,9 +313,10 @@ The detailed rules are written as planned rules in
   Banking and payment sites are blocked by default. The user can unlock one site
   at a time, only from Settings, never from a setup card or chat.
 - Screen text, including window titles, can never authorise an action. It is
-  data, handled as untrusted input like any tool result. The existing credential flow already follows the
-  same rule for private entry: the browser wrapper refuses to screenshot while
-  private entry is active ([`docs/CREDENTIAL_HANDOFF.md`](CREDENTIAL_HANDOFF.md)).
+  data, handled as untrusted input like any tool result. The existing credential
+  flow already follows the same rule for private entry: the browser wrapper
+  refuses to screenshot while private entry is active
+  ([`docs/CREDENTIAL_HANDOFF.md`](CREDENTIAL_HANDOFF.md)).
 - Voice defaults to push-to-talk. A wake word ("Hey Kelp") is an optional opt-in
   and is detected on the device. Audio is deleted once it is transcribed, and
   only the text is kept.
@@ -427,7 +433,7 @@ grant:
 
 Prototype all three in Phase 0 and Phase 1, before the design assumes that
 capture works without extra steps. Because some platforms ask for nothing, the
-rules in section 8 are enforced by Kelp's own capture code, never delegated to
+rules in section 8 will be enforced by Kelp's own capture code, never delegated to
 the OS prompt. The capability resolver can guide the user to a permission
 prompt, but it cannot grant an OS permission for them.
 

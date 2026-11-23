@@ -378,11 +378,12 @@ Windows were not tested.
   being shared or a call is active. The same condition mutes speech (V5). The
   detection method on each OS is open.
 - **S6. Screen text is data.** Text read from the screen can never approve an
-  action and can never start a setup step ([product brief](PRODUCT_BRIEF.md) §3).
-  Window titles are untrusted text, the same as screen text. The reaction loop
-  that watches the screen has no tool access (ADR 0004 §2, item 5). If Kelp sees text that looks like instructions aimed at it, it tells
-  the user once per page or window ("this page tried to give me instructions; I
-  ignored them") and does nothing else.
+  action and can never start a setup step ([product brief](PRODUCT_BRIEF.md)
+  §3). Window titles are untrusted text, the same as screen text. The reaction
+  loop that watches the screen has no tool access (ADR 0004 §2, item 5). If Kelp
+  sees text that looks like instructions aimed at it, it tells the user once per
+  page or window ("this page tried to give me instructions; I ignored them") and
+  does nothing else.
 - **S7. Indicator.** Kelp draws its own watching and listening indicator. On
   wlroots the OS shows nothing during capture (spike).
 
@@ -483,14 +484,15 @@ rules below will be enforced in the resolver, in the approval gate
     scoped to one action type and one target, is time-limited (default 30 days),
     and is listed and revocable in Settings. It can never cover spending money,
     deletion or any other irreversible act, anything another person will see, or
-    accepting terms. It cannot waive a T1 card for new access (logins, folders,
-    hosts, OS permissions).
+    accepting terms. It cannot waive a T1 card for new access (accounts and
+    logins, folders, hosts, OS permissions).
 
   Both kinds are created only from a confirmation that the desktop app renders
   from structured fields (action type, target, expiry), never from model-written
   text. Neither kind can be created from a turn in which screen, web or
   tool-result text is the source of the request, and neither can be created by a
-  scheduled watch.
+  scheduled watch. Every action that runs under a standing approval is logged
+  with the approval id.
 
   Today's approvals (`openshell/approvals.py`) are single-use, bound to the
   command and its `argument_hash`, with a 600 s TTL. Standing approvals, and the
