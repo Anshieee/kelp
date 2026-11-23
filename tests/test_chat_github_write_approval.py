@@ -104,7 +104,12 @@ def test_model_is_offered_github_write_and_pending_approval_has_no_egress(
             cards = await wait_until(lambda: store.list_approvals(status="pending"))
             card = cards[0]
             assert requests == []
-            offered = provider.requests[0].tools
+            provider_request = provider.requests[0]
+            assert any(
+                message.get("role") == "user" and message.get("content") == "Open a PR"
+                for message in provider_request.messages
+            )
+            offered = provider_request.tools
             assert any(item["function"]["name"] == "github.write" for item in offered)
             assert "After you approve" in card["rationale"]
             assert "Anshieee/kelp" in card["rationale"]
@@ -120,7 +125,13 @@ def test_model_is_offered_github_write_and_pending_approval_has_no_egress(
             replay = service.decide(card["id"], "approve")
             assert replay["approval"]["status"] == "approved"
             await service.wait_for_turn(payload["turn_id"])
-            assert sum(request.url.path.endswith("/pulls") for request in requests) == 1
+            # One branch, one commit, one pull request: the approved invocation
+            # ran exactly once, step by step.
+            for endpoint in ("/git/refs", "/git/commits", "/pulls"):
+                assert sum(
+                    request.method == "POST" and request.url.path.endswith(endpoint)
+                    for request in requests
+                ) == 1, endpoint
             assert len(requests) == 8
             assert all(request.url.host == "api.github.com" for request in requests)
             settled = store.get_approval(card["id"])
