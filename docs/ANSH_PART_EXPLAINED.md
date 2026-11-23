@@ -19,8 +19,7 @@ own one slice of it:
   documents, uses tools, and keeps the spending safe. It lives mainly in the
   `kernel/` and `openshell/` folders.
 - Akshat (Person C) builds the screens, the parts a person actually sees and
-  clicks. It lives mainly in the `frontend/`, `desktop/`, and `netlify/`
-  folders.
+  clicks. It lives mainly in the `desktop/` folder.
 - Ansh (Person B) builds the front door of the server in between. The front
   door is the layer of the server that receives every click and question from
   a screen, decides who is allowed in, sorts each request to the right place,

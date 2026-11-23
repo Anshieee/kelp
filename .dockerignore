@@ -47,9 +47,8 @@ htmlcov/
 **/__pycache__/
 **/*.py[cod]
 
-# Docs and the Netlify demo deployment
+# Docs
 docs/
-netlify/
 README.md
 **/*.md
 LICENSE
