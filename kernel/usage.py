@@ -32,6 +32,8 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Mapping, Protocol
 
+from openshell.audit import ends_mid_line as _ends_mid_line
+
 from .config import DEFAULT_TENANT_ID
 
 __all__ = [
@@ -143,24 +145,6 @@ class InMemoryUsageStore:
     def __len__(self) -> int:
         return len(self.records)
 
-
-
-def _ends_mid_line(path: Path) -> bool:
-    """True when ``path`` is non-empty and its last byte is not a newline.
-
-    A crash mid-append leaves a partial last line. Writing the next row straight
-    after it would glue the two together, and the reader would skip both.
-    """
-
-    try:
-        with path.open("rb") as handle:
-            handle.seek(0, os.SEEK_END)
-            if handle.tell() == 0:
-                return False
-            handle.seek(-1, os.SEEK_END)
-            return handle.read(1) != b"\n"
-    except OSError:
-        return False
 
 class JsonlUsageStore:
     """Append-only JSONL store. Safe for concurrent writers within one process."""

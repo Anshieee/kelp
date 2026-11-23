@@ -147,10 +147,11 @@ def _filter_groups(
     A question such as "revenue for East" carries a filter as well as an
     aggregate, but a CSV has no schema saying which words are values. A word is
     treated as one only when it is a token of a cell in a non-numeric column:
-    that keeps filler ("across", "regions") from changing the answer, and the
-    aggregate, header and target-column words are never candidates. Terms that
-    share a candidate column are alternatives (OR); distinct groups must all
-    hold (AND).
+    that keeps filler ("across", "regions") from changing the answer unless the
+    file itself uses the word as a value, and the aggregate, header and target-column words are never candidates. A word that
+    is also a value in a text column does filter, and the answer names the
+    filter, so the change is visible. Terms that share a candidate column are
+    alternatives (OR); distinct groups must all hold (AND).
     """
 
     skip = set().union(*(_column_tokens(header) for header in table.header))
@@ -205,17 +206,32 @@ def _matching_rows(
     return passing
 
 
+#: Columns named per filter group before the rest are counted.
+_MAX_FILTER_COLUMNS = 3
+#: Ceiling on the whole filter description, so a wide table cannot flood it.
+_MAX_FILTER_CHARS = 200
+
+
 def _describe_filters(
     table: CsvTable, groups: Sequence[tuple[list[int], list[str]]]
 ) -> str:
-    """"region matches east or west and product matches gpu" for the answer."""
+    """"region matches east or west and product matches gpu" for the answer.
 
-    return " and ".join(
-        "/".join(_clip(table.header[column]) for column in columns)
-        + " matches "
-        + " or ".join(words)
-        for columns, words in groups
-    )
+    A word common to many text columns would otherwise list every one of them,
+    so each group names at most :data:`_MAX_FILTER_COLUMNS` headers and counts
+    the rest, and the whole description is clipped.
+    """
+
+    parts = []
+    for columns, words in groups:
+        named = "/".join(
+            _clip(table.header[column], 40) for column in columns[:_MAX_FILTER_COLUMNS]
+        )
+        hidden = len(columns) - _MAX_FILTER_COLUMNS
+        if hidden > 0:
+            named += f" and {hidden} more columns"
+        parts.append(named + " matches " + " or ".join(words))
+    return _clip(" and ".join(parts), _MAX_FILTER_CHARS)
 
 
 def _aggregate_answer(

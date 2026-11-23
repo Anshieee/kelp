@@ -22,7 +22,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable, Mapping
 
-__all__ = ["AuditLog", "DEFAULT_TENANT_ID", "SecretScrubber"]
+__all__ = ["AuditLog", "DEFAULT_TENANT_ID", "SecretScrubber", "ends_mid_line"]
 
 #: The only tenant admitted by this version. A record written without an
 #: explicit tenant is the owner's.
@@ -124,8 +124,7 @@ class SecretScrubber:
         return value
 
 
-
-def _ends_mid_line(path: Path) -> bool:
+def ends_mid_line(path: Path) -> bool:
     """True when ``path`` is non-empty and its last byte is not a newline.
 
     A crash mid-append leaves a partial last line. Writing the next row straight
@@ -221,7 +220,7 @@ class AuditLog:
         with self._lock:
             self.path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
             is_new = not self.path.exists()
-            torn = not is_new and _ends_mid_line(self.path)
+            torn = not is_new and ends_mid_line(self.path)
             with self.path.open("a", encoding="utf-8") as handle:
                 if is_new:
                     try:

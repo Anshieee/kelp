@@ -216,7 +216,8 @@ Razorpay transport (`purpose = "payments.razorpay.<operation>"`, one of
 `payment.create`, `payment.capture`). `build_app` hands its egress ledger to both
 the wallet and the hosted Checkout, so the lazily built `HttpRazorpayTransport`
 writes into the same audit trail; the row's outcome is `completed`,
-`provider_error` (HTTP 400 and up), `unreachable`, or `timeout`, and a call
+`provider_error` (HTTP 400 and up), `unreachable`, `timeout`, or `error` (an
+unexpected client-side fault), and a call
 refused before it reaches the network (a missing credential, a malformed id)
 writes nothing because nothing left. The Stripe transport is the one place a
 future change could add a recipient without a row: `HttpStripeGateway` is not

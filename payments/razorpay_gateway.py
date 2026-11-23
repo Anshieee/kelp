@@ -513,8 +513,8 @@ class HttpRazorpayTransport:
             headers["X-Razorpay-Idempotency-Key"] = idempotency_key
         url = f"{self.base_url}{path}"
         json_body = dict(body or {})
-        # Same encoding httpx applies to ``json=``, so the ledger counts the
-        # bytes that actually leave the process (headers excluded).
+        # Same encoding httpx 0.28 applies to ``json=`` (older versions add
+        # spaces), so the ledger counts the body bytes sent, headers excluded.
         request_bytes = len(
             json.dumps(
                 json_body, ensure_ascii=False, separators=(",", ":"), allow_nan=False
@@ -534,6 +534,11 @@ class HttpRazorpayTransport:
                 )
             except httpx.TimeoutException:
                 outcome = "timeout"
+                raise
+            except httpx.HTTPError:
+                raise  # transport failure: the default "unreachable" stands
+            except Exception:
+                outcome = "error"  # a client fault, not an unreachable processor
                 raise
             status = response.status_code
             outcome = "provider_error" if status >= 400 else "completed"

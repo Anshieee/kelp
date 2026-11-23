@@ -1643,3 +1643,26 @@ def test_every_existing_call_shape_still_works_without_a_ledger() -> None:
     assert wallet._transport().egress is None  # noqa: SLF001
     assert RazorpayGateway(key_id=KEY_ID).egress is None
     assert HttpRazorpayTransport().egress is None
+
+
+def test_a_non_network_client_error_is_recorded_as_error_not_unreachable() -> None:
+    # A client that fails before sending (here: closed) is not an unreachable
+    # processor; the row says ``error`` and the original exception propagates.
+    import httpx
+
+    from openshell.audit import AuditLog
+    from openshell.egress_ledger import EgressLedger
+    from payments.razorpay_gateway import HttpRazorpayTransport
+
+    import tempfile
+    from pathlib import Path
+
+    with tempfile.TemporaryDirectory() as directory:
+        audit = AuditLog(Path(directory) / "audit.jsonl")
+        client = httpx.Client(transport=httpx.MockTransport(lambda request: httpx.Response(200, json={})))
+        client.close()
+        transport = HttpRazorpayTransport(client=client, egress=EgressLedger(audit))
+        with pytest.raises(RuntimeError):
+            transport.create_customer(key_id="rzp_test_k", key_secret="s3cret", notes={})
+        rows = audit.entries(event="egress")
+        assert [row["outcome"] for row in rows] == ["error"]

@@ -1119,3 +1119,35 @@ def test_200_page_pdf_answers_within_two_seconds(tmp_path: Path) -> None:
         token_count(citation["text"]) for citation in first["citations"]
     )
     assert context_tokens <= 1200
+
+
+def test_csv_filter_description_stays_short_for_a_wide_table() -> None:
+    # A common word in many text columns must not turn the answer into a copy
+    # of the header row: the description names a few columns and counts the
+    # rest, and the whole filter text is clipped.
+    from skills.builtin.docs_answer.answer import csv_answer
+
+    columns = [f"col_{index}" for index in range(600)]
+    header = ",".join(columns + ["revenue"])
+    rows = [",".join(["yes"] * 600 + ["10"]), ",".join(["no"] * 600 + ["5"])]
+    table = read_csv((header + "\n" + "\n".join(rows) + "\n").encode())
+
+    answer, citations = csv_answer(table, "total revenue for yes")
+
+    assert answer.startswith("Total revenue across 1 rows where col_0/col_1/col_2")
+    assert "and 597 more columns matches yes" in answer
+    assert answer.endswith(" is 10.")
+    assert len(answer) < 400
+    assert [c["locator"] for c in citations] == ["row 2"]
+
+
+def test_csv_filler_word_in_a_text_column_is_stated_as_a_filter() -> None:
+    # A word that is also a value in a text column does filter; the answer says
+    # so instead of silently changing the total.
+    from skills.builtin.docs_answer.answer import csv_answer
+
+    table = read_csv(b"region,notes,revenue\nEast,up across the board,100\nWest,flat,5\n")
+
+    answer, _ = csv_answer(table, "total revenue across regions")
+
+    assert answer == "Total revenue across 1 rows where notes matches across is 100."
