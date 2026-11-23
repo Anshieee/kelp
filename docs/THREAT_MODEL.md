@@ -6,7 +6,8 @@
   and, as planned rules, the desktop companion (screen, voice, self-setup, local brain)
 - **Companion sections:** added 2026-11-24, see [`docs/PRODUCT_BRIEF.md`](PRODUCT_BRIEF.md) and
   [ADR 0004](adr/0004-desktop-companion.md). Updated 2026-11-24 with the
-  owner's answers (brief §17): L4 to L7 in §6, S3 in §7 and T2 in §9
+  owner's answers 1 to 12 (brief §17, including the Q11 and Q12 answers): L4 to
+  L7 in §6, S3 and S8 in §7 and T2 in §9
 - **Companions:** the recipient table ([`docs/PRIVACY.md`](PRIVACY.md) §2), the principal table and
   share-link threat model ([ADR 0002](adr/0002-sharing-and-identity.md) §4 and §10), the policy gate
   ([`docs/OPENSHELL.md`](OPENSHELL.md)), and the skill contract ([`docs/SKILL_SPEC.md`](SKILL_SPEC.md))
@@ -471,8 +472,9 @@ designed.
   - **What Telegram may approve.** A card is approvable from Telegram only when
     the fields Telegram shows fully determine the action, and the card is not in
     a T4 category (money, anything another person sees, irreversible acts, terms
-    of service) and is not new access (T1). Every other card shows "open in the
-    app" in Telegram. Whether to widen this is a follow-up.
+    of service) and is not new access (T1). It is also never a screen-control
+    card (S8). Every other card shows "open in the app" in Telegram. Whether to
+    widen this is a follow-up.
   - **Inbound messages.** The bridge accepts messages only from the paired
     Telegram user id and refuses group chats. Pairing uses a one-time code that
     the desktop app shows. The bot token is a persistent secret, stored per L5
@@ -489,6 +491,7 @@ designed.
 | Whether Boat lets the app set `authorized_keys` options on the sandbox (L4) | [ADR 0004](adr/0004-desktop-companion.md) follow-ups |
 | Push relay design: pairing, key exchange, per-brain credential, hosting (L6) | [ADR 0004](adr/0004-desktop-companion.md) follow-ups |
 | Whether to widen which cards may be approved from Telegram (L7) | [ADR 0004](adr/0004-desktop-companion.md) follow-ups |
+| Detecting user input to pause screen control, and a global stop shortcut, on each OS (S8). Screen control does not ship on an OS without both | [ADR 0004](adr/0004-desktop-companion.md) follow-ups (input spike) |
 | Update [`docs/PRIVACY.md`](PRIVACY.md) §2 and the telemetry and recipient statements here (§1.1, §10) before a hosted plan or the Telegram bridge ships (S3, L7) | [ADR 0004](adr/0004-desktop-companion.md) follow-ups |
 
 Decided on 2026-11-24 and no longer open: where the owner bearer and vault key
@@ -526,15 +529,22 @@ Windows were not tested.
   the brain's store, not in the capture module.
 - **S3. Where frames go.** The only Kelp-run server that may receive screen
   frames is the plan model gateway ([product brief](PRODUCT_BRIEF.md) §15),
-  for plan users (owner decision 2026-11-24, open question 11). No Kelp-run
+  for plan users (owner decision 2026-11-24, owner answer 11). No Kelp-run
   server receives audio. The push relay (L6) never receives frames or audio and
   sees only ciphertext and timing. The Telegram bridge (L7), when the user turns
   it on, receives the plaintext of bridge messages but never frames or audio.
   The plan gateway receives conversation text, because it forwards the user's
-  turns to a model, and downscaled frames for apps marked "may send to cloud".
-  It forwards each frame to the model and keeps nothing: no frame is written to
-  disk, a log, a queue that outlives the request, or a training set. A
-  self-hoster's own gateway follows the same rule. "Cloud" for frames means the
+  turns to a model, downscaled frames for apps marked "may send to cloud",
+  reaction metadata (app id and window title) and text observations. The "may
+  send to cloud" tick is off for every app by default and is never part of the
+  suggested defaults in S1. The gateway forwards each frame to the model and
+  keeps nothing itself: no frame is written to disk, a log, a queue that
+  outlives the request, or a training set. A self-hoster's own gateway follows
+  the same rule. The gateway's upstream provider keeps whatever its terms
+  allow. Before frames are enabled for plan users, the project names that
+  provider and its retention terms in [`docs/PRIVACY.md`](PRIVACY.md) and on
+  the plan page. The gateway enforces its own per-account rate cap and maximum
+  frame size, and rejects anything larger. "Cloud" for frames means the
   plan gateway, a provider the user configured with their own key, or the user's
   own Boat VM. What leaves the machine depends on the run mode:
 
@@ -544,7 +554,7 @@ Windows were not tested.
   | Local mode, local vision model | Nothing. Frames stay on the machine. | Used only if a hardware check passes. The spikes did not measure a local vision model, so it is unproven until that check exists. |
   | Local mode, cloud provider | A downscaled frame, to the provider the user configured | Only for apps the user marked "may send to cloud". That is a separate tick from "may watch". Never for blocked apps. Rate-limited. The indicator shows the destination (for example "watching: sent to <provider>"). Provider retention is out of scope (§5), and the setting says so plainly. The brain enforces the rate limit, because it makes the model call. The desktop app holds the per-app ticks and draws the indicator. |
   | Plan user, plan gateway | A downscaled frame, to the plan gateway, which forwards it to the plan's model | The same "may send to cloud" tick, block list and rate limit as the row above. The indicator names the destination ("watching: sent to Kelp plan"). The gateway stores no frames. |
-  | Boat mode | When the user has enabled frame sending ([product brief](PRODUCT_BRIEF.md) §5), frames go to the user's own VM, on demand only, over the SSH port forward, with the owner bearer (L4) | The VM counts as the user's machine for retention, and the same no-disk rule (S2) applies inside the VM. If the VM's model is a third-party provider, the "may send to cloud" tick applies. |
+  | Boat mode | When the user has enabled frame sending ([product brief](PRODUCT_BRIEF.md) §5), frames go to the user's own VM, on demand only, over the SSH port forward, with the owner bearer (L4) | The VM counts as the user's machine for retention, and the same no-disk rule (S2) applies inside the VM. If the VM's model is a third-party provider or the plan gateway, the "may send to cloud" tick applies. The indicator names the final destination. |
 - **S4. Block list.** Two tiers, checked against the focused app before any frame
   is taken:
   - Always blocked, cannot be lifted: password managers, private or incognito
@@ -581,28 +591,66 @@ Windows were not tested.
   does nothing else.
 - **S7. Indicator.** Kelp draws its own watching and listening indicator. On
   wlroots the OS shows nothing during capture (spike).
-- **S8. Screen control (planned).** Screen control means Kelp sending mouse and
-  keyboard input to the user's own desktop. The owner made it a core capability
-  in every mode on 2026-11-24. No input mechanism was tested (brief §12).
-  - **Started only by an approved task.** Control starts from a user turn and
-    an approval card for the task, or under the plan-bound approval from brief
-    §4.2. Each step that falls in a T4 category (sending, submitting, paying,
-    deleting, accepting terms) still gets its own card at that step.
+- **S8. Screen control (planned, not built).** Screen control means Kelp
+  sending mouse and keyboard input to the user's own desktop. The owner made it
+  a core capability in every mode on 2026-11-24. No input was sent in any spike
+  (brief §12).
+  - **Started only by an approved task.** Control starts only inside a user
+    turn, after a card rendered by the desktop app from structured fields:
+    target app id or site origin, a step cap, and an expiry. It is never
+    rendered from model-written text. The approval is a new single-use kind
+    bound to the hash of those fields. Each input step is checked against that
+    hash. A standing approval can never cover screen control. Every T4 category
+    still gets its own card at its step.
+  - **The user's own desktop is approved locally.** Control of the user's real
+    desktop starts and is approved only at the desktop app, because the user
+    must be able to take over. A scheduled watch, Telegram and the phone can
+    never start or approve it. Control of a Boat sandbox desktop may be
+    approved from the paired phone app (L6), never from Telegram.
+  - **Enforced in the desktop app.** The body applies S4, S7 and S8 to every
+    input event, whatever brain sent it, including a Boat brain. Before each
+    event it re-reads the focused app and window and targets the approved
+    window where the OS allows it. If the focused app, window or site cannot be
+    determined, or does not match the card, no input is sent.
+  - **Frames follow S1 to S5.** The control loop sees only apps on the allowed
+    list and sends frames to a cloud model only for apps ticked "may send to
+    cloud". A task for any other app uses a local vision model or does not run.
+    Control pauses while S5 is active.
   - **Screen text cannot widen the task.** The control loop reads the screen
     (S6), so what it reads is untrusted. It may choose clicks and keystrokes
     within the approved task and target app or site. A step that would leave
     that app or site, or start something the card did not name, stops and asks.
+  - **Each T4 step gets a card.** Each step in any T4 category gets its own
+    card at that step. The desktop app classifies the step from the UI
+    element's role and label (Send, Post, Submit, Pay, Buy, Delete, Accept,
+    Enter in a form) and from the target app. The model does not. A step it
+    cannot classify is treated as T4 and shows a card.
   - **Blocked apps are never controlled.** Kelp sends no input while an S4
     blocked app or window has focus, and stops if one takes focus. Passwords and
-    one-time codes are never typed from model output. Logins go through the
-    credential vault (T3) and the existing private-entry flow
-    ([`docs/CREDENTIAL_HANDOFF.md`](CREDENTIAL_HANDOFF.md)).
+    one-time codes are never typed from model output. In a browser, a login
+    goes through the credential handoff
+    ([`docs/CREDENTIAL_HANDOFF.md`](CREDENTIAL_HANDOFF.md)), which is
+    origin-bound and needs a fresh owner entry each time. In a native app Kelp
+    stops and asks the user to enter it. While private entry is active Kelp
+    sends no input to that page.
+  - **Typing into a terminal is command execution.** Input to a terminal
+    emulator, shell window, IDE terminal or remote-shell session is treated as
+    running a command. It stays off while the exec boundary in
+    [`docs/PRIVACY.md`](PRIVACY.md) §5 holds (nothing runs a command in this
+    build). Turning it on is a separate owner decision that reverses that
+    boundary. When it is on, each command gets its own card that shows the
+    exact command text, rendered from the keystrokes Kelp is about to send,
+    never from model prose.
   - **The user can always take over.** A separate "Kelp is controlling"
     indicator shows while control is active. Any physical mouse or keyboard
     input from the user pauses control at once, and a stop shortcut ends it.
-    Control resumes only when the user says so.
+    Control resumes only when the user says so. The detection method and the
+    global stop shortcut on each OS are open (the same status as S5). Screen
+    control does not ship on an OS where Kelp cannot detect user input and
+    offer a stop control on the "Kelp is controlling" indicator.
   - **Logged without frames.** Each control step writes an audit row with the
-    task, the step type and the target app, never a frame or typed text.
+    approval id, step index, step type (click, key, scroll, text), target app
+    id and an `argument_hash`. It holds no task text, frame or typed text.
   - In Boat mode, long or risky tasks run in the sandbox's own desktop by
     default, so they do not touch the user's desktop (brief §5).
 
@@ -756,7 +804,8 @@ rules below will be enforced in the resolver, in the approval gate
   planned sections 6 to 9 come from:
   [`docs/PRODUCT_BRIEF.md`](PRODUCT_BRIEF.md) and
   [ADR 0004](adr/0004-desktop-companion.md).
-- **Owner answers**: the answers that set L4 to L7, the S3 wording and T2:
+- **Owner answers**: the answers that set L4 to L7, S3, S8 and T2 (answers 1
+  to 12, including Q11 and Q12):
   [`docs/PRODUCT_BRIEF.md`](PRODUCT_BRIEF.md#owner-answers-2026-11-24). The
   remote approval design is in
   [brief §4.6](PRODUCT_BRIEF.md#46-remote-approvals-planned).

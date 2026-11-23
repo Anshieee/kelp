@@ -22,9 +22,9 @@ chat events to pet states, and the panel's screen button is inert because no
 capture code exists.
 
 The product direction in [`docs/PRODUCT_BRIEF.md`](../PRODUCT_BRIEF.md) is an
-animated avatar that sees the screen, talks by voice, and reacts to what the user
-is doing. The thin-client, single-server model does not fit that, for these
-reasons:
+animated companion that sees the screen, talks by voice, and reacts to what
+the user is doing. The thin-client, single-server model does not fit that, for
+these reasons:
 
 - **Screen and microphone are local.** A server cannot see the user's screen or
   hear the user. Capture, audio and OS permissions must run on the user's machine.
@@ -58,6 +58,8 @@ decided:
   outside Kelp's own release, and before the full resolver ships in Phase 3.
 - **Remote approval channel: push to Ketock's native mobile app first, a Telegram
   bridge second** (answer 9). Item 10 below.
+- **Frames, screen reactions and screen control in every mode; desk pet
+  optional** (answer 11). Item 11 below.
 
 1. **The body is always local.** It is the avatar rendering, screen capture,
    microphone and speaker, OS permission handling, and the approval UI. It lives
@@ -219,14 +221,20 @@ decided:
     does not run. The Telegram bridge is outbound only (long polling), accepts
     messages only from the paired Telegram user id, and shows only the action
     type and target. A card is approvable from Telegram only when those fields
-    fully determine the action, and it is not in a T4 category and not new
-    access (T1). Remote channels can never create a standing approval or approve
-    a T1 new-access card. Neither channel uses the Boat tunnel (item 8).
+    fully determine the action, and it is not in a T4 category, not new access
+    (T1) and not a screen-control card (S8). Remote channels can never create a
+    standing approval or approve a T1 new-access card. Control of the user's own
+    desktop starts and is approved only at the desktop app, and neither the
+    phone nor Telegram can start it. The paired phone app may approve control of
+    a Boat sandbox desktop (L6), and Telegram never may
+    ([THREAT_MODEL §7, S8](../THREAT_MODEL.md#7-screen)). Neither channel uses
+    the Boat tunnel (item 8).
 11. **Screen frames, screen reactions and screen control in every mode; the
-    desk pet is optional (decided 2026-11-24).** Every run mode, including a
-    plan user with no provider key of their own, supports downscaled frames,
-    screen-based reactions and screen control. The plan model gateway may carry
-    frames for apps the user allowed and stores none
+    desk pet is optional (decided 2026-11-24; planned, none of it built).**
+    Every run mode, including a plan user with no provider key of their own,
+    supports downscaled frames, screen-based reactions and screen control. The
+    plan model gateway may carry frames for apps the user marked "may send to
+    cloud" and stores none
     ([THREAT_MODEL §7, S3](../THREAT_MODEL.md#7-screen)). Screen control follows
     S8. Users may turn the desk pet off; Kelp then runs from a tray or menu-bar
     icon with the same capabilities.
@@ -284,7 +292,8 @@ Recording and Accessibility, and Windows Graphics Capture. Each needs a prototyp
 before the design relies on it. The first one, on a wlroots compositor, captured
 the screen with no prompt at all
 ([`docs/spikes/2026-11-screen-capture.md`](../spikes/2026-11-screen-capture.md)),
-so Kelp's own capture code must enforce the opt-in and the indicator.
+so Kelp's own capture code must enforce the opt-in and the indicator. Screen
+control needs its own input mechanism per OS (brief §12).
 
 **Threat model must grow first.** [`docs/THREAT_MODEL.md`](../THREAT_MODEL.md)
 covers the server process (`kernel/`, `skills/`, `openshell/`, `chat/`). It does
@@ -329,8 +338,8 @@ include it. The service is open source, and self-hosters run its components on
 their own side instead. That is new for this project, and none of it exists yet.
 The existing Razorpay wallet code may be reused for billing. A hosted plan's
 model gateway will receive conversation text and downscaled frames for apps the
-user allowed (item 11), which the current privacy documents do not describe (see
-the follow-ups).
+user marked "may send to cloud" (item 11), which the current privacy documents
+do not describe (see the follow-ups).
 Decision D (no public hosted instance until production) holds until the plan
 service launches, and is revisited then.
 
@@ -370,7 +379,8 @@ updated on every OS, or measured Boat numbers make Boat mode unworkable.
 - Owner decision on the whole ADR. The installer option (a) is decided; see
   "Decisions recorded 2026-11-24" in section 2.
 - Land Storm's 3 pet commits from `origin/kel-31-pet-motion-kit` (3bd69c5,
-  4546460, 84fa565) on main by cherry-pick or a fresh PR. Do not merge the
+  4546460, 84fa565) on main by cherry-pick or a fresh PR, as an interim
+  placeholder and not the identity. Do not merge the
   branch, because it is based on `desktop-demo`, which carries demo fixtures.
 - Capture spikes on Wayland, macOS and Windows, and a local voice spike.
 - Done (2026-11-24): screen, voice, self-setup and local-brain sections written in
@@ -390,8 +400,8 @@ updated on every OS, or measured Boat numbers make Boat mode unworkable.
   definition of done item 1).
 - Decide whether to widen which cards may be approved from Telegram. The default
   is that a card is approvable there only when the fields Telegram shows fully
-  determine the action, and it is not in a T4 category and not new access (T1).
-  Every other card shows "open in the app".
+  determine the action, and it is not in a T4 category, not new access (T1) and
+  not a screen-control card (S8). Every other card shows "open in the app".
 - Find the narrowest Boat API key that can resume and read one sandbox. Whether
   Boat offers a per-sandbox key is unverified. Until it is checked, use the
   narrowest preset that works.
@@ -400,10 +410,12 @@ updated on every OS, or measured Boat numbers make Boat mode unworkable.
   (`restrict,port-forwarding,permitopen="127.0.0.1:PORT"`). It is unverified.
 - Design the hosted plan service: billing, a model gateway that stores no
   frames, the push relay and Boat provisioning on plans that include it (brief
-  section 17, open question 11). Package the relay and gateway so a self-hoster
+  section 17, owner answer 11). Package the relay and gateway so a self-hoster
   can run them.
 - Spike screen control (input) on each OS next to the capture spike (brief
-  section 12, THREAT_MODEL S8).
+  section 12, THREAT_MODEL S8). Include detecting user input to pause control
+  and a global stop shortcut, because S8 does not let control ship on an OS
+  without both.
 - Before the plan ships, update the recipient table in
   [`docs/PRIVACY.md`](../PRIVACY.md) section 2, and the statements in
   [`docs/THREAT_MODEL.md`](../THREAT_MODEL.md) about telemetry and recipients

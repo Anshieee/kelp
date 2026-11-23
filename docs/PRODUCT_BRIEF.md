@@ -95,8 +95,8 @@ enabled. Kelp should not ask the user to repeat setup for each new feature.
 - The target is talking to Kelp within a few minutes of installing, with no
   config files edited by hand.
 - The desk pet is on by default. The welcome screen and Settings each have one
-  switch to turn it off. It has a default and nothing waits on it, so it does
-  not count as a first-run question in the section 14.1 metrics.
+  switch to turn it off (planned). It has a default and nothing waits on it, so
+  it does not count as a first-run question in the section 14.1 metrics.
 
 ### 4.2 Capability resolver
 
@@ -275,15 +275,19 @@ target. Full details stay in the desktop or phone app.
   fields Telegram shows fully determine the action, and the card is not in a
   [T4 category](THREAT_MODEL.md#9-self-setup-the-capability-resolver) (money,
   anything another person sees, irreversible acts, terms of service) and is not
-  new access (T1). Every other card shows "open in the app" in Telegram. Whether
-  to widen this is a follow-up.
+  new access (T1). It is also never a screen-control card
+  ([THREAT_MODEL S8](THREAT_MODEL.md#7-screen)). Every other card shows "open in
+  the app" in Telegram. Whether to widen this is a follow-up.
 - **Who may send.** The bridge accepts messages only from the paired Telegram
   user id and refuses group chats. Pairing uses a one-time code that the desktop
   app shows. The bot token is a persistent secret, stored in the OS credential
   store.
 - **Remote channels are limited.** A message from the bridge is a user turn. But
   Telegram and the phone can never create a standing approval or approve a T1
-  new-access card.
+  new-access card. Neither can start or approve control of the user's own
+  desktop. The paired phone app may approve control of a Boat sandbox desktop,
+  and Telegram never may
+  ([THREAT_MODEL S8](THREAT_MODEL.md#7-screen)). Planned, not built.
 
 ## 5. Run modes
 
@@ -305,9 +309,9 @@ frames are downscaled and sent only on demand, and they are not written to disk.
 |---|---|---|
 | Where the brain runs | Sidecar process on the user's machine, loopback only | Persistent Ubuntu VM in a Boat sandbox the user owns |
 | Cost | No hosting cost. Model calls cost whatever the chosen model costs, or nothing for a local model. | Boat bills per second with a $20/month minimum plan. Small (2 vCPU/4 GB) is $0.018/h and the default (4 vCPU/8 GB) is $0.036/h. There is a 7-day trial with a card and 25 compute hours. Plus model calls. |
-| Privacy | Data stays on the machine unless a remote provider is chosen. | Chat, and any screen frames the user enabled, reach the sandbox and the model provider. |
+| Privacy | Data stays on the machine unless a remote provider or the plan gateway is chosen. | Chat, and any screen frames the user enabled, reach the sandbox and the model provider. |
 | Works offline | Yes, with a local model and local STT/TTS | No. The sandbox and the provider need the network. |
-| Computer-use target | The user's real desktop, only after approval | Kelp's own cloud computer: a 60fps virtual desktop with a browser and Docker, so long or risky tasks do not touch the user's desktop |
+| Computer-use target | The user's real desktop, only after approval | Kelp's own cloud computer by default: a 60fps virtual desktop with a browser and Docker, so long or risky tasks do not touch the user's desktop. The user's real desktop only when the user asks for that task, with the same S8 card and local checks. |
 | Limits | Depends on the user's hardware | Machines only in Germany, Finland and France. No GPU, so no large local model inside the sandbox. Auto-stop defaults to 1 h (configurable up to 30 days, or off on paid plans). A stopped sandbox keeps its disk for at least 14 days, but memory and processes are not saved across a stop. The IP changes on resume. |
 
 Boat figures were read from boat.dev on 2026-11-23 and belong to a third party, so
@@ -369,15 +373,20 @@ pet state, such as the existing `curious` or `surprised`, and at most one short
 line. The reaction loop has no tool access. It can propose an offer, but an offer
 only turns into an action when the user accepts and a normal turn starts.
 
-With the desk pet turned off, the reaction loop still runs. Its line appears as
-a small notification from the tray or menu-bar icon instead of a pet state,
+With the desk pet turned off (planned), the reaction loop still runs on the apps
+the user allowed ([THREAT_MODEL S1](THREAT_MODEL.md#7-screen)). Its line appears
+as a small notification from the tray or menu-bar icon instead of a pet state,
 under the same rate limit.
 
 **Actions (rare, expensive, gated).** Anything that does work runs through the
 kernel, the skills, and the approval gate. This is the path that exists today.
 Screen control (computer use on the user's own desktop) is one of these actions
-and is available in every run mode. Its rules are in
-[THREAT_MODEL §7, S8](THREAT_MODEL.md#7-screen).
+and is available in every run mode (in Boat mode the sandbox desktop is the
+default target). Its rules are in
+[THREAT_MODEL §7, S8](THREAT_MODEL.md#7-screen) (planned, not built). Typing
+into a terminal counts as running a command, so it stays off while the exec
+boundary in [`docs/PRIVACY.md`](PRIVACY.md) §5 holds. Turning it on is a
+separate owner decision, and each command then gets its own card.
 
 The cost reason is direct. Spend caps fail closed (`kernel/usage.py`), so a
 frontier model called on every frame would exhaust the cap and then stop the
@@ -433,17 +442,21 @@ files are plain files, so users can share them and edit them.
 
 ## 10. Avatar and voice
 
-**The avatar is optional (decided 2026-11-24).** Users choose a desk pet or no
-pet. Without it, Kelp lives in a tray or menu-bar icon plus the chat window, the
-phone app and Telegram, and keeps screen reactions, screen control and voice.
-Kelp's identity (what it looks like) is still open; the owner does not want to
-commit to Storm's pet sprites or an anime style yet.
+**Decided: the avatar is optional. Undecided: what it looks like.** The owner
+decided on 2026-11-24 that users choose a desk pet or no pet. Without it, Kelp
+lives in a tray or menu-bar icon plus the chat window, the phone app and
+Telegram, and keeps screen reactions, screen control and voice. None of this
+exists in `desktop/` today: there is no tray icon and no pet switch. Kelp's
+identity is still open, and the owner does not want to commit to Storm's pet
+sprites or an anime style yet.
 
-**Avatar.** Start from the existing ten-state kit in `assets/kelp-pet/` (idle,
-working, waiting, done, offline, curious, happy, excited, thinking, surprised).
-The kit ships 384×384 animated WebP, 64-frame atlases, and a `kelp-pet.js` web
-component. Then move to VRM through three-vrm, which is open, or to Live2D. The
-Live2D Cubism SDK is not open source, so check its licence before adopting it.
+**Avatar.** The identity is undecided. The existing ten-state kit in
+`assets/kelp-pet/` (idle, working, waiting, done, offline, curious, happy,
+excited, thinking, surprised) is the placeholder pet, and its state names are
+the interface any avatar must implement. The kit ships 384×384 animated WebP,
+64-frame atlases, and a `kelp-pet.js` web component. VRM through three-vrm,
+which is open, or Live2D, are options, not a plan. The Live2D Cubism SDK is not
+open source, so check its licence before adopting it.
 
 **Reuse before building.** AIRI (MIT, Live2D and VRM, realtime voice) and
 Open-LLM-VTuber (Live2D, voice, vision, offline) already solve parts of this.
@@ -496,15 +509,15 @@ command panel (an overlay opened with `CommandOrControl+Shift+Space`), and a
 96×96 pet overlay (`desktop/src/pet.js`, `desktop/src/orb.js`).
 `desktop/pet_state.py` maps chat events to pet states (working, thinking,
 waiting, done, idle). The panel's screen button is inert, and no capture code
-exists. The seed of the avatar is on the branch `origin/kel-31-pet-motion-kit`
-(Storm, kept). Its 3 commits are 3bd69c5 (animate the pet from the kit's ten
-states), 4546460 (lean toward the cursor and fidget) and 84fa565 (overlay pill
-alignment). The branch is based on `desktop-demo`, which carries demo fixtures,
-so those commits should land on main by cherry-pick or a fresh PR, not by merging
-the branch. Issue #69 (Storm) covers desktop demo mode. The main app also has a
-Computer pane (`desktop/src/ComputerPane.tsx`): a view-only noVNC viewer onto a
-VM's graphical session. It is the natural starting point for watching Kelp work in
-a Boat sandbox's virtual desktop.
+exists. The current placeholder pet is on the branch
+`origin/kel-31-pet-motion-kit` (Storm, kept). Its 3 commits are 3bd69c5 (animate
+the pet from the kit's ten states), 4546460 (lean toward the cursor and fidget)
+and 84fa565 (overlay pill alignment). The branch is based on `desktop-demo`,
+which carries demo fixtures, so those commits should land on main by cherry-pick
+or a fresh PR, not by merging the branch. Issue #69 (Storm) covers desktop demo
+mode. The main app also has a Computer pane (`desktop/src/ComputerPane.tsx`): a
+view-only noVNC viewer onto a VM's graphical session. It is the natural starting
+point for watching Kelp work in a Boat sandbox's virtual desktop.
 
 ## 11. What pauses
 
@@ -539,11 +552,14 @@ grant:
 - **Windows:** Windows Graphics Capture.
 
 Screen control (S8) needs a second mechanism on each OS to send mouse and
-keyboard input. The capture spike found none on the wlroots test machine. The
-usual candidates are the xdg-desktop-portal RemoteDesktop interface or libei on
-Linux, the Accessibility permission on macOS, and `SendInput` or UI Automation
-on Windows. None of them was tested, and an input spike belongs in Phase 0 or
-Phase 1 next to the capture spike.
+keyboard input. The capture spike probed the xdg-desktop-portal RemoteDesktop
+interface on the wlroots machine and found it unavailable. It names
+`wlr-virtual-pointer`/`virtual-keyboard` or uinput (`ydotool`) as the only
+wlroots route, which is a separate permission and risk decision. No input was
+actually sent on any OS. The other candidates (libei, macOS Accessibility,
+`SendInput` or UI Automation) are untested. An input spike belongs in Phase 0
+or Phase 1 next to the capture spike. It should also try to detect user input
+and offer a global stop shortcut, which S8 requires before control ships.
 
 Prototype all three in Phase 0 and Phase 1, before the design assumes that
 capture works without extra steps. Because some platforms ask for nothing, the
@@ -601,7 +617,7 @@ endpoint, and leave the machine only if the user opts in to sharing them.
 | Metric | Definition | Target |
 |---|---|---|
 | Time to first conversation | Installer start to the first rendered Kelp reply, in seconds | p50 ≤ 5 min, no config file edited |
-| First-run questions | Questions the user answers before that first reply | 1 (Local or Boat), plus one provider sign-in only when no local model fits. Boat adds one question, the Boat sign-in that includes the owner bearer handoff |
+| First-run questions | Questions the user answers before that first reply | 1 (Local or Boat), plus one provider sign-in only when no local model fits. Boat adds one question, the Boat sign-in that includes the owner bearer handoff. The desk pet switch (section 4.1) is not counted. |
 | Setup prompts per active week | Kelp-initiated prompts shown per user per week after the first day: resolver plan cards, credential handoff requests, and resolver steps that ask the OS for a permission | ≤ 1 median, trending to 0 |
 | Repeat asks | A Kelp-initiated setup prompt for a capability that was already approved and whose scope has not changed, excluding a re-request after an OS-initiated lapse (counted under OS re-consent) | **0.** Any non-zero value is a bug |
 | OS re-consent | Reminders the OS raises on its own, such as the macOS 15+ "continue to allow" screen-recording prompt. Counted when Kelp detects the permission lapsed | Watched, not a bug |
@@ -628,15 +644,15 @@ covers everything, with no per-feature limits.
   to start. It covers model usage (including reactions, voice, and downscaled
   screen frames for screen reactions and screen control), the push relay
   (section 4.6) and, depending on the plan, Boat compute. The user sees one
-  number. The UI shows no sub-caps and no per-feature limits.
+  number. The UI shows no sub-caps. Within a plan there are no per-feature
+  limits. Whether a plan includes Boat compute depends on the plan.
 - **Self-hoster.** A self-hoster runs the same open-source plan service
   components on their own side instead of using the project's: the push relay,
   and a model gateway only if they want one in front of their own provider key.
   Billing is not needed. A self-hoster pays Kelp nothing. They have at most one
-  monthly cap, the existing
-  `KELP_SPEND_CAP_MONTH_USD` ([`docs/DEPLOY.md`](DEPLOY.md)). The day cap
-  (`KELP_SPEND_CAP_DAY_USD`) stays available to operators, but it is not shown to
-  plan users.
+  monthly cap, the existing `KELP_SPEND_CAP_MONTH_USD`
+  ([`docs/DEPLOY.md`](DEPLOY.md)). The day cap (`KELP_SPEND_CAP_DAY_USD`) stays
+  available to operators, but it is not shown to plan users.
 - **What this means for the project.** The Kelp project will operate a hosted
   service for plan users: billing, a model gateway, the push relay, and Boat
   provisioning on plans that include it (decided 2026-11-24). The service is
@@ -645,8 +661,9 @@ covers everything, with no per-feature limits.
   plan service launches; decision D is revisited then. The existing Razorpay
   wallet and Checkout code (section 11) may be reused for it. A hosted plan's
   model gateway will receive conversation text and downscaled screen frames for
-  apps the user allowed, which the privacy documents do not yet describe (see
-  the follow-ups in [ADR 0004](adr/0004-desktop-companion.md#7-follow-ups)).
+  apps the user marked "may send to cloud", which the privacy documents do not
+  yet describe (see the follow-ups in
+  [ADR 0004](adr/0004-desktop-companion.md#7-follow-ups)).
 
 Price, plan tiers and what a plan includes are not set. Nothing here is built.
 
@@ -654,9 +671,9 @@ Price, plan tiers and what a plan includes are not set. Nothing here is built.
 
 | Phase | Scope |
 |---|---|
-| 0 (now) | This brief and ADR 0004. Land Storm's 3 pet commits on main. Spikes for screen capture and voice. The installer decision. |
+| 0 (now) | This brief and ADR 0004. Land Storm's 3 pet commits on main (interim placeholder, not the identity). Spikes for screen capture, screen-control input and voice. The installer decision. |
 | 1 | Persona and voice chat with the animated avatar. Local sidecar installer, first run (section 4.1) and remember-once (section 4.3). A minimal resolver for the voice models only. No screen access. |
-| 2 | Opt-in screen awareness through the reaction loop. The resolver guides the user through the OS capture permission. |
+| 2 | Opt-in screen awareness through the reaction loop. The resolver guides the user through the OS capture permission. Frames go to a local model or the user's own provider key until the plan gateway exists. |
 | 3 | Actions through approval-gated skills. The full capability resolver with the signed catalog. Computer use, either on the local desktop or in a Boat sandbox. |
 | 4 | Production hardening, signed and notarised installers (section 6), the real landing page, and invitations to the pre-register list. The phone app approval channel, the push relay, the Telegram bridge and the plan service must be scheduled into a phase before invitations. |
 
@@ -670,10 +687,12 @@ Price, plan tiers and what a plan includes are not set. Nothing here is built.
 - [x] The installer option is chosen, and the choice is written into ADR 0004.
       (Option (a), 2026-11-24.)
 - [ ] Storm's 3 pet commits are on main by cherry-pick or a fresh PR, without
-      the `desktop-demo` fixtures.
-- [ ] A capture spike has run on Wayland, macOS and Windows, with notes on what
-      each permission prompt looks like. Wayland (wlroots) is done; GNOME, KDE,
-      macOS and Windows are not.
+      the `desktop-demo` fixtures. They are an interim placeholder, not the
+      identity.
+- [ ] A capture and screen-control input spike has run on Wayland, macOS and
+      Windows, with notes on what each permission prompt looks like. Wayland
+      (wlroots) capture is done and its input route was probed but sent
+      nothing; GNOME, KDE, macOS and Windows are not.
 - [x] A voice spike has measured the end-of-speech to start-of-reply latency of
       the local STT and TTS choice. Result: 3.1–3.3 s with a cloud model on one
       Linux laptop; the target is revised in section 10. A run on Apple Silicon
@@ -689,7 +708,7 @@ Price, plan tiers and what a plan includes are not set. Nothing here is built.
 - [ ] Measured Boat desktop-task durations and cost exist, or the owner has
       accepted going without them.
 
-**Open questions for the owner.** The owner answered questions 1 to 10 on
+**Open questions for the owner.** The owner answered questions 1 to 12 on
 2026-11-24. The question text below is kept as a historical record. The answers
 and where each one is applied are in
 [Owner answers (2026-11-24)](#owner-answers-2026-11-24).
@@ -733,11 +752,12 @@ and where each one is applied are in
 **Open questions raised by the answers:**
 
 11. Will the Kelp project run the hosted plan service, and does the one price
-    include Boat compute or only model usage and the relay? Under
-    [THREAT_MODEL S3](THREAT_MODEL.md#7-screen) the plan's model gateway carries
-    text only, so a plan user without their own provider key gets no
-    frame-based reactions. Should the gateway carry downscaled frames for apps
-    the user allowed, under the same no-storage rules? (answered, see below)
+    include Boat compute or only model usage and the relay? At the time of
+    asking, under [THREAT_MODEL S3](THREAT_MODEL.md#7-screen) the plan's model
+    gateway carries text only, so a plan user without their own provider key
+    gets no frame-based reactions. Should the gateway carry downscaled frames
+    for apps the user allowed, under the same no-storage rules? (answered, see
+    below)
 12. Should submissions to a course the user names be allowed under a standing
     approval, which T4 currently forbids for anything another person sees?
     (answered, see below)
@@ -807,7 +827,8 @@ the answer is applied. Nothing here is built unless the linked section says so.
     components on their side instead. Users choose a desk pet or no pet. Screen
     frames, screen-based reactions and screen control are supported in every
     mode, so the plan gateway carries downscaled frames for apps the user
-    allowed, under the S2 no-storage rule. Applied in
+    marked "may send to cloud" (off for every app by default), under the S2
+    no-storage rule. Applied in
     [section 1](#1-what-kelp-becomes), [section 4.1](#41-first-run),
     [section 7](#7-reacting-versus-acting), [section 10](#10-avatar-and-voice),
     [section 12](#12-platform-permissions-risk),
