@@ -60,7 +60,7 @@ recommendation holds.
 
 ## 4. Zero repeated setup
 
-This is the core of the owner's ask. The owner's goal is a seamless local setup.
+This is the core requirement: local setup with no repeated steps.
 The failure to avoid is one seen in other agent tools: Hermes Agent (Nous
 Research) ships a one-line installer and a `hermes doctor` check, yet users report
 per-feature friction in its setup wizard, for example GitHub issues #41046 (forced
@@ -84,9 +84,17 @@ The steps are:
 1. **Detect the gap.** The turn needs a capability that is not installed, not
    connected, or not permitted.
 2. **Write a setup plan.** The plan lists what Kelp will install or connect, from
-   where, at what pinned version or digest, and what access it grants.
+   where, at what pinned version or digest, and what access it grants. The model
+   may only name catalog entry ids. The resolver builds the plan, and the card's
+   text, from catalog metadata. No model-written text appears on the card, so
+   injected page or screen text cannot shape what the user approves.
 3. **Show one approval card.** The whole plan is a single card in the existing
-   approval UI. It is not one prompt per step.
+   approval UI. It is not one prompt per step. Today's approvals in
+   `openshell/approvals.py` are single-use, bound to one `command` and its
+   `argument_hash`, with a 600 s TTL. A plan of several steps, such as a large
+   model download, fits neither rule. The resolver therefore needs a new approval
+   kind bound to the hash of the whole plan: each step is checked against that
+   hash before it runs, and the TTL covers the decision, not the run time.
 4. **Perform every step.** After approval Kelp does the installing and
    connecting itself. The user does not edit config.
 5. **Verify.** Kelp runs a doctor-style self-check and reports success or the
@@ -102,8 +110,11 @@ its scope changes.
 
 ### 4.4 Safety limits
 
-- Kelp installs only from an allowlisted catalog of signed or pinned skills and
-  packages. The pinning mechanism exists today in `skills/loader.py`. A package
+- Kelp installs only from an allowlisted catalog. The catalog covers skills,
+  model weights and runtime dependencies. Each entry is pinned by version and
+  digest. Logins and OS permissions are catalog entries too, but they describe a
+  flow to run, not a file to verify. The pinning mechanism exists today for skill
+  packages only, in `skills/loader.py`. A package
   digest is a SHA-256 over the sorted file paths, modes and contents
   (`package_digest`). The pin is recorded as name, version and digest in
   `plugins.lock.json`. At load time the loader recomputes the digest and refuses
@@ -114,14 +125,21 @@ its scope changes.
   wrote it. Publisher signing (Ed25519 over the digest string) exists only as a
   spike in `skills/signing.py`, described in
   [`docs/SPIKE_PLUGIN_SIGNING.md`](SPIKE_PLUGIN_SIGNING.md), and is not wired into
-  the loader. A catalog that a resolver can trust needs that step first, so it is
-  a Phase 3 prerequisite.
+  the loader. The recommendation is to wire signing in before the resolver ships
+  in Phase 3; open question 6 asks the owner to confirm.
 - Anything outside the catalog needs an explicit extra confirmation on the card.
 - No setup step may be triggered by screen content or web content alone. A setup
-  plan can only start from a request the user made.
+  plan can only start inside a turn the user started, and because the card is
+  built from catalog metadata, injected text can at most pick a catalog entry the
+  user then sees by its real name.
 - Skill network access stays limited to resolved public addresses
   (`skills/policy.py`), and spend caps keep failing closed (`kernel/usage.py`,
-  [`docs/DEPLOY.md`](DEPLOY.md) section 13.1).
+  [`docs/DEPLOY.md`](DEPLOY.md) section 13.1). The egress guard is cooperative at
+  the Python layer, and [`docs/THREAT_MODEL.md`](THREAT_MODEL.md) section 5 relies
+  on the deployment boundary (no exec, container egress rules) to back it. A local
+  sidecar running as the user has no such boundary, so Local mode needs OS-level
+  confinement of the sidecar (a restricted user or sandbox, no exec, egress rules)
+  before skills with network access run there.
 
 ## 5. Run modes
 
@@ -226,8 +244,8 @@ The setup flow writes a versioned persona file. It covers:
   fixed list.
 - **Talkativeness.** How often Kelp speaks unprompted. The default is rarely.
 - **Topics** it may comment on, and topics it must leave alone.
-- **Voice.**
-- **Avatar.**
+- **Voice:** which TTS voice, and its speed and pitch.
+- **Avatar:** which avatar pack, and which states and expressions it maps.
 
 Mood changes slowly across a session and does not swing on each event. Persona
 files are plain files, so users can share them and edit them.
@@ -261,7 +279,10 @@ exists. The seed of the avatar is on the branch `origin/kel-31-pet-motion-kit`
 states), 4546460 (lean toward the cursor and fidget) and 84fa565 (overlay pill
 alignment). The branch is based on `desktop-demo`, which carries demo fixtures,
 so those commits should land on main by cherry-pick or a fresh PR, not by merging
-the branch. Issue #69 (Storm) covers desktop demo mode.
+the branch. Issue #69 (Storm) covers desktop demo mode. The main app also has a
+Computer pane (`desktop/src/ComputerPane.tsx`): a view-only noVNC viewer onto a
+VM's graphical session. It is the natural starting point for watching Kelp work in
+a Boat sandbox's virtual desktop.
 
 ## 11. What pauses
 
@@ -283,7 +304,7 @@ grant:
 - **Windows:** Windows Graphics Capture.
 
 Prototype all three in Phase 0 and Phase 1, before the design assumes that
-capture "just works". The capability resolver can guide the user to a permission
+capture works without extra steps. The capability resolver can guide the user to a permission
 prompt, but it cannot grant an OS permission for them.
 
 ## 13. Companion risks
@@ -336,9 +357,9 @@ None of these are built or priced in Phase 0.
 | Phase | Scope |
 |---|---|
 | 0 (now) | This brief and ADR 0004. Land Storm's 3 pet commits on main. Spikes for screen capture and voice. The installer decision. |
-| 1 | Persona and voice chat with the animated avatar. Local sidecar installer. No screen access. |
-| 2 | Opt-in screen awareness through the reaction loop. |
-| 3 | Actions through approval-gated skills. The capability resolver. Computer use, either on the local desktop or in a Boat sandbox. |
+| 1 | Persona and voice chat with the animated avatar. Local sidecar installer, first run (section 4.1) and remember-once (section 4.3). A minimal resolver for the voice models only. No screen access. |
+| 2 | Opt-in screen awareness through the reaction loop. The resolver guides the user through the OS capture permission. |
+| 3 | Actions through approval-gated skills. The full capability resolver with the signed catalog. Computer use, either on the local desktop or in a Boat sandbox. |
 | 4 | Production hardening, the real landing page, and invitations to the pre-register list. |
 
 ## 17. Phase 0 exit criteria and open questions
@@ -369,13 +390,18 @@ None of these are built or priced in Phase 0.
 2. Does the owner accept option (a) for the local installer, given the signing
    and notarisation cost?
 3. How does the desktop app reach a brain inside a Boat sandbox: an exposed HTTP
-   port, or a tunnel? The IP changes on resume, and the owner bearer must still
-   protect the endpoint.
-4. In local mode, where do the owner bearer and the credential vault key live?
-   Today the vault key comes from the environment
-   ([`docs/CREDENTIAL_HANDOFF.md`](CREDENTIAL_HANDOFF.md)) and the desktop app
-   keeps no bearer at rest (`desktop/README.md`). A local installer has to
-   generate and store both somewhere, most likely in the OS keychain.
+   port, or a tunnel? ADR 0004 sets the minimum (TLS only, owner bearer always
+   required, no pinning by IP, secrets kept inside the sandbox). The transport
+   choice blocks Boat mode.
+4. In local mode, where do the owner secrets live? A local installer has to
+   generate the owner bearer (`KELP_AUTH_TOKEN`) and the credential settings
+   `KELP_VAULT_KEY`, `KELP_BROWSER_WORKER_TOKEN` and `KELP_CREDENTIAL_SIGNING_KEY`
+   ([`docs/CREDENTIAL_HANDOFF.md`](CREDENTIAL_HANDOFF.md)), and store them. The
+   OS keychain is the likely home, but note that `docs/DESKTOP_SCOPE.md` says
+   "token in OS keychain only" while `desktop/README.md` records that the old
+   `keychain.js` and its Stronghold wiring were removed and nothing is stored at
+   rest. It says any future at-rest storage belongs on the Rust side, inside
+   `bridge_sign_in`, never in the webview. Local mode has to add that.
 5. Do reaction-loop calls get their own spend sub-cap?
 6. Should the resolver's catalog wait for publisher signing
    (`skills/signing.py`), or ship first with digest pinning only?

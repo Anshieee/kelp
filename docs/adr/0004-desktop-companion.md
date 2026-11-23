@@ -61,10 +61,15 @@ Split Kelp into a body and a brain, and let the user choose where the brain runs
 4. **The capability resolver goes through the existing approval gate.** When a
    request needs a model, skill, login or OS permission that Kelp lacks, Kelp
    writes a setup plan and shows it as one approval card in the existing approval
-   flow. It then performs the steps itself and verifies them. Installs come from
-   an allowlisted catalog of pinned packages (the digest pinning in
-   `skills/loader.py`). Anything outside the catalog needs an extra
-   confirmation.
+   flow. It then performs the steps itself and verifies them. The model names
+   catalog entry ids only; the resolver builds the plan and the card text from
+   catalog metadata, so model-written or injected text never appears on the card.
+   The card is a new approval kind bound to the hash of the whole plan, because
+   today's approvals (`openshell/approvals.py`) are single-use and bound to one
+   command and argument hash. Installs come from an allowlisted catalog of pinned
+   entries (skills, model weights, runtime dependencies), extending the digest
+   pinning that `skills/loader.py` applies to skill packages today. Anything
+   outside the catalog needs an extra confirmation.
 5. **Screen data is untrusted input.** Text from the screen or from a web page
    can never authorise an action and can never trigger a setup step. The
    reaction loop that watches the screen has no tool access.
@@ -75,6 +80,14 @@ Split Kelp into a body and a brain, and let the user choose where the brain runs
    compares this with a single-binary freeze, a `curl | sh` script alone, and a
    Docker container (brief section 6). The status of this ADR is Proposed, so
    this choice is open until the owner accepts it.
+7. **The local sidecar is never open.** It binds 127.0.0.1 only, on a random
+   per-install port, always requires the owner bearer, and rejects requests whose
+   Host or Origin is not the expected loopback value. Any local process or browser
+   page can reach loopback, so loopback alone is not an access control.
+8. **Minimum rules for a Boat brain.** TLS only, the owner bearer always
+   required, no pinning by IP address (it changes on resume), and provider keys,
+   the vault key and credentials stored only inside the sandbox. Whether the app
+   reaches it through an exposed port or a tunnel is a blocking follow-up.
 
 ## 3. What stays
 
@@ -102,7 +115,10 @@ This ADR supersedes the following in [`docs/DESKTOP_SCOPE.md`](../DESKTOP_SCOPE.
 
 Everything else in that file is unchanged. That includes the Tauri choice, the
 approval cards, the OS keychain rule, and the rule that diagnostics are local logs
-only. A note at the top of `docs/DESKTOP_SCOPE.md` points here.
+only. The keychain rule is not implemented today: `desktop/README.md` records that
+the old `keychain.js` and its Stronghold wiring were removed and nothing is stored
+at rest, and that any future at-rest storage belongs on the Rust side inside
+`bridge_sign_in`. Local mode has to add it there. A note at the top of `docs/DESKTOP_SCOPE.md` points here.
 
 ## 5. Consequences
 
@@ -128,12 +144,18 @@ not cover screen capture, voice, a sidecar on the user's machine, or a resolver
 that installs software. It must gain sections for screen, voice and self-setup
 before any capture code lands. Its section 5 already notes that a compromised
 process is out of scope, and a local sidecar makes that process the user's own
-machine, so that boundary needs to be restated.
+machine, so that boundary needs to be restated. Section 5 also says the skill
+socket guard is cooperative at the Python layer and is backed by the deployment
+boundary (no exec, container egress rules). A sidecar running as the user has no
+such boundary, so Local mode needs OS-level confinement of the sidecar before
+skills with network access run there.
 
 **Auth and secrets in local mode.** The desktop app keeps no bearer at rest
-today (`desktop/README.md`), and the credential vault key is supplied through the
-environment ([`docs/CREDENTIAL_HANDOFF.md`](../CREDENTIAL_HANDOFF.md)). A local
-installer must generate and store both. The default is not decided here.
+today (`desktop/README.md`), and the credential settings `KELP_VAULT_KEY`,
+`KELP_BROWSER_WORKER_TOKEN` and `KELP_CREDENTIAL_SIGNING_KEY` are supplied through
+the environment ([`docs/CREDENTIAL_HANDOFF.md`](../CREDENTIAL_HANDOFF.md)). A local
+installer must generate and store these and the owner bearer. Where they are
+stored is not decided here.
 
 **The catalog depends on signing.** Digest pinning proves a package is unchanged
 since install, not who published it. Publisher signing exists only as a spike
@@ -179,10 +201,15 @@ updated on every OS, or measured Boat numbers make Boat mode unworkable.
   4546460, 84fa565) on main by cherry-pick or a fresh PR. Do not merge the
   branch, because it is based on `desktop-demo`, which carries demo fixtures.
 - Capture spikes on Wayland, macOS and Windows, and a local voice spike.
-- Add screen, voice and self-setup sections to `docs/THREAT_MODEL.md`.
+- Add screen, voice and self-setup sections to `docs/THREAT_MODEL.md`, including
+  OS-level confinement of the local sidecar.
+- Design the plan-bound approval kind for the resolver, including what happens
+  when a step outlasts the decision window.
 - Decide where the owner bearer and the vault key live in local mode.
-- Decide how the app reaches a brain inside a Boat sandbox.
-- Decide whether the resolver's catalog waits for publisher signing.
+- Decide how the app reaches a brain inside a Boat sandbox (blocking for Boat
+  mode).
+- Confirm the recommendation that publisher signing is wired in before the
+  resolver ships.
 - Licence checks for Live2D, AIRI and Open-LLM-VTuber before any reuse.
 - When accepted, change the Status line here and update the note at the top of
   `docs/DESKTOP_SCOPE.md`.
