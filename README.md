@@ -4,6 +4,8 @@ Kelp is a private, always-on assistant for chat, approval-gated work, scheduled 
 
 ## Current status
 
+**Direction (proposed):** Kelp is moving from a chat and agent bot to a desktop companion with an animated avatar. The plan is in [`docs/PRODUCT_BRIEF.md`](docs/PRODUCT_BRIEF.md) and [ADR 0004](docs/adr/0004-desktop-companion.md). The rest of this section describes what runs today.
+
 Kelp is live as a single-owner, single-provider service. Today it provides:
 
 - an authenticated chat API with streaming turns,

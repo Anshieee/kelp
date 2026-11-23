@@ -1,0 +1,8 @@
+cache/
+models/
+audio/
+results/
+logs/
+.venv/
+uv.lock
+__pycache__/
