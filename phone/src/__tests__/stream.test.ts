@@ -82,6 +82,84 @@ describe("reconnect policy", () => {
     expect(reconnectDelayMs(50)).toBe(15000);
   });
 
+  it("ignores server-sent error frames for reconnect purposes", () => {
+    // A failed turn arrives as `event: error` — a MessageEvent carrying data
+    // on a healthy connection. The transport must NOT treat it as a
+    // disconnect: no reconnect is scheduled and the pill must not flip to
+    // "reconnecting" (the reported stuck-pill bug).
+    vi.useFakeTimers();
+    let constructs = 0;
+    const states: string[] = [];
+    const created: Array<{
+      onerror: ((event: unknown) => void) | null;
+    }> = [];
+    class FakeEventSource {
+      static CLOSED = 2;
+      readyState = 0;
+      onopen: (() => void) | null = null;
+      onmessage: ((event: { data: string }) => void) | null = null;
+      onerror: ((event: unknown) => void) | null = null;
+      addEventListener(_type: string, _handler: (event: { data: string }) => void) {}
+      constructor(public url: string) {
+        constructs += 1;
+        created.push(this);
+      }
+      close() {}
+    }
+    vi.stubGlobal("EventSource", FakeEventSource);
+    try {
+      const stream = new ThreadStream("ses_e", {
+        onEvent: () => {},
+        onState: (state) => states.push(state),
+      });
+      stream.open(0);
+      // Server-sent turn failure: MessageEvent WITH data, connection healthy.
+      created[0]?.onerror?.({ data: JSON.stringify({ seq: 4, type: "error" }) });
+      vi.advanceTimersByTime(20_000);
+      expect(constructs).toBe(1);
+      expect(states).not.toContain("reconnecting");
+      stream.close();
+    } finally {
+      vi.unstubAllGlobals();
+      vi.useRealTimers();
+    }
+  });
+
+  it("reconnects on a dataless transport error", () => {
+    // A genuine connection failure arrives as a plain Event with no data.
+    // That MUST schedule a reconnect with backoff.
+    vi.useFakeTimers();
+    let constructs = 0;
+    const created: Array<{
+      onerror: ((event: unknown) => void) | null;
+    }> = [];
+    class FakeEventSource {
+      static CLOSED = 2;
+      readyState = FakeEventSource.CLOSED;
+      onopen: (() => void) | null = null;
+      onmessage: ((event: { data: string }) => void) | null = null;
+      onerror: ((event: unknown) => void) | null = null;
+      addEventListener(_type: string, _handler: (event: { data: string }) => void) {}
+      constructor(public url: string) {
+        constructs += 1;
+        created.push(this);
+      }
+      close() {}
+    }
+    vi.stubGlobal("EventSource", FakeEventSource);
+    try {
+      const stream = new ThreadStream("ses_f", { onEvent: () => {} });
+      stream.open(0);
+      created[0]?.onerror?.({});
+      vi.advanceTimersByTime(1500);
+      expect(constructs).toBe(2);
+      stream.close();
+    } finally {
+      vi.unstubAllGlobals();
+      vi.useRealTimers();
+    }
+  });
+
   it("reconnects with after= set to the last seq seen, then gives up", () => {
     vi.useFakeTimers();
     const seen: Array<number | null> = [];
@@ -101,6 +179,7 @@ describe("reconnect policy", () => {
       onopen: (() => void) | null = null;
       onmessage: ((event: { data: string }) => void) | null = null;
       onerror: (() => void) | null = null;
+      addEventListener(_type: string, _handler: (event: { data: string }) => void) {}
       constructor(public url: string) {
         factoryCalls += 1;
         seen.push(
@@ -152,6 +231,7 @@ describe("reconnect policy", () => {
       onopen: (() => void) | null = null;
       onmessage: ((event: { data: string }) => void) | null = null;
       onerror: (() => void) | null = null;
+      addEventListener(_type: string, _handler: (event: { data: string }) => void) {}
       constructor() {
         sources.push(this);
       }
@@ -184,4 +264,78 @@ describe("reconnect policy", () => {
 
 afterEach(() => {
   vi.useRealTimers();
+});
+
+describe("named server events (regression: onmessage-only wiring)", () => {
+  it("delivers server-named frames to onEvent, not just onmessage", () => {
+    // The server names every frame (`event: token_delta`, ...). A real
+    // browser dispatches those to addEventListener(type) handlers and NEVER
+    // to onmessage — a wiring that only listens on onmessage connects fine
+    // yet renders nothing, exactly the reported "switch chats to see
+    // updates" symptom. This test replays that browser behavior faithfully:
+    // named dispatches go to the type listener, onmessage stays silent.
+    const applied: StreamEvent[] = [];
+    const listeners = new Map<string, Array<(event: { data: string }) => void>>();
+    class FakeEventSource {
+      static CLOSED = 2;
+      readyState = 0;
+      onopen: (() => void) | null = null;
+      onmessage: ((event: { data: string }) => void) | null = null;
+      onerror: (() => void) | null = null;
+      constructor(public url: string) {}
+      addEventListener(type: string, handler: (event: { data: string }) => void) {
+        const list = listeners.get(type) ?? [];
+        list.push(handler);
+        listeners.set(type, list);
+      }
+      close() {}
+      /** Like a browser: named frame -> type listeners only, never onmessage. */
+      dispatchNamed(type: string, data: string) {
+        for (const handler of listeners.get(type) ?? []) handler({ data });
+      }
+    }
+
+    vi.stubGlobal("EventSource", FakeEventSource);
+    try {
+      const stream = new ThreadStream("ses_z", { onEvent: (event) => applied.push(event) });
+      stream.open(0);
+      const serverFrame = JSON.stringify(ev(7, "token_delta", { text: "hi" }));
+      // What the server actually sends: a named frame, dispatched by a real
+      // browser to the type listener and never to onmessage.
+      const handlers = listeners.get("token_delta") ?? [];
+      expect(handlers.length).toBeGreaterThan(0);
+      for (const handler of handlers) handler({ data: serverFrame });
+      expect(applied.map((event) => event.seq)).toEqual([7]);
+      stream.close();
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("still honors the unnamed onmessage fallback", () => {
+    const applied: StreamEvent[] = [];
+    const created: Array<{ onmessage: ((event: { data: string }) => void) | null }> = [];
+    class FakeEventSource {
+      static CLOSED = 2;
+      readyState = 0;
+      onopen: (() => void) | null = null;
+      onmessage: ((event: { data: string }) => void) | null = null;
+      onerror: (() => void) | null = null;
+      addEventListener(_type: string, _handler: (event: { data: string }) => void) {}
+      constructor(public url: string) {
+        created.push(this);
+      }
+      close() {}
+    }
+    vi.stubGlobal("EventSource", FakeEventSource);
+    try {
+      const stream = new ThreadStream("ses_w", { onEvent: (event) => applied.push(event) });
+      stream.open(0);
+      created[0]?.onmessage?.({ data: JSON.stringify(ev(9, "message_created")) });
+      expect(applied.map((event) => event.seq)).toEqual([9]);
+      stream.close();
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
 });
