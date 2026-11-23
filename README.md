@@ -12,7 +12,7 @@ Kelp is live as a single-owner, single-provider service. Today it provides:
 - spend caps that stop calls before the provider sees them when budget runs out,
 - offline and provider-backed evaluations.
 
-The server serves the phone web app at `/phone/`. The landing page in `landing/` is a separate static site. The browser chat UI and the dashboard page at `/` are not built yet; the API is the interface.
+The server serves the phone web app at `/phone/`. `landing/` holds a one-page "Kelp is cooking" holding site with a pre-register form, deployed separately on Netlify. The browser chat UI and the dashboard page at `/` are not built yet; the API is the interface.
 
 What just landed: the **P0–P6 control layer** (2026-11-09): the frozen contract, the provider seam, tenant scope, a per-tenant provider key, `TaskRun` records, the entitlement gate, and a read-only admin API with a support runbook. The frozen shapes cover the single owner tenant, the provider stream contract, the `TaskRun` record, the gate order (auth → tenant → entitlement → spend → provider), and the admin read model. Start from the operator documents, then the contract:
 
@@ -125,7 +125,7 @@ The service and API listen at `http://127.0.0.1:8765`. There is no dashboard pag
 - `deploy/` — container health checks and deployment configuration.
 - `desktop/` — Tauri desktop client.
 - `phone/` — phone web app (PWA), served by the server at `/phone/`.
-- `landing/` — static marketing page.
+- `landing/` — holding page with a pre-register form (see `landing/README.md`).
 
 ## Tests
 
