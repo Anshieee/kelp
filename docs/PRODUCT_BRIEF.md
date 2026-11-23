@@ -274,13 +274,19 @@ laptop CPU (Intel i7-1255U, no GPU):
 | Chain, end of speech to first sentence of audio | Median |
 |---|---|
 | tiny.en + cloud Haiku 5.5 (reasoning off) + Piper | 3.1–3.3 s |
-| tiny.en + local phi4-mini 3.8B (Ollama, CPU) + Piper, estimated from stages | about 6.1 s |
+| tiny.en + local phi4-mini 3.8B (Ollama, CPU) + Piper | about 6.1 s, an estimate: 0.98 s STT + 4.68 s LLM first sentence + 0.46 s Piper, stages measured separately, not a chained run |
+
+Both rows exclude endpointing (typically 0.3–0.8 s of silence before the
+utterance counts as finished), audio device latency and network variance. The
+chained run's STT step was also slowed by other load on the machine (1.43–1.56 s
+against 0.87–0.98 s when run alone).
 
 The targets are therefore:
 
 - **Acknowledge in ≤ 200 ms.** The avatar switches to its listening or thinking
   state as soon as speech ends. The pet already has those states.
-- **First spoken word ≤ 2.5 s p50** in cloud-brain mode on a laptop CPU. Getting
+- **First audio ≤ 2.5 s p50** in cloud-brain mode on a laptop CPU, measured from
+  the end of endpointing to the first audio sample played. Getting
   there needs streaming STT (transcribing while the user speaks), which the spike
   did not measure.
 - **Local-only voice** needs a GPU or NPU to be conversational. On a CPU-only
@@ -330,7 +336,10 @@ grant:
   the full 1920×1080 screen in 38 ms with **no prompt at all**, the portal's
   non-interactive Screenshot also ran without a prompt, and X11 capture through
   Xwayland returned black frames. GNOME and KDE route capture through the
-  xdg-desktop-portal ScreenCast dialog; that was not tested.
+  xdg-desktop-portal ScreenCast dialog; that was not tested. On wlroots the
+  portal's non-interactive Screenshot also left the image in `/tmp` as a
+  world-readable (0644) file, so Kelp captures frames in memory and does not use
+  that portal call.
 - **macOS:** Screen Recording and Accessibility permissions.
 - **Windows:** Windows Graphics Capture.
 
@@ -383,16 +392,20 @@ endpoint, and leave the machine only if the user opts in to sharing them.
 | Metric | Definition | Target |
 |---|---|---|
 | Time to first conversation | Installer start to the first rendered Kelp reply, in seconds | p50 ≤ 5 min, no config file edited |
-| First-run questions | Questions the user answers before that first reply | 1 (Local or Boat), plus one provider sign-in only when no local model fits |
-| Setup prompts per active week | Resolver plan cards, OS permission prompts and credential handoffs shown, per user per week after the first day | ≤ 1 median, trending to 0 |
-| Repeat asks | A setup prompt for a capability that was already approved and whose scope has not changed | **0.** Any non-zero value is a bug |
+| First-run questions | Questions the user answers before that first reply | 1 (Local or Boat), plus one provider sign-in only when no local model fits. Boat adds the Boat sign-in and the owner bearer handoff, counted as one more question |
+| Setup prompts per active week | Kelp-initiated prompts shown per user per week after the first day: resolver plan cards, credential handoff requests, and resolver steps that ask the OS for a permission | ≤ 1 median, trending to 0 |
+| Repeat asks | A Kelp-initiated setup prompt for a capability that was already approved and whose scope has not changed | **0.** Any non-zero value is a bug |
+| OS re-consent | Reminders the OS raises on its own, such as the macOS 15+ "continue to allow" screen-recording prompt. Counted when Kelp detects the permission lapsed | Watched, not a bug |
 | Resolver success rate | Approved setup plans whose self-check (section 4.2, step 5) passes on the first attempt | ≥ 95% |
 | Setup abandonment | Setup cards dismissed or left to expire, as a share of cards shown | Watched, no target yet |
-| Manual fixes | Times a user had to edit a file or run a command to make a capability work, from bug reports and doctor output | 0 |
+| Manual fixes | Self-check results that end in `manual_fix_required`, meaning the user must edit a file or run a command. Bug reports with the same cause are tracked by hand | 0 |
 
-Setup prompts are counted from the approval audit rows (`approval_requested`,
-`approval_resolved`) once the resolver gets its own approval kind (section 4.2),
-so setup cards can be counted separately from action approvals. Repeat asks are
+Resolver plan cards are counted from the approval audit rows
+(`approval_requested`, `approval_resolved`) once the resolver gets its own
+approval kind (section 4.2), so setup cards can be counted separately from action
+approvals. Credential handoff requests and OS permission steps get their own
+audit rows when they are built. OS dialogs themselves are outside Kelp, so only
+the step that triggers them is counted. Repeat asks are
 detected by comparing a new plan's capability ids and scopes with the remembered
 grants from section 4.3.
 

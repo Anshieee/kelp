@@ -1,9 +1,9 @@
 """faster-whisper CPU int8 benchmark: wall time from 'audio complete' to final transcript + WER.
 
-Usage: python scripts/bench_stt.py <model> [--threads N] [--beam N] [--warm N]
+Usage: python bench_stt.py <model> [--threads N] [--beam N] [--warm N]
 Model is a faster-whisper size name (tiny.en, base.en, small.en) or an HF repo id.
 Each invocation is a fresh process, so the first call is a true cold start (model
-already on disk after the first download; page cache effects are noted in RESULTS.md).
+already on disk after the first download; page-cache effects are not controlled).
 """
 import argparse
 import json

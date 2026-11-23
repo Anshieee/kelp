@@ -16,7 +16,7 @@ before endpointing. Local-only LLMs are 3–7 s to the first token on this CPU.
   1.4–1.6 s versus 0.87–0.98 s when STT ran on its own, which is contention.
 - Test audio is synthetic speech (Piper `en_US-lessac-medium`, resampled to 16 kHz) with
   0.5 s of silence at each end: `short3s` (3.9 s total) and `long8s` (8.8 s total).
-- Every number is from the spike's `results/*.json` (kept outside the repo; they hold model output text). The scripts are in [`voice-latency-scripts/`](voice-latency-scripts/); run them after `source env.sh` and `uv sync`, with models from Hugging Face (faster-whisper) and the Piper and Kokoro releases in `models/`. "Warm" means the model
+- Every number is from the spike's `results/*.json` (kept outside the repo; they hold model output text). The scripts are in [`voice-latency-scripts/`](voice-latency-scripts/); run them from that folder after `source env.sh` and `uv sync`, with models from Hugging Face (faster-whisper) and the Piper and Kokoro releases in `models/`. "Warm" means the model
   was already loaded; the first call is reported separately.
 
 ## Stage results
@@ -41,9 +41,13 @@ Each run sends a new user message, so only the system prompt can be cached.
 |---|---|---|---|---|
 | Ollama (local CPU) | phi4-mini 3.8B Q4_K_M | 18.6 s (load) | 3.17 s | 4.68 s |
 | Ollama (local CPU) | qwen2.5 7B Q4_K_M | 24.0 s (load) | 7.01 s | 7.75 s |
-| OpenRouter | anthropic/claude-haiku-5.5, reasoning off, `sort: latency` | 1.07 s | 1.04 s | 1.35 s |
+| OpenRouter | anthropic/claude-haiku-5.5, reasoning off, `sort: latency` (see below) | 1.07 s | 1.04 s | 1.35 s |
 | Kiro gateway :8000 | claude-haiku-5-5 | 18.8 s | 17.2 s | 17.2 s |
 | Kiro gateway :8000 | gpt-5.6-luna | 14.5 s | 14.4 s | 14.5 s |
+
+The OpenRouter rows were run with `BENCH_API_KEY` set in the shell (never committed) and
+`BENCH_EXTRA='{"reasoning":{"enabled":false},"provider":{"sort":"latency"}}'`, which
+`bench_llm.py` and `e2e.py` merge into the request body.
 
 Local generation ran at 2.5–4.8 tokens/s. The Kiro gateway wraps an agent session per
 request, so it is unusable for voice; it is listed only because it was tested.

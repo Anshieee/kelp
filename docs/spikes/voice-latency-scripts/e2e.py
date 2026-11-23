@@ -3,7 +3,7 @@ audio complete -> faster-whisper transcript -> streamed LLM reply -> first sente
 -> piper audio for that sentence ready to play. Endpointing (how long the VAD waits
 for silence before calling the utterance complete) is NOT included; add it on top.
 
-Usage: python scripts/e2e.py <stt-model> <base_url> <model> [--runs N]  (key: $BENCH_API_KEY)
+Usage: python e2e.py <stt-model> <base_url> <model> [--runs N]  (key: $BENCH_API_KEY)
 """
 import argparse
 import json

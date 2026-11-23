@@ -1,7 +1,7 @@
 """TTS latency: time from reply text to the first playable audio chunk, plus the
 real-time factor (synthesis time / audio length). CPU only, no speakers.
 
-Usage: python scripts/bench_tts.py piper|kokoro [--threads N] [--runs N]
+Usage: python bench_tts.py piper|kokoro [--threads N] [--runs N]
 """
 import argparse
 import json

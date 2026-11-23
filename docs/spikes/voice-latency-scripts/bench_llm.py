@@ -2,8 +2,8 @@
 sentence end (TTFS, the point where TTS can start speaking).
 
 Usage:
-  python scripts/bench_llm.py ollama <model> [--runs N]
-  python scripts/bench_llm.py openai <base_url> <model> [--runs N]   # key from $BENCH_API_KEY
+  python bench_llm.py ollama <model> [--runs N]
+  python bench_llm.py openai <base_url> <model> [--runs N]   # key from $BENCH_API_KEY
 
 Run 1 is reported separately as "first" (for ollama it includes model load when
 the model is not resident). The rest are summarised as warm samples.
