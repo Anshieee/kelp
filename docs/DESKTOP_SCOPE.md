@@ -15,7 +15,7 @@
 ## What they are
 
 - **Desktop app:** a thin client over the existing Kelp server (`chat/api.py`). It talks to a server URL, signs in with the root bearer once, and keeps a session cookie after that. No chat logic moves into the client.
-- **Desk pet:** an always-on-top frameless overlay reusing the landing orb (`landing/e-fx.js` `initOrb`, three flavours, blink plus glance cadence, pointer gaze, CSS `e-orb-face` fallback). It mirrors live assistant state, nothing more.
+- **Desk pet:** an always-on-top frameless overlay reusing the orb from the former landing page, now ported to `desktop/src/orb.js` (originally `landing/e-fx.js` `initOrb`; three flavours, blink plus glance cadence, pointer gaze, CSS `e-orb-face` fallback). It mirrors live assistant state, nothing more.
 
 ## App surface (v1)
 
