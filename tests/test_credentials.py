@@ -670,3 +670,56 @@ def test_scoped_token_response_is_no_store_and_never_reaches_logs_or_audit(api, 
     for secret in (token, token.split('.')[1], WORKER, SIGNING_KEY):
         assert secret not in out.out + out.err + audit_text
     assert ident in audit_text  # only the handoff id is recorded
+
+
+def test_device_id_does_not_reveal_a_hash_of_the_root_token(tmp_path):
+    # The device id travels in every scoped token. It must be keyed by the
+    # server-only signing key, not an unsalted hash of the bootstrap token.
+    b = CredentialBroker(tmp_path / 'v.db', Fernet.generate_key().decode(), WORKER, [SITE],
+                         signing_key=SIGNING_KEY)
+    try:
+        created = b.create(descriptor())
+        token = b.issue_worker_token(created['id'])
+        claims = json.loads(base64.urlsafe_b64decode(token.split('.')[0] + '=='))
+        assert claims['device'] != hashlib.sha256(WORKER.encode()).hexdigest()
+        assert hashlib.sha256(WORKER.encode()).hexdigest() not in token
+        other = CredentialBroker(tmp_path / 'w.db', Fernet.generate_key().decode(), WORKER, [SITE],
+                                 signing_key=SIGNING_KEY[::-1])
+        try:
+            assert other._device_id != b._device_id  # depends on the signing key
+        finally:
+            other.close()
+    finally:
+        b.close()
+
+
+def test_wrong_vault_key_leaves_pre_upgrade_rows_untouched(tmp_path):
+    key = Fernet.generate_key().decode()
+    path = tmp_path / 'vault.db'
+    legacy_store(path, key, [('cred_pend', 'pending')])
+    with pytest.raises(ValueError):
+        CredentialBroker(path, Fernet.generate_key().decode(), WORKER, [SITE], signing_key=SIGNING_KEY)
+    import sqlite3
+    db = sqlite3.connect(path)
+    try:
+        assert db.execute("SELECT state, result FROM requests WHERE id='cred_pend'").fetchone() == ('pending', '')
+    finally:
+        db.close()
+
+
+def test_build_app_wires_and_scrubs_the_signing_key(tmp_path):
+    from chat.server import ServerConfig, build_app
+    from tests.test_server import NoopProvider, _env
+
+    env = _env(tmp_path, KELP_CREDENTIALS_ENABLED='1', KELP_VAULT_KEY=Fernet.generate_key().decode(),
+               KELP_BROWSER_WORKER_TOKEN=WORKER, KELP_CREDENTIAL_SIGNING_KEY=SIGNING_KEY,
+               KELP_BROWSER_ALLOWED_ORIGINS=SITE)
+    app = build_app(ServerConfig.from_env(env), provider=NoopProvider(), environ=env)
+    try:
+        broker = app.api.credentials
+        assert broker is not None and broker._signing_key == SIGNING_KEY.encode()
+        app.audit.record('probe', tool='t', extra={'leak': f'key {SIGNING_KEY}'})
+        text = app.audit.path.read_text()
+        assert 'probe' in text and SIGNING_KEY not in text
+    finally:
+        app.close()

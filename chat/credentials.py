@@ -136,11 +136,6 @@ class CredentialBroker:
         columns = {row['name'] for row in self._db.execute('PRAGMA table_info(requests)')}
         if 'device' not in columns:
             self._db.execute("ALTER TABLE requests ADD COLUMN device TEXT NOT NULL DEFAULT ''")
-        # Rows with no recorded device pre-date request-scoped tokens. No worker holds
-        # a token for them and their payloads are sealed under the old context, so
-        # fail live ones closed rather than attribute them to today's worker.
-        self._db.execute("UPDATE requests SET state='failed',payload=NULL,result='upgraded' "
-                         "WHERE device='' AND state IN ('pending','submitted','claimed')")
         try:
             row = self._db.execute('SELECT check_value FROM meta WHERE id=1').fetchone()
             if row:
@@ -148,6 +143,12 @@ class CredentialBroker:
                     raise InvalidToken()
             else:
                 self._db.execute('INSERT INTO meta VALUES (1, ?)', (self._cipher.encrypt(b'kelp-vault-v1'),))
+            # Only after the vault key is proven: rows with no recorded device
+            # pre-date request-scoped tokens. No worker holds a token for them and
+            # their payloads are sealed under the old context, so fail live ones
+            # closed rather than attribute them to today's worker.
+            self._db.execute("UPDATE requests SET state='failed',payload=NULL,result='upgraded' "
+                             "WHERE device='' AND state IN ('pending','submitted','claimed')")
             # Never resume a delivered secret after a process crash.
             self._db.execute("UPDATE requests SET state='failed',payload=NULL,result='interrupted' WHERE state='claimed'")
         except InvalidToken:
@@ -163,8 +164,13 @@ class CredentialBroker:
 
     @property
     def _device_id(self) -> str:
-        """Stable server-derived identity for the configured trusted worker."""
-        return self._worker_digest.hex()
+        """Stable server-derived identity for the configured trusted worker.
+
+        Keyed by the server-only signing key: the id is readable in every scoped
+        token, so an unsalted hash of the bootstrap token must not appear there.
+        """
+        return hmac.new(self._signing_key, b'kelp-credential-device-v1:' + self._worker_digest,
+                        hashlib.sha256).hexdigest()
 
     def _sign(self, encoded: str) -> str:
         digest = hmac.new(self._signing_key, encoded.encode(), hashlib.sha256).digest()

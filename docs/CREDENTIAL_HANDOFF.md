@@ -81,15 +81,17 @@ valid until the record is pruned (`read_exp`, 24 hours after the deadline), so
 the worker still sees `expired`, or the owner's later `release`, and can resume
 the page. Single use is enforced by request state, not by the token: after a
 claim the stored payload is gone, so a replayed `claim` or `finish` gets `409`.
-The server derives device identity from the configured bootstrap-token digest;
-the worker cannot select or overwrite it in the request body. This first
+The server derives device identity as an HMAC, under the signing key, of the
+configured bootstrap-token digest, so the id carried in every scoped token
+reveals nothing about the bootstrap token; the worker cannot select or overwrite
+it in the request body. This first
 version supports one trusted worker identity and the repository's existing
 single-owner account, not tenant isolation. The per-request token is a bearer
 credential: keep it in worker memory only, do not log it, and discard it when the
 request ends. Rotating `KELP_CREDENTIAL_SIGNING_KEY` or
 `KELP_BROWSER_WORKER_TOKEN` invalidates every outstanding scoped token (the
-device identity changes with the bootstrap token); affected handoffs must be
-requested again.
+device identity is derived from both); affected handoffs must be requested
+again.
 
 **Upgrading an existing `credentials.db`.** The `requests.device` column is added
 on first start. Rows with no recorded device were created before request-scoped
