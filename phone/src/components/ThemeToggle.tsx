@@ -1,5 +1,5 @@
 /*
- * Midnight/Meadow toggle. Presentational only: flips <html data-skin>,
+ * Light/Midnight toggle. Presentational only: flips <html data-skin>,
  * persists to localStorage, and updates the theme-color meta (see theme.ts).
  */
 import { useState } from "react";
@@ -12,7 +12,7 @@ export default function ThemeToggle({ label = true }: { label?: boolean }) {
     setSkin(toggleSkin());
   };
 
-  const next = skin === "meadow" ? "Midnight dark theme" : "Meadow light theme";
+  const next = skin === "light" ? "Midnight dark theme" : "Light theme";
   return (
     <button
       type="button"
@@ -21,8 +21,8 @@ export default function ThemeToggle({ label = true }: { label?: boolean }) {
       aria-label={`Switch to ${next}`}
       title={`Switch to ${next}`}
     >
-      <span aria-hidden="true">◐</span>
-      {label && <span className="theme-toggle-label">{skin === "meadow" ? "Meadow" : "Midnight"}</span>}
+      <span aria-hidden="true">{skin === "light" ? "☾" : "☀"}</span>
+      {label && <span className="theme-toggle-label">{skin === "light" ? "Light" : "Midnight"}</span>}
       {label && <span className="theme-toggle-hint">Change theme</span>}
     </button>
   );

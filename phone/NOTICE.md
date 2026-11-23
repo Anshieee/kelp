@@ -31,17 +31,39 @@ substantial and are recorded here per Apache-2.0 §4(b).
 
 Upstream copyright: `Copyright 2026 Milind Soni and OpenMausBot contributors`.
 
-## In-repo design adaptation (Midnight/Meadow, Geist, drawer UI)
+## In-repo adaptation (Midnight/Meadow, Geist, drawer UI)
 
-The current visual language (Midnight and Meadow color tokens, Geist
-typography, conversation drawer, rounded composer, approval-card and task
-bubble patterns, kelp-avatar motif) is adapted from the OpenMausBot-derived
-design already in this repository at `netlify/mobile/` (see
-`third-party/OpenMausBot/` for the upstream license and notice). Token values
-and component patterns were re-expressed in this app's own stylesheet
-(`src/styles.css`) and components; nothing was copied wholesale, and no shared
-asset files were referenced or moved.
+The previous visual language (Midnight and Meadow themes, Geist typography,
+conversation drawer, rounded composer, approval-card and task bubble patterns,
+kelp-avatar motif) was adapted from the OpenMausBot-derived design already in
+this repository at `netlify/mobile/` (see `third-party/OpenMausBot/` for the
+upstream license and notice). The blue rounded-square avatar came from that
+lineage.
 
-The bundled font `public/fonts/geist-latin.woff2` is Geist, Copyright 2026
-The Geist Project Authors, under the SIL Open Font License 1.1 (see
-`third-party/Geist/`). The same subset ships in the in-repo demo client.
+## Site-language redesign (current)
+
+The current look follows the Kelp marketing site in `landing/` (same
+repository): the warm canvas, ink, and pastel tokens; Newsreader serif
+display type with Inter body type; the sprout mark with the serif "kelp"
+wordmark in app chrome; pill buttons and rounded cards.
+
+- The `sprout` artwork is copied from the site's inline SVG symbol
+  (`landing/index.html`): a stroke-only mark, `fill:none`,
+  `stroke:currentColor`. The install icons (`public/icons/*`) are unchanged
+  originals.
+- The film-grain page overlay (`body::after` in `src/styles.css`) adapts the
+  site's static `feTurbulence` data-URI (`landing/styles.css`), with an
+  inverted speckle for the dark theme. The empty-state artwork
+  (`public/blob.png`, rendered by `src/components/LivingBlob.tsx`) is a
+  frame captured from the site's live hero field canvas (`landing/`
+  `#kelp-field`), cropped to its opaque bounds; the in-app motion (slow
+  breathe + pointer drift, transform-only, frozen under reduced-motion) is
+  original.
+- `public/fonts/newsreader-latin.woff2`, `newsreader-italic-latin.woff2`,
+  and `inter-latin.woff2` are the SIL Open Font License 1.1 faces the site
+  loads from Google Fonts, vendored here so the offline-first PWA never
+  needs the CDN; the license text ships alongside them in
+  `public/fonts/OFL.txt`. The previously bundled `geist-latin.woff2` was
+  removed with the redesign.
+- The Midnight dark theme is retained as an option; the Meadow theme was
+  retired with the redesign.

@@ -17,13 +17,16 @@ export class ApiError extends Error {
   readonly status: number;
   readonly code: string;
   readonly retryable: boolean;
+  /** Mirrors the envelope's `user_fixable`: true when the user can fix it. */
+  readonly userFixable: boolean;
 
-  constructor(status: number, code: string, message: string, retryable: boolean) {
+  constructor(status: number, code: string, message: string, retryable: boolean, userFixable = false) {
     super(message);
     this.name = "ApiError";
     this.status = status;
     this.code = code;
     this.retryable = retryable;
+    this.userFixable = userFixable;
   }
 }
 
@@ -39,6 +42,7 @@ export interface ApiEnvelopeError {
   code?: string;
   message?: string;
   retryable?: boolean;
+  user_fixable?: boolean;
 }
 
 export interface PairResponse {
@@ -194,6 +198,15 @@ interface RequestOptions {
   authorization?: string;
 }
 
+/**
+ * Shared low-level caller for non-chat slices (e.g. the wallet). Same
+ * conventions as every other call: relative `/api` path, session cookie via
+ * `credentials: "include"`, CSRF header on mutations, 401 clears the session.
+ */
+export function apiRequest<T>(method: string, path: string, options: RequestOptions = {}): Promise<T> {
+  return request<T>(method, path, options);
+}
+
 async function request<T>(method: string, path: string, options: RequestOptions = {}): Promise<T> {
   const headers: Record<string, string> = { Accept: "application/json" };
   if (options.body !== undefined) headers["Content-Type"] = "application/json";
@@ -223,17 +236,19 @@ async function request<T>(method: string, path: string, options: RequestOptions 
     let code = "unknown_error";
     let message = "Something went wrong.";
     let retryable = false;
+    let userFixable = false;
     try {
       const data = (await response.json()) as { error?: ApiEnvelopeError };
       if (data?.error) {
         if (typeof data.error.code === "string") code = data.error.code;
         if (typeof data.error.message === "string") message = data.error.message;
         retryable = data.error.retryable === true;
+        userFixable = data.error.user_fixable === true;
       }
     } catch {
       // Non-JSON error body; keep the generic copy.
     }
-    throw new ApiError(response.status, code, message, retryable);
+    throw new ApiError(response.status, code, message, retryable, userFixable);
   }
 
   if (response.status === 204) return undefined as T;

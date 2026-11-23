@@ -1,25 +1,81 @@
 /*
- * Kelp phone app — Midnight/Meadow design language adapted from
- * netlify/mobile/app.css (which itself adapts OpenMausBot src/styles.css,
- * Apache-2.0; see third-party/OpenMausBot/). Midnight is the default skin;
- * `data-skin="meadow"` on <html> switches to the light theme.
+ * Kelp phone app — site design language (light-first) with Midnight retained
+ * as the dark option. Light is the default skin; `data-skin="midnight"` on
+ * <html> switches to the dark theme.
+ *
+ * Light tokens mirror the marketing site (canvas #fbf9f5, sage/butter/peach/
+ * sky/lilac accents, Newsreader serif display + Inter UI). Midnight tokens
+ * are unchanged.
  *
  * Phone palette aliases (--panel-2, --accent, --danger, ...) map onto the
- * Midnight/Meadow tokens so existing component markup keeps working.
+ * light/Midnight tokens so existing component markup keeps working.
  */
 
 @font-face {
-  font-family: Geist;
-  src: url("/fonts/geist-latin.woff2") format("woff2");
+  font-family: Inter;
+  src: url("/phone/fonts/inter-latin.woff2") format("woff2");
   font-style: normal;
-  font-weight: 100 900;
+  font-weight: 400 600;
   font-display: swap;
 }
 
-/* Midnight (default) and Meadow palette adapted from OpenMausBot src/styles.css.
- * Copyright 2026 Milind Soni and OpenMausBot contributors. Apache-2.0.
- * Modified for Kelp's phone client; see third-party/OpenMausBot/. */
+@font-face {
+  font-family: Newsreader;
+  src: url("/phone/fonts/newsreader-latin.woff2") format("woff2");
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: Newsreader;
+  src: url("/phone/fonts/newsreader-italic-latin.woff2") format("woff2");
+  font-style: italic;
+  font-weight: 400;
+  font-display: swap;
+}
+
+/* Light (default) palette mirrors the marketing site. */
 :root {
+  color-scheme: light;
+  --bg: #fbf9f5;
+  --panel: #ffffff;
+  --surface: rgba(255, 255, 255, 0.9);
+  --surface-2: #f5f3ef;
+  --hover: #efece6;
+  --composer: #ffffff;
+  --composer-ring: rgba(69, 67, 63, 0.16);
+  --line: rgba(69, 67, 63, 0.16);
+  --ink: #191817;
+  --muted: #45433f;
+  --dim: #7d7971;
+  --green: #1a7a48;
+  --green-ink: #191817;
+  --success: #1a7a48;
+  --amber: #8a5a00;
+  --red: #c02b3a;
+  --user: #fcefc7;
+  --sage: #d6e8d8;
+  --butter: #fcefc7;
+  --peach: #fce1d8;
+  --sky: #dcebf7;
+  --lilac: #eadff2;
+  --radius: 16px;
+  /* Phone aliases onto the light/Midnight tokens. */
+  --panel-2: var(--surface);
+  --line-2: var(--composer-ring);
+  --ink-2: var(--ink);
+  --accent: var(--green);
+  --accent-dim: var(--green);
+  --danger: var(--red);
+  --warn: var(--amber);
+  --sans: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", ui-sans-serif, system-ui, Roboto, "Helvetica Neue", Arial, sans-serif;
+  --serif: Newsreader, Georgia, serif;
+  --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+}
+
+/* Midnight (dark option) tokens — unchanged. */
+:root[data-skin="midnight"] {
   color-scheme: dark;
   --bg: #121212;
   --panel: #0e0e0e;
@@ -31,48 +87,21 @@
   --line: #383838;
   --ink: #f5f5f5;
   --muted: #b6b6b6;
+  --dim: #b6b6b6;
   --green: #1084fe;
   --green-ink: #fff;
   --success: #38d591;
   --amber: #ffb454;
   --red: #ff5667;
   --user: #5a5a5a;
-  --radius: 16px;
-  /* Phone aliases onto the Midnight/Meadow tokens. */
-  --panel-2: var(--surface);
-  --line-2: var(--composer-ring);
-  --ink-2: var(--ink);
-  --dim: var(--muted);
-  --accent: var(--green);
-  --accent-dim: var(--green);
-  --danger: var(--red);
-  --warn: var(--amber);
-  --sans: Geist, -apple-system, BlinkMacSystemFont, "Segoe UI", ui-sans-serif, system-ui, Roboto, "Helvetica Neue", Arial, sans-serif;
-  --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
-}
-
-:root[data-skin="meadow"] {
-  color-scheme: light;
-  --bg: #fff;
-  --panel: #f6f8f6;
-  --surface: #f1f5f2;
-  --surface-2: #e9eeea;
-  --hover: #d6efdf;
-  --composer: #fff;
-  --composer-ring: #e3e9e4;
-  --line: #c9d3cc;
-  --ink: #0f1a13;
-  --muted: #3e4a42;
-  --green: #1a7a48;
-  --green-ink: #fff;
-  --success: #1a7a48;
-  --amber: #8a5a00;
-  --red: #c02b3a;
-  --user: #e1e9e3;
 }
 
 * {
   box-sizing: border-box;
+}
+
+::selection {
+  background: var(--sage);
 }
 
 /* The drawer, backdrops, and conditional screens rely on the `hidden`
@@ -177,41 +206,107 @@ body.drawer-open {
   }
 }
 
-/* --- Kelp avatar motif (blue rounded square, two dark bars) --- */
+/* --- sprout identity (site wordmark language: serif + sprout mark) --- */
 
-.kelp-avatar {
+.brand {
   display: inline-flex;
   align-items: center;
-  justify-content: center;
-  gap: 9px;
+  gap: 8px;
+  font-family: var(--serif);
+  font-size: 30px;
+  line-height: 1;
+  letter-spacing: -0.06em;
+}
+
+.brand svg {
   flex-shrink: 0;
-  background: #b8ddf2;
-  border-radius: 42%;
-  box-shadow: inset 0 -8px 15px #46859e20;
 }
 
-.kelp-avatar i {
-  width: 7px;
-  height: 19px;
-  border-radius: 7px;
-  background: #142425;
+.wordmark-title {
+  font-family: var(--serif);
+  font-weight: 400;
+  letter-spacing: -0.06em;
 }
 
-.kelp-avatar.small {
-  width: 32px;
-  height: 32px;
-  gap: 5px;
+.top-bar-title .wordmark-title {
+  font-size: 26px;
+  line-height: 1;
+  margin: 0;
 }
 
-.kelp-avatar.small i {
-  width: 4px;
-  height: 11px;
+.hero-sprout {
+  color: var(--muted);
+  margin-bottom: 8px;
 }
 
-.hero-avatar {
-  width: 66px;
-  height: 66px;
-  margin-bottom: 20px;
+/* Film grain, adapted from the marketing site (landing/styles.css
+   body::after): a static feTurbulence overlay at 5% that sits above
+   everything. pointer-events:none keeps it out of the way. The midnight
+   theme uses a light speckle so the grain stays visible on dark chrome. */
+body::after {
+  content: "";
+  position: fixed;
+  inset: 0;
+  z-index: 200;
+  pointer-events: none;
+  opacity: 0.14;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='180' height='180'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.85' stitchTiles='stitch'/%3E%3C/filter%3E%3Cpath fill='%23191817' filter='url(%23n)' opacity='.6' d='M0 0h180v180H0z'/%3E%3C/svg%3E");
+}
+
+:root[data-skin="midnight"] body::after {
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='180' height='180'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.85' stitchTiles='stitch'/%3E%3C/filter%3E%3Cpath fill='%23f5f5f5' filter='url(%23n)' opacity='.6' d='M0 0h180v180H0z'/%3E%3C/svg%3E");
+}
+
+/* Empty-state living blob: the site's own hero artwork (captured frame),
+   breathing slowly and drifting toward the pointer. Transform-only motion so
+   the compositor does the work; frozen under prefers-reduced-motion. */
+.hero-blob {
+  display: block;
+  margin-bottom: 4px;
+  border-radius: 50%;
+  transform: translate(var(--drift-x, 0px), var(--drift-y, 0px));
+  will-change: transform;
+}
+
+.hero-blob img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  border-radius: 50%;
+  /* Two unsynchronised loops (11s breathe + 7s sway) so the motion never
+     visibly repeats — the "alive" read. Transform-only; the compositor does
+     the work. */
+  animation:
+    hero-breathe 11s ease-in-out infinite alternate,
+    hero-sway 7s ease-in-out infinite alternate;
+  will-change: transform;
+  pointer-events: none;
+  user-select: none;
+  -webkit-user-drag: none;
+}
+
+@keyframes hero-breathe {
+  from {
+    transform: scale(1) rotate(-1.5deg);
+  }
+  to {
+    transform: scale(1.05) rotate(1.5deg);
+  }
+}
+
+@keyframes hero-sway {
+  from {
+    translate: -5px 3px;
+  }
+  to {
+    translate: 5px -4px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .hero-blob img {
+    animation: none;
+  }
 }
 
 /* --- top bar --- */
@@ -250,17 +345,6 @@ body.drawer-open {
   white-space: nowrap;
 }
 
-.brand {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  text-decoration: none;
-  color: var(--ink);
-  font-size: 18px;
-  font-weight: 650;
-  letter-spacing: -0.5px;
-}
-
 .chat-top-bar {
   padding-top: calc(10px + env(safe-area-inset-top));
 }
@@ -291,6 +375,7 @@ body.drawer-open {
   gap: 7px;
   border: 1px solid var(--line);
   border-radius: 999px;
+  background: var(--panel);
   padding: 6px 10px;
   white-space: nowrap;
   flex-shrink: 0;
@@ -409,7 +494,7 @@ body.drawer-open {
   background: var(--surface-2);
   color: var(--ink);
   text-align: left;
-  border-radius: 10px;
+  border-radius: 999px;
   min-height: 46px;
   padding: 10px 12px;
   font-weight: 550;
@@ -488,16 +573,20 @@ body.drawer-open {
   align-items: center;
   justify-content: center;
   min-height: 44px;
-  padding: 0 18px;
+  padding: 0 22px;
   border: 1px solid var(--line-2);
-  border-radius: 12px;
-  background: var(--panel-2);
+  border-radius: 999px;
+  background: #ffffff;
   color: var(--ink);
   font-size: 15px;
   font-weight: 500;
   font-family: inherit;
   cursor: pointer;
   transition: background 0.16s;
+}
+
+:root[data-skin="midnight"] .btn {
+  background: var(--panel-2);
 }
 
 .btn:hover,
@@ -511,14 +600,14 @@ body.drawer-open {
 }
 
 .btn-primary {
-  background: var(--accent);
-  border-color: var(--accent);
-  color: var(--green-ink);
+  background: linear-gradient(110deg, var(--sage), var(--butter));
+  border-color: transparent;
+  color: #191817;
 }
 
 .btn-primary:hover,
 .btn-primary:focus-visible {
-  filter: brightness(1.08);
+  filter: brightness(1.03);
 }
 
 .btn-danger {
@@ -612,7 +701,11 @@ textarea:focus-visible {
 
 .pair-card h1 {
   margin: 0 0 6px;
-  font-size: 26px;
+  font-family: var(--serif);
+  font-weight: 400;
+  font-size: 46px;
+  line-height: 1;
+  letter-spacing: -0.04em;
 }
 
 .pair-lede {
@@ -659,18 +752,18 @@ textarea:focus-visible {
   margin: 10px 14px 0;
   padding: 10px 14px;
   min-height: 44px;
-  border: 1px solid rgba(251, 191, 36, 0.4);
+  border: 1px solid color-mix(in srgb, var(--warn) 35%, transparent);
   border-radius: var(--radius);
-  background: rgba(251, 191, 36, 0.08);
+  background: var(--butter);
   color: var(--warn);
   font-size: 14px;
   font-weight: 500;
   text-decoration: none;
 }
 
-:root[data-skin="meadow"] .approval-badge {
-  border-color: color-mix(in srgb, var(--warn) 35%, transparent);
-  background: color-mix(in srgb, var(--warn) 8%, transparent);
+:root[data-skin="midnight"] .approval-badge {
+  border-color: rgba(251, 191, 36, 0.4);
+  background: rgba(251, 191, 36, 0.08);
 }
 
 .drawer-scroll .approval-badge {
@@ -846,9 +939,14 @@ textarea:focus-visible {
   padding: 6px 14px;
   font-size: 12px;
   color: var(--warn);
-  background: rgba(251, 191, 36, 0.08);
-  border-bottom: 1px solid rgba(251, 191, 36, 0.25);
+  background: var(--butter);
+  border-bottom: 1px solid rgba(138, 90, 0, 0.25);
   flex-shrink: 0;
+}
+
+:root[data-skin="midnight"] .stream-banner {
+  background: rgba(251, 191, 36, 0.08);
+  border-bottom-color: rgba(251, 191, 36, 0.25);
 }
 
 .message-list {
@@ -1087,11 +1185,16 @@ textarea:focus-visible {
 /* turn error banner */
 
 .turn-error {
-  border: 1px solid rgba(248, 113, 113, 0.35);
-  background: rgba(248, 113, 113, 0.07);
+  border: 1px solid rgba(192, 43, 58, 0.35);
+  background: var(--peach);
   border-radius: var(--radius);
   padding: 12px 14px;
   font-size: 14px;
+}
+
+:root[data-skin="midnight"] .turn-error {
+  border-color: rgba(248, 113, 113, 0.35);
+  background: rgba(248, 113, 113, 0.07);
 }
 
 .turn-error p {
@@ -1149,7 +1252,10 @@ textarea:focus-visible {
 
 .approval-card h3 {
   margin: 0 0 4px;
-  font-size: 15px;
+  font-family: var(--serif);
+  font-weight: 400;
+  font-size: 19px;
+  letter-spacing: -0.01em;
 }
 
 .candidate-identity {
@@ -1234,6 +1340,12 @@ textarea:focus-visible {
 }
 
 .btn-approve {
+  background: linear-gradient(110deg, var(--sage), var(--butter));
+  border-color: transparent;
+  color: #191817;
+}
+
+:root[data-skin="midnight"] .btn-approve {
   background: var(--accent);
   border-color: var(--accent);
   color: var(--green-ink);
@@ -1306,6 +1418,12 @@ textarea:focus-visible {
 }
 
 .btn-send {
+  background: linear-gradient(110deg, var(--sage), var(--butter));
+  border-color: transparent;
+  color: #191817;
+}
+
+:root[data-skin="midnight"] .btn-send {
   background: var(--accent);
   border-color: var(--accent);
   color: var(--green-ink);
@@ -1483,15 +1601,21 @@ textarea:focus-visible {
 .modal {
   width: 100%;
   max-width: 340px;
-  background: var(--panel-2);
+  background: var(--panel);
   border: 1px solid var(--line-2);
   border-radius: 14px;
   padding: 20px;
 }
 
+:root[data-skin="midnight"] .modal {
+  background: var(--panel-2);
+}
+
 .modal h2 {
   margin: 0 0 8px;
-  font-size: 16px;
+  font-family: var(--serif);
+  font-weight: 400;
+  font-size: 20px;
   overflow-wrap: break-word;
 }
 
@@ -1507,6 +1631,335 @@ textarea:focus-visible {
   justify-content: flex-end;
 }
 
+/* --- wallet / payment sheet (bottom sheet; light + midnight skins) --- */
+
+.sheet-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.6);
+  padding: 0;
+}
+
+.pay-sheet {
+  width: 100%;
+  max-width: 520px;
+  max-height: 92dvh;
+  overflow-y: auto;
+  background: var(--panel);
+  border-top-left-radius: 20px;
+  border-top-right-radius: 20px;
+  border: 1px solid var(--line-2);
+  border-bottom: 0;
+  padding: 12px 18px calc(20px + env(safe-area-inset-bottom));
+  animation: pay-sheet-up 0.22s ease;
+}
+
+:root[data-skin="midnight"] .pay-sheet {
+  background: var(--panel-2);
+}
+
+@keyframes pay-sheet-up {
+  from {
+    transform: translateY(24px);
+    opacity: 0;
+  }
+  to {
+    transform: translateY(0);
+    opacity: 1;
+  }
+}
+
+.pay-sheet-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  position: sticky;
+  top: 0;
+  background: inherit;
+  padding: 4px 0 8px;
+}
+
+.pay-sheet-eyebrow {
+  font-size: 12px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--dim);
+}
+
+.pay-hero {
+  text-align: center;
+  padding: 8px 0 4px;
+}
+
+.pay-amount {
+  margin: 0;
+  font-family: var(--serif);
+  font-weight: 400;
+  font-size: 42px;
+  letter-spacing: -0.02em;
+  line-height: 1.1;
+  overflow-wrap: anywhere;
+}
+
+.pay-amount-fallback {
+  margin: 0;
+  font-family: var(--serif);
+  font-weight: 400;
+  font-size: 26px;
+  letter-spacing: -0.01em;
+}
+
+.pay-payee {
+  margin: 6px 0 0;
+  font-size: 15px;
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+
+.pay-rows {
+  margin: 12px 0 0;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  overflow: hidden;
+  background: var(--panel);
+}
+
+:root[data-skin="midnight"] .pay-rows {
+  background: transparent;
+}
+
+.pay-row + .pay-row {
+  border-top: 1px solid var(--line);
+}
+
+.pay-row-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  min-height: 44px;
+  padding: 10px 14px;
+  background: transparent;
+  border: 0;
+  color: var(--ink);
+  text-align: left;
+  font-size: 14px;
+}
+
+.pay-row-label {
+  flex-shrink: 0;
+  font-size: 12px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--dim);
+  min-width: 118px;
+}
+
+.pay-row-value {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--ink);
+}
+
+.pay-chevron {
+  flex-shrink: 0;
+  color: var(--dim);
+  font-size: 13px;
+}
+
+.pay-row-body {
+  padding: 2px 14px 12px 14px;
+  font-size: 13px;
+  color: var(--muted);
+  line-height: 1.55;
+  overflow-wrap: anywhere;
+}
+
+.pay-row-note {
+  margin: 0;
+}
+
+.pay-card-toggle {
+  display: inline-flex;
+  align-items: center;
+  min-height: 44px;
+  padding: 0 4px;
+  background: transparent;
+  border: 0;
+  color: var(--accent);
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.pay-card-list {
+  list-style: none;
+  margin: 4px 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.pay-card-option {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  width: 100%;
+  min-height: 44px;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: transparent;
+  color: var(--ink);
+  font-size: 14px;
+  text-align: left;
+}
+
+.pay-card-option[aria-pressed="true"] {
+  border-color: var(--accent);
+}
+
+.pay-default {
+  font-size: 11px;
+  color: var(--muted);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 2px 8px;
+  white-space: nowrap;
+}
+
+.pay-error {
+  margin-left: 0;
+  margin-right: 0;
+}
+
+.pay-actions {
+  display: flex;
+  gap: 10px;
+  margin-top: 16px;
+  position: sticky;
+  bottom: 0;
+  padding: 12px 0 4px;
+  background: inherit;
+}
+
+.pay-actions .btn-quiet {
+  flex: 1;
+}
+
+.pay-actions .btn-pay {
+  flex: 1.6;
+}
+
+/* Approve is the dark primary action; quiet Cancel is the secondary. */
+.btn-pay {
+  background: #191817;
+  border-color: #191817;
+  color: #fbf9f5;
+}
+
+:root[data-skin="midnight"] .btn-pay {
+  background: #f5f5f5;
+  border-color: #f5f5f5;
+  color: #121212;
+}
+
+.btn-quiet {
+  background: transparent;
+  border-color: var(--line-2);
+  color: var(--ink);
+}
+
+.pay-footnote {
+  margin: 8px 0 0;
+  font-size: 11px;
+  color: var(--dim);
+  line-height: 1.6;
+  text-align: center;
+}
+
+/* Inline "Review purchase >" link on spend-related chat approval cards. */
+.approval-review-link {
+  display: inline-flex;
+  align-items: center;
+  min-height: 44px;
+  padding: 0 2px;
+  background: transparent;
+  border: 0;
+  color: var(--accent);
+  font-size: 14px;
+  font-weight: 600;
+}
+
+/* Receipt view (paid amount, last4, paid-at, order id). */
+.pay-receipt {
+  text-align: center;
+  padding: 12px 0 4px;
+}
+
+.pay-receipt h2 {
+  margin: 0 0 4px;
+  font-family: var(--serif);
+  font-weight: 400;
+  font-size: 28px;
+  letter-spacing: -0.01em;
+  overflow-wrap: anywhere;
+}
+
+.pay-receipt-mark {
+  margin: 0 0 4px;
+  font-size: 30px;
+  color: var(--dim);
+}
+
+.pay-receipt-mark.ok {
+  color: var(--success);
+}
+
+.pay-receipt-rows {
+  margin: 14px 0 4px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  overflow: hidden;
+  text-align: left;
+}
+
+.pay-receipt-rows > div {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 12px;
+  padding: 10px 14px;
+}
+
+.pay-receipt-rows > div + div {
+  border-top: 1px solid var(--line);
+}
+
+.pay-receipt-rows dt {
+  font-size: 13px;
+  color: var(--muted);
+}
+
+.pay-receipt-rows dd {
+  margin: 0;
+  font-size: 13px;
+  color: var(--ink);
+  overflow-wrap: anywhere;
+  text-align: right;
+}
+
 /* --- phone-first responsive: drawer stays a slide-over at every width --- */
 
 @media (max-width: 767px) {
@@ -1520,14 +1973,6 @@ textarea:focus-visible {
     --composer-ring: #3a3a3c;
     --line: #3a3a3c;
     --radius: 18px;
-  }
-
-  :root[data-skin="meadow"] {
-    --bg: #f6f8f6;
-    --panel: #fcfdfc;
-    --surface: #fff;
-    --composer-ring: #cfd8d1;
-    --line: #c1ccc4;
   }
 
   .top-bar {
@@ -1575,6 +2020,10 @@ textarea:focus-visible {
 
   .conv-drawer {
     transition: none;
+  }
+
+  .pay-sheet {
+    animation: none;
   }
 
   .screen {
