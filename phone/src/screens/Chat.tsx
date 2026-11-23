@@ -21,7 +21,10 @@ import ApprovalCard from "../components/ApprovalCard";
 import Composer from "../components/Composer";
 import ConversationDrawer from "../components/ConversationDrawer";
 import MessageList from "../components/MessageList";
+import PaymentSheet from "../components/PaymentSheet";
+import SproutMark from "../components/SproutMark";
 import ThemeToggle from "../components/ThemeToggle";
+import type { ProposalRef, SheetProposal } from "../wallet";
 import { AccountChip, ThreadListView, useThreadsList } from "../components/ThreadList";
 
 interface ChatProps {
@@ -36,6 +39,7 @@ export default function Chat({ threadId, onBack, onOpenThread }: ChatProps) {
   const [streamState, setStreamState] = useState<StreamState>("connecting");
   const [actionError, setActionError] = useState<string | null>(null);
   const [drawerOpen, setDrawerOpen] = useState(false);
+  const [purchaseSheet, setPurchaseSheet] = useState<{ sheet: SheetProposal; approvalId: string } | null>(null);
   const streamRef = useRef<ThreadStream | null>(null);
   const stateRef = useRef<ChatState | null>(null);
   stateRef.current = state;
@@ -93,6 +97,7 @@ export default function Chat({ threadId, onBack, onOpenThread }: ChatProps) {
                     effects: approval.effects ?? [],
                     expires_at: approval.expires_at,
                     status: approval.status,
+                    arguments: approval.arguments,
                   });
                 }
               }
@@ -197,6 +202,18 @@ export default function Chat({ threadId, onBack, onOpenThread }: ChatProps) {
     [state],
   );
 
+  // Spend-related approval cards carry a wallet proposal id: open it in the
+  // payment sheet. The sheet fetches its own cards/limits snapshots.
+  const reviewPurchase = useCallback(
+    (approvalId: string) => (ref: ProposalRef) => {
+      setPurchaseSheet({
+        sheet: { id: ref.proposalId, amountCents: ref.amountCents, currency: ref.currency, description: ref.description },
+        approvalId,
+      });
+    },
+    [],
+  );
+
   const drawer = (
     <ConversationDrawer open={drawerOpen} onClose={() => setDrawerOpen(false)}>
       <div className="drawer-scroll">
@@ -257,9 +274,32 @@ export default function Chat({ threadId, onBack, onOpenThread }: ChatProps) {
       {pendingApprovalsList.length > 0 && (
         <section className="approvals-tray" aria-label="Approvals waiting on you">
           {pendingApprovalsList.map((approval) => (
-            <ApprovalCard key={approval.id} approval={approval} onDecide={decide} />
+            <ApprovalCard
+              key={approval.id}
+              approval={approval}
+              onDecide={decide}
+              onReviewPurchase={reviewPurchase(approval.id)}
+            />
           ))}
         </section>
+      )}
+      {purchaseSheet && (
+        <PaymentSheet
+          proposal={purchaseSheet.sheet}
+          onClose={() => setPurchaseSheet(null)}
+          onDecided={() => {
+            // The stream's approval_resolved event removes the card; remove
+            // optimistically here too, mirroring the inline decide path.
+            const approvalId = purchaseSheet.approvalId;
+            setState((current) => {
+              if (!current) return current;
+              if (!current.approvals.has(approvalId)) return current;
+              const approvals = new Map(current.approvals);
+              approvals.delete(approvalId);
+              return { ...current, approvals };
+            });
+          }}
+        />
       )}
       <Composer
         disabled={state.activeTurnId !== null}
@@ -304,10 +344,7 @@ function ChatHeader({
         </svg>
       </button>
       <div className="chat-identity">
-        <span className="kelp-avatar small" aria-hidden="true">
-          <i />
-          <i />
-        </span>
+        <SproutMark size={20} />
         <h1 className="chat-title">{title}</h1>
       </div>
       <span className={`connection ${live ? "online" : "offline"}`} role="status">

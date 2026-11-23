@@ -5,13 +5,16 @@
  */
 import { useEffect, useState } from "react";
 import type { Approval } from "../chatState";
+import { extractProposalRef, type ProposalRef } from "../wallet";
 
 interface ApprovalCardProps {
   approval: Approval;
   onDecide: (approvalId: string, decision: "approve" | "deny") => Promise<void>;
+  /** Set when the host screen can open the payment sheet for spend approvals. */
+  onReviewPurchase?: (ref: ProposalRef) => void;
 }
 
-export default function ApprovalCard({ approval, onDecide }: ApprovalCardProps) {
+export default function ApprovalCard({ approval, onDecide, onReviewPurchase }: ApprovalCardProps) {
   const [busy, setBusy] = useState<"approve" | "deny" | null>(null);
   const [now, setNow] = useState(() => Date.now());
 
@@ -23,6 +26,11 @@ export default function ApprovalCard({ approval, onDecide }: ApprovalCardProps) 
   const expiresAt = Date.parse(approval.expires_at);
   const expired = !Number.isNaN(expiresAt) && now >= expiresAt;
   const secondsLeft = Number.isNaN(expiresAt) ? null : Math.max(0, Math.floor((expiresAt - now) / 1000));
+
+  // Spend-related cards carry a wallet proposal id in their arguments; those
+  // get a "Review purchase >" link into the payment sheet. Everything else
+  // keeps the existing inline Approve/Deny exactly as before.
+  const proposalRef = onReviewPurchase ? extractProposalRef(approval) : null;
 
   const decide = async (decision: "approve" | "deny") => {
     if (busy || expired) return;
@@ -63,6 +71,16 @@ export default function ApprovalCard({ approval, onDecide }: ApprovalCardProps) 
             </li>
           ))}
         </ul>
+      )}
+      {proposalRef && onReviewPurchase && (
+        <button
+          type="button"
+          className="approval-review-link"
+          onClick={() => onReviewPurchase(proposalRef)}
+          disabled={busy !== null || expired}
+        >
+          Review purchase &gt;
+        </button>
       )}
       <div className="approval-actions">
         <button

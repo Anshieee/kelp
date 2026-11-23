@@ -8,6 +8,7 @@
  * - Pure presentation: thread data lives in ThreadListPanel.
  */
 import { useEffect, useRef, type ReactNode } from "react";
+import SproutMark from "./SproutMark";
 
 interface ConversationDrawerProps {
   open: boolean;
@@ -65,11 +66,8 @@ export default function ConversationDrawer({
       >
         <div className="drawer-heading">
           <span className="brand">
-            <span className="kelp-avatar small" aria-hidden="true">
-              <i />
-              <i />
-            </span>
-            Kelp
+            <SproutMark size={22} />
+            kelp
           </span>
           <button
             ref={closeRef}
