@@ -43,7 +43,13 @@ from payments.razorpay_gateway import (
     RazorpayWallet,
 )
 from payments.stripe_wallet import WalletNotConfigured
-from payments.wallet import Card, SpendCaps, WalletError, WalletLedger
+from payments.wallet import (
+    Card,
+    SpendCaps,
+    WalletError,
+    WalletLedger,
+    reason_is_late_settleable,
+)
 
 KEY_ID = "rzp_test_abc123"
 TEST_SECRET = "razorpaysecret123"
@@ -921,6 +927,227 @@ def test_failed_payment_releases_the_reservation(
         "failed"
     )
     assert checkout.wallet.limits("usd")["reserved_cents"] == 0
+
+
+def _confirm(checkout: RazorpayCheckout, order_id: str, payment_id: str) -> dict[str, Any]:
+    return checkout.confirm(
+        razorpay_order_id=order_id,
+        razorpay_payment_id=payment_id,
+        razorpay_signature=signature_for(order_id, payment_id),
+    )
+
+
+def _fail_first_attempt(
+    transport: CheckoutTransport, checkout: RazorpayCheckout, order_id: str
+) -> None:
+    """Fail payment attempt A on the order, as Razorpay lets the payer retry."""
+
+    transport.payment_status = "failed"
+    with pytest.raises(WalletError) as caught:
+        _confirm(checkout, order_id, "pay_test0001")
+    assert caught.value.code == "payment_failed"
+    transport.payment_status = "captured"
+
+
+def test_a_successful_retry_after_a_failed_attempt_settles_the_order(
+    transport: CheckoutTransport,
+) -> None:
+    checkout = make_checkout(transport=transport)
+    created = create_order(checkout)
+    order_id = created["checkout"]["order_id"]
+    _fail_first_attempt(transport, checkout, order_id)
+    # The failed attempt released the reservation immediately.
+    assert checkout.wallet.limits("usd")["reserved_cents"] == 0
+
+    result = _confirm(checkout, order_id, "pay_test0002")
+
+    assert result["idempotent"] is False
+    assert result["proposal"]["status"] == "paid"
+    assert result["receipt"] is not None
+    assert result["receipt"]["amount_cents"] == 1500
+    stored = checkout.wallet.ledger.get_proposal(created["proposal"]["id"])
+    assert stored.status == "paid"
+    assert stored.reason is None
+    assert checkout.wallet.limits("usd")["spent_cents"] == 1500
+    assert checkout.wallet.limits("usd")["reserved_cents"] == 0
+
+
+def test_a_failed_attempt_records_a_late_settleable_reason(
+    transport: CheckoutTransport,
+) -> None:
+    checkout = make_checkout(transport=transport)
+    created = create_order(checkout)
+    _fail_first_attempt(transport, checkout, created["checkout"]["order_id"])
+
+    stored = checkout.wallet.ledger.get_proposal(created["proposal"]["id"])
+
+    assert stored.status == "failed"
+    assert stored.reason == "payment_attempt_failed:failed"
+    assert reason_is_late_settleable(stored.reason)
+
+
+def test_a_failed_attempt_keeps_the_provider_error_code_in_the_reason(
+    transport: CheckoutTransport,
+) -> None:
+    class CodedTransport(CheckoutTransport):
+        def fetch_payment(self, **kwargs: Any) -> Mapping[str, Any]:
+            payload = dict(super().fetch_payment(**kwargs))
+            payload["error_code"] = "BAD_REQUEST_ERROR"
+            return payload
+
+    coded = CodedTransport()
+    coded.payment_status = "failed"
+    checkout = make_checkout(transport=coded)
+    created = create_order(checkout)
+    order_id = created["checkout"]["order_id"]
+
+    with pytest.raises(WalletError):
+        _confirm(checkout, order_id, "pay_test0001")
+
+    stored = checkout.wallet.ledger.get_proposal(created["proposal"]["id"])
+    assert stored.reason == "payment_attempt_failed:BAD_REQUEST_ERROR"
+    coded.payment_status = "captured"
+    assert _confirm(checkout, order_id, "pay_test0002")["proposal"]["status"] == (
+        "paid"
+    )
+
+
+def test_a_successful_webhook_after_a_failed_webhook_settles_the_order(
+    transport: CheckoutTransport,
+) -> None:
+    checkout = make_checkout(transport=transport)
+    created = create_order(checkout)
+    order_id = created["checkout"]["order_id"]
+
+    transport.payment_status = "failed"
+    failed_body, failed_sig = sign_webhook(
+        webhook_event(
+            order_id,
+            "pay_test0001",
+            status="failed",
+            event="payment.failed",
+        )
+    )
+    failed = checkout.handle_webhook(failed_body, signature=failed_sig)
+    assert failed["handled"] is True
+    assert failed["status"] == "failed"
+    assert failed["error"] == "payment_failed"
+    assert checkout.wallet.limits("usd")["reserved_cents"] == 0
+
+    transport.payment_status = "captured"
+    ok_body, ok_sig = sign_webhook(webhook_event(order_id, "pay_test0002"))
+    result = checkout.handle_webhook(ok_body, signature=ok_sig)
+
+    assert result["handled"] is True
+    assert result["proposal"]["status"] == "paid"
+    assert result["receipt"]["amount_cents"] == 1500
+    assert checkout.wallet.limits("usd")["spent_cents"] == 1500
+
+
+def test_a_refunded_payment_is_not_settleable_afterwards(
+    transport: CheckoutTransport,
+) -> None:
+    checkout = make_checkout(transport=transport)
+    created = create_order(checkout)
+    order_id = created["checkout"]["order_id"]
+    transport.payment_status = "refunded"
+    with pytest.raises(WalletError):
+        _confirm(checkout, order_id, "pay_test0001")
+    stored = checkout.wallet.ledger.get_proposal(created["proposal"]["id"])
+    assert stored.reason == "refunded"
+    assert not reason_is_late_settleable(stored.reason)
+
+    transport.payment_status = "captured"
+    with pytest.raises(WalletError) as caught:
+        _confirm(checkout, order_id, "pay_test0002")
+    assert caught.value.code == "already_decided"
+    body, signature = sign_webhook(webhook_event(order_id, "pay_test0002"))
+    ignored = checkout.handle_webhook(body, signature=signature)
+
+    assert ignored == {
+        "handled": False,
+        "event": "payment.captured",
+        "reason": "not_payable",
+    }
+    assert checkout.wallet.ledger.get_proposal(created["proposal"]["id"]).status == (
+        "failed"
+    )
+    assert checkout.wallet.limits("usd")["spent_cents"] == 0
+
+
+def test_an_amount_mismatch_is_not_settleable_afterwards(
+    transport: CheckoutTransport,
+) -> None:
+    transport.payment_amount = 999
+    checkout = make_checkout(transport=transport)
+    created = create_order(checkout)
+    order_id = created["checkout"]["order_id"]
+    with pytest.raises(WalletError) as caught:
+        _confirm(checkout, order_id, "pay_test0001")
+    assert caught.value.code == "payment_mismatch"
+    stored = checkout.wallet.ledger.get_proposal(created["proposal"]["id"])
+    assert stored.reason == "amount_mismatch"
+    assert not reason_is_late_settleable(stored.reason)
+
+    transport.payment_amount = None
+    with pytest.raises(WalletError) as caught:
+        _confirm(checkout, order_id, "pay_test0002")
+    assert caught.value.code == "already_decided"
+    body, signature = sign_webhook(webhook_event(order_id, "pay_test0002"))
+    ignored = checkout.handle_webhook(body, signature=signature)
+
+    assert ignored["handled"] is False
+    assert ignored["reason"] == "not_payable"
+    assert checkout.wallet.ledger.get_proposal(created["proposal"]["id"]).status == (
+        "failed"
+    )
+    assert checkout.wallet.limits("usd")["spent_cents"] == 0
+
+
+def test_a_second_captured_payment_is_refused_after_a_retry_settles(
+    transport: CheckoutTransport,
+) -> None:
+    checkout = make_checkout(transport=transport)
+    created = create_order(checkout)
+    order_id = created["checkout"]["order_id"]
+    _fail_first_attempt(transport, checkout, order_id)
+    _confirm(checkout, order_id, "pay_test0002")
+
+    with pytest.raises(WalletError) as caught:
+        _confirm(checkout, order_id, "pay_test0003")
+    assert caught.value.code == "already_decided"
+    body, signature = sign_webhook(webhook_event(order_id, "pay_test0003"))
+    other = checkout.handle_webhook(body, signature=signature)
+
+    assert other["handled"] is False
+    assert other["reason"] == "already_paid"
+    assert checkout.wallet.limits("usd")["spent_cents"] == 1500
+    # The winning payment still replays idempotently.
+    assert _confirm(checkout, order_id, "pay_test0002")["idempotent"] is True
+
+
+def test_a_payment_that_settled_another_order_cannot_settle_a_retried_order(
+    transport: CheckoutTransport,
+) -> None:
+    checkout = make_checkout(transport=transport)
+    first = create_order(checkout, key="checkout-key-1")
+    first_order = first["checkout"]["order_id"]
+    _fail_first_attempt(transport, checkout, first_order)
+    second = create_order(checkout, key="checkout-key-2")
+    second_order = second["checkout"]["order_id"]
+    _confirm(checkout, second_order, "pay_test0002")
+
+    # The provider claims the payment that paid the second order also belongs
+    # to the first one.
+    transport.payment_order_id = first_order
+    with pytest.raises(WalletError) as caught:
+        _confirm(checkout, first_order, "pay_test0002")
+
+    assert caught.value.code == "already_decided"
+    assert checkout.wallet.ledger.get_proposal(first["proposal"]["id"]).status == (
+        "failed"
+    )
+    assert checkout.wallet.limits("usd")["spent_cents"] == 1500
 
 
 def test_unknown_order_is_not_settled(transport: CheckoutTransport) -> None:

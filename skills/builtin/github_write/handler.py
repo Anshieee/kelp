@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import base64
+import functools
 import json
+import re
 from pathlib import Path
 from typing import Any, Callable, Mapping, Protocol
 from urllib.parse import quote
@@ -51,6 +53,24 @@ def _invalid_arguments(arguments: Mapping[str, Any]) -> None:
             user_fixable=True,
             details={"field": pointer},
         )
+
+
+@functools.lru_cache(maxsize=1)
+def _ref_pattern() -> re.Pattern[str]:
+    schema = json.loads(_MANIFEST.read_text(encoding="utf-8"))["input_schema"]
+    return re.compile(schema["properties"]["branch"]["pattern"])
+
+
+def _valid_ref(name: str) -> bool:
+    """Whether ``name`` is a branch name this skill may put in a GitHub URL.
+
+    The manifest pattern is a subset of ``git check-ref-format``: no ``..``,
+    ``//``, ``/.``, ``.lock`` component, or leading/trailing separator. A ref
+    such as ``../../repos/other/x`` would otherwise be normalised by the HTTP
+    client into a path outside the approved repository.
+    """
+
+    return isinstance(name, str) and _ref_pattern().search(name) is not None
 
 
 async def _request(
@@ -107,6 +127,10 @@ async def run(arguments: Mapping[str, Any], context: GitHubWriteContext) -> Mapp
     encoded_repo = quote(repo, safe="/")
     base = str(arguments["base"])
     branch = str(arguments["branch"])
+    if not (_valid_ref(base) and _valid_ref(branch)):  # pragma: no cover - schema checked
+        raise SkillHandlerError(
+            "invalid_arguments", "Invalid GitHub branch name.", user_fixable=True
+        )
     def transport(
         method: str,
         url: str,

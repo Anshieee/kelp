@@ -218,8 +218,12 @@ maps tenants, and `KELP_ENTITLEMENT_PLAN` is the fallback plan id. The built-in
 with no entry in `KELP_ENTITLEMENT_TENANT_PLANS_JSON` gets the fallback plan, so
 with the defaults every tenant that passes the tenant gate is unlimited. A tenant
 mapped to a plan id missing from the table, or a task type outside the plan's
-`allowed_task_types`, is denied with `entitlement_denied`; a reached ceiling
-answers `entitlement_exhausted`; a malformed plan table fails startup. Billing is an internal terminal
+`allowed_task_types`, is denied with `entitlement_denied`; a malformed plan table
+fails startup. The ceilings (`max_turns`, `max_runs`, `max_cost_usd`) are parsed
+and validated, but this build does not wire a usage counter into
+`StaticEntitlementStore`, so a configured ceiling is not enforced yet and never
+answers `entitlement_exhausted` in the running server. Use the spend caps (§13.1)
+to bound cost today. Billing is an internal terminal
 hook and needs no environment variable; it receives usage fields and the plan
 snapshot, never prompt text.
 

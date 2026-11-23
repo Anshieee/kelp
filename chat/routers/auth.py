@@ -8,11 +8,11 @@ No status code, header, cookie, or error body may change here.
 from __future__ import annotations
 
 import hashlib
-import hmac
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 from urllib.parse import unquote, urlsplit
 
+from ..compare import constant_time_equals
 from ..errors import ChatError
 from ..logging import log
 from ._util import (
@@ -167,7 +167,7 @@ def _same_origin(request: "Request") -> bool:
         return False
     if parsed.scheme not in {"http", "https"} or not parsed.netloc:
         return False
-    return hmac.compare_digest(parsed.netloc, host)
+    return constant_time_equals(parsed.netloc, host)
 
 
 # -- limiter and authorization --------------------------------------------
@@ -333,7 +333,7 @@ def _bearer_authorized(api: "ChatAPI", request: "Request") -> bool:
     prefix = "Bearer "
     if not header.startswith(prefix):
         return False
-    return hmac.compare_digest(header[len(prefix) :], api.auth_token)
+    return constant_time_equals(header[len(prefix) :], api.auth_token)
 
 
 def _csrf_ok(api: "ChatAPI", request: "Request", auth: _AuthResult) -> bool:
@@ -354,7 +354,7 @@ def _csrf_ok(api: "ChatAPI", request: "Request", auth: _AuthResult) -> bool:
             return False
         header = request.header("x-csrf-token") or ""
         cookie = _parse_cookies(request.header("cookie")).get(CSRF_COOKIE) or ""
-        if not header or not cookie or not hmac.compare_digest(header, cookie):
+        if not header or not cookie or not constant_time_equals(header, cookie):
             return False
         return auth.session is not None and api.sessions.csrf_matches(
             auth.session, header
@@ -363,7 +363,7 @@ def _csrf_ok(api: "ChatAPI", request: "Request", auth: _AuthResult) -> bool:
         return True
     if api.csrf_token:
         supplied = request.header("x-csrf-token") or ""
-        return hmac.compare_digest(supplied, api.csrf_token)
+        return constant_time_equals(supplied, api.csrf_token)
     if not request.header("origin"):
         # Non-browser local calls with an explicit bearer token or with auth
         # disabled: there is no ambient credential to protect.

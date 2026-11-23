@@ -331,6 +331,146 @@ def test_form_xobject_nesting_stops_at_the_depth_cap() -> None:
     assert lines[1:] == ["Level 1", "Level 2", "Level 3", "Level 4"]
 
 
+_FORM_HEAD = b" /Type /XObject /Subtype /Form /BBox [0 0 612 792]"
+
+
+def _form_fanout_pdf(*, fan_out: int, levels: int) -> bytes:
+    """Page -> F0 x N -> F1 x N -> ... -> leaf form that shows one text line."""
+
+    bodies: dict[int, bytes] = {
+        1: b"<< /Type /Catalog /Pages 2 0 R >>",
+        2: b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+        3: (
+            b"<< /Type /Page /Parent 2 0 R "
+            b"/Resources << /XObject << /Fm 10 0 R >> >> /Contents 4 0 R >>"
+        ),
+        4: stream_object(b"/Fm Do " * fan_out),
+    }
+    for level in range(levels):
+        number = 10 + level
+        if level + 1 < levels:
+            content = b"/Fm Do " * fan_out
+            resources = b" /Resources << /XObject << /Fm %d 0 R >> >>" % (number + 1)
+        else:
+            content = b"BT (leaf) Tj ET"
+            resources = b" /Resources << >>"
+        bodies[number] = stream_object(content, _FORM_HEAD + resources)
+    return make_pdf_from_objects(bodies)
+
+
+def test_form_used_twice_is_extracted_twice() -> None:
+    data = make_pdf_from_objects(
+        {
+            1: b"<< /Type /Catalog /Pages 2 0 R >>",
+            2: b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+            3: (
+                b"<< /Type /Page /Parent 2 0 R "
+                b"/Resources << /XObject << /Fm0 5 0 R >> >> /Contents 4 0 R >>"
+            ),
+            4: stream_object(b"BT (A) Tj ET /Fm0 Do BT (B) Tj ET /Fm0 Do"),
+            5: stream_object(
+                zlib.compress(b"BT (Inside) Tj ET"),
+                _FORM_HEAD + b" /Resources << >> /Filter /FlateDecode",
+            ),
+        }
+    )
+
+    assert extract_pdf(data) == [["A", "Inside", "B", "Inside"]]
+
+
+def test_form_decoded_once_per_document(monkeypatch: pytest.MonkeyPatch) -> None:
+    data = _form_fanout_pdf(fan_out=3, levels=2)
+    real = extract_module._decode_stream
+    form_decodes = 0
+
+    def counting(body: bytes, **kwargs: object) -> bytes | None:
+        nonlocal form_decodes
+        if b"/Subtype /Form" in body:
+            form_decodes += 1
+        return real(body, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(extract_module, "_decode_stream", counting)
+
+    lines = extract_pdf(data)[0]
+
+    assert lines == ["leaf"] * 9  # behaviour preserved: every invocation is read
+    assert form_decodes == 2  # one decode per form object, not per invocation
+
+
+def test_form_fanout_is_bounded_in_time_and_output() -> None:
+    data = _form_fanout_pdf(fan_out=20, levels=4)  # 20**4 leaf invocations
+    assert len(data) < 4096
+
+    started = time.monotonic()
+    pages = extract_pdf(data)
+    elapsed = time.monotonic() - started
+
+    assert elapsed < 10.0  # generous for slow CI; the counts below are the real check
+    assert len(pages) == 1
+    assert pages[0]  # partial output survives the cap
+    assert len(pages[0]) <= extract_module._MAX_FORM_INVOCATIONS
+    assert set(pages[0]) == {"leaf"}
+
+
+def test_one_form_repeated_many_times_is_capped() -> None:
+    bodies = {
+        1: b"<< /Type /Catalog /Pages 2 0 R >>",
+        2: b"<< /Type /Pages /Kids [3 0 R] /Count 2 >>",
+        3: (
+            b"<< /Type /Page /Parent 2 0 R "
+            b"/Resources << /XObject << /Fm0 5 0 R >> >> /Contents 4 0 R >>"
+        ),
+        4: stream_object(zlib.compress(b"/Fm0 Do " * 100_000), b" /Filter /FlateDecode"),
+        5: stream_object(b"BT (x) Tj ET", _FORM_HEAD + b" /Resources << >>"),
+    }
+    started = time.monotonic()
+    pages = extract_pdf(make_pdf_from_objects(bodies))
+    elapsed = time.monotonic() - started
+
+    assert elapsed < 10.0  # generous for slow CI; the counts below are the real check
+    assert 0 < len(pages[0]) <= extract_module._MAX_FORM_INVOCATIONS < 100_000
+
+
+def test_token_cap_truncates_a_flat_content_stream(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(extract_module, "_MAX_CONTENT_TOKENS", 100)
+    content = b"".join(b"BT (line %d) Tj ET\n" % index for index in range(1000))
+    data = make_pdf_from_objects(
+        {
+            1: b"<< /Type /Catalog /Pages 2 0 R >>",
+            2: b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+            3: b"<< /Type /Page /Parent 2 0 R /Contents 4 0 R >>",
+            4: stream_object(content),
+        }
+    )
+
+    lines = extract_pdf(data)[0]
+
+    assert lines[0] == "line 0"
+    assert 0 < len(lines) <= 100 // 4  # BT ( ) Tj ET = 4 tokens per line
+
+
+def test_work_cap_leaves_later_pages_in_place_but_empty() -> None:
+    bodies = {
+        1: b"<< /Type /Catalog /Pages 2 0 R >>",
+        2: b"<< /Type /Pages /Kids [3 0 R 6 0 R] /Count 2 >>",
+        3: (
+            b"<< /Type /Page /Parent 2 0 R "
+            b"/Resources << /XObject << /Fm0 5 0 R >> >> /Contents 4 0 R >>"
+        ),
+        4: stream_object(b"/Fm0 Do " * (extract_module._MAX_FORM_INVOCATIONS + 10)),
+        5: stream_object(b"BT (x) Tj ET", _FORM_HEAD + b" /Resources << >>"),
+        6: b"<< /Type /Page /Parent 2 0 R /Contents 7 0 R >>",
+        7: stream_object(b"BT (Second page) Tj ET"),
+    }
+
+    pages = extract_pdf(make_pdf_from_objects(bodies))
+
+    assert len(pages) == 2  # page numbering never drifts
+    assert pages[1] == []  # the cap is document-wide, so nothing more is read
+
+
 def test_oversized_artifact_is_refused_before_reading(tmp_path: Path) -> None:
     context, root = workspace(tmp_path, {})
     oversized = root / "var" / "artifacts" / "abcdefgh1234.csv"

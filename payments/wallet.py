@@ -68,6 +68,7 @@ __all__ = [
     "DEFAULT_MONTHLY_CAP_CENTS",
     "DEFAULT_PER_PURCHASE_CAP_CENTS",
     "MONTHLY_CAP_ENV",
+    "PAYMENT_ATTEMPT_FAILED_REASON",
     "PER_PURCHASE_CAP_ENV",
     "Card",
     "HttpStripeGateway",
@@ -83,6 +84,7 @@ __all__ = [
     "card_from_payment_method",
     "contains_raw_card_data",
     "normalize_currency",
+    "reason_is_late_settleable",
     "redact_payload",
     "redact_text",
 ]
@@ -104,6 +106,40 @@ MAX_IDEMPOTENCY_CHARS = 80
 DEFAULT_APPROVAL_TTL = timedelta(minutes=30)
 MAX_APPROVAL_TTL = timedelta(days=31)
 APPROVAL_EXPIRED_REASON = "approval_expired"
+# A hosted-checkout payment attempt that failed. Razorpay lets the payer retry
+# on the same order, so such an order can still be paid afterwards. The stored
+# reason is ``payment_attempt_failed`` or ``payment_attempt_failed:<code>``.
+PAYMENT_ATTEMPT_FAILED_REASON = "payment_attempt_failed"
+_PAYMENT_ATTEMPT_FAILED_PREFIX = PAYMENT_ATTEMPT_FAILED_REASON + ":"
+
+
+def reason_is_late_settleable(reason: str | None) -> bool:
+    """Whether a failed order's ``reason`` still allows a hosted payment.
+
+    True for an expired approval and for a failed payment attempt (with or
+    without a provider error code). Mismatch, refund, denial and every other
+    failure reason are final. ``WalletLedger.settle_checkout`` applies the same
+    rule in SQL (see ``_LATE_SETTLEABLE_SQL``), so the two cannot disagree.
+    """
+
+    if not isinstance(reason, str):
+        return False
+    return reason in (
+        APPROVAL_EXPIRED_REASON,
+        PAYMENT_ATTEMPT_FAILED_REASON,
+    ) or reason.startswith(_PAYMENT_ATTEMPT_FAILED_PREFIX)
+
+
+# ``substr`` instead of ``LIKE`` so the ``_`` in the prefix is not a wildcard.
+_LATE_SETTLEABLE_SQL = (
+    "reason IN (?, ?) OR substr(reason, 1, %d) = ?"
+    % len(_PAYMENT_ATTEMPT_FAILED_PREFIX)
+)
+_LATE_SETTLEABLE_PARAMS = (
+    APPROVAL_EXPIRED_REASON,
+    PAYMENT_ATTEMPT_FAILED_REASON,
+    _PAYMENT_ATTEMPT_FAILED_PREFIX,
+)
 
 _CURRENCY_RE = re.compile(r"^[a-z]{3}$")
 _PAYMENT_METHOD_RE = re.compile(r"^pm_[A-Za-z0-9]{4,}$")
@@ -1087,12 +1123,13 @@ class WalletLedger:
                         message="That order was already paid by another payment.",
                     )
                 # A hosted payment can complete after the reservation window
-                # folded the approval. The provider already holds the money, so
-                # an ``approval_expired`` order is still settleable; a denial
-                # or a failed payment is not.
+                # folded the approval, or after an earlier attempt on the same
+                # order failed (Razorpay lets the payer retry on one order).
+                # The provider already holds the money, so those orders are
+                # still settleable; a denial, a mismatch or a refund is not.
                 payable = proposal_row["status"] == "approved" or (
                     proposal_row["status"] == "failed"
-                    and proposal_row["reason"] == APPROVAL_EXPIRED_REASON
+                    and reason_is_late_settleable(proposal_row["reason"])
                 )
                 if not payable:
                     self._conn.execute("ROLLBACK")
@@ -1123,15 +1160,16 @@ class WalletLedger:
                         card_last4 = ?, paid_at = ?, reason = NULL
                     WHERE id = ? AND (
                         status = 'approved'
-                        OR (status = 'failed' AND reason = ?)
+                        OR (status = 'failed' AND (%s))
                     )
-                    """,
+                    """
+                    % _LATE_SETTLEABLE_SQL,
                     (
                         receipt_id,
                         card_last4,
                         now,
                         order["proposal_id"],
-                        APPROVAL_EXPIRED_REASON,
+                        *_LATE_SETTLEABLE_PARAMS,
                     ),
                 ).rowcount
                 recorded = self._conn.execute(

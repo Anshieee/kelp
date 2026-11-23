@@ -780,9 +780,12 @@ def build_app(
             config.db_path.parent / "wallet" / "wallet.db"
         )
         wallet = RazorpayWallet.from_env(source, ledger=wallet_ledger)
-        wallet_api = WalletAPI(wallet)
+        # upstream_authorized: ChatAPI._dispatch_inner runs auth_routes._authorize
+        # (auth + CSRF, chat/api.py) before routing any /api/wallet/* request here.
+        wallet_api = WalletAPI(wallet, upstream_authorized=True)
         checkout_api = CheckoutAPI(
-            RazorpayCheckout.from_env(source, ledger=wallet_ledger)
+            RazorpayCheckout.from_env(source, ledger=wallet_ledger),
+            upstream_authorized=True,
         )
         api = ChatAPI(
             service,

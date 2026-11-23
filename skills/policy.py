@@ -118,11 +118,31 @@ _ACTIVE: contextvars.ContextVar[_ActiveInvocation | None] = contextvars.ContextV
 _EGRESS_ALLOWED: contextvars.ContextVar[bool] = contextvars.ContextVar(
     "kelp_skill_egress_allowed", default=False
 )
-#: IPs returned by host-checked lookups during the current egress request.
-#: ``connect`` is bound to this set. The mutable set is created per request and
-#: shared by reference with threads that copy the context.
-_RESOLVED_ADDRESSES: contextvars.ContextVar[set[str] | None] = contextvars.ContextVar(
-    "kelp_skill_resolved_addresses", default=None
+
+
+class _EgressScope:
+    """State for exactly one ``EgressClient.request`` call.
+
+    ``addresses`` holds the IPs that host-checked lookups returned for allowed
+    hosts; ``connect`` is bound to it. The object is shared by reference with
+    threads that copied the context, so ``close()`` ends the scope for them too:
+    a thread that outlives the request can no longer resolve or connect.
+    """
+
+    __slots__ = ("addresses", "open")
+
+    def __init__(self) -> None:
+        self.addresses: set[str] = set()
+        self.open: bool = True
+
+    def close(self) -> None:
+        self.open = False
+        self.addresses.clear()
+
+
+#: The scope of the current egress request, or ``None`` outside one.
+_EGRESS_SCOPE: contextvars.ContextVar[_EgressScope | None] = contextvars.ContextVar(
+    "kelp_skill_egress_scope", default=None
 )
 
 
@@ -179,6 +199,19 @@ def _normalise_socket_host(host: Any) -> str:
     return host.strip().lower().rstrip(".")
 
 
+def _open_scope() -> _EgressScope:
+    """Return the live egress scope, or refuse if it ended or never existed."""
+
+    scope = _EGRESS_SCOPE.get()
+    if scope is None or not scope.open:
+        raise PolicyDenied(
+            "the egress request scope has ended; network access is only "
+            "available while context.egress().request() is running",
+            ("net:direct", "egress:scope_closed"),
+        )
+    return scope
+
+
 def _guard_socket_target(host: Any) -> None:
     active = _ACTIVE.get()
     if active is None:
@@ -189,6 +222,7 @@ def _guard_socket_target(host: Any) -> None:
             "direct network access is not allowed from a skill; use context.egress()",
             (f"net:{candidate}", "egress:direct"),
         )
+    _open_scope()
     # The egress client already checked the method and URL. Re-check the host
     # here so a transport-level redirect or a DNS change cannot escape scope.
     active.policy.check_host(candidate, "GET")
@@ -223,16 +257,52 @@ def _normalise_ip(value: Any) -> str | None:
     return f"{canonical}{separator}{zone}" if separator else canonical
 
 
-def _record_resolved(*addresses: Any) -> None:
-    """Remember IPs a host-checked lookup returned, for this egress request."""
+def _address_allowed(ip: str) -> bool:
+    """Whether ``ip`` is a publicly routable address a skill may connect to.
 
-    resolved = _RESOLVED_ADDRESSES.get()
-    if resolved is None or _ACTIVE.get() is None or not _EGRESS_ALLOWED.get():
+    Loopback, RFC 1918, link-local (including the 169.254.169.254 metadata
+    address), CGNAT, unspecified, and every other range for which
+    ``ipaddress`` reports ``is_global`` as false are refused, as is anything
+    that does not parse. An IPv4-mapped IPv6 address is judged by its IPv4
+    form. This is the single override point for tests.
+    """
+
+    try:
+        address = ipaddress.ip_address(ip.partition("%")[0].strip())
+    except (AttributeError, ValueError):
+        return False
+    if isinstance(address, ipaddress.IPv6Address) and address.ipv4_mapped is not None:
+        address = address.ipv4_mapped
+    return address.is_global
+
+
+def _record_resolved(host: str, *addresses: Any) -> None:
+    """Remember the IPs a host-checked lookup returned for this egress request.
+
+    If any returned address is not publicly routable the whole answer is
+    refused and nothing is recorded, so a mixed answer cannot be used to
+    reach its public half either.
+
+    Raises:
+        PolicyDenied: An address is not publicly routable.
+    """
+
+    scope = _EGRESS_SCOPE.get()
+    if scope is None or _ACTIVE.get() is None or not _EGRESS_ALLOWED.get():
         return
-    for address in addresses:
-        canonical = _normalise_ip(address)
-        if canonical is not None:
-            resolved.add(canonical)
+    canonical_addresses = [
+        canonical
+        for canonical in (_normalise_ip(address) for address in addresses)
+        if canonical is not None
+    ]
+    for canonical in canonical_addresses:
+        if not _address_allowed(canonical):
+            raise PolicyDenied(
+                f"{host} resolved to a non-public address; refusing to connect",
+                (f"net:{host}", "egress:non_public_address"),
+            )
+    if scope.open:
+        scope.addresses.update(canonical_addresses)
 
 
 def _guard_connect_address(address: Any) -> None:
@@ -242,11 +312,11 @@ def _guard_connect_address(address: Any) -> None:
         return
     if not _EGRESS_ALLOWED.get():
         _refuse_direct_egress()
-    resolved = _RESOLVED_ADDRESSES.get()
+    scope = _open_scope()
     target = (
         _normalise_ip(address[0]) if isinstance(address, tuple) and address else None
     )
-    if resolved is None or target is None or target not in resolved:
+    if target is None or target not in scope.addresses:
         raise PolicyDenied(
             "connect target was not resolved for an allowed host in this egress request",
             ("net:unresolved", "egress:unresolved"),
@@ -256,21 +326,23 @@ def _guard_connect_address(address: Any) -> None:
 def _guarded_getaddrinfo(host: Any, port: Any, *args: Any, **kwargs: Any) -> Any:
     _guard_socket_target(host)
     result = _REAL_GETADDRINFO(host, port, *args, **kwargs)
-    _record_resolved(*(entry[4][0] for entry in result if entry[4]))
+    _record_resolved(
+        _normalise_socket_host(host), *(entry[4][0] for entry in result if entry[4])
+    )
     return result
 
 
 def _guarded_gethostbyname(host: Any) -> Any:
     _guard_socket_target(host)
     result = _REAL_GETHOSTBYNAME(host)
-    _record_resolved(result)
+    _record_resolved(_normalise_socket_host(host), result)
     return result
 
 
 def _guarded_gethostbyname_ex(host: Any) -> Any:
     _guard_socket_target(host)
     result = _REAL_GETHOSTBYNAME_EX(host)
-    _record_resolved(*result[2])
+    _record_resolved(_normalise_socket_host(host), *result[2])
     return result
 
 
@@ -294,13 +366,32 @@ def _guarded_connect_ex(self: socket.socket, address: Any) -> Any:
     return _REAL_SOCKET_CONNECT_EX(self, address)
 
 
+def _guard_datagram(address: Any) -> None:
+    """Check a datagram send; ``address`` is ``None`` for a connected socket.
+
+    Inside an egress request a datagram follows the ``connect`` rule: the
+    target must be an IP literal resolved in this scope. A hostname would be
+    resolved inside CPython, past the guarded lookup and the non-public check.
+    """
+
+    if _ACTIVE.get() is None:
+        return
+    if not _EGRESS_ALLOWED.get():
+        if address is None:
+            # Connected socket with no address: ``connect`` predates the
+            # invocation, so refuse the direct send itself.
+            _refuse_direct_egress()
+        _guard_address(address)
+        return
+    if address is None:
+        _open_scope()
+        return
+    _guard_connect_address(address)
+
+
 def _guarded_sendto(self: socket.socket, data: Any, *args: Any) -> Any:
-    if args:
-        _guard_address(args[0])
-    elif _ACTIVE.get() is not None and not _EGRESS_ALLOWED.get():
-        # Connected socket with no address: ``connect`` predates the
-        # invocation, so refuse the direct send itself.
-        _refuse_direct_egress()
+    # ``sendto(data, address)`` or ``sendto(data, flags, address)``.
+    _guard_datagram(args[-1] if args else None)
     return _REAL_SOCKET_SENDTO(self, data, *args)
 
 
@@ -311,10 +402,7 @@ def _guarded_sendmsg(
     flags: int = 0,
     address: Any = None,
 ) -> Any:
-    if address is not None:
-        _guard_address(address)
-    elif _ACTIVE.get() is not None and not _EGRESS_ALLOWED.get():
-        _refuse_direct_egress()
+    _guard_datagram(address)
     return _REAL_SOCKET_SENDMSG(self, buffers, ancdata, flags, address)
 
 
@@ -874,7 +962,8 @@ class EgressClient:
             raise ValueError("timeout must be positive")
         self._audit("skill_egress", host, normalised, "allow", "started")
         token = _EGRESS_ALLOWED.set(True)
-        resolved_token = _RESOLVED_ADDRESSES.set(set())
+        scope = _EgressScope()
+        scope_token = _EGRESS_SCOPE.set(scope)
         try:
             if self._transport is not None:
                 response = self._transport(
@@ -899,7 +988,10 @@ class EgressClient:
             self._ledger_record(host, normalised, request_bytes, 0, "egress_error")
             raise
         finally:
-            _RESOLVED_ADDRESSES.reset(resolved_token)
+            # Close first: threads that copied the context share ``scope`` by
+            # reference and must lose access before the vars are reset.
+            scope.close()
+            _EGRESS_SCOPE.reset(scope_token)
             _EGRESS_ALLOWED.reset(token)
         self._audit(
             "skill_egress",

@@ -96,11 +96,15 @@ async for event in loop.run_turn(messages, tools=tool_schemas, session_id="s-1")
 | `max_output_tokens` | 4096 | sum of reported completion tokens |
 | `max_tokens_per_step` | 1024 | `max_tokens` sent to the provider |
 | `max_tool_calls` | 8 | executed tool calls per turn |
-| `max_wall_seconds` | 120 | wall clock, checked between steps |
+| `max_wall_seconds` | 120 | wall clock, checked between steps and while waiting on the provider stream |
 
 Exceeding a limit emits `error.code = "turn_budget_exceeded"` with
 `details.limit` set to the limit name, then `turn_finished` with
 `reason = "budget"`. The turn stops; the session and loop stay usable.
+
+The wall budget and Stop are also checked while the loop waits on the provider
+stream, at least once a second, so a provider that sends only keepalives or
+trickles tokens cannot hold a step open past the limit or ignore a cancel.
 
 Token budgeting consumes the provider's reported usage only. If a backend does
 not report usage, only the step, tool-call, and wall-clock limits bound the
@@ -134,6 +138,9 @@ that means no request was accepted for billing: a failure carrying an HTTP statu
 (the provider answered with an error status), or a failure raised before any
 request (`missing_base_url`, `missing_api_key`, and `tenant_mismatch` from
 `kernel.providers.base.tenant_failure`). Every other unmetered step is bounded.
+An error status is treated as unbilled even when a gateway in front of the model
+(a 502 or 504 from a proxy) may have let upstream work happen; that is the one
+case where the record can undercount.
 That includes a timeout, an unreachable endpoint, and a protocol error that
 carry no HTTP status. An unreachable endpoint usually billed nothing, so its
 bound overcounts; the loop cannot tell a refused connection from a dropped one,

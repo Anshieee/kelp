@@ -803,6 +803,58 @@ def test_retry_reuses_the_user_message_without_duplicating_it(tmp_path: Path) ->
         store.close()
 
 
+@pytest.mark.parametrize("reason", ["cancelled", "budget", "error", "interrupted"])
+def test_retry_is_allowed_for_every_turn_reason_that_ends_in_a_retryable_status(
+    tmp_path: Path, reason: str
+) -> None:
+    """CHAT_SPEC §5.4: error, stopped (client Stop) and interrupted may retry.
+
+    A turn stores the *reason* (``cancelled``, ``budget``, ...), and the
+    message status derived from it decides retryability.
+    """
+
+    service, store, _provider = make_service(
+        tmp_path, [text_script("first"), text_script("second")]
+    )
+    try:
+        thread = service.create_thread()
+
+        async def scenario() -> None:
+            payload = await send_and_wait(service, thread["id"], "question")
+            store.update_turn(payload["turn_id"], state="finished", reason=reason)
+
+            retried = await service.retry(payload["turn_id"])
+            await service.wait_for_turn(retried["turn_id"])
+            assert retried["retry_of"] == payload["turn_id"]
+            assert retried["turn_id"] != payload["turn_id"]
+
+        asyncio.run(scenario())
+    finally:
+        store.close()
+
+
+@pytest.mark.parametrize("reason", ["stop", "length", "stopped", "bogus"])
+def test_retry_is_refused_for_completed_or_unknown_reasons(
+    tmp_path: Path, reason: str
+) -> None:
+    service, store, _provider = make_service(tmp_path, [text_script("first")])
+    try:
+        thread = service.create_thread()
+
+        async def scenario() -> None:
+            payload = await send_and_wait(service, thread["id"], "question")
+            store.update_turn(payload["turn_id"], state="finished", reason=reason)
+
+            with pytest.raises(ChatErrorType) as refused:
+                await service.retry(payload["turn_id"])
+            assert refused.value.code == "turn_not_retryable"
+            assert refused.value.status == 409
+
+        asyncio.run(scenario())
+    finally:
+        store.close()
+
+
 def test_retry_rejects_a_non_latest_or_unfinished_turn(tmp_path: Path) -> None:
     service, store, _provider = make_service(tmp_path, [text_script("one"), text_script("two")])
     try:
@@ -1454,11 +1506,14 @@ def test_thread_deleted_mid_turn_closes_the_loop_in_the_turn_task(tmp_path: Path
 
         # The loop was closed deterministically by the service, inside the
         # turn's own task and context, not later by the asyncgen finalizer.
+        # The loop reads the provider stream through short-lived read tasks, so
+        # the generator's start-up task is not the turn task; the turn task is
+        # the one that closed the stream and wrote the usage record.
         assert provider.turn_task is not None
-        assert provider.closed_in is provider.turn_task
+        assert provider.closed_in is not None
         assert len(usage.records) == 1
         record, written_by = usage.records[0]
         assert record.outcome == "cancelled"  # type: ignore[attr-defined]
-        assert written_by is provider.turn_task
+        assert written_by is provider.closed_in
     finally:
         store.close()

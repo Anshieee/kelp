@@ -3,10 +3,11 @@
 While ``EgressClient.request`` runs, ``_EGRESS_ALLOWED`` is true. A handler may
 supply its own ``transport`` callable (``github_write`` does), and that callable
 runs in the same scope. Before this binding, a transport could call
-``socket.connect(("203.0.113.9", 443))`` and escape the manifest allow-list
+``socket.connect(("93.184.216.35", 443))`` and escape the manifest allow-list
 because the connect guard allowed any address. These tests keep the real network
 out: ``_REAL_GETADDRINFO`` and the ``_REAL_SOCKET_CONNECT*`` functions are
-replaced by recorders, and every address is from a documentation range.
+replaced by recorders, and every address is a public literal (non-public
+ranges, including the documentation ranges, are refused by the SSRF guard).
 """
 
 from __future__ import annotations
@@ -26,9 +27,9 @@ from tests.fixtures import handlers
 from tests.test_policy_enforcement import invoke, load, policy_manifest
 
 ALLOWED_HOST = "api.example.com"
-RESOLVED_V4 = "203.0.113.7"
-RESOLVED_V6 = "2001:db8::7"
-UNRESOLVED_V4 = "203.0.113.9"
+RESOLVED_V4 = "93.184.216.34"
+RESOLVED_V6 = "2606:4700::abcd"
+UNRESOLVED_V4 = "93.184.216.35"
 
 #: The body each test runs inside the handler-supplied transport.
 STATE: dict[str, Any] = {"body": None, "calls": 0}
@@ -224,7 +225,7 @@ def test_transport_ipv6_four_tuple_after_getaddrinfo_is_allowed(tmp_path: Path) 
 def test_transport_ipv6_spelling_is_normalised(tmp_path: Path) -> None:
     def body() -> None:
         socket.getaddrinfo(ALLOWED_HOST, 443)
-        _connect(("2001:0DB8:0:0:0:0:0:7", 443, 0, 0), socket.AF_INET6)
+        _connect(("2606:4700:0:0:0:0:0:ABCD", 443, 0, 0), socket.AF_INET6)
 
     result = _run(tmp_path, body)
     assert result["ok"] is True, result
