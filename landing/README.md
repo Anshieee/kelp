@@ -10,10 +10,13 @@ landing page comes back once Kelp is ready for production users.
 
 ## Pre-register form
 
-The form uses [Netlify Forms](https://docs.netlify.com/forms/setup/). Netlify
-finds `data-netlify="true"` when the site is deployed and stores submissions
+The form uses [Netlify Forms](https://docs.netlify.com/forms/setup/). With form
+detection on (site setting `processing_settings.ignore_html_forms: false`, enabled
+2026-11-23), Netlify finds `data-netlify="true"` on each deploy and stores submissions
 (email, optional "what would you want Kelp to do") under the site's **Forms**
-tab. `netlify-honeypot="company"` drops submissions that fill the hidden field.
+tab. `netlify-honeypot="company"` drops submissions that fill the hidden field. Netlify's spam filter can also
+flag real sign-ups (the 2026-11-23 test with an `example.com` address landed in
+**Spam**), so check that list too.
 The page promises the email is used only to say Kelp is ready to try; keep it
 that way.
 
