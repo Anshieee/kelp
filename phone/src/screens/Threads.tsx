@@ -5,15 +5,18 @@
  */
 import { useState } from "react";
 import ConversationDrawer from "../components/ConversationDrawer";
+import SproutMark from "../components/SproutMark";
+import LivingBlob from "../components/LivingBlob";
 import ThemeToggle from "../components/ThemeToggle";
 import { AccountChip, ThreadListView, useThreadsList } from "../components/ThreadList";
 
 interface ThreadsProps {
   onOpenThread: (threadId: string) => void;
   onOpenSettings: () => void;
+  onOpenWallet: () => void;
 }
 
-export default function Threads({ onOpenThread, onOpenSettings }: ThreadsProps) {
+export default function Threads({ onOpenThread, onOpenSettings, onOpenWallet }: ThreadsProps) {
   const list = useThreadsList(onOpenThread);
   const [drawerOpen, setDrawerOpen] = useState(false);
 
@@ -33,11 +36,8 @@ export default function Threads({ onOpenThread, onOpenSettings }: ThreadsProps) 
           </svg>
         </button>
         <div className="top-bar-title">
-          <span className="kelp-avatar small" aria-hidden="true">
-            <i />
-            <i />
-          </span>
-          <h1>Kelp</h1>
+          <SproutMark size={22} />
+          <h1 className="wordmark-title">kelp</h1>
           {list.deviceLabel && <span className="device-chip">{list.deviceLabel}</span>}
         </div>
         <button
@@ -85,10 +85,7 @@ export default function Threads({ onOpenThread, onOpenSettings }: ThreadsProps) 
           </p>
         )}
         <div className="empty-state">
-          <span className="kelp-avatar hero-avatar" aria-hidden="true">
-            <i />
-            <i />
-          </span>
+          <LivingBlob size={260} className="hero-blob" />
           <p>
             {list.loading
               ? "Loading…"
@@ -111,6 +108,9 @@ export default function Threads({ onOpenThread, onOpenSettings }: ThreadsProps) 
                   Open conversations
                 </button>
               )}
+              <button type="button" className="btn" onClick={onOpenWallet}>
+                Wallet
+              </button>
             </div>
           )}
         </div>
