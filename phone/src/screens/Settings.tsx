@@ -68,7 +68,7 @@ export default function Settings({ onBack, onSignedOut }: SettingsProps) {
 
       <section className="settings-section" aria-labelledby="appearance-heading">
         <h2 id="appearance-heading">Appearance</h2>
-        <p className="settings-note">Midnight is the default. Meadow is a light theme.</p>
+        <p className="settings-note">Light is the default. Midnight is the dark theme.</p>
         <div className="appearance-card">
           <ThemeToggle />
         </div>

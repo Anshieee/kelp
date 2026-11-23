@@ -50,6 +50,27 @@ makes enforces the owner session.
 | Threads | Recent threads, new chat, rename, delete, and a badge for pending approvals. |
 | Chat | Messages with live streaming (SSE, resumed by `seq` on reconnect), the composer with the 8,000-character cap, stop and retry, and pending approval cards with Approve/Deny. |
 | Settings | Install hint, signed-in devices with per-device revoke, sign out, and a spend glance from `/api/metrics`. |
+| Wallet | Saved cards (brand, last four, expiry, default badge), per-purchase and monthly remaining from `/api/wallet/limits`, and New payment. |
+
+## Paying from the phone
+
+Wallet → New payment takes an amount, currency, and payee line, then
+proposes the order (`POST /api/wallet/propose`, one idempotency key per
+logical proposal — same amount/currency/payee reuses the key so a retried
+tap replays against the same pending order instead of reserving cap twice,
+while any field edit mints a fresh key; the real double-charge protection
+is the server's single-use approve) and opens the review sheet:
+the big amount, the payee, and expandable rows for the amount, the card
+(switchable when more than one saved card exists), the caps impact, the
+~30-minute approval window, and the retry safety note. Approve charges the
+selected saved card exactly once (`POST /api/wallet/approve`); Cancel denies
+with no charge; the receipt shows the paid amount, card, timestamp, and
+order id. Orders bound for hosted Checkout show the server's message with no
+card button — they are paid on the provider's page, never twice.
+
+The sheet needs a configured wallet: with no server-side Stripe keys every
+wallet call answers `wallet_not_configured`, and the app says so plainly
+instead of showing dead buttons.
 
 Model text renders as plain text — no HTML, no Markdown injection — matching
 the chat spec's XSS rules. The service worker caches the app shell only;
