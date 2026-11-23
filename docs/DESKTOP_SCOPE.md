@@ -1,5 +1,11 @@
 # Desktop app + desk pet — scope (v1)
 
+> **Superseded in part (2026-11-23, proposed):** owner decision 2 below ("one
+> Nebius-hosted server, no bundled sidecar") and the out-of-scope items "bundled
+> server sidecar" and "voice input" are superseded by
+> [ADR 0004](adr/0004-desktop-companion.md). The direction is in
+> [`docs/PRODUCT_BRIEF.md`](PRODUCT_BRIEF.md). The rest of this file still applies.
+
 > **Owner decisions (locked, 2026-10-30):**
 > 1. **Tauri thin client** — small binary, OS webview, keychain API, token in OS keychain only.
 > 2. **One Nebius-hosted server** — exactly one configured server URL (`desktop/src/config.js`), no bundled sidecar, no runtime URL switcher.
