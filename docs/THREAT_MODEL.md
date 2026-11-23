@@ -524,24 +524,26 @@ Windows were not tested.
   Observations are stored as untrusted data and are never promoted to memory or to
   a rule without the user's confirmation. The 24 hour expiry will be enforced in
   the brain's store, not in the capture module.
-- **S3. Where frames go.** Kelp the project runs no server that receives screen
-  frames or audio. That includes the push relay (L6) and any hosted plan service
-  ([product brief](PRODUCT_BRIEF.md) §15). The relay sees only ciphertext and
-  timing. The Telegram bridge (L7), when the user turns it on, receives the
-  plaintext of bridge messages but never frames or audio. A hosted plan's model
-  gateway, if built, would receive conversation
-  text, because it forwards the user's turns to a model. It carries text only
-  under this rule, so a frame can go to a cloud model only through a provider
-  the user configured with their own key. Whether the gateway may carry frames
-  for allowed apps is open question 11 in the brief. "Cloud" for frames always
-  means that provider, or the user's own Boat VM. What leaves the machine
-  depends on the run mode:
+- **S3. Where frames go.** The only Kelp-run server that may receive screen
+  frames is the plan model gateway ([product brief](PRODUCT_BRIEF.md) §15),
+  for plan users (owner decision 2026-11-24, open question 11). No Kelp-run
+  server receives audio. The push relay (L6) never receives frames or audio and
+  sees only ciphertext and timing. The Telegram bridge (L7), when the user turns
+  it on, receives the plaintext of bridge messages but never frames or audio.
+  The plan gateway receives conversation text, because it forwards the user's
+  turns to a model, and downscaled frames for apps marked "may send to cloud".
+  It forwards each frame to the model and keeps nothing: no frame is written to
+  disk, a log, a queue that outlives the request, or a training set. A
+  self-hoster's own gateway follows the same rule. "Cloud" for frames means the
+  plan gateway, a provider the user configured with their own key, or the user's
+  own Boat VM. What leaves the machine depends on the run mode:
 
   | Run mode | What leaves the machine | Rule |
   |---|---|---|
   | Default reaction signals, any mode | Metadata only: the focused app id (11 ms to read on wlroots in the spike), idle time, and the window title, read only after the S4 check passes and never for blocked or private windows | No pixels leave the machine by default. |
   | Local mode, local vision model | Nothing. Frames stay on the machine. | Used only if a hardware check passes. The spikes did not measure a local vision model, so it is unproven until that check exists. |
   | Local mode, cloud provider | A downscaled frame, to the provider the user configured | Only for apps the user marked "may send to cloud". That is a separate tick from "may watch". Never for blocked apps. Rate-limited. The indicator shows the destination (for example "watching: sent to <provider>"). Provider retention is out of scope (§5), and the setting says so plainly. The brain enforces the rate limit, because it makes the model call. The desktop app holds the per-app ticks and draws the indicator. |
+  | Plan user, plan gateway | A downscaled frame, to the plan gateway, which forwards it to the plan's model | The same "may send to cloud" tick, block list and rate limit as the row above. The indicator names the destination ("watching: sent to Kelp plan"). The gateway stores no frames. |
   | Boat mode | When the user has enabled frame sending ([product brief](PRODUCT_BRIEF.md) §5), frames go to the user's own VM, on demand only, over the SSH port forward, with the owner bearer (L4) | The VM counts as the user's machine for retention, and the same no-disk rule (S2) applies inside the VM. If the VM's model is a third-party provider, the "may send to cloud" tick applies. |
 - **S4. Block list.** Two tiers, checked against the focused app before any frame
   is taken:
@@ -579,6 +581,30 @@ Windows were not tested.
   does nothing else.
 - **S7. Indicator.** Kelp draws its own watching and listening indicator. On
   wlroots the OS shows nothing during capture (spike).
+- **S8. Screen control (planned).** Screen control means Kelp sending mouse and
+  keyboard input to the user's own desktop. The owner made it a core capability
+  in every mode on 2026-11-24. No input mechanism was tested (brief §12).
+  - **Started only by an approved task.** Control starts from a user turn and
+    an approval card for the task, or under the plan-bound approval from brief
+    §4.2. Each step that falls in a T4 category (sending, submitting, paying,
+    deleting, accepting terms) still gets its own card at that step.
+  - **Screen text cannot widen the task.** The control loop reads the screen
+    (S6), so what it reads is untrusted. It may choose clicks and keystrokes
+    within the approved task and target app or site. A step that would leave
+    that app or site, or start something the card did not name, stops and asks.
+  - **Blocked apps are never controlled.** Kelp sends no input while an S4
+    blocked app or window has focus, and stops if one takes focus. Passwords and
+    one-time codes are never typed from model output. Logins go through the
+    credential vault (T3) and the existing private-entry flow
+    ([`docs/CREDENTIAL_HANDOFF.md`](CREDENTIAL_HANDOFF.md)).
+  - **The user can always take over.** A separate "Kelp is controlling"
+    indicator shows while control is active. Any physical mouse or keyboard
+    input from the user pauses control at once, and a stop shortcut ends it.
+    Control resumes only when the user says so.
+  - **Logged without frames.** Each control step writes an audit row with the
+    task, the step type and the target app, never a frame or typed text.
+  - In Boat mode, long or risky tasks run in the sandbox's own desktop by
+    default, so they do not touch the user's desktop (brief §5).
 
 Prior art: Windows Recall filters apps and private browsing
 ([Microsoft support](https://support.microsoft.com/en-us/windows/ai/ai-features/filtering-apps-websites-and-sensitive-information-in-recall));

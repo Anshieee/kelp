@@ -18,15 +18,17 @@ current code, the file is named so the claim can be checked.
 
 ## 1. What Kelp becomes
 
-Kelp moves from a chat and agent bot to an anime-style avatar that lives on the
-user's desktop. The avatar is animated, can see and interact with the screen when
-the user allows it, talks by voice, and reacts to what the user is doing. An
-initial setup defines how Kelp generally acts and behaves, which is its persona.
-Kelp should be able to take on whatever the user throws at it, and it is open
-source and accessible to anyone. The user chooses where the thinking happens:
-fully on their own machine, or in a Boat cloud sandbox that they own. The
-existing server work (chat API, approval gate, skills, spend caps) stays and
-becomes the brain behind the avatar.
+Kelp moves from a chat and agent bot to an animated companion that lives on the
+user's desktop. Its look is not decided yet (section 10). Kelp can see and
+control the screen when the user allows it, talks by voice, and reacts to what
+the user is doing. The on-screen avatar (the desk pet) is optional: a user can
+turn it off and keep everything else (section 10). An initial setup defines how
+Kelp generally acts and behaves, which is its persona. Kelp should be able to
+take on whatever the user throws at it, and it is open source and accessible to
+anyone. The user chooses where the thinking happens: fully on their own machine,
+or in a Boat cloud sandbox that they own. The existing server work (chat API,
+approval gate, skills, spend caps) stays and becomes the brain behind the
+avatar.
 
 ## 2. Who it is for first, and the first daily loop
 
@@ -92,6 +94,9 @@ enabled. Kelp should not ask the user to repeat setup for each new feature.
   Kelp picks one. If it cannot, Kelp asks for one provider sign-in, once.
 - The target is talking to Kelp within a few minutes of installing, with no
   config files edited by hand.
+- The desk pet is on by default. The welcome screen and Settings each have one
+  switch to turn it off. It has a default and nothing waits on it, so it does
+  not count as a first-run question in the section 14.1 metrics.
 
 ### 4.2 Capability resolver
 
@@ -364,8 +369,15 @@ pet state, such as the existing `curious` or `surprised`, and at most one short
 line. The reaction loop has no tool access. It can propose an offer, but an offer
 only turns into an action when the user accepts and a normal turn starts.
 
+With the desk pet turned off, the reaction loop still runs. Its line appears as
+a small notification from the tray or menu-bar icon instead of a pet state,
+under the same rate limit.
+
 **Actions (rare, expensive, gated).** Anything that does work runs through the
 kernel, the skills, and the approval gate. This is the path that exists today.
+Screen control (computer use on the user's own desktop) is one of these actions
+and is available in every run mode. Its rules are in
+[THREAT_MODEL §7, S8](THREAT_MODEL.md#7-screen).
 
 The cost reason is direct. Spend caps fail closed (`kernel/usage.py`), so a
 frontier model called on every frame would exhaust the cap and then stop the
@@ -420,6 +432,12 @@ Mood changes slowly across a session and does not swing on each event. Persona
 files are plain files, so users can share them and edit them.
 
 ## 10. Avatar and voice
+
+**The avatar is optional (decided 2026-11-24).** Users choose a desk pet or no
+pet. Without it, Kelp lives in a tray or menu-bar icon plus the chat window, the
+phone app and Telegram, and keeps screen reactions, screen control and voice.
+Kelp's identity (what it looks like) is still open; the owner does not want to
+commit to Storm's pet sprites or an anime style yet.
 
 **Avatar.** Start from the existing ten-state kit in `assets/kelp-pet/` (idle,
 working, waiting, done, offline, curious, happy, excited, thinking, surprised).
@@ -520,6 +538,13 @@ grant:
 - **macOS:** Screen Recording and Accessibility permissions.
 - **Windows:** Windows Graphics Capture.
 
+Screen control (S8) needs a second mechanism on each OS to send mouse and
+keyboard input. The capture spike found none on the wlroots test machine. The
+usual candidates are the xdg-desktop-portal RemoteDesktop interface or libei on
+Linux, the Accessibility permission on macOS, and `SendInput` or UI Automation
+on Windows. None of them was tested, and an input spike belongs in Phase 0 or
+Phase 1 next to the capture spike.
+
 Prototype all three in Phase 0 and Phase 1, before the design assumes that
 capture works without extra steps. Because some platforms ask for nothing, the
 rules in section 8 will be enforced by Kelp's own capture code, never delegated to
@@ -600,23 +625,28 @@ The core stays open source. The owner's answer (2026-11-24) is one price that
 covers everything, with no per-feature limits.
 
 - **Plan user.** A user who wants Kelp to handle everything pays one plan price
-  to start. It covers model usage (including reactions and voice; text only
-  until open question 11 is decided), the push
-  relay (section 4.6) and, if included, Boat compute (open question 11). The
-  user sees one number. The UI shows no sub-caps and no per-feature limits.
-- **Self-hoster.** A self-hoster who brings their own provider key pays Kelp
-  nothing. They have at most one monthly cap, the existing
+  to start. It covers model usage (including reactions, voice, and downscaled
+  screen frames for screen reactions and screen control), the push relay
+  (section 4.6) and, depending on the plan, Boat compute. The user sees one
+  number. The UI shows no sub-caps and no per-feature limits.
+- **Self-hoster.** A self-hoster runs the same open-source plan service
+  components on their own side instead of using the project's: the push relay,
+  and a model gateway only if they want one in front of their own provider key.
+  Billing is not needed. A self-hoster pays Kelp nothing. They have at most one
+  monthly cap, the existing
   `KELP_SPEND_CAP_MONTH_USD` ([`docs/DEPLOY.md`](DEPLOY.md)). The day cap
   (`KELP_SPEND_CAP_DAY_USD`) stays available to operators, but it is not shown to
   plan users.
 - **What this means for the project.** The Kelp project will operate a hosted
-  service: billing, a model gateway, the push relay, and optionally Boat
-  provisioning. That is new. None of it exists today. Decision D (no public
-  hosted instance until production) still holds until the plan service launches;
-  decision D is revisited then. The existing Razorpay wallet and Checkout code
-  (section 11) may be reused for it. A hosted plan's model gateway would receive
-  conversation text, which the privacy documents do not yet describe (see the
-  follow-ups in [ADR 0004](adr/0004-desktop-companion.md#7-follow-ups)).
+  service for plan users: billing, a model gateway, the push relay, and Boat
+  provisioning on plans that include it (decided 2026-11-24). The service is
+  open source so self-hosters can run it. That is new. None of it exists today.
+  Decision D (no public hosted instance until production) still holds until the
+  plan service launches; decision D is revisited then. The existing Razorpay
+  wallet and Checkout code (section 11) may be reused for it. A hosted plan's
+  model gateway will receive conversation text and downscaled screen frames for
+  apps the user allowed, which the privacy documents do not yet describe (see
+  the follow-ups in [ADR 0004](adr/0004-desktop-companion.md#7-follow-ups)).
 
 Price, plan tiers and what a plan includes are not set. Nothing here is built.
 
@@ -707,13 +737,14 @@ and where each one is applied are in
     [THREAT_MODEL S3](THREAT_MODEL.md#7-screen) the plan's model gateway carries
     text only, so a plan user without their own provider key gets no
     frame-based reactions. Should the gateway carry downscaled frames for apps
-    the user allowed, under the same no-storage rules?
+    the user allowed, under the same no-storage rules? (answered, see below)
 12. Should submissions to a course the user names be allowed under a standing
     approval, which T4 currently forbids for anything another person sees?
+    (answered, see below)
 
 ### Owner answers (2026-11-24)
 
-These are the owner's answers to questions 1 to 10 above. Each entry says where
+These are the owner's answers to questions 1 to 12 above. Each entry says where
 the answer is applied. Nothing here is built unless the linked section says so.
 
 1. **Audience: general users, anyone.** The first audience is general users with
@@ -770,3 +801,21 @@ the answer is applied. Nothing here is built unless the linked section says so.
     protects against injected instructions. This raises open question 12. Applied
     in [section 13](#13-companion-risks) and
     [THREAT_MODEL §9, T4](THREAT_MODEL.md#9-self-setup-the-capability-resolver).
+11. **Plan service: yes for plan users; self-hosters run their own.** The
+    project runs the hosted plan service for plan users. Whether a plan includes
+    Boat compute depends on the plan. Self-hosters run the same open-source
+    components on their side instead. Users choose a desk pet or no pet. Screen
+    frames, screen-based reactions and screen control are supported in every
+    mode, so the plan gateway carries downscaled frames for apps the user
+    allowed, under the S2 no-storage rule. Applied in
+    [section 1](#1-what-kelp-becomes), [section 4.1](#41-first-run),
+    [section 7](#7-reacting-versus-acting), [section 10](#10-avatar-and-voice),
+    [section 12](#12-platform-permissions-risk),
+    [section 15](#15-money-one-plan-price),
+    [ADR 0004](adr/0004-desktop-companion.md#2-decision) (item 11) and
+    [THREAT_MODEL §7, S3 and S8](THREAT_MODEL.md#7-screen). "Supported in every
+    mode" does not switch watching on by default: S1 opt-in, the S4 block list
+    and the S7 indicator still apply.
+12. **Course submissions keep the card.** A submission is something another
+    person sees, so it always shows an approval card, and a standing approval
+    cannot cover it. T4 is unchanged.

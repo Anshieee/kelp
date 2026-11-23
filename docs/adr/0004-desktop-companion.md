@@ -222,6 +222,14 @@ decided:
     fully determine the action, and it is not in a T4 category and not new
     access (T1). Remote channels can never create a standing approval or approve
     a T1 new-access card. Neither channel uses the Boat tunnel (item 8).
+11. **Screen frames, screen reactions and screen control in every mode; the
+    desk pet is optional (decided 2026-11-24).** Every run mode, including a
+    plan user with no provider key of their own, supports downscaled frames,
+    screen-based reactions and screen control. The plan model gateway may carry
+    frames for apps the user allowed and stores none
+    ([THREAT_MODEL §7, S3](../THREAT_MODEL.md#7-screen)). Screen control follows
+    S8. Users may turn the desk pet off; Kelp then runs from a tray or menu-bar
+    icon with the same capabilities.
 
 ## 3. What stays
 
@@ -315,11 +323,14 @@ before the full resolver ships in Phase 3. The resolver's catalog is only as
 trustworthy as that step.
 
 **Kelp will run a hosted service.** The owner's money answer (brief section 15)
-means the Kelp project operates a hosted plan service: billing, a model gateway,
-the push relay (item 10) and optionally Boat provisioning. That is new for this
-project, and none of it exists yet. The existing Razorpay wallet code may be
-reused for billing. A hosted plan's model gateway would receive conversation
-text, which the current privacy documents do not describe (see the follow-ups).
+means the Kelp project operates a hosted plan service for plan users: billing, a
+model gateway, the push relay (item 10) and Boat provisioning on plans that
+include it. The service is open source, and self-hosters run its components on
+their own side instead. That is new for this project, and none of it exists yet.
+The existing Razorpay wallet code may be reused for billing. A hosted plan's
+model gateway will receive conversation text and downscaled frames for apps the
+user allowed (item 11), which the current privacy documents do not describe (see
+the follow-ups).
 Decision D (no public hosted instance until production) holds until the plan
 service launches, and is revisited then.
 
@@ -387,14 +398,19 @@ updated on every OS, or measured Boat numbers make Boat mode unworkable.
 - Check whether Boat lets the desktop app set `authorized_keys` options on the
   sandbox, so that its key can be restricted to forwarding one loopback port
   (`restrict,port-forwarding,permitopen="127.0.0.1:PORT"`). It is unverified.
-- Design the hosted plan service: billing, a model gateway, the push relay and
-  optionally Boat provisioning (brief section 17, open question 11).
+- Design the hosted plan service: billing, a model gateway that stores no
+  frames, the push relay and Boat provisioning on plans that include it (brief
+  section 17, open question 11). Package the relay and gateway so a self-hoster
+  can run them.
+- Spike screen control (input) on each OS next to the capture spike (brief
+  section 12, THREAT_MODEL S8).
 - Before the plan ships, update the recipient table in
   [`docs/PRIVACY.md`](../PRIVACY.md) section 2, and the statements in
   [`docs/THREAT_MODEL.md`](../THREAT_MODEL.md) about telemetry and recipients
   (sections 1.1 and 10), to name the model gateway, the push relay and the
   Telegram Bot API as recipients. A hosted plan's model gateway would receive
-  conversation text, and Telegram receives the plaintext of bridge messages.
+  conversation text and downscaled screen frames, and Telegram receives the
+  plaintext of bridge messages.
   Do the Telegram part before the bridge ships, even if the plan does not.
 - Licence checks for Live2D, AIRI and Open-LLM-VTuber before any reuse.
 - When accepted, change the Status line here and update the note at the top of
