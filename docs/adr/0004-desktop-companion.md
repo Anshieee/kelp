@@ -43,6 +43,22 @@ reasons:
 
 Split Kelp into a body and a brain, and let the user choose where the brain runs.
 
+**Decisions recorded 2026-11-24.** The owner answered the open questions in
+[`docs/PRODUCT_BRIEF.md`](../PRODUCT_BRIEF.md) section 17. The owner has not
+accepted this ADR as a whole, so its status stays Proposed. These items are
+decided:
+
+- **Local installer: option (a)** (answer 2). Item 6 below.
+- **Reaching a Boat brain: SSH local port forward** (answer 3). Item 8 below.
+- **Where local secrets live: the OS credential store, from Rust only**
+  (answer 4). Item 9 below.
+- **Catalog signing: ship with digest pinning first** (answer 6). Kelp's own
+  release-pinned entries ship first (Phase 1 voice models). Publisher signing
+  (`skills/signing.py`) is wired in before the catalog accepts any entry from
+  outside Kelp's own release, and before the full resolver ships in Phase 3.
+- **Remote approval channel: push to Ketock's native mobile app first, a Telegram
+  bridge second** (answer 9). Item 10 below.
+
 1. **The body is always local.** It is the avatar rendering, screen capture,
    microphone and speaker, OS permission handling, and the approval UI. It lives
    in the Tauri app under `desktop/`. A cloud VM cannot see the user's screen, so
@@ -83,16 +99,129 @@ Split Kelp into a body and a brain, and let the user choose where the brain runs
    It ships through signed per-OS installers plus a one-line script that fetches
    the same installer, and it updates through Tauri's updater. The brief
    compares this with a single-binary freeze, a `curl | sh` script alone, and a
-   Docker container (brief section 6). The status of this ADR is Proposed, so
-   this choice is open until the owner accepts it.
+   Docker container (brief section 6). The owner chose this option on
+   2026-11-24. Unsigned Linux builds are fine while building in public. macOS and
+   Windows signing and notarisation are required before general users are
+   invited. The status of this ADR stays Proposed, because the owner has not
+   accepted the whole ADR.
 7. **The local sidecar is never open.** It binds 127.0.0.1 only, on a random
    per-launch port, always requires the owner bearer, and rejects requests whose
    Host or Origin is not the expected loopback value. Any local process or browser
    page can reach loopback, so loopback alone is not an access control.
-8. **Minimum rules for a Boat brain.** TLS only, the owner bearer always
-   required, no pinning by IP address (it changes on resume), and provider keys,
-   the vault key and credentials stored only inside the sandbox. Whether the app
-   reaches it through an exposed port or a tunnel is a blocking follow-up.
+8. **A Boat brain is reached through an SSH port forward (planned).** The rules
+   are written in
+   [THREAT_MODEL §6, L4](../THREAT_MODEL.md#6-local-brain-boundary-local-mode).
+   In short:
+   - The brain inside the sandbox binds 127.0.0.1 only, like the local sidecar
+     (item 7). It has no public port and no Boat public URL.
+   - The desktop app reaches it through an SSH local port forward to the
+     sandbox's loopback port. Boat documents this as `boat forward`, which binds
+     127.0.0.1 on the user's computer by default and makes nothing public
+     (<https://docs.boat.dev/ssh-access.md>). The forward's local end binds
+     127.0.0.1 explicitly, on an ephemeral port, and the Host, Origin and bearer
+     checks of item 7 apply to the Boat brain too.
+   - The desktop generates its own ed25519 SSH key per device, authorises it on
+     the sandbox through the Boat API, and pins the host key from the Boat API
+     response. The machine, IP address and host key change after each resume and
+     fork, so the app refreshes the endpoint and host key from the Boat API after
+     every resume or fork. It never trusts a host key on first use, it never pins
+     the brain by IP address, and it refuses to connect if the Boat API response
+     has no host key.
+   - Removing a device in the desktop app deletes its key from the sandbox
+     through the Boat API. Where possible, the authorised key is restricted to
+     forwarding the one loopback port. Whether Boat lets the app set
+     `authorized_keys` options is unverified (see the follow-ups).
+   - The owner bearer is still required on every request inside the tunnel.
+   - Provider keys, the vault key and credentials stay inside the sandbox. The
+     desktop stores three secrets in the OS credential store (item 9): its SSH
+     private key, the Boat API key and the Boat brain's owner bearer. The Boat
+     API key can authorise new SSH keys, so it is the highest-value desktop
+     secret and never uses the plain-file fallback.
+   - Not the Boat public URL (`boat host`): Boat terminates TLS for `on.boat.dev`
+     and proxies to the sandbox
+     (<https://docs.boat.dev/hosting/how-it-works.md>), so Boat would see the
+     plaintext chat and the owner bearer. The default protection is a `_token`
+     query parameter, so anyone with the full URL can open it
+     (<https://docs.boat.dev/hosting.md>), and query strings end up in logs and
+     history.
+   - Not a mesh VPN (WireGuard or a hosted mesh): it adds an account or key
+     exchange step for every user, which breaks zero setup. It can be an advanced
+     option later.
+   - The phone app and the messaging bridge do not use this tunnel (item 10).
+9. **Local secrets are generated by Rust and kept in the OS credential store
+   (planned).** The rules are written in
+   [THREAT_MODEL §6, L5](../THREAT_MODEL.md#6-local-brain-boundary-local-mode).
+   None of it is built.
+   - The Rust side of the desktop app generates all secrets on first run from the
+     OS random source. The user never sees, types or copies one.
+   - Persistent secrets (`KELP_VAULT_KEY`, `KELP_CREDENTIAL_SIGNING_KEY`) are
+     stored in the OS credential store from Rust only: macOS Keychain, Windows
+     Credential Manager, or Linux Secret Service. The webview never reads them,
+     which matches `desktop/README.md` (future at-rest storage belongs in
+     `bridge_sign_in` on the Rust side).
+   - The per-launch set is the owner bearer (`KELP_AUTH_TOKEN`),
+     `KELP_CSRF_TOKEN`, `KELP_SESSION_SECRET` and `KELP_BROWSER_WORKER_TOKEN` for
+     the local brain. It is generated fresh on every launch, held in memory,
+     passed to the sidecar over stdin or an inherited descriptor (item 7 and
+     THREAT_MODEL L1), and never stored.
+   - `KELP_SESSION_SECRET` falls back to `KELP_AUTH_TOKEN`
+     (`chat/server.py:813`), and device sessions persist across restarts
+     (`.env.example:56`). In Local mode they are not expected to survive a
+     restart. The desktop body signs in again automatically on each launch, with
+     no user step.
+   - The browser worker reads `KELP_BROWSER_WORKER_TOKEN` from the environment
+     today (`chat/credential_browser.py:218`). Local mode needs new code so the
+     worker gets it over stdin or an inherited descriptor, like the bearer.
+   - A credential request left pending across a restart cannot be claimed with
+     the old tokens and has to be requested again, the same outcome that
+     [`docs/CREDENTIAL_HANDOFF.md`](../CREDENTIAL_HANDOFF.md) describes for a
+     rotated signing key or worker token.
+   - Lost credential-store entry. Today startup aborts when the vault key does
+     not match an existing store (`chat/credentials.py:154-156`). The planned
+     rule, which needs new code in the sidecar launcher: when the vault key is
+     missing from the credential store but `credentials.db` exists, the launcher
+     renames `credentials.db` aside with a timestamp (never a silent delete),
+     generates a new key, and Kelp then asks for each login again as new access
+     (one card). An encrypted export of the vault key can live in Settings for
+     users who want it. It is never part of first run.
+   - Linux without a Secret Service daemon (common on minimal Wayland
+     compositors): a 0600 file stands in for the credential store, for the
+     Local-mode persistent secrets only (the vault key and the credential signing
+     key). It is created with `O_EXCL` and mode 0600 inside
+     `$XDG_DATA_HOME/kelp/secrets/` (mode 0700), separate from the database
+     directory, and Kelp's own backups exclude it. When a Secret Service later
+     becomes available, Kelp moves both values into it and removes the file.
+     Kelp shows a one-time notice in Settings, not a setup step. It is weaker
+     than a credential store. The SSH private key, the Boat API key, the Boat
+     brain's bearer, the Telegram bot token and the relay credential, end-to-end
+     key and device records (item 10) never use it. Kelp offers to set
+     up a Secret Service through the resolver (a catalog entry, one card). Until
+     then, Boat mode and the Telegram bridge are unavailable.
+   - Boat mode: the Boat brain's owner bearer is stored in the OS credential
+     store too, because a Boat sandbox persists across resumes and the bearer
+     cannot be per-launch. To rotate it, the desktop writes a new bearer into the
+     sandbox over the SSH channel and restarts the brain. A second desktop reads
+     the bearer over SSH once its own key is authorised. The relay credential,
+     end-to-end key, device records and Telegram bot token of a Boat brain live
+     inside the sandbox; the desktop sends them in over SSH at pairing.
+10. **Remote approvals: push to Ketock's native app first, a Telegram bridge
+    second (planned).** The brief describes the design in section 4.6, and the
+    rules are in
+    [THREAT_MODEL §6, L6 and
+    L7](../THREAT_MODEL.md#6-local-brain-boundary-local-mode).
+    A push relay is required, because Apple and Google push services accept only
+    pushes signed with the app publisher's credentials. The brain keeps an
+    outbound connection to the relay, and the relay authenticates it with a
+    per-brain credential. The push carries no content, and the card details and
+    the decision travel end-to-end encrypted between the paired phone and the
+    brain. Each decision is bound to the card id, the argument hash and the
+    expiry. A dropped or late relay message means the card expires and the action
+    does not run. The Telegram bridge is outbound only (long polling), accepts
+    messages only from the paired Telegram user id, and shows only the action
+    type and target. A card is approvable from Telegram only when those fields
+    fully determine the action, and it is not in a T4 category and not new
+    access (T1). Remote channels can never create a standing approval or approve
+    a T1 new-access card. Neither channel uses the Boat tunnel (item 8).
 
 ## 3. What stays
 
@@ -134,7 +263,9 @@ chat API, approval gate, skills and spend caps are reused instead of rewritten.
 
 **Packaging and signing work.** Bundling a Python runtime and its dependencies
 makes the installer larger. Each OS needs code signing, and macOS needs
-notarisation. The updater needs signing keys. Today the desktop app ships
+notarisation. The updater needs signing keys. Linux builds may stay unsigned
+while building in public. macOS and Windows signing and notarisation are
+required before general users are invited. Today the desktop app ships
 unsigned dev builds with the updater off (`desktop/README.md`). The sidecar needs a
 lifecycle: start, health check, restart, and a loopback port that does not
 collide.
@@ -165,16 +296,32 @@ skills with network access run there.
 
 **Auth and secrets in local mode.** The desktop app keeps no bearer at rest
 today (`desktop/README.md`), and the credential settings `KELP_VAULT_KEY`,
-`KELP_BROWSER_WORKER_TOKEN` and `KELP_CREDENTIAL_SIGNING_KEY` are supplied through
-the environment ([`docs/CREDENTIAL_HANDOFF.md`](../CREDENTIAL_HANDOFF.md)). A local
-installer must generate and store these and the owner bearer. Where they are
-stored is not decided here.
+`KELP_BROWSER_WORKER_TOKEN` and `KELP_CREDENTIAL_SIGNING_KEY` are supplied
+through the environment
+([`docs/CREDENTIAL_HANDOFF.md`](../CREDENTIAL_HANDOFF.md)). A local installer
+must generate these and the owner bearer. Item 9 above decides where they live:
+the persistent ones in the OS credential store, written from Rust only, and the
+per-launch ones (including `KELP_SESSION_SECRET`) in memory. None of it is built
+yet.
 
 **The catalog depends on signing.** Digest pinning proves a package is unchanged
 since install, not who published it. Publisher signing exists only as a spike
 (`skills/signing.py`,
-[`docs/SPIKE_PLUGIN_SIGNING.md`](../SPIKE_PLUGIN_SIGNING.md)). The resolver's
-catalog is only as trustworthy as that step.
+[`docs/SPIKE_PLUGIN_SIGNING.md`](../SPIKE_PLUGIN_SIGNING.md)). The owner decided
+on 2026-11-24 that the catalog ships with pinning first: Kelp's own
+release-pinned entries only (Phase 1 voice models), with publisher signing wired
+in before the catalog accepts any entry from outside Kelp's own release and
+before the full resolver ships in Phase 3. The resolver's catalog is only as
+trustworthy as that step.
+
+**Kelp will run a hosted service.** The owner's money answer (brief section 15)
+means the Kelp project operates a hosted plan service: billing, a model gateway,
+the push relay (item 10) and optionally Boat provisioning. That is new for this
+project, and none of it exists yet. The existing Razorpay wallet code may be
+reused for billing. A hosted plan's model gateway would receive conversation
+text, which the current privacy documents do not describe (see the follow-ups).
+Decision D (no public hosted instance until production) holds until the plan
+service launches, and is revisited then.
 
 **Boat limits apply to Boat mode.** Machines are in Germany, Finland and France
 only, there is no GPU, auto-stop defaults to 1 h, and the IP changes on resume.
@@ -209,7 +356,8 @@ updated on every OS, or measured Boat numbers make Boat mode unworkable.
 
 ## 7. Follow-ups
 
-- Owner decision on this ADR, and on the local installer option.
+- Owner decision on the whole ADR. The installer option (a) is decided; see
+  "Decisions recorded 2026-11-24" in section 2.
 - Land Storm's 3 pet commits from `origin/kel-31-pet-motion-kit` (3bd69c5,
   4546460, 84fa565) on main by cherry-pick or a fresh PR. Do not merge the
   branch, because it is based on `desktop-demo`, which carries demo fixtures.
@@ -220,12 +368,34 @@ updated on every OS, or measured Boat numbers make Boat mode unworkable.
   sections must land before it.
 - Design the plan-bound approval kind for the resolver, including what happens
   when a step outlasts the decision window.
-- Decide where the owner bearer and the vault key live in local mode.
-- Decide how the app reaches a brain inside a Boat sandbox (blocking for Boat
-  mode).
-- Confirm the recommendation that publisher signing is wired in before the full
-  resolver ships in Phase 3 (the Phase 1 voice-model resolver uses only entries
-  pinned in Kelp's own release).
+- Design the push relay: the pairing flow (one QR scan from the desktop app), the
+  device key created at pairing, the end-to-end encryption between phone and
+  brain and the brain's long-term key for it, the per-brain credential the relay
+  uses to authenticate the brain, the stored paired-device records, how
+  the relay is hosted, and the open-source release for self-hosters. Reconcile
+  it with Ketock's native app handoff, which says no second server and no new
+  credential type, and whose definition of done says one configured server URL
+  (`docs/KETOCK_NATIVE_APP_HANDOFF.md`, sections 2 and 3, and section 4
+  definition of done item 1).
+- Decide whether to widen which cards may be approved from Telegram. The default
+  is that a card is approvable there only when the fields Telegram shows fully
+  determine the action, and it is not in a T4 category and not new access (T1).
+  Every other card shows "open in the app".
+- Find the narrowest Boat API key that can resume and read one sandbox. Whether
+  Boat offers a per-sandbox key is unverified. Until it is checked, use the
+  narrowest preset that works.
+- Check whether Boat lets the desktop app set `authorized_keys` options on the
+  sandbox, so that its key can be restricted to forwarding one loopback port
+  (`restrict,port-forwarding,permitopen="127.0.0.1:PORT"`). It is unverified.
+- Design the hosted plan service: billing, a model gateway, the push relay and
+  optionally Boat provisioning (brief section 17, open question 11).
+- Before the plan ships, update the recipient table in
+  [`docs/PRIVACY.md`](../PRIVACY.md) section 2, and the statements in
+  [`docs/THREAT_MODEL.md`](../THREAT_MODEL.md) about telemetry and recipients
+  (sections 1.1 and 10), to name the model gateway, the push relay and the
+  Telegram Bot API as recipients. A hosted plan's model gateway would receive
+  conversation text, and Telegram receives the plaintext of bridge messages.
+  Do the Telegram part before the bridge ships, even if the plan does not.
 - Licence checks for Live2D, AIRI and Open-LLM-VTuber before any reuse.
 - When accepted, change the Status line here and update the note at the top of
   `docs/DESKTOP_SCOPE.md`.
