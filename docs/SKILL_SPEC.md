@@ -380,7 +380,7 @@ invoke(tool, arguments)
   │    ├─ hook false/raises          → approval_denied
   │    └─ hook true                  → continue
   ├─ handler under timeout
-  │    ├─ timeout                    → timeout (retryable)
+  │    ├─ timeout                    → timeout (retryable only if idempotent)
   │    ├─ SkillHandlerError          → its code
   │    └─ other exception            → handler_error
   ├─ output is object + serializable → else invalid_output
@@ -441,7 +441,7 @@ invoke(tool, arguments)
 | `approval_denied` | no | no | A human declined; nothing ran. |
 | `policy_denied` | no | no | The concrete call escaped the declared effects/scope. Terminal; never approvable. |
 | `invalid_output` | no | no | Handler violated its output schema; a bug. |
-| `timeout` | yes | no | Handler exceeded `timeout_ms`; side effects may be partial. |
+| `timeout` | only if the manifest sets `idempotent: true` | no | Handler exceeded `timeout_ms`; side effects may be partial, so a non-idempotent skill is never marked retryable. |
 | `handler_error` | no | no | Unhandled handler failure (handler may opt in to retryable). |
 | `missing_secret` | no | no | A declared secret is not configured. |
 | `not_implemented` | no | no | Prototype stub; the handler is not built yet. |

@@ -49,14 +49,19 @@ def clip_text(text: str, limit: int = CLIP_CHARS) -> str:
 
     The result is always derived from ``text`` and never contains anything the
     source did not: it is an excerpt, not a summary. The trailing ``…`` says a
-    cut happened, so a reader never mistakes an excerpt for the whole span.
+    cut happened, so a reader never mistakes an excerpt for the whole span. It
+    counts toward ``limit``, so the result is never longer than ``limit``.
     """
 
     text = " ".join(text.split())
     if len(text) <= limit:
         return text
-    cut = text[: limit + 1].rsplit(" ", 1)[0]
-    return (cut or text[:limit]).rstrip(",;:") + "…"
+    budget = max(limit - 1, 0)  # room left once the ellipsis is accounted for
+    head = text[: budget + 1]
+    # A head with no space is one unbroken word: cut it mid-word. Without this
+    # guard ``rsplit`` returns the whole head, one character over budget.
+    cut = head.rsplit(" ", 1)[0] if " " in head else text[:budget]
+    return cut.rstrip(",;:") + "…"
 
 
 @dataclass(frozen=True)

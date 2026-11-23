@@ -227,7 +227,11 @@ def test_orphan_sweep_removes_parentless_rows_files_and_indexes(tmp_path: Path) 
                 }
             ],
         )
-        # Fresh unbound upload: inside the grace window, must survive.
+        # Fresh unbound upload: inside the grace window, must survive. The sweep
+        # runs at BASE+2h with a 1h grace, so the cutoff is BASE+1h. BASE+1h30 is
+        # after the cutoff but not in the future, so only the grace window (not
+        # a created_at that is later than "now") keeps this row alive.
+        fresh_created = BASE + timedelta(hours=1, minutes=30)
         fresh = store.create_artifact(
             {
                 "handle": "artifact:freshupload01",
@@ -238,10 +242,12 @@ def test_orphan_sweep_removes_parentless_rows_files_and_indexes(tmp_path: Path) 
                 "size_bytes": 3,
                 "sha256": "fresh",
                 "storage_path": "freshupload01.pdf",
-                "created_at": _iso(BASE + timedelta(hours=3)),
+                "created_at": _iso(fresh_created),
             }
         )
-        (registry.root / fresh["storage_path"]).write_bytes(b"%PDF")
+        fresh_path = registry.root / fresh["storage_path"]
+        fresh_path.write_bytes(b"%PDF")
+        os.utime(fresh_path, (fresh_created.timestamp(), fresh_created.timestamp()))
 
         # A file that never got a row (crash between write and insert).
         orphan_file = registry.root / "crashupload01.pdf"
@@ -264,6 +270,7 @@ def test_orphan_sweep_removes_parentless_rows_files_and_indexes(tmp_path: Path) 
         assert store.get_artifact(old["handle"]) is None
         assert store.get_artifact(referenced["handle"]) is not None
         assert store.get_artifact(fresh["handle"]) is not None
+        assert fresh_path.exists()
         assert not old_path.exists()
         assert (registry.root / referenced["storage_path"]).exists()
         assert not orphan_file.exists()

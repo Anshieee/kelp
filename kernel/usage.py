@@ -32,6 +32,8 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Mapping, Protocol
 
+from openshell.audit import ends_mid_line as _ends_mid_line
+
 from .config import DEFAULT_TENANT_ID
 
 __all__ = [
@@ -156,24 +158,41 @@ class JsonlUsageStore:
         with self._lock:
             self.path.parent.mkdir(parents=True, exist_ok=True)
             is_new = not self.path.exists()
+            torn = not is_new and _ends_mid_line(self.path)
             with self.path.open("a", encoding="utf-8") as handle:
                 if is_new:
                     try:
                         os.chmod(self.path, 0o600)
                     except OSError:
                         pass
-                handle.write(payload + "\n")
+                handle.write(("\n" if torn else "") + payload + "\n")
                 handle.flush()
                 os.fsync(handle.fileno())
 
     def records(self) -> list[dict[str, Any]]:
+        """Every readable usage row, oldest first.
+
+        A crash mid-write leaves one partial line. It is skipped (like any
+        line that is not a JSON object) so the surrounding rows stay visible;
+        :class:`SpendGuard` reads the files itself and counts such a line as
+        unknown-price spend.
+        """
+
         rows: list[dict[str, Any]] = []
         for path in _jsonl_paths(self.path):
             try:
                 lines = path.read_text(encoding="utf-8").splitlines()
             except FileNotFoundError:  # a rotation raced this read
                 continue
-            rows.extend(json.loads(line) for line in lines if line.strip())
+            for line in lines:
+                if not line.strip():
+                    continue
+                try:
+                    row = json.loads(line)
+                except ValueError:  # a torn or garbled line: keep the rest
+                    continue
+                if isinstance(row, dict):
+                    rows.append(row)
         return rows
 
 

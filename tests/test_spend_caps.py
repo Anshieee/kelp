@@ -36,7 +36,7 @@ from kernel.usage import (
 from kernel.provider import ProviderFailure, StreamEnd, TextDelta
 from openshell.audit import AuditLog
 
-from .chatkit import MODEL, StubProvider, text_script
+from .chatkit import MODEL, StubProvider, send_and_wait, text_script
 
 NOW = datetime(2026, 10, 30, 12, 0, tzinfo=timezone.utc)
 
@@ -313,6 +313,30 @@ def test_torn_usage_line_counts_as_unknown_not_free(tmp_path: Path) -> None:
     assert state.block_reason == "unknown_price"
 
 
+def test_usage_records_skip_torn_and_garbled_lines_across_segments(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "usage.jsonl"
+    segment = tmp_path / "usage.jsonl.20261030T120000000000Z"
+    segment.write_text(
+        json.dumps({"turn_id": "a"}) + "\n"
+        + "garbled}{\n"
+        + json.dumps({"turn_id": "b"}) + "\n",
+        encoding="utf-8",
+    )
+    path.write_text(
+        json.dumps({"turn_id": "c"}) + "\n"
+        + "[]\n"  # valid JSON, not an object
+        + json.dumps({"turn_id": "d"}) + "\n"
+        + '{"turn_id":"torn"',
+        encoding="utf-8",
+    )
+
+    rows = JsonlUsageStore(path).records()
+
+    assert [row["turn_id"] for row in rows] == ["a", "b", "c", "d"]
+
+
 def test_unreadable_usage_blocks_while_a_cap_is_configured(tmp_path: Path) -> None:
     directory = tmp_path / "usage.jsonl"
     directory.mkdir()
@@ -471,10 +495,9 @@ def test_count_as_mode_admits_then_refuses_when_counted_spend_reaches_the_cap(
         tmp_path, caps, [], model="vendor/unpriced-model"
     )
     thread = service.create_thread("Budget")
-    payload, _ = asyncio.run(
-        service.send(thread["id"], text="hi", client_turn_id="ct-1234abcd")
-    )
-    asyncio.run(service.wait_for_turn(payload["turn_id"]))
+    # Send and wait in one event loop: a second ``asyncio.run`` would start
+    # after the first loop's shutdown had already cancelled the turn task.
+    asyncio.run(send_and_wait(service, thread["id"], "hi"))
     # The turn itself was unpriced, so count_as charged it one assumed amount.
     assert usage.records()[-1]["estimated_cost_usd"] is None
     assert len(usage.records()) == 1
@@ -499,10 +522,9 @@ def test_warning_is_logged_and_gauge_published_once(
     )
     thread = service.create_thread("Budget")
     for index, client_id in enumerate(("ct-1234abcd", "ct-5678efgh")):
-        payload, _ = asyncio.run(
-            service.send(thread["id"], text=f"hi {index}", client_turn_id=client_id)
+        asyncio.run(
+            send_and_wait(service, thread["id"], f"hi {index}", client_turn_id=client_id)
         )
-        asyncio.run(service.wait_for_turn(payload["turn_id"]))
 
     warnings = audit.entries(event="spend_cap_warning")
     assert len(warnings) == 1
@@ -563,10 +585,9 @@ def test_retry_is_gated_by_the_same_cap(tmp_path: Path) -> None:
         now=lambda: NOW,
     )
     thread = service.create_thread("Budget")
-    payload, _ = asyncio.run(
-        service.send(thread["id"], text="hi", client_turn_id="ct-1234abcd")
-    )
-    asyncio.run(service.wait_for_turn(payload["turn_id"]))
+    # Send and wait in one event loop: a second ``asyncio.run`` would start
+    # after the first loop's shutdown had already cancelled the turn task.
+    payload = asyncio.run(send_and_wait(service, thread["id"], "hi"))
     assert store.get_turn(payload["turn_id"])["reason"] == "error"
     assert len(provider.requests) == 1
 
@@ -607,10 +628,9 @@ def test_metrics_scrape_after_one_turn_shows_spend_without_a_second_send(
     )
     api = ChatAPI(service, auth_token="tok", csrf_token="csrf", metrics=metrics)
     thread = service.create_thread("Budget")
-    payload, _ = asyncio.run(
-        service.send(thread["id"], text="hi", client_turn_id="ct-1234abcd")
-    )
-    asyncio.run(service.wait_for_turn(payload["turn_id"]))
+    # Send and wait in one event loop: a second ``asyncio.run`` would start
+    # after the first loop's shutdown had already cancelled the turn task.
+    asyncio.run(send_and_wait(service, thread["id"], "hi"))
     # Exactly one provider call: the scrape below must not need a second send
     # to move the gauge.
     assert len(provider.requests) == 1
@@ -643,3 +663,14 @@ def test_metrics_scrape_republishes_from_records_without_a_new_turn(
     assert rendered['spend_used_usd{window="day"}'] == pytest.approx(0.25)
     assert rendered['spend_cap_ratio{window="day"}'] == pytest.approx(0.25)
     assert provider.requests == []
+
+
+def test_a_usage_row_written_after_a_torn_tail_is_not_lost(tmp_path: Path) -> None:
+    path = tmp_path / "usage.jsonl"
+    store = JsonlUsageStore(path)
+    store.record(usage_record(0.5, turn_id="turn_before"))
+    with path.open("a", encoding="utf-8") as handle:
+        handle.write('{"turn_id": "torn"')
+    store.record(usage_record(0.25, turn_id="turn_after"))
+
+    assert [row["turn_id"] for row in store.records()] == ["turn_before", "turn_after"]

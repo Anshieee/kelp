@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import os
 import re
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -44,12 +47,35 @@ def test_mode_detection(key: str, mode: str) -> None:
     assert StripeConfig(key).mode == mode
 
 
-def test_import_does_not_require_a_key(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.delenv(STRIPE_SECRET_KEY_ENV, raising=False)
-    import importlib
-
-    module = importlib.import_module("payments.stripe_wallet")
-    assert module.StripeWallet is StripeWallet
+def test_import_does_not_require_a_key() -> None:
+    # ``payments.stripe_wallet`` is already imported by this test module, so an
+    # in-process ``import_module`` only returns the cached module and proves
+    # nothing. A fresh interpreter with the variable removed runs the module
+    # body for real, so a key read at import time would fail here.
+    env = {
+        name: value
+        for name, value in os.environ.items()
+        if name != STRIPE_SECRET_KEY_ENV
+    }
+    env["PYTHONPATH"] = str(SOURCE_ROOT)
+    env["PYTHONDONTWRITEBYTECODE"] = "1"
+    assert STRIPE_SECRET_KEY_ENV not in env
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            "import payments, payments.stripe_wallet as m;"
+            "print(m.StripeWallet.__name__, m.STRIPE_SECRET_KEY_ENV)",
+        ],
+        cwd=SOURCE_ROOT,
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=60,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.split() == ["StripeWallet", STRIPE_SECRET_KEY_ENV]
 
 
 def test_no_hardcoded_stripe_keys_in_source() -> None:

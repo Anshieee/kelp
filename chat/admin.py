@@ -23,8 +23,10 @@ Design rules enforced here, not by the caller:
 Known P5 behaviour surfaced by these views (documented in
 ``docs/ADMIN_API.md`` and ``docs/SUPPORT_RUNBOOK.md``):
 
-* entitlement counters are bumped twice for each accepted ``POST /api/runs``;
-* ``max_turns`` and ``max_runs`` share one injected usage counter;
+* the entitlement gate is consulted twice for each accepted ``POST /api/runs``;
+  no usage counter is wired in the shipped server, so plan ceilings are parsed
+  but not enforced (``max_turns`` and ``max_runs`` would share one counter once
+  one is injected);
 * plan snapshots live recorder-side, so a run row has no historical plan. The
   tenant view reports the *current* configured plan, not a reconstructed past.
 
@@ -58,10 +60,14 @@ __all__ = [
 #: The store's ``list_runs`` ceiling. Counts and the run index cover this many
 #: newest rows; ``window`` in every payload says so.
 RUN_WINDOW = 500
-#: One admin page. The audit log is read whole, so its page ceiling matches the
-#: run window while the default stays small enough for a terminal.
+#: One admin page, for both indexes; the default stays small enough for a
+#: terminal.
 PAGE_MAX = 200
 _DEFAULT_PAGE = 50
+
+#: Upper clamp for the audit ``offset``. The audit log is read whole, so there is
+#: no window to enforce; this only keeps a pathological value a plain int.
+_AUDIT_OFFSET_MAX = 2**63 - 1
 
 #: The only audit keys an index row may carry. ``command``, ``argument_hash``,
 #: and ``extra`` are intentionally absent: they are the fields most likely to
@@ -311,7 +317,9 @@ def _run(api: Any, request: Any, raw_run_id: str) -> Any:
 def _audit(api: Any, request: Any) -> Any:
     tenant_id = _tenant_id()
     limit = _int_param(request, "limit", _DEFAULT_PAGE, 1, PAGE_MAX)
-    offset = _int_param(request, "offset", 0, 0, RUN_WINDOW)
+    # The audit log is read whole, so unlike the run index it has no window:
+    # ``next_offset`` must stay a valid ``offset`` all the way to the oldest row.
+    offset = _int_param(request, "offset", 0, 0, _AUDIT_OFFSET_MAX)
     event = request.query_one("event") or None
 
     entries = _audit_entries(api)

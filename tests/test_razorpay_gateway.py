@@ -20,6 +20,8 @@ from typing import Any, Mapping
 
 import pytest
 
+from openshell.audit import AuditLog
+from openshell.egress_ledger import RECIPIENTS, EgressLedger
 from payments.razorpay_gateway import (
     CUSTOMER_ID_ENV,
     KEY_ID_ENV,
@@ -1217,3 +1219,450 @@ def test_gateway_never_creates_an_http_client_until_called() -> None:
     gateway = RazorpayGateway(key_id=KEY_ID)
     assert gateway._transport is None  # noqa: SLF001
     gateway.close()  # nothing to close, must not raise
+
+
+# -- egress ledger: every HTTP call leaves one content-free row ----------------
+
+#: Values that identify a customer, a card, an order, or an amount. None of them
+#: may reach the serialized audit line; only counts and fixed labels may.
+_EGRESS_ORDER = "order_ledgerprobe77"
+_EGRESS_PAYMENT = "pay_ledgerprobe88"
+_EGRESS_TOKEN = "token_ledgerprobe99"
+_EGRESS_CUSTOMER = "cust_ledgerprobe66"
+_EGRESS_AMOUNT = 987654
+_EGRESS_RECEIPT = "receipt-ledgerprobe-55"
+_EGRESS_IDEMPOTENCY = "kelp-ledgerprobe-key-44"
+_EGRESS_FORBIDDEN = (
+    KEY_ID,
+    TEST_SECRET,
+    _EGRESS_ORDER,
+    _EGRESS_PAYMENT,
+    _EGRESS_TOKEN,
+    _EGRESS_CUSTOMER,
+    str(_EGRESS_AMOUNT),
+    _EGRESS_RECEIPT,
+    _EGRESS_IDEMPOTENCY,
+    "Authorization",
+    "Basic ",
+    "/v1/",
+    "?count",
+    "notes",
+)
+
+
+def _mock_transport(
+    tmp_path: Path,
+    handler: Any,
+    *,
+    egress: Any = ...,
+) -> tuple[HttpRazorpayTransport, EgressLedger, Path, list[Any]]:
+    import httpx
+
+    seen: list[Any] = []
+
+    def wrapped(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        return handler(request)
+
+    audit_path = tmp_path / "audit.jsonl"
+    audit = AuditLog(audit_path, secret_values=(KEY_ID, TEST_SECRET))
+    ledger = EgressLedger(audit)
+    transport = HttpRazorpayTransport(
+        client=httpx.Client(transport=httpx.MockTransport(wrapped)),
+        egress=ledger if egress is ... else egress,
+    )
+    return transport, ledger, audit_path, seen
+
+
+def _json_handler(status: int, body: Mapping[str, Any]) -> Any:
+    import httpx
+
+    return lambda request: httpx.Response(status, json=dict(body))
+
+
+def _create_order(transport: HttpRazorpayTransport) -> Mapping[str, Any]:
+    return transport.create_order(
+        key_id=KEY_ID,
+        key_secret=TEST_SECRET,
+        amount_cents=_EGRESS_AMOUNT,
+        currency="inr",
+        notes={"who": "ledgerprobe"},
+        idempotency_key=_EGRESS_IDEMPOTENCY,
+        receipt=_EGRESS_RECEIPT,
+    )
+
+
+def test_a_successful_call_writes_exactly_one_completed_row(tmp_path: Path) -> None:
+    transport, ledger, _path, seen = _mock_transport(
+        tmp_path,
+        _json_handler(200, {"id": _EGRESS_ORDER, "amount": _EGRESS_AMOUNT}),
+    )
+
+    _create_order(transport)
+
+    rows = ledger.entries()
+    assert len(rows) == 1
+    extra = rows[0]["extra"]
+    assert extra["recipient"] == "razorpay"
+    assert extra["host"] == "api.razorpay.com"
+    assert extra["method"] == "post"
+    assert extra["purpose"] == "payments.razorpay.order.create"
+    assert extra["outcome"] == "completed"
+    assert extra["status"] == 200
+    # Counts are of the body as it went over the wire, not of anything inside it.
+    assert extra["request_bytes"] == len(seen[0].content)
+    assert extra["response_bytes"] > 0
+    assert set(extra) <= {
+        "recipient", "purpose", "request_bytes", "response_bytes", "outcome",
+        "host", "method", "status",
+    }
+
+
+@pytest.mark.parametrize(
+    ("status", "retryable"),
+    [(400, False), (401, False), (404, False), (429, True), (500, True), (503, True)],
+)
+def test_an_error_status_writes_one_provider_error_row(
+    tmp_path: Path, status: int, retryable: bool
+) -> None:
+    transport, ledger, _path, _seen = _mock_transport(
+        tmp_path, _json_handler(status, {"error": {"code": "BAD_REQUEST_ERROR"}})
+    )
+
+    with pytest.raises(RazorpayGatewayError) as caught:
+        transport.fetch_payment(
+            key_id=KEY_ID, key_secret=TEST_SECRET, payment_id=_EGRESS_PAYMENT
+        )
+
+    assert caught.value.retryable is retryable
+    rows = ledger.entries()
+    assert len(rows) == 1
+    extra = rows[0]["extra"]
+    assert extra["recipient"] == "razorpay"
+    assert extra["outcome"] == "provider_error"
+    assert extra["status"] == status
+    assert extra["method"] == "get"
+    assert extra["purpose"] == "payments.razorpay.payment.fetch"
+    assert extra["response_bytes"] > 0
+
+
+def test_a_network_error_writes_one_unreachable_row_without_a_status(
+    tmp_path: Path,
+) -> None:
+    import httpx
+
+    def refuse(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("no route")
+
+    transport, ledger, _path, _seen = _mock_transport(tmp_path, refuse)
+
+    with pytest.raises(RazorpayGatewayError) as caught:
+        _create_order(transport)
+
+    assert caught.value.retryable is True
+    rows = ledger.entries()
+    assert len(rows) == 1
+    extra = rows[0]["extra"]
+    assert extra["outcome"] == "unreachable"
+    assert "status" not in extra
+    assert extra["response_bytes"] == 0
+    assert extra["request_bytes"] > 0
+    assert extra["recipient"] == "razorpay"
+
+
+def test_a_timeout_writes_one_timeout_row(tmp_path: Path) -> None:
+    import httpx
+
+    def slow(request: httpx.Request) -> httpx.Response:
+        raise httpx.ReadTimeout("too slow")
+
+    transport, ledger, _path, _seen = _mock_transport(tmp_path, slow)
+
+    with pytest.raises(RazorpayGatewayError) as caught:
+        _create_order(transport)
+
+    assert caught.value.retryable is True
+    rows = ledger.entries()
+    assert len(rows) == 1
+    assert rows[0]["extra"]["outcome"] == "timeout"
+    assert "status" not in rows[0]["extra"]
+
+
+def test_every_operation_writes_one_row_with_its_own_label(tmp_path: Path) -> None:
+    transport, ledger, _path, _seen = _mock_transport(
+        tmp_path, _json_handler(200, {"id": _EGRESS_PAYMENT, "items": []})
+    )
+
+    transport.create_customer(key_id=KEY_ID, key_secret=TEST_SECRET, notes={})
+    transport.fetch_token(key_id=KEY_ID, key_secret=TEST_SECRET, token_id=_EGRESS_TOKEN)
+    transport.list_tokens(
+        key_id=KEY_ID, key_secret=TEST_SECRET, customer_id=_EGRESS_CUSTOMER
+    )
+    _create_order(transport)
+    transport.fetch_payment(
+        key_id=KEY_ID, key_secret=TEST_SECRET, payment_id=_EGRESS_PAYMENT
+    )
+    transport.create_payment(
+        key_id=KEY_ID,
+        key_secret=TEST_SECRET,
+        order_id=_EGRESS_ORDER,
+        token_id=_EGRESS_TOKEN,
+        amount_cents=_EGRESS_AMOUNT,
+        currency="inr",
+        description="ledgerprobe",
+        customer_id=_EGRESS_CUSTOMER,
+        idempotency_key=_EGRESS_IDEMPOTENCY,
+    )
+    transport.capture_payment(
+        key_id=KEY_ID,
+        key_secret=TEST_SECRET,
+        payment_id=_EGRESS_PAYMENT,
+        amount_cents=_EGRESS_AMOUNT,
+        currency="inr",
+    )
+
+    assert [row["extra"]["purpose"] for row in ledger.entries()] == [
+        "payments.razorpay.customer.create",
+        "payments.razorpay.card.fetch",
+        "payments.razorpay.card.list",
+        "payments.razorpay.order.create",
+        "payments.razorpay.payment.fetch",
+        "payments.razorpay.payment.create",
+        "payments.razorpay.payment.capture",
+    ]
+
+
+@pytest.mark.parametrize("scenario", ["ok", "rejected", "overloaded", "unreachable"])
+def test_a_row_carries_no_id_amount_path_or_credential(
+    tmp_path: Path, scenario: str
+) -> None:
+    import httpx
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if scenario == "unreachable":
+            raise httpx.ConnectError(f"cannot reach {request.url}")
+        status = {"ok": 200, "rejected": 400, "overloaded": 503}[scenario]
+        return httpx.Response(
+            status,
+            json={
+                "id": _EGRESS_ORDER,
+                "amount": _EGRESS_AMOUNT,
+                "error": {"code": "BAD_REQUEST_ERROR", "description": TEST_SECRET},
+            },
+        )
+
+    transport, _ledger, audit_path, _seen = _mock_transport(tmp_path, handler)
+
+    try:
+        _create_order(transport)
+        transport.fetch_payment(
+            key_id=KEY_ID, key_secret=TEST_SECRET, payment_id=_EGRESS_PAYMENT
+        )
+        transport.list_tokens(
+            key_id=KEY_ID, key_secret=TEST_SECRET, customer_id=_EGRESS_CUSTOMER
+        )
+    except RazorpayGatewayError:
+        pass
+
+    line = audit_path.read_text(encoding="utf-8")
+    assert "egress" in line  # a row was written; the loop below inspects it
+    for forbidden in _EGRESS_FORBIDDEN:
+        assert forbidden not in line, forbidden
+
+
+def test_a_path_id_in_the_url_never_reaches_the_row(tmp_path: Path) -> None:
+    transport, _ledger, audit_path, seen = _mock_transport(
+        tmp_path, _json_handler(200, {"id": _EGRESS_PAYMENT})
+    )
+
+    transport.fetch_payment(
+        key_id=KEY_ID, key_secret=TEST_SECRET, payment_id=_EGRESS_PAYMENT
+    )
+
+    assert _EGRESS_PAYMENT in str(seen[0].url)  # the id really was on the wire
+    assert _EGRESS_PAYMENT not in audit_path.read_text(encoding="utf-8")
+
+
+class _ExplodingLedger:
+    def __init__(self, error: Exception) -> None:
+        self.error = error
+        self.attempts = 0
+
+    def record(self, **_kwargs: Any) -> None:
+        self.attempts += 1
+        raise self.error
+
+
+@pytest.mark.parametrize(
+    "error", [RuntimeError("disk full"), ValueError("bad label"), OSError("read-only")]
+)
+def test_a_failing_ledger_never_breaks_a_successful_call(
+    tmp_path: Path, error: Exception
+) -> None:
+    ledger = _ExplodingLedger(error)
+    transport, _real, _path, _seen = _mock_transport(
+        tmp_path, _json_handler(200, {"id": _EGRESS_ORDER}), egress=ledger
+    )
+
+    payload = _create_order(transport)
+
+    assert payload["id"] == _EGRESS_ORDER
+    assert ledger.attempts == 1
+
+
+def test_a_failing_ledger_does_not_replace_the_gateway_error(tmp_path: Path) -> None:
+    import httpx
+
+    ledger = _ExplodingLedger(RuntimeError("disk full"))
+
+    def refuse(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("no route")
+
+    (tmp_path / "rejecting").mkdir()
+    transport, _real, _path, _seen = _mock_transport(tmp_path, refuse, egress=ledger)
+
+    with pytest.raises(RazorpayGatewayError) as caught:
+        _create_order(transport)
+
+    assert caught.value.retryable is True
+    assert ledger.attempts == 1
+
+    rejecting, _real, _path, _seen = _mock_transport(
+        tmp_path / "rejecting", _json_handler(400, {}), egress=ledger
+    )
+    with pytest.raises(RazorpayGatewayError) as rejected:
+        _create_order(rejecting)
+    assert rejected.value.retryable is False
+    assert ledger.attempts == 2
+
+
+def test_no_ledger_means_no_rows_and_unchanged_behaviour(tmp_path: Path) -> None:
+    transport, ledger, _path, _seen = _mock_transport(
+        tmp_path, _json_handler(200, {"id": _EGRESS_ORDER}), egress=None
+    )
+
+    assert _create_order(transport)["id"] == _EGRESS_ORDER
+    assert ledger.entries() == []
+
+
+def test_a_call_refused_before_the_network_writes_no_row(tmp_path: Path) -> None:
+    transport, ledger, _path, seen = _mock_transport(
+        tmp_path, _json_handler(200, {"id": _EGRESS_ORDER})
+    )
+
+    with pytest.raises(RazorpayGatewayError):
+        transport.fetch_token(key_id=KEY_ID, key_secret="", token_id=_EGRESS_TOKEN)
+    with pytest.raises(RazorpayGatewayError):
+        transport.fetch_token(
+            key_id=KEY_ID, key_secret=TEST_SECRET, token_id="../../admin"
+        )
+
+    assert seen == []
+    assert ledger.entries() == []  # nothing left the process, so nothing is claimed
+
+
+def test_a_transport_with_an_unlisted_base_url_is_recorded_as_unlisted(
+    tmp_path: Path,
+) -> None:
+    class Elsewhere(HttpRazorpayTransport):
+        base_url = "https://payments.example.test/v1"
+
+    import httpx
+
+    audit = AuditLog(tmp_path / "audit.jsonl")
+    ledger = EgressLedger(audit)
+    transport = Elsewhere(
+        client=httpx.Client(
+            transport=httpx.MockTransport(lambda r: httpx.Response(200, json={}))
+        ),
+        egress=ledger,
+    )
+
+    transport.create_customer(key_id=KEY_ID, key_secret=TEST_SECRET, notes={})
+
+    extra = ledger.entries()[0]["extra"]
+    assert extra["recipient"] == "unlisted"
+    assert extra["host"] == "payments.example.test"
+
+
+def test_razorpay_is_a_known_egress_recipient() -> None:
+    assert RECIPIENTS["razorpay"] == ("api.razorpay.com",)
+
+
+# -- egress ledger: threading through the gateway and wallet -------------------
+
+
+def test_the_gateway_hands_its_ledger_to_the_lazily_built_transport() -> None:
+    ledger = EgressLedger(None)
+    gateway = RazorpayGateway(key_id=KEY_ID, egress=ledger)
+
+    assert gateway.egress is ledger
+    assert gateway._transport is None  # noqa: SLF001 - still lazy
+
+    built = gateway._client()  # noqa: SLF001
+    assert isinstance(built, HttpRazorpayTransport)
+    assert built.egress is ledger
+    gateway.close()
+
+
+def test_an_injected_transport_is_used_as_is_and_never_wrapped() -> None:
+    fake = FakeTransport()
+    gateway = RazorpayGateway(key_id=KEY_ID, transport=fake, egress=EgressLedger(None))
+
+    assert gateway._client() is fake  # noqa: SLF001
+
+
+def test_the_wallet_from_env_threads_the_ledger_and_stays_lazy() -> None:
+    ledger = EgressLedger(None)
+    wallet = RazorpayWallet.from_env(
+        {KEY_ID_ENV: KEY_ID, KEY_SECRET_ENV: TEST_SECRET},
+        ledger=WalletLedger(":memory:"),
+        egress=ledger,
+    )
+
+    gateway = wallet._transport()  # noqa: SLF001
+    assert gateway.egress is ledger
+    assert gateway._transport is None  # noqa: SLF001 - no HTTP transport yet
+    assert wallet._razorpay_transport is None  # noqa: SLF001
+
+
+def test_the_wallet_builds_a_gateway_with_the_ledger_when_none_was_injected() -> None:
+    ledger = EgressLedger(None)
+    wallet = RazorpayWallet(
+        config=RazorpayConfig(key_id=KEY_ID, secret_key=TEST_SECRET),
+        ledger=WalletLedger(":memory:"),
+        egress=ledger,
+    )
+
+    assert wallet._transport().egress is ledger  # noqa: SLF001
+
+
+def test_every_existing_call_shape_still_works_without_a_ledger() -> None:
+    wallet = RazorpayWallet.from_env({KEY_ID_ENV: KEY_ID, KEY_SECRET_ENV: TEST_SECRET})
+
+    assert wallet._transport().egress is None  # noqa: SLF001
+    assert RazorpayGateway(key_id=KEY_ID).egress is None
+    assert HttpRazorpayTransport().egress is None
+
+
+def test_a_non_network_client_error_is_recorded_as_error_not_unreachable() -> None:
+    # A client that fails before sending (here: closed) is not an unreachable
+    # processor; the row says ``error`` and the original exception propagates.
+    import httpx
+
+    from openshell.audit import AuditLog
+    from openshell.egress_ledger import EgressLedger
+    from payments.razorpay_gateway import HttpRazorpayTransport
+
+    import tempfile
+    from pathlib import Path
+
+    with tempfile.TemporaryDirectory() as directory:
+        audit = AuditLog(Path(directory) / "audit.jsonl")
+        client = httpx.Client(transport=httpx.MockTransport(lambda request: httpx.Response(200, json={})))
+        client.close()
+        transport = HttpRazorpayTransport(client=client, egress=EgressLedger(audit))
+        with pytest.raises(RuntimeError):
+            transport.create_customer(key_id="rzp_test_k", key_secret="s3cret", notes={})
+        rows = audit.entries(event="egress")
+        assert [row["outcome"] for row in rows] == ["error"]

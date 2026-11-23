@@ -22,7 +22,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable, Mapping
 
-__all__ = ["AuditLog", "DEFAULT_TENANT_ID", "SecretScrubber"]
+__all__ = ["AuditLog", "DEFAULT_TENANT_ID", "SecretScrubber", "ends_mid_line"]
 
 #: The only tenant admitted by this version. A record written without an
 #: explicit tenant is the owner's.
@@ -32,7 +32,18 @@ _REDACTED = "[redacted]"
 _MIN_SECRET_LEN = 4
 
 _BEARER_RE = re.compile(r"(?i)\bbearer\s+[A-Za-z0-9._~+/=-]+")
-_PROVIDER_KEY_RE = re.compile(r"\b(?:sk|rk|pk)_(?:live|test)_[A-Za-z0-9]{4,}")
+# Well-known provider key shapes. Every alternative is a literal prefix followed
+# by one bounded character class, so matching is linear (no nested quantifiers).
+# The new shapes are anchored with a look-behind/look-ahead on [A-Za-z0-9] rather
+# than ``\b`` so a key glued to an ``_`` (``LEAK_ghp_...``) is still redacted,
+# while a longer alphanumeric word that merely contains the prefix is not.
+_PROVIDER_KEY_RE = re.compile(
+    r"\b(?:sk|rk|pk)_(?:live|test)_[A-Za-z0-9]{4,}"  # Stripe-style
+    r"|(?<![A-Za-z0-9])sk-or-v1-[A-Za-z0-9_-]{8,}"  # OpenRouter
+    r"|(?<![A-Za-z0-9])gh[pousr]_[A-Za-z0-9]{20,}"  # GitHub token families
+    r"|(?<![A-Za-z0-9])github_pat_[A-Za-z0-9_]{20,}"  # GitHub fine-grained PAT
+    r"|(?<![A-Za-z0-9])AKIA[0-9A-Z]{16}(?![A-Za-z0-9])"  # AWS access key id
+)
 _KV_RE = re.compile(
     r"(?i)\b(token|secret|password|passwd|api[_-]?key|access[_-]?key|private[_-]?key)"
     r"\b(\s*[=:]\s*)(\"[^\"]*\"|'[^']*'|\S+)"
@@ -113,6 +124,23 @@ class SecretScrubber:
         return value
 
 
+def ends_mid_line(path: Path) -> bool:
+    """True when ``path`` is non-empty and its last byte is not a newline.
+
+    A crash mid-append leaves a partial last line. Writing the next row straight
+    after it would glue the two together, and the reader would skip both.
+    """
+
+    try:
+        with path.open("rb") as handle:
+            handle.seek(0, os.SEEK_END)
+            if handle.tell() == 0:
+                return False
+            handle.seek(-1, os.SEEK_END)
+            return handle.read(1) != b"\n"
+    except OSError:
+        return False
+
 class AuditLog:
     def __init__(
         self,
@@ -192,13 +220,14 @@ class AuditLog:
         with self._lock:
             self.path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
             is_new = not self.path.exists()
+            torn = not is_new and ends_mid_line(self.path)
             with self.path.open("a", encoding="utf-8") as handle:
                 if is_new:
                     try:
                         os.chmod(self.path, 0o600)
                     except OSError:
                         pass
-                handle.write(line + "\n")
+                handle.write(("\n" if torn else "") + line + "\n")
                 handle.flush()
                 os.fsync(handle.fileno())
         return entry
@@ -215,9 +244,15 @@ class AuditLog:
                 raw = path.read_text(encoding="utf-8")
             except FileNotFoundError:  # a rotation raced this read
                 continue
-            parsed.extend(
-                json.loads(line) for line in raw.splitlines() if line.strip()
-            )
+            for line in raw.splitlines():
+                if not line.strip():
+                    continue
+                try:
+                    row = json.loads(line)
+                except ValueError:  # a torn or garbled line: keep the rest
+                    continue
+                if isinstance(row, dict):
+                    parsed.append(row)
         if turn_id is not None:
             parsed = [entry for entry in parsed if entry.get("turn_id") == turn_id]
         if event is not None:

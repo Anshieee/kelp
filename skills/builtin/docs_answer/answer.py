@@ -139,13 +139,126 @@ def _row_text(row: Sequence[str]) -> str:
     return _clip(",".join(row))
 
 
+def _filter_groups(
+    table: CsvTable, column: int, question: str
+) -> list[tuple[list[int], list[str]]]:
+    """Row-filter groups ``(columns, terms)`` named by the question, in order.
+
+    A question such as "revenue for East" carries a filter as well as an
+    aggregate, but a CSV has no schema saying which words are values. A word is
+    treated as one only when it is a token of a cell in a non-numeric column:
+    that keeps filler ("across", "regions") from changing the answer unless the
+    file itself uses the word as a value, and the aggregate, header and target-column words are never candidates. A word that
+    is also a value in a text column does filter, and the answer names the
+    filter, so the change is visible. Terms that share a candidate column are
+    alternatives (OR); distinct groups must all hold (AND).
+    """
+
+    skip = set().union(*(_column_tokens(header) for header in table.header))
+    for words in _AGGREGATES.values():
+        skip.update(word for word in words if " " not in word)
+    terms = [t for t in dict.fromkeys(tokenize(question)) if t not in skip]
+    numeric = set(_numeric_columns(table)) | {column}
+    candidates = [index for index in range(len(table.header)) if index not in numeric]
+
+    columns_of: dict[str, set[int]] = {}
+    # Tokenise each candidate column once, not once per question term.
+    vocabulary = {
+        index: {token for row in table.rows if index < len(row) for token in tokenize(row[index])}
+        for index in candidates
+    }
+    for term in terms:
+        found = {index for index in candidates if term in vocabulary[index]}
+        if found:
+            columns_of[term] = found
+
+    # Merge terms whose column sets overlap, transitively, in question order.
+    groups: list[tuple[set[int], list[str]]] = []
+    for term, found in columns_of.items():
+        merged_columns, merged_terms = set(found), [term]
+        for group in [g for g in groups if g[0] & merged_columns]:
+            groups.remove(group)
+            merged_columns |= group[0]
+            merged_terms += group[1]
+        groups.append((merged_columns, merged_terms))
+    order = {term: position for position, term in enumerate(terms)}
+    return [(sorted(cols), sorted(words, key=order.__getitem__)) for cols, words in groups]
+
+
+def _matching_rows(
+    table: CsvTable, groups: Sequence[tuple[list[int], list[str]]]
+) -> list[int]:
+    """Indices of rows that satisfy every filter group."""
+
+    passing: list[int] = []
+    for index, row in enumerate(table.rows):
+        for columns, words in groups:
+            cells = {
+                token
+                for column in columns
+                if column < len(row)
+                for token in tokenize(row[column])
+            }
+            if not cells.intersection(words):
+                break
+        else:
+            passing.append(index)
+    return passing
+
+
+#: Columns named per filter group before the rest are counted.
+_MAX_FILTER_COLUMNS = 3
+#: Ceiling on the whole filter description, so a wide table cannot flood it.
+_MAX_FILTER_CHARS = 200
+
+
+def _describe_filters(
+    table: CsvTable, groups: Sequence[tuple[list[int], list[str]]]
+) -> str:
+    """"region matches east or west and product matches gpu" for the answer.
+
+    A word common to many text columns would otherwise list every one of them,
+    so each group names at most :data:`_MAX_FILTER_COLUMNS` headers and counts
+    the rest, and the whole description is clipped.
+    """
+
+    parts = []
+    for columns, words in groups:
+        named = "/".join(
+            _clip(table.header[column], 40) for column in columns[:_MAX_FILTER_COLUMNS]
+        )
+        hidden = len(columns) - _MAX_FILTER_COLUMNS
+        if hidden > 0:
+            named += f" and {hidden} more columns"
+        parts.append(named + " matches " + " or ".join(words))
+    return _clip(" and ".join(parts), _MAX_FILTER_CHARS)
+
+
 def _aggregate_answer(
-    table: CsvTable, column: int, operation: str, max_rows: int
+    table: CsvTable,
+    column: int,
+    operation: str,
+    max_rows: int,
+    question: str = "",
 ) -> tuple[str, list[dict[str, str]]]:
-    header = table.header[column]
+    # The header is file content: clip it like a row so a huge header cannot
+    # flood the answer.
+    header = _clip(table.header[column])
+    groups = _filter_groups(table, column, question)
+    if groups:
+        rows = _matching_rows(table, groups)
+        where = _describe_filters(table, groups)
+    else:
+        rows = list(range(len(table.rows)))
+        where = ""
+    if groups and not rows:
+        return f"No rows where {where}.", []
+    suffix = f" where {where}" if where else ""
+
     values: list[float] = []
     used: list[int] = []
-    for index, row in enumerate(table.rows):
+    for index in rows:
+        row = table.rows[index]
         text = row[column] if column < len(row) else ""
         value = numeric_value(text)
         if value is None:
@@ -154,10 +267,12 @@ def _aggregate_answer(
         used.append(index + 2)
 
     if not values:
-        return f"No numeric values found in column {header}.", []
+        return f"No numeric values found in column {header}{suffix}.", []
 
     if operation == "count":
-        answer = f"Column {header} has {len(values)} numeric values across {len(table.rows)} rows."
+        answer = (
+            f"Column {header} has {len(values)} numeric values across {len(rows)} rows{suffix}."
+        )
     else:
         computed = {
             "total": sum(values),
@@ -171,7 +286,7 @@ def _aggregate_answer(
             "minimum": "Minimum",
             "maximum": "Maximum",
         }[operation]
-        answer = f"{label} {header} across {len(values)} rows is {_format_amount(computed)}."
+        answer = f"{label} {header} across {len(values)} rows{suffix} is {_format_amount(computed)}."
         if operation in ("minimum", "maximum"):
             # Name the row that holds the extreme; an aggregate alone would
             # leave "which one?" unanswered.
@@ -206,7 +321,7 @@ def csv_answer(
         matching = [index for index in columns if _column_tokens(table.header[index]) & terms]
         column = matching[0] if matching else columns[0]
         if operation is not None or matching:
-            return _aggregate_answer(table, column, operation or "total", max_rows)
+            return _aggregate_answer(table, column, operation or "total", max_rows, question)
 
     # Lexical row matching: rank rows by term overlap, then by row number.
     scored_rows: list[tuple[int, int]] = []

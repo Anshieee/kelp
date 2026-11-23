@@ -45,6 +45,36 @@ The offline run wraps the whole suite in `evals.offline.block_network`, which
 replaces connect and name-resolution paths with a tripwire. A task that tries
 to reach the network fails the run; it cannot silently pass.
 
+## What offline tool and multi-turn accuracy means
+
+In the offline run the model is a recording. Tool selection, tool arguments and
+the final answer of a `tool`, `approval`, `restart_resume` or `multi_turn` task
+are replayed from `provider_v1.json`, so a pass there measures **replay
+fidelity** (the real chat service, loop, approval and recovery code handles the
+recorded events correctly). It says nothing about whether a live model would
+choose those tools. Only `--live` measures that.
+
+Replay alone cannot see a regression in the *request* the service builds, so
+every provider request is also recorded (snapshotted when sent, because the
+agent loop keeps appending to the same transcript list) and the gate checks
+its shape. These are ordinary per-task checks in `report.json`; any failure
+fails the task:
+
+| Check | Tasks | Passes when |
+| --- | --- | --- |
+| `request_tool_specs` | tasks with `expect.tool_calls` (`tool`, `approval`) | every request carries a tool spec for each expected tool name |
+| `request_tool_results` | same | the last request has a `role: "tool"` message for each executed call's `tool_call_id` |
+| `followup_sent_last` | `multi_turn_two` | the second request ends with the follow-up as a `user` message |
+| `retry_request_prompt` | `resume_retry` | the retried request carries the original user prompt |
+| `history_sent` | `multi_turn_two` with `expect.history_in_request: true` | the second request contains the first user prompt and the first assistant answer |
+
+`history_sent` is **off in the shipped dataset**. `ChatService` currently sends
+only the current user text to the model on every turn, and prompt assembly from
+stored history is explicitly a later slice (`docs/CHAT_SPEC.md` section 1), so
+the check would fail today. The check exists and is tested; turn it on in
+`EV-023` when the service starts sending history. Until then the gate does not
+claim that earlier turns reach the model.
+
 ## Metrics and gates
 
 `evals/metrics.py` computes:

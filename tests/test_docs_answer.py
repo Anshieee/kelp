@@ -20,7 +20,7 @@ from pathlib import Path
 import pytest
 
 from skills.builtin.docs_answer import embeddings, extract as extract_module
-from skills.builtin.docs_answer.chunking import CLIP_CHARS, chunk_csv, chunk_pdf
+from skills.builtin.docs_answer.chunking import CLIP_CHARS, chunk_csv, chunk_pdf, clip_text
 from skills.builtin.docs_answer.handler import run
 from skills.builtin.docs_answer.extract import extract_pdf, numeric_value, read_csv
 from skills.builtin.docs_answer.retrieval import (
@@ -699,6 +699,179 @@ def test_csv_question_without_a_match_does_not_invent_rows(tmp_path: Path) -> No
 
 
 # ---------------------------------------------------------------------------
+# CSV aggregate row filters
+# ---------------------------------------------------------------------------
+
+REGION_DATA = b"region,revenue\nEast,100\nWest,900\nNorth,50\n"
+EVAL_DATA = (
+    "region,product,units,revenue\n"
+    "North,GPU cluster,12,48000\n"
+    "South,Storage tier,30,15000\n"
+    "East,Inference API,20,64000\n"
+    "West,Support plan,7,9000\n"
+).encode()
+
+
+def test_csv_total_is_restricted_to_the_filtered_region(tmp_path: Path) -> None:
+    context, _ = workspace(tmp_path, {"abcdefgh1234.csv": REGION_DATA})
+
+    output = ask(context, "csv", "What is the revenue for the East region?")
+
+    assert output["answer"] == "Total revenue across 1 rows where region matches east is 100."
+    assert output["citations"] == [{"locator": "row 2", "text": "East,100"}]
+
+
+def test_csv_eval_dataset_filter_cites_only_the_matching_row(tmp_path: Path) -> None:
+    context, _ = workspace(tmp_path, {"abcdefgh1234.csv": EVAL_DATA})
+
+    output = ask(context, "csv", "What is the total revenue for East?")
+
+    assert output["answer"] == (
+        "Total revenue across 1 rows where region matches east is 64,000."
+    )
+    assert output["citations"] == [{"locator": "row 4", "text": "East,Inference API,20,64000"}]
+
+
+def test_csv_filter_term_matching_no_cell_is_ignored(tmp_path: Path) -> None:
+    context, _ = workspace(tmp_path, {"abcdefgh1234.csv": EVAL_DATA})
+
+    output = ask(context, "csv", "What is the total revenue across all regions?")
+
+    assert output["answer"] == "Total revenue across 4 rows is 136,000."
+    assert [citation["locator"] for citation in output["citations"]] == [
+        "row 2",
+        "row 3",
+        "row 4",
+        "row 5",
+    ]
+
+
+def test_csv_terms_in_one_column_are_alternatives(tmp_path: Path) -> None:
+    context, _ = workspace(tmp_path, {"abcdefgh1234.csv": REGION_DATA})
+
+    output = ask(context, "csv", "total revenue for East or West")
+
+    assert output["answer"] == (
+        "Total revenue across 2 rows where region matches east or west is 1,000."
+    )
+    assert [citation["locator"] for citation in output["citations"]] == ["row 2", "row 3"]
+
+
+def test_csv_terms_in_different_columns_must_all_hold(tmp_path: Path) -> None:
+    data = b"region,product,revenue\nEast,GPU,100\nEast,Storage,20\nWest,GPU,5\n"
+    context, _ = workspace(tmp_path, {"abcdefgh1234.csv": data})
+
+    output = ask(context, "csv", "total revenue for East GPU")
+
+    assert output["answer"] == (
+        "Total revenue across 1 rows where region matches east and product matches gpu is 100."
+    )
+    assert output["citations"] == [{"locator": "row 2", "text": "East,GPU,100"}]
+
+
+def test_csv_term_present_in_two_columns_names_both_headers(tmp_path: Path) -> None:
+    data = b"region,hub,revenue\nEast,West,100\nWest,North,20\nNorth,East,5\n"
+    context, _ = workspace(tmp_path, {"abcdefgh1234.csv": data})
+
+    output = ask(context, "csv", "total revenue for East")
+
+    assert output["answer"] == (
+        "Total revenue across 2 rows where region/hub matches east is 105."
+    )
+    assert [citation["locator"] for citation in output["citations"]] == ["row 2", "row 4"]
+
+
+def test_csv_filter_with_no_passing_rows_says_so(tmp_path: Path) -> None:
+    data = b"region,product,revenue\nEast,Storage,20\nWest,GPU,5\n"
+    context, _ = workspace(tmp_path, {"abcdefgh1234.csv": data})
+
+    output = ask(context, "csv", "total revenue for East GPU")
+
+    assert output["answer"] == "No rows where region matches east and product matches gpu."
+    assert output["citations"] == []
+
+
+def test_csv_filter_with_rows_but_no_numeric_values_keeps_the_message(
+    tmp_path: Path,
+) -> None:
+    data = b"region,revenue\nEast,\nWest,900\nNorth,50\n"
+    context, _ = workspace(tmp_path, {"abcdefgh1234.csv": data})
+
+    output = ask(context, "csv", "total revenue for East")
+
+    assert output["answer"] == (
+        "No numeric values found in column revenue where region matches east."
+    )
+    assert output["citations"] == []
+
+
+def test_csv_count_reports_filtered_rows(tmp_path: Path) -> None:
+    context, _ = workspace(tmp_path, {"abcdefgh1234.csv": REGION_DATA})
+
+    output = ask(context, "csv", "How many revenue values for East?")
+
+    assert output["answer"] == (
+        "Column revenue has 1 numeric values across 1 rows where region matches east."
+    )
+
+
+def test_csv_maximum_names_the_winning_row_among_filtered_rows(tmp_path: Path) -> None:
+    data = b"region,sales\nEast,10\nWest,900\nEast,70\n"
+    context, _ = workspace(tmp_path, {"abcdefgh1234.csv": data})
+
+    output = ask(context, "csv", "What was the highest sales in East?")
+
+    assert output["answer"] == (
+        "Maximum sales across 2 rows where region matches east is 70. Row 4: East,70."
+    )
+    assert [citation["locator"] for citation in output["citations"]] == ["row 2", "row 4"]
+
+
+def test_csv_header_name_selects_the_column_and_is_not_a_filter(tmp_path: Path) -> None:
+    context, _ = workspace(tmp_path, {"abcdefgh1234.csv": EVAL_DATA})
+
+    output = ask(context, "csv", "total units for the East region")
+
+    assert output["answer"] == "Total units across 1 rows where region matches east is 20."
+    assert "units matches" not in output["answer"]
+    assert "region matches region" not in output["answer"]
+
+
+def test_clip_text_never_exceeds_the_limit_without_spaces() -> None:
+    clipped = clip_text("x" * 5000)
+
+    assert len(clipped) <= CLIP_CHARS
+    assert clipped.endswith("…")
+
+
+def test_clip_text_never_exceeds_the_limit_with_spaces() -> None:
+    clipped = clip_text("word " * 500)
+
+    assert len(clipped) <= CLIP_CHARS
+    assert clipped.endswith("…")
+    # A space exactly at the boundary must not push the result over either.
+    for length in range(CLIP_CHARS - 3, CLIP_CHARS + 4):
+        assert len(clip_text(("a" * (length - 1) + " ") * 3)) <= CLIP_CHARS
+
+
+def test_clip_text_leaves_short_text_untouched() -> None:
+    assert clip_text("  a   b ") == "a b"
+    assert clip_text("y" * CLIP_CHARS) == "y" * CLIP_CHARS
+
+
+@pytest.mark.parametrize("question", ["total", "count of rows"])
+def test_csv_answer_clips_an_oversized_header(tmp_path: Path, question: str) -> None:
+    header = "h" * 5000
+    data = f"{header},label\n5,a\n7,b\n".encode()
+    context, _ = workspace(tmp_path, {"abcdefgh1234.csv": data})
+
+    output = ask(context, "csv", question)
+
+    assert header not in output["answer"]
+    assert len(output["answer"]) <= CLIP_CHARS + 64
+
+
+# ---------------------------------------------------------------------------
 # chunking and retrieval units
 # ---------------------------------------------------------------------------
 
@@ -946,3 +1119,35 @@ def test_200_page_pdf_answers_within_two_seconds(tmp_path: Path) -> None:
         token_count(citation["text"]) for citation in first["citations"]
     )
     assert context_tokens <= 1200
+
+
+def test_csv_filter_description_stays_short_for_a_wide_table() -> None:
+    # A common word in many text columns must not turn the answer into a copy
+    # of the header row: the description names a few columns and counts the
+    # rest, and the whole filter text is clipped.
+    from skills.builtin.docs_answer.answer import csv_answer
+
+    columns = [f"col_{index}" for index in range(600)]
+    header = ",".join(columns + ["revenue"])
+    rows = [",".join(["yes"] * 600 + ["10"]), ",".join(["no"] * 600 + ["5"])]
+    table = read_csv((header + "\n" + "\n".join(rows) + "\n").encode())
+
+    answer, citations = csv_answer(table, "total revenue for yes")
+
+    assert answer.startswith("Total revenue across 1 rows where col_0/col_1/col_2")
+    assert "and 597 more columns matches yes" in answer
+    assert answer.endswith(" is 10.")
+    assert len(answer) < 400
+    assert [c["locator"] for c in citations] == ["row 2"]
+
+
+def test_csv_filler_word_in_a_text_column_is_stated_as_a_filter() -> None:
+    # A word that is also a value in a text column does filter; the answer says
+    # so instead of silently changing the total.
+    from skills.builtin.docs_answer.answer import csv_answer
+
+    table = read_csv(b"region,notes,revenue\nEast,up across the board,100\nWest,flat,5\n")
+
+    answer, _ = csv_answer(table, "total revenue across regions")
+
+    assert answer == "Total revenue across 1 rows where notes matches across is 100."

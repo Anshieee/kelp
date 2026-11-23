@@ -43,6 +43,7 @@ from .fixtures import (
 from .metrics import compare_to_previous, compute_metrics, evaluate_thresholds
 from .offline import block_network
 from .report import find_previous, write_reports
+from .request_checks import snapshot_request
 from .results import Observation, TaskResult
 from .scenarios import ScenarioContext, run_retrieval, run_scenario
 from .tools import (
@@ -80,14 +81,19 @@ class SuiteOutcome:
 
 
 class CountingProvider:
-    """Record requests so multi-turn/retry tests can assert call counts."""
+    """Record requests so scenarios can assert call counts and request shape.
+
+    The agent loop builds each ``ChatRequest`` around its live transcript list
+    and keeps appending to it, so the request is snapshotted on arrival. The
+    inner provider still receives the original object.
+    """
 
     def __init__(self, inner: Any):
         self._inner = inner
         self.requests: list[ChatRequest] = []
 
     async def stream(self, request: ChatRequest) -> AsyncIterator[Any]:
-        self.requests.append(request)
+        self.requests.append(snapshot_request(request))
         async for event in self._inner.stream(request):
             yield event
 

@@ -26,6 +26,8 @@ from tests.test_wallet import (
 
 TOKEN = "test-session-token"
 CSRF = "test-csrf-token"
+# Distinctive so it cannot match an id, timestamp or status in a response body.
+CVC = "737"
 
 
 @pytest.fixture
@@ -264,13 +266,15 @@ def test_attach_rejects_card_details_and_never_echoes_them(api: WalletAPI) -> No
         api,
         "POST",
         "/api/wallet/attach",
-        body={"payment_method_id": PM_ID, "number": PAN, "cvc": "123"},
+        body={"payment_method_id": PM_ID, "number": PAN, "cvc": CVC},
     )
 
     assert response.status == 422
     assert payload(response)["error"]["code"] == "unstorable_card"
+    # Both values were really sent (see the request above), so absence from the
+    # whole response body, not from a dict's keys, is what proves no echo.
     assert PAN not in text(response)
-    assert "123" not in payload(response)["error"].get("details", {})
+    assert CVC not in text(response)
     assert payload(call(api, "GET", "/api/wallet/cards"))["cards"] == []
 
 

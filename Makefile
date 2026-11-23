@@ -27,7 +27,8 @@ eval:
 	python -m evals $(EVAL_ARGS)
 
 # Build the phone web app (PWA) into phone/dist/, which the server mounts at
-# /phone/. Requires node/npm on the build host; the committed dist/ means the
-# mount works without this step until the next app change.
+# /phone/. Requires node/npm on the build host. phone/dist/ is not committed, so
+# until this target has run, /phone/ answers 404 phone_not_built. The Docker
+# image does not include the phone app (docs/DEPLOY.md section 1).
 phone:
 	cd phone && npm ci && npm run build

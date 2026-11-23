@@ -777,7 +777,10 @@ def test_two_approvals_cannot_both_fit_inside_the_cap() -> None:
 
     assert caught.value.code == "monthly_cap_exceeded"
     assert wallet.ledger.get_proposal(second.id).status == "blocked"
-    assert gateway.intents == {}  # the second order never reached Stripe
+    # ``intents`` is only written on success and the fake raises first, so it is
+    # always empty here. ``payments`` records every call that reached the
+    # gateway: exactly the first order's 5000-cent attempt, never the second's.
+    assert [p["amount_cents"] for p in gateway.payments] == [5000]
 
 
 def test_stale_approval_is_swept_and_frees_the_monthly_cap() -> None:

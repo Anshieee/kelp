@@ -36,6 +36,11 @@ Security boundaries (same rules as the Stripe wallet):
 - HTTP happens only inside :class:`HttpRazorpayTransport`, which is constructed
   lazily on the first real call. Tests inject ``FakeTransport``; the network
   stack is never touched.
+- Every HTTP call writes exactly one content-free row to the egress ledger
+  (``recipient=razorpay``, ``purpose=payments.razorpay.<operation>``, byte
+  counts, outcome, status). The row never carries a path id, query, body, amount,
+  or credential, and a ledger failure is swallowed: accounting never blocks
+  payment traffic. Without a ledger (``egress=None``) nothing is recorded.
 
 Configuration (server-only environment):
 
@@ -63,11 +68,15 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import json
 import os
 import re
 import threading
 from dataclasses import dataclass, field
 from typing import Any, Iterable, Mapping, Protocol
+from urllib.parse import urlsplit
+
+from openshell.egress_ledger import EgressLedger, recipient_for_host
 
 from .stripe_wallet import WalletNotConfigured
 from .wallet import (
@@ -391,10 +400,62 @@ class HttpRazorpayTransport:
         "customer": _CUSTOMER_RE,
     }
 
-    def __init__(self, *, timeout: float = 20.0, client: Any = None) -> None:
+    def __init__(
+        self,
+        *,
+        timeout: float = 20.0,
+        client: Any = None,
+        egress: EgressLedger | None = None,
+    ) -> None:
         self.timeout = timeout
         self._client: Any = client
+        self._egress = egress
         self._lock = threading.Lock()
+
+    @property
+    def egress(self) -> EgressLedger | None:
+        """The per-recipient egress ledger, or ``None`` when unaccounted."""
+
+        return self._egress
+
+    def _record_egress(
+        self,
+        *,
+        url: str,
+        operation: str,
+        method: str,
+        request_bytes: int,
+        response_bytes: int,
+        outcome: str,
+        status: int | None,
+    ) -> None:
+        """Write one ledger row for one HTTP call; never raises.
+
+        Only fixed labels and integers go in: the recipient is resolved from the
+        URL's host, the purpose is ``payments.razorpay.<operation>`` with a
+        compile-time operation label, and the byte counts are lengths. The path
+        (which carries order, payment, token, and customer ids), the query, the
+        body, and the ``Authorization`` header are never passed to the ledger.
+        A ledger failure is swallowed so accounting cannot block traffic, the
+        same rule the model client follows.
+        """
+
+        if self._egress is None:
+            return
+        try:
+            host = urlsplit(url).hostname
+            self._egress.record(
+                recipient=recipient_for_host(host),
+                purpose=f"payments.razorpay.{operation}",
+                request_bytes=request_bytes,
+                response_bytes=response_bytes,
+                outcome=outcome,
+                method=method,
+                host=host,
+                status=status,
+            )
+        except Exception:  # noqa: BLE001 - ledger is accounting, not traffic
+            return
 
     def close(self) -> None:
         with self._lock:
@@ -426,6 +487,7 @@ class HttpRazorpayTransport:
         method: str,
         path: str,
         *,
+        operation: str,
         key_id: str,
         key_secret: str,
         body: Mapping[str, Any] | None = None,
@@ -449,18 +511,56 @@ class HttpRazorpayTransport:
         }
         if idempotency_key:
             headers["X-Razorpay-Idempotency-Key"] = idempotency_key
+        url = f"{self.base_url}{path}"
+        json_body = dict(body or {})
+        # Same encoding httpx 0.28 applies to ``json=`` (older versions add
+        # spaces), so the ledger counts the body bytes sent, headers excluded.
+        request_bytes = len(
+            json.dumps(
+                json_body, ensure_ascii=False, separators=(",", ":"), allow_nan=False
+            ).encode("utf-8")
+        )
+        outcome = "unreachable"
+        status: int | None = None
+        response_bytes = 0
         try:
-            response = self._http().request(
-                method,
-                f"{self.base_url}{path}",
-                json=dict(body or {}),
-                params=dict(params or {}),
-                headers=headers,
-            )
+            try:
+                response = self._http().request(
+                    method,
+                    url,
+                    json=json_body,
+                    params=dict(params or {}),
+                    headers=headers,
+                )
+            except httpx.TimeoutException:
+                outcome = "timeout"
+                raise
+            except httpx.HTTPError:
+                raise  # transport failure: the default "unreachable" stands
+            except Exception:
+                outcome = "error"  # a client fault, not an unreachable processor
+                raise
+            status = response.status_code
+            outcome = "provider_error" if status >= 400 else "completed"
+            raw = getattr(response, "content", None)
+            response_bytes = len(raw) if isinstance(raw, (bytes, bytearray)) else 0
         except httpx.HTTPError:
             raise RazorpayGatewayError(
                 "Can't reach the payment processor right now.", retryable=True
             ) from None
+        finally:
+            # Exactly one row per call that reached the HTTP layer, whatever
+            # the outcome. A call refused above (missing credential, bad id)
+            # never sent anything, so it writes nothing.
+            self._record_egress(
+                url=url,
+                operation=operation,
+                method=method,
+                request_bytes=request_bytes,
+                response_bytes=response_bytes,
+                outcome=outcome,
+                status=status,
+            )
 
         if response.status_code >= 400:
             code: str | None = None
@@ -495,6 +595,7 @@ class HttpRazorpayTransport:
         return self._request(
             "POST",
             "/customers",
+            operation="customer.create",
             key_id=key_id,
             key_secret=key_secret,
             body={"notes": {str(k): str(v)[:_MAX_NOTES_CHARS] for k, v in notes.items()}},
@@ -510,6 +611,7 @@ class HttpRazorpayTransport:
         return self._request(
             "GET",
             f"/tokens/{self._path_id(token_id, 'token')}",
+            operation="card.fetch",
             key_id=key_id,
             key_secret=key_secret,
         )
@@ -524,6 +626,7 @@ class HttpRazorpayTransport:
         payload = self._request(
             "GET",
             f"/customers/{self._path_id(customer_id, 'customer')}/tokens",
+            operation="card.list",
             key_id=key_id,
             key_secret=key_secret,
             params={"count": "20"},
@@ -562,6 +665,7 @@ class HttpRazorpayTransport:
         return self._request(
             "POST",
             "/orders",
+            operation="order.create",
             key_id=key_id,
             key_secret=key_secret,
             body=body,
@@ -578,6 +682,7 @@ class HttpRazorpayTransport:
         return self._request(
             "GET",
             f"/payments/{self._path_id(payment_id, 'payment')}",
+            operation="payment.fetch",
             key_id=key_id,
             key_secret=key_secret,
         )
@@ -608,6 +713,7 @@ class HttpRazorpayTransport:
         return self._request(
             "POST",
             "/payments",
+            operation="payment.create",
             key_id=key_id,
             key_secret=key_secret,
             body=body,
@@ -626,6 +732,7 @@ class HttpRazorpayTransport:
         return self._request(
             "POST",
             f"/payments/{self._path_id(payment_id, 'payment')}/capture",
+            operation="payment.capture",
             key_id=key_id,
             key_secret=key_secret,
             body={"amount": amount_cents, "currency": currency.upper()},
@@ -655,6 +762,7 @@ class RazorpayGateway:
         key_id: str,
         transport: RazorpayTransport | None = None,
         max_charge_cents: int = MAX_AMOUNT_CENTS,
+        egress: EgressLedger | None = None,
     ) -> None:
         if not isinstance(key_id, str) or not key_id.strip():
             raise WalletError(
@@ -673,6 +781,13 @@ class RazorpayGateway:
         self.key_id = key_id.strip()
         self.max_charge_cents = max_charge_cents
         self._transport = transport
+        self._egress = egress
+
+    @property
+    def egress(self) -> EgressLedger | None:
+        """The ledger handed to the lazily built HTTP transport, if any."""
+
+        return self._egress
 
     def __repr__(self) -> str:
         return (
@@ -688,7 +803,7 @@ class RazorpayGateway:
 
     def _client(self) -> RazorpayTransport:
         if self._transport is None:
-            self._transport = HttpRazorpayTransport()
+            self._transport = HttpRazorpayTransport(egress=self._egress)
         return self._transport
 
     # -- protocol: customers and cards -------------------------------------
@@ -983,6 +1098,7 @@ class RazorpayWallet(Wallet):
         now_fn: Any = None,
         approval_ttl: Any = None,
         transport: RazorpayTransport | None = None,
+        egress: EgressLedger | None = None,
     ) -> None:
         raw_customer = (customer_id or "").strip()
         if raw_customer and _CUSTOMER_RE.match(raw_customer) is None:
@@ -1003,6 +1119,7 @@ class RazorpayWallet(Wallet):
         # value is set after the base constructor has validated "".
         self.customer_id = raw_customer
         self._razorpay_transport = transport
+        self._egress = egress
 
     @classmethod
     def from_env(
@@ -1012,6 +1129,7 @@ class RazorpayWallet(Wallet):
         ledger: WalletLedger | None = None,
         transport: RazorpayTransport | None = None,
         now_fn: Any = None,
+        egress: EgressLedger | None = None,
     ) -> "RazorpayWallet":
         source = os.environ if env is None else env
         key_id = (source.get(KEY_ID_ENV) or "").strip()
@@ -1030,7 +1148,9 @@ class RazorpayWallet(Wallet):
         gateway = (
             None
             if config is None
-            else RazorpayGateway(key_id=config.key_id, transport=transport)
+            else RazorpayGateway(
+                key_id=config.key_id, transport=transport, egress=egress
+            )
         )
         return cls(
             config=config,
@@ -1040,6 +1160,7 @@ class RazorpayWallet(Wallet):
             customer_id=(source.get(CUSTOMER_ID_ENV) or "").strip(),
             now_fn=now_fn,
             transport=transport,
+            egress=egress,
         )
 
     # -- configuration -----------------------------------------------------
@@ -1061,7 +1182,9 @@ class RazorpayWallet(Wallet):
         if self._gateway is None:
             config = self._require_config()
             self._gateway = RazorpayGateway(
-                key_id=config.key_id, transport=self._razorpay_transport
+                key_id=config.key_id,
+                transport=self._razorpay_transport,
+                egress=self._egress,
             )
         return self._gateway  # type: ignore[return-value]
 

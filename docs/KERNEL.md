@@ -1,6 +1,8 @@
 # Kernel agent loop (KEL-6 / P0-1)
 
-- **Status:** scaffold, 2026-10-28
+- **Status:** implemented (KEL-6, 2026-10-28). The loop is driven by the chat server
+  (`chat/service.py`); this document describes the loop and its events, not the
+  surfaces built on it. Where a section reads as a plan, the code and its tests win.
 - **Branch:** `kel-6`
 - **Contract:** `docs/SKILL_SPEC.md` for tools; this doc for the loop
 - **Tests:** `tests/test_kernel_provider.py`, `tests/test_kernel_loop.py`
