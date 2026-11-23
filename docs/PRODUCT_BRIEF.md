@@ -215,7 +215,8 @@ These are requirements for how Kelp works on a request. None is built yet.
    scoped to one action type and one target, it expires, and it is listed and
    revocable in Settings. A standing approval never covers spending money,
    deletion or other irreversible acts, anything another person will see, or
-   accepting terms of service, and Kelp always shows terms acceptance as a card.
+   accepting terms of service, or starting screen control (THREAT_MODEL S8), and
+   Kelp always shows terms acceptance as a card.
    It cannot waive a card for new access (accounts and logins, folders, hosts, OS
    permissions). Both kinds are created only from a confirmation that the desktop
    app renders from structured fields (action type, target, expiry), never from
@@ -380,11 +381,13 @@ under the same rate limit.
 
 **Actions (rare, expensive, gated).** Anything that does work runs through the
 kernel, the skills, and the approval gate. This is the path that exists today.
-Screen control (computer use on the user's own desktop) is one of these actions
+Screen control (computer use on the user's own desktop or a Boat sandbox
+desktop) is one of these actions
 and is available in every run mode (in Boat mode the sandbox desktop is the
 default target). Its rules are in
 [THREAT_MODEL §7, S8](THREAT_MODEL.md#7-screen) (planned, not built). Typing
-into a terminal counts as running a command, so it stays off while the exec
+into a terminal, or into any field that launches a program, counts as running a
+command, so it stays off while the exec
 boundary in [`docs/PRIVACY.md`](PRIVACY.md) §5 holds. Turning it on is a
 separate owner decision, and each command then gets its own card.
 
@@ -637,8 +640,9 @@ grants from section 4.3.
 
 ## 15. Money: one plan price
 
-The core stays open source. The owner's answer (2026-11-24) is one price that
-covers everything, with no per-feature limits.
+The core stays open source. The owner's answer (2026-11-24) is one price with no
+per-feature limits that covers model usage and the relay. Boat compute depends
+on the plan.
 
 - **Plan user.** A user who wants Kelp to handle everything pays one plan price
   to start. It covers model usage (including reactions, voice, and downscaled

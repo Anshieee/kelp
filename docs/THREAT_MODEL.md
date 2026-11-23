@@ -481,7 +481,9 @@ designed.
     and never in the file fallback.
   - **Remote-channel rule (applies to L6 and L7).** A message from the bridge is
     a user turn. Remote channels (Telegram and the phone) can never create a
-    standing approval and can never approve a T1 new-access card.
+    standing approval and can never approve a T1 new-access card. Neither can
+    start or approve control of the user's own desktop (S8). Only the phone may
+    approve control of a Boat sandbox desktop.
   - Like L6, it opens no inbound port and does not use the Boat tunnel (L4).
 
 | Open decision | Where it is tracked |
@@ -591,10 +593,10 @@ Windows were not tested.
   does nothing else.
 - **S7. Indicator.** Kelp draws its own watching and listening indicator. On
   wlroots the OS shows nothing during capture (spike).
-- **S8. Screen control (planned, not built).** Screen control means Kelp
-  sending mouse and keyboard input to the user's own desktop. The owner made it
-  a core capability in every mode on 2026-11-24. No input was sent in any spike
-  (brief §12).
+- **S8. Screen control (planned, not built).** Screen control means Kelp sending
+  mouse and keyboard input to a desktop: the user's own, or a Boat sandbox
+  desktop. The owner made it a core capability in every mode on 2026-11-24. No
+  input was sent in any spike (brief §12).
   - **Started only by an approved task.** Control starts only inside a user
     turn, after a card rendered by the desktop app from structured fields:
     target app id or site origin, a step cap, and an expiry. It is never
@@ -605,17 +607,23 @@ Windows were not tested.
   - **The user's own desktop is approved locally.** Control of the user's real
     desktop starts and is approved only at the desktop app, because the user
     must be able to take over. A scheduled watch, Telegram and the phone can
-    never start or approve it. Control of a Boat sandbox desktop may be
-    approved from the paired phone app (L6), never from Telegram.
-  - **Enforced in the desktop app.** The body applies S4, S7 and S8 to every
-    input event, whatever brain sent it, including a Boat brain. Before each
-    event it re-reads the focused app and window and targets the approved
-    window where the OS allows it. If the focused app, window or site cannot be
-    determined, or does not match the card, no input is sent.
-  - **Frames follow S1 to S5.** The control loop sees only apps on the allowed
-    list and sends frames to a cloud model only for apps ticked "may send to
-    cloud". A task for any other app uses a local vision model or does not run.
-    Control pauses while S5 is active.
+    never start or approve it.
+  - **Boat sandbox desktop.** The focus check, takeover detection and S1 to S5
+    app list below apply to the user's real desktop only. For a sandbox desktop
+    the card is rendered from the same structured fields by the desktop app or
+    the paired phone app (L6), never Telegram. The brain in the sandbox enforces
+    the target-site, T4 step and terminal checks, and the "Kelp is controlling"
+    indicator names the sandbox. S4 blocks and S1 to S5 still apply to any of
+    the user's own windows Kelp is shown, never to the sandbox screen.
+  - **Enforced in the desktop app (user's own desktop).** The body applies S4,
+    S7 and S8 to every input event, whatever brain sent it, including a Boat
+    brain. Before each event it re-reads the focused app and window and targets
+    the approved window where the OS allows it. If the focused app, window or
+    site cannot be determined, or does not match the card, no input is sent.
+  - **Frames follow S1 to S5 (user's own desktop).** The control loop sees only
+    apps on the allowed list and sends frames to a cloud model only for apps
+    ticked "may send to cloud". A task for any other app uses a local vision
+    model or does not run. Control pauses while S5 is active.
   - **Screen text cannot widen the task.** The control loop reads the screen
     (S6), so what it reads is untrusted. It may choose clicks and keystrokes
     within the approved task and target app or site. A step that would leave
@@ -634,13 +642,17 @@ Windows were not tested.
     stops and asks the user to enter it. While private entry is active Kelp
     sends no input to that page.
   - **Typing into a terminal is command execution.** Input to a terminal
-    emulator, shell window, IDE terminal or remote-shell session is treated as
-    running a command. It stays off while the exec boundary in
-    [`docs/PRIVACY.md`](PRIVACY.md) §5 holds (nothing runs a command in this
-    build). Turning it on is a separate owner decision that reverses that
-    boundary. When it is on, each command gets its own card that shows the
-    exact command text, rendered from the keystrokes Kelp is about to send,
-    never from model prose.
+    emulator, shell window, IDE terminal, remote-shell session, or any field
+    that launches a program or runs a command (Run dialog, launcher, command
+    palette, task runner) is treated as running a command. The desktop app
+    classifies the target as it does in the T4 step rule, and a text target it
+    cannot classify is treated as one of these. The rule applies unchanged in a
+    Boat sandbox desktop until the owner decides otherwise. It stays off while
+    the exec boundary in [`docs/PRIVACY.md`](PRIVACY.md) §5 holds (nothing runs
+    a command in this build). Turning it on is a separate owner decision that
+    reverses that boundary. When it is on, each command gets its own card that
+    shows the exact command text, rendered from the keystrokes Kelp is about to
+    send, never from model prose.
   - **The user can always take over.** A separate "Kelp is controlling"
     indicator shows while control is active. Any physical mouse or keyboard
     input from the user pauses control at once, and a stop shortcut ends it.
@@ -754,8 +766,8 @@ rules below will be enforced in the resolver, in the approval gate
     scoped to one action type and one target, is time-limited (default 30 days),
     and is listed and revocable in Settings. It can never cover spending money,
     deletion or any other irreversible act, anything another person will see, or
-    accepting terms. It cannot waive a T1 card for new access (accounts and
-    logins, folders, hosts, OS permissions).
+    accepting terms, or starting screen control (S8). It cannot waive a T1 card
+    for new access (accounts and logins, folders, hosts, OS permissions).
 
   Both kinds are created only from a confirmation that the desktop app renders
   from structured fields (action type, target, expiry), never from model-written
