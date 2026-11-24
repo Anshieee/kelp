@@ -297,11 +297,15 @@ does.
 
 **Planned change (2026-11-24).** The owner decided to allow commands behind
 approvals (planned, not built). Each command will show a card with its exact
-argv, and a mode that skips cards for read-only commands is planned
+argv, and a mode that skips cards for allowlisted read-only commands is planned
 ([THREAT_MODEL §9, T7 and
 T8](THREAT_MODEL.md#9-self-setup-the-capability-resolver)). Nothing changes in
 this build. The boundary above and `tests/test_privacy.py` stay as they are
-until the three wiring steps listed above land in one change.
+until the three wiring steps listed above land in one change. Those steps are
+not enough for the skip-the-card mode. It also needs an argument-aware
+allowlist (today `openshell/policy.py` checks `argv[0]` only), a logged
+"Approved for you" approval path (today `ExecGate.execute` always consumes an
+approval), and OS-level confinement of the brain first (T8, L3).
 
 ---
 

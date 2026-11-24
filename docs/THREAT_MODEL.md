@@ -9,7 +9,10 @@
   owner's answers 1 to 12 (brief §17, including the Q11 and Q12 answers): L4 to
   L7 in §6, S3 and S8 in §7 and T2 in §9. Updated again 2026-11-24 with the
   later answers 13 to 15 (brief §17): the background-control model in S8 (§7),
-  the remote-channel rule in L7 (§6), and T4, T5, T7 and T8 in §9
+  the remote-channel rule in L7 (§6), and T4, T5, T7 and T8 in §9. Revised
+  after review 1 (2026-11-24): the T8 allowlist grammar and the code gaps it
+  needs filled, L3 before commands, the S8 and S4 target and classifier rules,
+  where the permission mode lives (T7) and the phone key gate (L6)
 - **Companions:** the recipient table ([`docs/PRIVACY.md`](PRIVACY.md) §2), the principal table and
   share-link threat model ([ADR 0002](adr/0002-sharing-and-identity.md) §4 and §10), the policy gate
   ([`docs/OPENSHELL.md`](OPENSHELL.md)), and the skill contract ([`docs/SKILL_SPEC.md`](SKILL_SPEC.md))
@@ -237,7 +240,9 @@ decision and its reversal procedure are in `docs/PRIVACY.md` §5.
   §1.2: a raw `_socket` object, a child process, a C extension calling
   `connect(2)`, or a pre-existing thread fed work through a queue. The guard is
   cooperative at the Python layer; the deployment boundary (no exec, container
-  egress rules) is what backs it.
+  egress rules) is what backs it. The no-exec part of that boundary ends when
+  commands ship (T8, planned). OS-level confinement (L3) must be in place
+  before that.
 - **A compromised process.** Everything in this document is enforced *by* the
   server process. An attacker with code execution inside it can read the
   environment, the database, and the audit trail directly. The boundaries above
@@ -289,11 +294,14 @@ designed.
   rest. Where local secrets live is decided in L5 below (planned, not built).
   That decision sets how private Local mode is, because any process that can
   read the chosen location can drive the brain.
-- **L3. OS-level confinement before network-capable skills.** The skill egress
-  guard (`skills/policy.py`) is cooperative at the Python layer, and §5 relies on
-  a deployment boundary behind it (no exec, container egress rules). A sidecar
-  running as the user has neither. Before any network-capable skill runs in Local
-  mode, the sidecar must run under OS-level confinement with three properties:
+- **L3. OS-level confinement before network-capable skills and commands.** The
+  skill egress guard (`skills/policy.py`) is cooperative at the Python layer,
+  and §5 relies on a deployment boundary behind it (no exec, container egress
+  rules). A sidecar running as the user has neither. The no-exec assumption
+  also ends when commands ship (T8, planned), so L3 must be in place before T8
+  is enabled in Local mode. Before any network-capable skill or command runs in
+  Local mode, the sidecar must run under OS-level confinement with three
+  properties:
   - no process execution outside `openshell`,
   - outbound network limited to the hosts the skill manifests declare and the
     model providers the user configured, plus exactly three more: the push relay
@@ -303,7 +311,8 @@ designed.
     approved.
 
   The mechanism on each OS is open. This section does not pick one. Until
-  confinement exists, Local mode does not enable network-capable skills.
+  confinement exists, Local mode does not enable network-capable skills or
+  commands.
 - **L4. Boat mode transport: an SSH port forward (planned).** The owner chose
   this on 2026-11-24 and asked for best practice. The Boat behaviour below was
   read from Boat's documentation (docs.boat.dev) on 2026-11-24 and can change.
@@ -360,7 +369,9 @@ designed.
     OS random source. The user never sees, types or copies one.
   - Persistent secrets are stored in the OS credential store, from Rust only:
     macOS Keychain, Windows Credential Manager, or Linux Secret Service. In
-    Local mode they are `KELP_VAULT_KEY`, `KELP_CREDENTIAL_SIGNING_KEY`, and once
+    Local mode they are `KELP_VAULT_KEY`, `KELP_CREDENTIAL_SIGNING_KEY`, the
+    desktop app's device signing key (created at first run, used to sign a
+    permission-mode change to "Approve for me", T7), and once
     L6 and L7 exist, the brain's per-brain relay credential, its long-term
     end-to-end private key, the paired phones' public keys and device records,
     and the Telegram bot token. The webview never reads them.
@@ -453,6 +464,10 @@ designed.
     (600 s, `APPROVAL_TTL_SECONDS`) and the `argument_hash` match in
     `chat/service.py`. A signed remote decision over (card id, `argument_hash`,
     expiry) is new code.
+  - **Decision key gate.** The phone's decision key is usable only after the
+    device biometric or passcode. This is required at least for approving the
+    start of screen control on the user's own desktop (S8). A phone that is
+    stolen while unlocked remains a risk (S8).
   - **Relay authentication.** The relay authenticates the brain's outbound
     connection with a per-brain credential, so one brain cannot receive another
     brain's traffic. It is stored as in L5.
@@ -499,7 +514,7 @@ designed.
 | Whether Boat lets the app set `authorized_keys` options on the sandbox (L4) | [ADR 0004](adr/0004-desktop-companion.md) follow-ups |
 | Push relay design: pairing, key exchange, per-brain credential, hosting (L6) | [ADR 0004](adr/0004-desktop-companion.md) follow-ups |
 | Whether to widen which cards may be approved from Telegram (L7) | [ADR 0004](adr/0004-desktop-companion.md) follow-ups |
-| Background-input spike on each OS: tier 1 drives an unfocused window without changing the user's pointer or keyboard focus, the action reads back as landed, and per-window capture of an occluded window works. Tier 2 nested-compositor test on wlroots. A global stop shortcut on each OS (S8). Screen control does not ship on an OS where tier 1 and tier 2 both fail the spike, and Kelp offers Boat there | [ADR 0004](adr/0004-desktop-companion.md) follow-ups (background-input spike) |
+| Background-input spike on each OS: tier 1 drives an unfocused window without changing the user's pointer, keyboard focus, active window, z-order, workspace or clipboard, the action reads back as landed, and per-window capture of an occluded window works. Tier 2 nested-compositor test on wlroots. A global stop shortcut on each OS (S8). Screen control does not ship on an OS where tier 1 and tier 2 both fail the spike, and Kelp offers Boat there | [ADR 0004](adr/0004-desktop-companion.md) follow-ups (background-input spike) |
 | How Kelp detects that the user focused or typed in the window it is acting in, on each OS (S8, yield rule) | [ADR 0004](adr/0004-desktop-companion.md) follow-ups (background-input spike) |
 | Update [`docs/PRIVACY.md`](PRIVACY.md) §2 and the telemetry and recipient statements here (§1.1, §10) before a hosted plan or the Telegram bridge ships (S3, L7) | [ADR 0004](adr/0004-desktop-companion.md) follow-ups |
 
@@ -570,6 +585,10 @@ Windows were not tested.
     browser windows, Kelp's own credential entry screen
     ([`docs/CREDENTIAL_HANDOFF.md`](CREDENTIAL_HANDOFF.md) already refuses
     screenshots during private entry), and 2FA or authenticator apps.
+  - Also always blocked, cannot be lifted (planned for screen control, S8): OS
+    permission prompts, authentication prompts (polkit, Keychain, UAC, Windows
+    Hello) and system settings panes. Kelp never clicks "Allow" in them.
+    Granting an OS permission stays a user act (T1).
   - Blocked by default, unlockable one site at a time: banking and payment sites.
     The unlock happens only in Settings, never from a setup card and never from
     chat.
@@ -589,6 +608,12 @@ Windows were not tested.
     the frame is discarded.
   - If the focused app, window or site cannot be determined, no frame is taken.
     The detection method for private windows and per-site blocks is open.
+  - **Text read from an app counts as frame content.** For S1 to S4, text read
+    from an accessibility tree, and text read back after an action (S8), is
+    treated like a frame. The watch list, the "may send to cloud" tick and the
+    block list decide whether it may be read and sent. The body never
+    enumerates or reads the accessibility tree or the window list of a blocked
+    app (planned).
 - **S5. Auto-pause during sharing and calls.** Capture pauses while the screen is
   being shared or a call is active. The same condition mutes speech (V5). The
   detection method on each OS is open.
@@ -624,7 +649,11 @@ Windows were not tested.
     Selection) and, for native controls, window messages; Linux AT-SPI (the
     Action, EditableText and Value interfaces). Kelp reads the result back from
     the same API and reports done, failed or unknown. It does not assume
-    success. Precedents: OpenAI's Computer Use runs "a scoped task in the
+    success. Tier 1 calls that can steal focus are not used on the user's
+    desktop: `AXRaise` on macOS, UI Automation `SetFocus` on Windows and AT-SPI
+    `grab_focus` on Linux. Launching an app that is not running is not done on
+    the user's desktop either, because the launch can take focus. Kelp uses
+    tier 2 for it. Precedents: OpenAI's Computer Use runs "a scoped task in the
     background while you keep working elsewhere" on macOS, but on Windows it
     "can't operate in the background while you keep using the same Windows
     session" and suggests a VM
@@ -669,11 +698,17 @@ Windows were not tested.
     bound to the hash of those fields. Each action is checked against that hash.
     A standing approval can never cover screen control. The card for starting a
     task is shown in both permission modes (T7), as this section already
-    required before the modes existed. Every T4 category still gets its own card
-    at its step.
+    required before the modes existed. In "Ask before doing anything" the
+    approval for screen control is that start card plus a card at each T4 step.
+    It is not a card per click. Every T4 category still gets its own card at its
+    step.
   - **Who may approve starting control.** The desktop app, or the paired phone
-    app with a signed decision (L6). Telegram never. A scheduled watch can never
-    start control. This is a change made on 2026-11-24. The earlier rule let
+    app with a signed decision (L6). On the phone the decision key must be gated
+    by the device biometric or passcode (L6). A phone that is stolen while
+    unlocked can still approve starting control. That risk remains. The step
+    cap, the target binding and the T4 step cards limit what the approval can
+    do. Telegram never. A scheduled watch can never start control. This is a
+    change made on 2026-11-24. The earlier rule let
     only the desktop app approve control of the user's own desktop, because the
     user had to be able to take over. That reason no longer holds, because Kelp
     never takes over.
@@ -692,7 +727,10 @@ Windows were not tested.
     is sent.
   - **Blocked apps are never acted in.** S4 blocked apps are checked by target,
     not by focus. Kelp stops if the target becomes a blocked app or window or a
-    private browser window. Passwords and one-time codes are never typed from
+    private browser window. A window or dialog spawned by an action (a popup, a
+    file picker, an OS prompt) is not the approved target. Kelp sends it no
+    action unless a card names it, and an OS permission or authentication prompt
+    is always blocked (S4). Passwords and one-time codes are never typed from
     model output. In a browser, a login goes through the credential handoff
     ([`docs/CREDENTIAL_HANDOFF.md`](CREDENTIAL_HANDOFF.md)), which is
     origin-bound and needs a fresh owner entry each time. In a native app Kelp
@@ -709,33 +747,50 @@ Windows were not tested.
     cloud: the control loop sees only apps on the allowed list and sends frames
     to a cloud model only for apps ticked "may send to cloud". A task for any
     other app uses a local vision model or does not run. Control pauses while S5
-    is active.
+    is active. Text read from the accessibility tree or read back after an
+    action counts as frame content for these rules (S4). The body never
+    enumerates or reads a blocked app's tree or windows.
   - **Screen text cannot widen the task.** The control loop reads the screen
     (S6), so what it reads is untrusted. It may choose clicks and keystrokes
     within the approved task and target app or site. A step that would leave
     that app or site, or start something the card did not name, stops and asks.
   - **Each T4 step gets a card.** Each step in any T4 category gets its own
     card at that step, in both permission modes. The desktop app classifies the
-    step from the UI element's role and label (Send, Post, Submit, Pay, Buy,
-    Delete, Accept, Enter in a form) and from the target app. The model does
-    not. A step it cannot classify is treated as T4 and shows a card.
+    step, and the model does not. A step it cannot classify is treated as T4
+    and shows a card. The classifier combines the element's role, its structure
+    and its label:
+    - Labels and other page- or app-supplied text are untrusted input. A label
+      can add a T4 signal (Send, Post, Submit, Pay, Buy, Delete, Accept, Enter
+      in a form). A label can never remove one.
+    - Structure rules: a submit-type element, a button that submits a form, and
+      any element that triggers a payment, a file upload, or navigation to a
+      different origin are T4.
+    - In "Approve for me" in a browser, routine means scroll, read, focus within
+      the target, typing into non-password fields, and links within the approved
+      origin. Anything else is unknown, and unknown is T4.
+    - Residual risk: a malicious site that the user approved as the target can
+      still disguise a consequential control. Origin binding and the T4 money
+      and submission rules limit this. They do not remove it.
   - **Typing into a terminal is command execution.** Input to a terminal
-    emulator, shell window, IDE terminal, remote-shell session, or any field
-    that launches a program or runs a command (Run dialog, launcher, command
-    palette, task runner) is treated as running a command. It gets the same
-    classification and card as a command run through the exec gate (T8). The
+    emulator, shell window, IDE terminal, remote-shell session, REPL, `sudo`
+    prompt, or any field that launches a program or runs a command (Run dialog,
+    launcher, command palette, task runner) is treated as running a command. The
     desktop app classifies the target as it does in the T4 step rule, and a
     text target it cannot classify is treated as one of these. The rule applies
     unchanged in a Boat sandbox desktop. Commands are allowed behind approvals
-    (planned, owner decision 2026-11-24, brief §17 answer 14). Each command
-    shows a card with the exact command text, rendered from the keystrokes Kelp
-    is about to send, never from model prose. In "Approve for me", the T8
-    allowlist rule applies, and text that cannot be parsed into an argv shows a
-    card. The exec boundary in [`docs/PRIVACY.md`](PRIVACY.md) §5 stays in place
-    until the wiring steps listed there land in one change.
+    (planned, owner decision 2026-11-24, brief §17 answer 14). Keystrokes into
+    any of these targets always show a card with the exact text Kelp is about
+    to send, in both modes, rendered from the keystrokes and never from model
+    prose. The T8 allowlist does not apply to keystrokes: a keystroke stream
+    cannot be checked against an argument grammar, so only commands run through
+    `openshell/exec_gate.py` can skip a card. The exec boundary in
+    [`docs/PRIVACY.md`](PRIVACY.md) §5 stays in place until the wiring and the
+    extra work listed there and in T8 land.
   - **Ships only after the spike.** Screen control does not ship on an OS where
     tier 1 and tier 2 both fail the background-input spike (brief §12, and the
-    open decision table in §6). Kelp then offers Boat.
+    open decision table in §6). The spike also checks that the user's active
+    window, z-order, workspace and clipboard did not change. Kelp then offers
+    Boat.
   - **Logged without frames.** Each control step writes an audit row with the
     approval id, step index, step type (click, key, scroll, text), target app
     id and an `argument_hash`. It holds no task text, frame or typed text.
@@ -832,7 +887,8 @@ approval gate.
   The tagging is planned and not designed yet.
 - **T4. What always needs a card.** In both permission modes, "Ask before doing
   anything" and "Approve for me" (T7), these always show a card. So do new
-  access (T1) and destructive commands (T8).
+  access (T1), destructive commands (T8) and starting a screen-control task
+  (S8).
   - Anything another person will see: messages, posts, emails, form or assignment
     submissions, pull request comments.
   - Anything that costs money. The card states the exact amount.
@@ -849,7 +905,10 @@ approval gate.
     scoped to one action type and one target, is time-limited (default 30 days),
     and is listed and revocable in Settings. It can never cover spending money,
     deletion or any other irreversible act, anything another person will see, or
-    accepting terms, or starting screen control (S8). It cannot waive a T1 card
+    accepting terms, or starting screen control (S8). It also can never cover
+    a command outside the T8 allowlist or any T8-destructive command. A standing
+    approval for commands binds to an exact `argv` pattern, never to a command
+    name alone. It cannot waive a T1 card
     for new access (accounts and logins, folders, hosts, OS permissions).
 
   Both kinds are created only from a confirmation that the desktop app renders
@@ -884,14 +943,22 @@ approval gate.
   settings and from the chat input. It will be enforced in the desktop app,
   which classifies each action, and in the approval gate (`openshell/`).
   - **Ask before doing anything.** Every action shows a card with an Approve
-    button: each skill call with side effects, each command, the start of each
-    screen-control task and each install. In this mode the silent-install
-    exception in T1 is off.
+    button, except under a standing approval the user created: each skill call
+    with side effects, each command, the start of each screen-control task and
+    each install. For screen control the card is the start card plus the T4
+    step cards (S8). It is not a card per click. In this mode the
+    silent-install exception in T1 is off.
   - **Approve for me.** Routine actions run without a card. Each is logged and
     listed, and the action carries an "Approved for you" mark, as in Kiro. These
     always show a card in both modes: everything in T4, new access (T1) and
     destructive commands (T8). Starting a screen-control task also shows a card
     in both modes, because S8 required it before the modes existed.
+  - **Routine is a positive list.** An action is routine only if its catalog
+    effect class is on a pinned routine list that ships in the release. An
+    action with an unknown effect class gets a card. The body classifies from
+    pinned catalog metadata. It never trusts a "routine" label that the brain
+    supplies, and that includes a Boat brain, as S8 already requires for the
+    S4, S7 and S8 checks.
   - **No model decides.** The desktop app and the catalog classify each action
     deterministically. An action they cannot classify gets a card. This keeps
     T5.
@@ -900,18 +967,23 @@ approval gate.
     created applies in both modes, so it skips the card in "Ask before doing
     anything" too. Nothing in this item changes what a standing approval can
     never cover.
-  - **Who may widen the mode.** Switching to "Approve for me" is allowed only in
-    the desktop app, from a confirmation it renders itself. It is never allowed
-    from model text, a scheduled watch, the phone or Telegram. Switching to
-    "Ask before doing anything" is allowed from any channel, including
+  - **Where the mode lives and who may widen it.** The brain stores the mode.
+    It accepts a change to "Approve for me" only when the change is signed with
+    the desktop app's device key, which is created at first run and kept per
+    L5. The desktop app signs only from a confirmation it renders itself. A
+    change is never accepted from model text or a scheduled watch, and the
+    phone and Telegram routes cannot reach that setter. Switching to "Ask before
+    doing anything" is accepted from any authenticated channel, including
     Telegram.
-  - **Scheduled watches.** Under "Approve for me" a watch may run routine
-    actions. A T4, T1 or destructive-command step waits for a card, which is
-    pushed to the phone (L6).
+  - **Scheduled watches.** A scheduled watch auto-runs only the action set that
+    the user approved when creating the watch in the desktop app. Any other
+    action in a watch shows a card, which is pushed to the phone (L6). A T4, T1
+    or destructive-command step always waits for a card.
   - **Injection.** In a turn whose context includes screen, web or tool-result
     text, "Approve for me" still applies only to actions the classifier marks
-    routine. Silent installs stay off in such a turn (T1). No T6 rule is
-    weakened.
+    routine, and a command needs a card unless it is in the action set of the
+    watch or standing approval the turn runs under. Silent installs stay off in
+    such a turn (T1). No T6 rule is weakened.
   - **Default on a new install.** Not decided (brief §17, question 16). The
     recommendation is "Approve for me", because T4, T1 and destructive commands
     always ask anyway, and it matches the zero repeated setup goal.
@@ -920,20 +992,72 @@ approval gate.
   commands become allowed, each approved with a button (brief §17, answer 14).
   - **Ask before doing anything.** Every command shows a card with the exact
     command text (`argv`), rendered from what will run and never from model
-    prose.
-  - **Approve for me.** A command runs without a card only if its `argv[0]` and
-    its arguments match a catalog allowlist of read-only or non-destructive
-    commands. Everything else shows a card. A command that deletes, overwrites,
-    moves, changes permissions, installs, pushes, sends, kills processes or uses
-    `sudo` is destructive for this rule and always shows a card in both modes
-    (T4). Unknown means card.
+    prose, except under a standing approval the user created (T4), which binds
+    to an exact `argv` pattern.
+  - **Approve for me.** A command runs without a card only if it is on the
+    catalog allowlist of read-only commands. Everything else shows a card, also
+    in this mode, except under a standing approval the user created (T4). A
+    command that deletes, overwrites, moves, changes permissions, installs,
+    pushes, sends, kills processes or uses `sudo` is destructive for this rule
+    and always shows a card in both modes (T4). Unknown means card.
+  - **Allowlist grammar.** An entry is per command and per argument grammar,
+    not per command name. Examples are `git status`, `git log`, `ls`, and `cat`
+    limited to approved folders. An entry only matches when every argument fits
+    its grammar.
+    - **Never on the allowlist:** interpreters and shells (`python -c`,
+      `node -e`, `sh -c`, `bash`), `env`, `xargs`, `find -exec`, the exec
+      features of `awk` and `sed`, build and test runners (`make`, `npm test`,
+      `pytest`), and anything that runs code from the workspace. `git` itself
+      can run repo-configured code (`core.fsmonitor`, filter drivers), so git
+      entries run with those disabled or show a card.
+    - **Resolved command.** `argv[0]` is resolved to an absolute path from the
+      catalog entry, not from `PATH` at run time.
+    - **Path arguments.** Each must be inside a folder the user approved (T1)
+      and outside a secret-path denylist, for example `~/.ssh`, browser
+      profiles, keyrings, `.env` files and Kelp's own credential store.
+    - **Who can change it.** The allowlist ships in the pinned release. It
+      cannot be edited from chat, the phone, Telegram or a watch.
+  - **Tainted turns and watches.** In a turn whose context includes screen, web
+    or tool-result text, a command needs a card unless it is in the action set
+    of the watch or standing approval the turn runs under (T7). A watch
+    auto-runs only the commands the user approved when creating it.
   - **Route.** Commands run through `openshell/exec_gate.py` (argv only,
     allowlisted `argv[0]`, no `shell=True`, single-use approval, scrubbed
-    output), not by typing keystrokes. Typing into a terminal through screen
-    control gets the same classification and card (S8).
+    output). Keystrokes into a terminal, remote shell, REPL, `sudo` prompt or
+    launcher are not commands run through the gate. They always show a card
+    with the exact text, in both modes (S8). The allowlist applies only to
+    commands run through the gate.
+  - **What the code does today (read 2026-11-24, at 0d468d1).** "Approve for
+    me" for commands needs new gate work, because the gate cannot express it:
+    - `openshell/policy.py:229-235` (`PolicyEngine._execute`) allowlists
+      `argv[0]` only. It compares `str(argv[0])` with
+      `PolicyConfig.allowed_commands` (`policy.py:60`, `:230`) and never reads
+      `argv[1:]`, so there is no argument check and no path check.
+    - `openshell/policy.py:244-248` returns `REQUIRE_APPROVAL` for every
+      command that passes, and no branch returns `ALLOW`. The module docstring
+      says so (`policy.py:4-5`).
+    - `openshell/exec_gate.py:133-140` (`ExecGate.request`) creates an approval
+      for every non-denied command. `exec_gate.py:196` (`ExecGate.execute`)
+      always calls `self._approvals.consume(request_id)` and returns an
+      `exec_blocked` result if that fails (`exec_gate.py:197-211`). There is no
+      path that runs a command without a consumed approval.
+    - `ExecGate.approve` (`exec_gate.py:154-167`) writes one `approval_granted`
+      event with the actor. Nothing records an approval the user did not give.
+    - `PolicyEngine._execute` also requires a working directory inside the
+      workspace (`policy.py:236-243`).
+  - **Extra work before "Approve for me" can run a command.** This is more than
+    the wiring steps in [`docs/PRIVACY.md`](PRIVACY.md) §5:
+    - an argument-aware allowlist, with the grammar and the path checks above,
+      that can return `ALLOW` for a matching command,
+    - a logged "Approved for you" approval path in `ExecGate`, which records
+      the rule that matched instead of a user decision,
+    - OS-level confinement (L3) in place first. The cooperative egress guard is
+      justified by "no exec" (§5), and that assumption ends when T8
+      ships.
   - **The exec boundary stays for now.** [`docs/PRIVACY.md`](PRIVACY.md) §5 and
     `tests/test_privacy.py` stay as they are until the three wiring steps listed
-    in §5 land in one change.
+    in §5 and the extra work above land. The wiring steps alone are not enough
+    for "Approve for me".
 
 ---
 
@@ -954,7 +1078,8 @@ approval gate.
 - **Exec boundary decision** — why no command runs in this build, and how to
   reverse it deliberately: [`docs/PRIVACY.md`](PRIVACY.md) §5. The owner decided
   on 2026-11-24 to allow commands behind approvals (planned, T8). The boundary
-  stays until the wiring steps there land in one change.
+  stays until the wiring steps there and the extra work in T8 (argument
+  grammar, an "Approved for you" path, L3 confinement) land.
 - **Policy gate and audit log** — [`docs/OPENSHELL.md`](OPENSHELL.md).
 - **Skill contract** — manifest rules including the `execute` prohibition:
   [`docs/SKILL_SPEC.md`](SKILL_SPEC.md).

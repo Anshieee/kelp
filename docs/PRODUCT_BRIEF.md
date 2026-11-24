@@ -27,9 +27,11 @@ keyboard, so the user keeps working while Kelp works (section 7, planned). Kelp
 also talks by voice and reacts to what the user is doing. The on-screen avatar
 (the desk pet) is optional: a user can turn it off and keep everything else
 (section 10). The desktop app and the phone app come first, and the desk pet and
-Kelp's identity come after them (section 16). An initial setup defines how
-Kelp generally acts and behaves, which is its persona. Kelp should be able to
-take on whatever the user throws at it, and it is open source and accessible to
+Kelp's identity come after them (section 16). Until then Kelp uses one neutral
+built-in persona with a fixed default voice. A setup flow that lets the user
+define how Kelp generally acts and behaves, which is its persona, comes with
+the identity work (sections 9 and 16). Kelp should be able to take on whatever
+the user throws at it, and it is open source and accessible to
 anyone. The user chooses where the thinking happens: fully on their own machine,
 or in a Boat cloud sandbox that they own. The existing server work (chat API,
 approval gate, skills, spend caps) stays and becomes the brain behind the
@@ -58,7 +60,9 @@ errands to support first. They no longer decide who the audience is.
 1. The companion is present on the desktop while the user works.
 2. It notices moments: the user looks stuck, something finished, the user has
    been idle, the user came back.
-3. It reacts in its persona, usually with an animation and at most a short line.
+3. It reacts in the neutral built-in persona (section 9), usually as a short
+   notification until the desk pet exists (Phase 3), and then with an animation
+   and at most a short line.
 4. It offers at most one useful action.
 5. It acts only after the user approves, apart from the logged exceptions in
    section 3.
@@ -75,18 +79,26 @@ are an equal entry point to this loop. They are not limited to desktop moments.
   permission mode sets how often a card appears
   ([THREAT_MODEL §9, T7](THREAT_MODEL.md#9-self-setup-the-capability-resolver)).
   In **Ask before doing anything**, every action shows a card with an Approve
-  button: each skill call with side effects, each command, the start of each
-  screen-control task and each install. In **Approve for me**, routine actions
-  run without a card and are logged and listed as "Approved for you". No model
-  decides what is routine. The desktop app and the catalog classify each action
-  deterministically, and an action they cannot classify gets a card. In both
-  modes a card is always shown for the always-ask list: money, anything another
-  person sees (including course submissions), anything that cannot be undone or
-  is destructive, accepting terms
+  button, except under a standing approval the user created: each skill call
+  with side effects, each command, the start of each screen-control task (the
+  start card plus the T4 step cards, not a card per click) and each install. In
+  **Approve for me**, routine actions run without a card and are logged and
+  listed as "Approved for you". No model decides what is routine. The desktop
+  app and the catalog classify each action deterministically, and an action
+  they cannot classify gets a card. Routine is a positive list: an action whose
+  catalog effect class is on a pinned routine list. A scheduled watch auto-runs
+  only the action set the user approved when creating it. The brain stores the
+  mode and accepts a change to "Approve for me" only when it is signed with the
+  desktop app's device key, so the phone and Telegram cannot widen it (T7). In
+  both modes a card
+  is always shown for the always-ask list: money, anything another person
+  sees (including course submissions), anything that cannot be undone or is
+  destructive, accepting terms
   ([THREAT_MODEL §9, T4](THREAT_MODEL.md#9-self-setup-the-capability-resolver)),
-  new access (accounts and logins, folders, hosts, OS permissions, T1) and
-  destructive commands (T8). Other logged exceptions: installs that grant no
-  new access ([THREAT_MODEL §9,
+  new access (accounts and logins, folders, hosts, OS permissions, T1),
+  destructive commands (T8) and starting a screen-control task
+  ([S8](THREAT_MODEL.md#7-screen)). Other logged exceptions: installs that
+  grant no new access ([THREAT_MODEL §9,
   T1](THREAT_MODEL.md#9-self-setup-the-capability-resolver)), which are silent
   only in "Approve for me", and actions covered by a standing approval the user
   created (T4). The default mode on a new install is an open question (section
@@ -115,9 +127,9 @@ enabled. Kelp should not ask the user to repeat setup for each new feature.
 - The target is talking to Kelp within a few minutes of installing, with no
   config files edited by hand.
 - The desk pet is on by default once it exists (Phase 3, section 16). The
-  welcome screen and Settings each have one
-  switch to turn it off (planned). It has a default and nothing waits on it, so
-  it does not count as a first-run question in the section 14.1 metrics.
+  welcome screen and Settings each have one switch to turn it off (planned). It
+  has a default and nothing waits on it, so it does not count as a first-run
+  question in the section 14.1 metrics.
 
 ### 4.2 Capability resolver
 
@@ -205,7 +217,9 @@ its scope changes.
   on the deployment boundary (no exec, container egress rules) to back it. A local
   sidecar running as the user has no such boundary, so Local mode needs OS-level
   confinement of the sidecar (a restricted user or sandbox, no exec, egress rules)
-  before skills with network access run there.
+  before skills with network access run there. The no-exec assumption ends when
+  commands ship (planned, THREAT_MODEL T8), so that confinement must be in
+  place before commands are enabled.
 - The rules for what installs silently, which sources are allowed, how logins are
   stored and removed, and what always needs a card are written as planned rules in
   [THREAT_MODEL §9](THREAT_MODEL.md#9-self-setup-the-capability-resolver). No code
@@ -237,8 +251,10 @@ These are requirements for how Kelp works on a request. None is built yet.
    scoped to one action type and one target, it expires, and it is listed and
    revocable in Settings. A standing approval never covers spending money,
    deletion or other irreversible acts, anything another person will see, or
-   accepting terms of service, or starting screen control (THREAT_MODEL S8), and
-   Kelp always shows terms acceptance as a card.
+   accepting terms of service, or starting screen control (THREAT_MODEL S8). It
+   also never covers a command outside the command allowlist or a destructive
+   command, and a standing approval for commands binds to an exact argv pattern
+   (THREAT_MODEL T4, T8). Kelp always shows terms acceptance as a card.
    It cannot waive a card for new access (accounts and logins, folders, hosts, OS
    permissions). Both kinds are created only from a confirmation that the desktop
    app renders from structured fields (action type, target, expiry), never from
@@ -310,7 +326,9 @@ target. Full details stay in the desktop or phone app.
   new-access card, and they can never switch the permission mode to "Approve for
   me" (section 3). Telegram can never start or approve screen control. The
   paired phone app may approve starting control, on the user's own desktop or on
-  a Boat sandbox desktop, with a signed decision (L6). This is a change made on
+  a Boat sandbox desktop, with a signed decision (L6). On the phone the decision
+  key must be gated by the device biometric or passcode (L6). A phone stolen
+  while unlocked remains a risk (S8). This is a change made on
   2026-11-24: starting control no longer has to be approved at the desk,
   because Kelp never takes over the user's input
   ([THREAT_MODEL S8](THREAT_MODEL.md#7-screen)). Planned, not built.
@@ -412,17 +430,25 @@ mode the sandbox desktop is the default target). On the user's own desktop Kelp
 works in the background with its own pointer and keyboard input. It acts on an
 approved window directly, or opens the app in its own workspace. It never moves
 the user's pointer, types on the user's keyboard focus, raises a window or
-switches the user's workspace, so the user keeps working while Kelp works. Its
+switches the user's workspace, so the user keeps working while Kelp works. It
+does not launch an app that is not running on the user's desktop, because a
+launch can take focus. It uses its own workspace for that. Its
 rules are in [THREAT_MODEL §7, S8](THREAT_MODEL.md#7-screen) (planned, not
 built). Typing into a terminal, or into any field that launches a program,
 counts as running a command. Commands are allowed behind approvals (planned,
 owner decision 2026-11-24, answer 14): in "Ask before doing anything" each
-command shows a card with its exact text, and in "Approve for me" only a command
-on a read-only or non-destructive allowlist skips the card
+command shows a card with its exact text, and in "Approve for me" only a
+read-only command that matches an allowlist entry, per command and per argument
+grammar, skips the card
 ([THREAT_MODEL §9, T8](THREAT_MODEL.md#9-self-setup-the-capability-resolver)).
-Commands run through `openshell/exec_gate.py`, not through keystrokes. The exec
-boundary in [`docs/PRIVACY.md`](PRIVACY.md) §5 stays in place until the wiring
-steps listed there land in one change.
+Commands run through `openshell/exec_gate.py`. Keystrokes into a terminal, a
+remote shell, a REPL, a `sudo` prompt or a launcher always show a card with the
+exact text, in both modes, because the allowlist applies only to commands run
+through the gate. The exec boundary in [`docs/PRIVACY.md`](PRIVACY.md) §5 stays
+in place until the wiring steps listed there and the extra work in T8 land: an
+argument-aware allowlist, an "Approved for you" approval path and OS-level
+confinement (THREAT_MODEL L3). The no-exec assumption behind the egress guard
+ends when commands ship.
 
 The cost reason is direct. Spend caps fail closed (`kernel/usage.py`), so a
 frontier model called on every frame would exhaust the cap and then stop the
@@ -451,9 +477,14 @@ The detailed rules are written as planned rules in
   most 24 hours, stored as untrusted data. Anything longer-term enters memory only
   after the user okays it.
 - Some apps are always blocked and the user cannot lift that: password managers,
-  private browser windows, Kelp's own credential screen, and authenticator apps.
+  private browser windows, Kelp's own credential screen, authenticator apps,
+  and, for screen control, OS permission prompts, authentication prompts
+  (polkit, Keychain, UAC, Windows Hello) and system settings panes, so Kelp can
+  never click "Allow" (granting an OS permission stays a user act, T1).
   Banking and payment sites are blocked by default. The user can unlock one site
-  at a time, only from Settings, never from a setup card or chat.
+  at a time, only from Settings, never from a setup card or chat. Text read from
+  an accessibility tree, or read back after an action, counts as frame content
+  for these rules, and Kelp never reads a blocked app's tree or windows.
 - Screen text, including window titles, can never authorise an action. It is
   data, handled as untrusted input like any tool result. The existing credential
   flow already follows the same rule for private entry: the browser wrapper
@@ -466,7 +497,8 @@ The detailed rules are written as planned rules in
 ## 9. Persona
 
 Scheduled for Phase 3 with the identity (section 16). Until then Kelp uses one
-neutral built-in persona.
+neutral built-in persona, which fixes a default text-to-speech voice, so voice
+chat in Phase 2 needs no persona setup.
 
 The setup flow writes a versioned persona file. It covers:
 
@@ -524,8 +556,11 @@ to play, so speaker latency is excluded too.
 
 The targets are therefore:
 
-- **Acknowledge in ≤ 200 ms.** The avatar switches to its listening or thinking
-  state as soon as speech ends. The pet already has those states.
+- **Acknowledge in ≤ 200 ms.** As soon as speech ends, Kelp shows that it is
+  listening or thinking. Until the desk pet exists (Phase 3), it does this with
+  the tray or menu-bar icon and the S7 indicator. With the pet on, the avatar
+  switches to its listening or thinking state instead. The pet kit already has
+  those states.
 - **First audio ≤ 2.5 s p50** in cloud-brain mode on a laptop CPU, measured from
   the end of endpointing to the first audio sample played. Getting
   there needs streaming STT (transcribing while the user speaks), which the spike
@@ -559,10 +594,10 @@ and 84fa565 (overlay pill alignment). The branch is based on `desktop-demo`,
 which carries demo fixtures, so Phase 3 considers those commits (section 16),
 by cherry-pick or a fresh PR and not by merging the branch. Issue #69 (Storm)
 covers desktop demo mode. The main app also has a Computer pane
-(`desktop/src/ComputerPane.tsx`): a
-view-only noVNC viewer onto a VM's graphical session. It is the natural starting
-point for watching Kelp work in a Boat sandbox's virtual desktop, and for
-watching Kelp's own workspace on the user's machine (S8, tier 2).
+(`desktop/src/ComputerPane.tsx`): a view-only noVNC viewer onto a VM's graphical
+session. It is the natural starting point for watching Kelp work in a Boat
+sandbox's virtual desktop, and for watching Kelp's own workspace on the user's
+machine (S8, tier 2).
 
 ## 11. What pauses
 
@@ -618,13 +653,15 @@ wlroots route on the user's seat. That route is now ruled out for the user's
 desktop. No input was actually sent on any OS.
 
 **Background-input spike (Phase 0, not yet run).** On each OS, drive an
-unfocused test window through tier 1 and confirm three things: (a) the user's
-pointer position and keyboard focus did not change, (b) the action landed, read
-back through the same API, and (c) per-window capture of an occluded window
-works. On wlroots, also run a tier 2 test in a nested compositor. Screen control
-does not ship on an OS where tier 1 and tier 2 both fail this spike, and Kelp
-offers Boat there instead. A global stop shortcut for each OS is a separate open
-item (S8).
+unfocused test window through tier 1 and confirm that (a) the user's pointer
+position, keyboard focus, active window, z-order, workspace and clipboard did
+not change, (b) the action landed, read back through the same API, and (c)
+per-window capture of an occluded window works. On wlroots, also run a tier 2
+test in a nested compositor. Screen control does not ship on an OS where tier 1
+and tier 2 both fail this spike, and Kelp offers Boat there instead. Tier 1
+calls that can steal focus are not used on the user's desktop: `AXRaise` on
+macOS, UI Automation `SetFocus` on Windows and AT-SPI `grab_focus` on Linux.
+A global stop shortcut for each OS is a separate open item (S8).
 
 **Already probed, with no input sent.** On the owner's machine (mango 0.18.6, a
 wlroots compositor) the compositor advertises `zwlr_virtual_pointer_manager_v1`,
@@ -766,8 +803,9 @@ Price, plan tiers and what a plan includes are not set. Nothing here is built.
       (Option (a), 2026-11-24.)
 - [ ] A capture and background-input spike has run on Wayland, macOS and
       Windows, with notes on what each permission prompt looks like. For each OS
-      it confirms that tier 1 drove an unfocused window without moving the
-      user's pointer or keyboard focus, that the action landed (read back), and
+      it confirms that tier 1 drove an unfocused window without changing the
+      user's pointer, keyboard focus, active window, z-order, workspace or
+      clipboard, that the action landed (read back), and
       that per-window capture of an occluded window works. On wlroots it also
       tests tier 2 in a nested compositor (section 12). Wayland (wlroots)
       capture is done. For input, only the compositor's advertised protocols

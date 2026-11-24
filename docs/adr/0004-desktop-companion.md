@@ -230,7 +230,8 @@ decided:
     standing approval, approve a T1 new-access card, or switch the permission
     mode to "Approve for me" (item 12). Starting screen control may be approved
     at the desktop app or at the paired phone app with a signed decision (L6),
-    on the user's own desktop or a Boat sandbox desktop, and Telegram never may
+    whose decision key is gated by the device biometric or passcode, on the
+    user's own desktop or a Boat sandbox desktop, and Telegram never may
     ([THREAT_MODEL §7, S8](../THREAT_MODEL.md#7-screen)). This changed on
     2026-11-24: control of the user's own desktop used to be approved only at
     the desktop app, because the user had to be able to take over, and Kelp now
@@ -261,27 +262,59 @@ decided:
     - **Tier 1 acts on the target window directly:** macOS Accessibility,
       Windows UI Automation (and window messages for native controls), Linux
       AT-SPI. Kelp reads the result back and reports done, failed or unknown.
-      All of it is untested.
+      Calls that can steal focus (`AXRaise`, UI Automation `SetFocus`, AT-SPI
+      `grab_focus`) are not used on the user's desktop, and an app that is not
+      running is not launched there, because a launch can take focus. Tier 2
+      handles that case. All of it is untested.
     - **Tier 2 is Kelp's own workspace** for apps tier 1 cannot drive: a nested
       headless wlroots compositor on Linux, a VM or the Boat sandbox on Windows,
       and the Boat sandbox desktop. macOS tier 2 is open. All of it is untested.
     - **Kelp's pointer is visible,** with a label and a Stop button over the
       window it acts in. Kelp pauses in a window the user focuses or types in
       and does not take it back.
+    - **Targets and step classification.** Accessibility-tree text and
+      read-back text count as frame content for the watch list, "may send to
+      cloud" and the block list, and Kelp never reads a blocked app's tree or
+      windows. A window or dialog spawned by an action is not the approved
+      target. OS permission prompts, authentication prompts and system
+      settings panes are always blocked, so Kelp never clicks "Allow". Labels
+      are untrusted classifier input and can only add a T4 signal. Submit,
+      payment, upload and cross-origin navigation elements are T4, and unknown
+      is T4. A malicious site that the user approved as target can still
+      disguise a control. That residual risk is stated in S8.
     - **Permission modes.** A global setting, in the desktop app settings and
-      the chat input: "Ask before doing anything" (every action shows a card)
-      and "Approve for me" (routine actions run, are logged and are marked
-      "Approved for you"). Money, anything another person sees, anything that
-      cannot be undone, accepting terms, new access and destructive commands
-      always show a card. No model decides: the desktop app and the catalog
-      classify each action, and an unclassified action gets a card. Switching to
-      "Approve for me" is allowed only in the desktop app. The default for a new
-      install is not decided (brief section 17, question 16).
+      the chat input: "Ask before doing anything" (every action shows a card,
+      except under a standing approval the user created) and "Approve for me"
+      (routine actions run, are logged and are marked "Approved for you").
+      For screen control, "Ask" means the start card plus the T4 step cards,
+      not a card per click. Money, anything another person sees, anything that
+      cannot be undone, accepting terms, new access, destructive commands and
+      starting a screen-control task always show a card. No model decides: the
+      desktop app and the catalog classify each action, "routine" is a pinned
+      positive list of effect classes, and an unclassified action gets a card.
+      A scheduled watch auto-runs only the action set the user approved when
+      creating it. In a turn whose context includes screen, web or tool-result
+      text, a command needs a card unless it is in the action set of the watch
+      or standing approval the turn runs under. The brain stores the mode and
+      accepts a change to "Approve for me" only when it is signed with the
+      desktop app's device key. The phone and Telegram cannot reach that setter,
+      and narrowing is accepted from any authenticated channel. The default for
+      a new install is not decided (brief section 17, question 16).
     - **Commands.** Typing into a terminal still counts as running a command.
       Commands are allowed behind approvals and run through
-      `openshell/exec_gate.py`. The exec boundary in
-      [`docs/PRIVACY.md`](../PRIVACY.md) §5 stays until its wiring steps land in
-      one change.
+      `openshell/exec_gate.py`. In "Approve for me" only a read-only command
+      that matches an allowlist entry, per command and per argument grammar,
+      skips the card. The allowlist ships in the pinned release and excludes
+      interpreters, shells, `env`, `xargs`, build and test runners and anything
+      that runs workspace code. Keystrokes into a terminal, remote shell, REPL,
+      `sudo` prompt or launcher are not commands run through the gate. They
+      always show a card with the exact text, in both modes. Today
+      `openshell/policy.py` checks `argv[0]` only and `ExecGate.execute` always
+      consumes an approval, so "Approve for me" for commands needs an
+      argument-aware allowlist, an "Approved for you" approval path and
+      OS-level confinement first (THREAT_MODEL T8, L3). The exec boundary in
+      [`docs/PRIVACY.md`](../PRIVACY.md) §5 stays until the wiring steps there
+      and that extra work land.
     - **Phases.** The desktop app and the phone app come before the desk pet and
       identity, which are Phase 3 (brief section 16).
 
@@ -357,7 +390,9 @@ and points to section 6. Section 5 also says the skill
 socket guard is cooperative at the Python layer and is backed by the deployment
 boundary (no exec, container egress rules). A sidecar running as the user has no
 such boundary, so Local mode needs OS-level confinement of the sidecar before
-skills with network access run there.
+skills with network access run there. The no-exec part of that boundary ends
+when commands ship (item 12), so the confinement must be in place before
+commands are enabled.
 
 **Auth and secrets in local mode.** The desktop app keeps no bearer at rest
 today (`desktop/README.md`), and the credential settings `KELP_VAULT_KEY`,
@@ -464,16 +499,21 @@ updated on every OS, or measured Boat numbers make Boat mode unworkable.
   can run them.
 - Background-input spike on each OS next to the capture spike (brief section
   12, THREAT_MODEL S8). Drive an unfocused test window through tier 1 and
-  confirm (a) the user's pointer position and keyboard focus did not change, (b)
+  confirm (a) the user's pointer position, keyboard focus, active window,
+  z-order, workspace and clipboard did not change, (b)
   the action landed, read back, and (c) per-window capture of an occluded window
   works. Add a tier 2 nested-compositor test on wlroots. Control does not ship
   on an OS where tier 1 and tier 2 both fail, and Kelp offers Boat there. Also
   decide the global stop shortcut on each OS and how Kelp detects that the user
   focused or typed in the window it is acting in.
-- Design the permission-mode classifier (deterministic, no model), the catalog
-  allowlist of read-only commands, and the settings and chat-input controls
-  (item 12). Wire `openshell/exec_gate.py` only in one change with the three
-  steps listed in [`docs/PRIVACY.md`](../PRIVACY.md) §5.
+- Design the permission-mode classifier (deterministic, no model), the pinned
+  routine list of effect classes, the catalog allowlist of read-only commands
+  with its argument grammar and secret-path denylist, and the settings and
+  chat-input controls (item 12). Wiring `openshell/exec_gate.py` for "Approve
+  for me" is more than the three steps in
+  [`docs/PRIVACY.md`](../PRIVACY.md) §5: it also needs an argument-aware
+  allowlist, an "Approved for you" approval path and OS-level confinement
+  (THREAT_MODEL L3, T8). Do that work before the gate is wired.
 - Before the plan ships, update the recipient table in
   [`docs/PRIVACY.md`](../PRIVACY.md) section 2, and the statements in
   [`docs/THREAT_MODEL.md`](../THREAT_MODEL.md) about telemetry and recipients
