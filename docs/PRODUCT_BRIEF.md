@@ -3,6 +3,8 @@
 - **Status:** Proposed, for owner review
 - **Date:** 2026-11-23
 - **Decision record:** [ADR 0004](adr/0004-desktop-companion.md)
+- **Owner answers:** recorded 2026-11-24 in
+  [section 17](#owner-answers-2026-11-24)
 - **Related:** [`docs/DESKTOP_SCOPE.md`](DESKTOP_SCOPE.md),
   [`docs/THREAT_MODEL.md`](THREAT_MODEL.md),
   [`docs/CREDENTIAL_HANDOFF.md`](CREDENTIAL_HANDOFF.md),
@@ -16,25 +18,35 @@ current code, the file is named so the claim can be checked.
 
 ## 1. What Kelp becomes
 
-Kelp moves from a chat and agent bot to an anime-style avatar that lives on the
-user's desktop. The avatar is animated, can see and interact with the screen when
-the user allows it, talks by voice, and reacts to what the user is doing. An
-initial setup defines how Kelp generally acts and behaves, which is its persona.
-Kelp should be able to take on whatever the user throws at it, and it is open
-source and accessible to anyone. The user chooses where the thinking happens:
-fully on their own machine, or in a Boat cloud sandbox that they own. The
-existing server work (chat API, approval gate, skills, spend caps) stays and
-becomes the brain behind the avatar.
+Kelp moves from a chat and agent bot to an animated companion that lives on the
+user's desktop. Its look is not decided yet (section 10). Kelp can see and
+control the screen when the user allows it, talks by voice, and reacts to what
+the user is doing. The on-screen avatar (the desk pet) is optional: a user can
+turn it off and keep everything else (section 10). An initial setup defines how
+Kelp generally acts and behaves, which is its persona. Kelp should be able to
+take on whatever the user throws at it, and it is open source and accessible to
+anyone. The user chooses where the thinking happens: fully on their own machine,
+or in a Boat cloud sandbox that they own. The existing server work (chat API,
+approval gate, skills, spend caps) stays and becomes the brain behind the
+avatar.
 
 ## 2. Who it is for first, and the first daily loop
 
-**First audience (recommendation):** developers and students who spend the day at
-a desktop. They already live with terminals, editors and browsers, they can
-tolerate an early build, and their screens give a companion real moments to react
-to. This is a guess until the pre-register form (the holding page in `landing/`)
-tells us otherwise. The form already has an optional "What would you want Kelp
-to do for you?" field (`wish`), and its answers decide whether this
-recommendation holds.
+**First audience (decided by the owner, 2026-11-24):** general users with no
+technical background, not developers and students. This replaces the earlier
+recommendation. It has these consequences:
+
+- No step ever needs a terminal, a config file or an API key copy-paste for a
+  plan user (section 15).
+- Kelp is reachable from the desktop avatar, the phone app and a messaging
+  bridge, with one brain behind all three (section 4.6). The phone app and the
+  bridge are planned.
+- Signed installers are required before non-developers are invited (section 6,
+  Phase 4 in section 16).
+
+The pre-register form (the holding page in `landing/`) has an optional "What
+would you want Kelp to do for you?" field (`wish`). Its answers now refine which
+errands to support first. They no longer decide who the audience is.
 
 **First daily loop:**
 
@@ -45,6 +57,9 @@ recommendation holds.
 4. It offers at most one useful action.
 5. It acts only after the user approves, apart from the logged exceptions in
    section 3.
+
+Errands and reminders that arrive through the phone app or the messaging bridge
+are an equal entry point to this loop. They are not limited to desktop moments.
 
 ## 3. Principles
 
@@ -66,11 +81,10 @@ recommendation holds.
 ## 4. Zero repeated setup
 
 This is the core requirement: local setup with no repeated steps.
-The failure to avoid is one seen in other agent tools: Hermes Agent (Nous
-Research) ships a one-line installer and a `hermes doctor` check, yet users report
-per-feature friction in its setup wizard, for example GitHub issues #41046 (forced
-portal onboarding) and #13301 (tools shown as "not configured" after being
-enabled). Kelp should not ask the user to repeat setup for each new feature.
+The failure to avoid is one seen in other agent tools: a one-line installer and a
+health check, followed by per-feature friction in the setup wizard, such as
+forced onboarding screens and tools shown as "not configured" after being
+enabled. Kelp should not ask the user to repeat setup for each new feature.
 
 ### 4.1 First run
 
@@ -80,6 +94,9 @@ enabled). Kelp should not ask the user to repeat setup for each new feature.
   Kelp picks one. If it cannot, Kelp asks for one provider sign-in, once.
 - The target is talking to Kelp within a few minutes of installing, with no
   config files edited by hand.
+- The desk pet is on by default. The welcome screen and Settings each have one
+  switch to turn it off (planned). It has a default and nothing waits on it, so
+  it does not count as a first-run question in the section 14.1 metrics.
 
 ### 4.2 Capability resolver
 
@@ -143,8 +160,10 @@ its scope changes.
   wrote it. Publisher signing (Ed25519 over the digest string) exists only as a
   spike in `skills/signing.py`, described in
   [`docs/SPIKE_PLUGIN_SIGNING.md`](SPIKE_PLUGIN_SIGNING.md), and is not wired into
-  the loader. The recommendation is to wire signing in before the full resolver
-  ships in Phase 3; open question 6 asks the owner to confirm. The minimal Phase 1
+  the loader. The owner decided on 2026-11-24 to ship with pinning first. Kelp's
+  own release-pinned entries ship first (the Phase 1 voice models). Publisher
+  signing is wired in before the catalog accepts any entry from outside Kelp's
+  own release, and before the full resolver ships in Phase 3. The minimal Phase 1
   resolver installs only voice models from a short list the project pins by
   digest in its own release, so it does not depend on publisher signing.
 - Anything outside the catalog is not installed by Kelp. Kelp may propose a
@@ -196,7 +215,8 @@ These are requirements for how Kelp works on a request. None is built yet.
    scoped to one action type and one target, it expires, and it is listed and
    revocable in Settings. A standing approval never covers spending money,
    deletion or other irreversible acts, anything another person will see, or
-   accepting terms of service, and Kelp always shows terms acceptance as a card.
+   accepting terms of service, or starting screen control (THREAT_MODEL S8), and
+   Kelp always shows terms acceptance as a card.
    It cannot waive a card for new access (accounts and logins, folders, hosts, OS
    permissions). Both kinds are created only from a confirmation that the desktop
    app renders from structured fields (action type, target, expiry), never from
@@ -209,8 +229,66 @@ These are requirements for how Kelp works on a request. None is built yet.
    already approved plan. It never starts a new setup step.
 8. When Kelp declines, name the reason and offer the nearest allowed alternative.
 9. Deliver approvals to the user away from the desk. A late yes loses
-   time-sensitive work. This needs a remote approval channel (a push to the phone
-   or a messaging bridge). It is open question 9 in section 17.
+   time-sensitive work. The primary channel is a push to Ketock's native mobile
+   app, and the secondary channel is a Telegram bridge. Both are planned and are
+   described in section 4.6. The owner chose them on 2026-11-24 (open question 9
+   in section 17).
+
+### 4.6 Remote approvals (planned)
+
+Nothing here is built. The rules for the relay and the bridge are in
+[THREAT_MODEL §6, L6 and L7](THREAT_MODEL.md#6-local-brain-boundary-local-mode).
+
+**Primary channel: push to Ketock's native app.** Ketock's native mobile app (see
+[`docs/KETOCK_NATIVE_APP_HANDOFF.md`](KETOCK_NATIVE_APP_HANDOFF.md)) is the main
+way to approve a card away from the desk. The work is coordinated with Ketock.
+
+- **A push relay is required.** Apple and Google push services accept pushes only
+  when they are signed with the app publisher's credentials. A self-hosted brain
+  does not hold those credentials, so it cannot push to the store app directly.
+- **The brain keeps an outbound connection to the relay.** This works behind home
+  NAT and needs no open port, in Local mode or in Boat mode.
+- **The push carries no content.** It says only that a card is waiting, plus an
+  opaque id.
+- **The app fetches and answers through the relay.** It fetches the card details
+  and sends the decision back through the relay. Both directions are end-to-end
+  encrypted between the paired phone and the brain, and the decision is signed
+  with a device key created at pairing. The relay sees only ciphertext and
+  timing.
+- **Pairing is one QR scan** from the desktop app.
+- **The relay is open source,** so self-hosters can run their own.
+
+The native app's handoff says no second server and no new credential type
+(`docs/KETOCK_NATIVE_APP_HANDOFF.md`, sections 2 and 3, and section 4 definition
+of done item 1, which says one configured server URL). A relay and a pairing
+device key do not fit those words as written, so they have to be reconciled with
+Ketock before any design is final. This is a follow-up in
+[ADR 0004](adr/0004-desktop-companion.md#7-follow-ups). Section 16 does not
+schedule this work yet, and Phase 4 notes that it must be scheduled before
+invitations.
+
+**Secondary channel: Telegram bridge.** The bridge is a bot that the brain
+reaches by long polling, which is outbound only. Telegram bot messages are not
+end-to-end encrypted, so a Telegram card shows only the action type and the
+target. Full details stay in the desktop or phone app.
+
+- **What Telegram may approve.** A card is approvable from Telegram only when the
+  fields Telegram shows fully determine the action, and the card is not in a
+  [T4 category](THREAT_MODEL.md#9-self-setup-the-capability-resolver) (money,
+  anything another person sees, irreversible acts, terms of service) and is not
+  new access (T1). It is also never a screen-control card
+  ([THREAT_MODEL S8](THREAT_MODEL.md#7-screen)). Every other card shows "open in
+  the app" in Telegram. Whether to widen this is a follow-up.
+- **Who may send.** The bridge accepts messages only from the paired Telegram
+  user id and refuses group chats. Pairing uses a one-time code that the desktop
+  app shows. The bot token is a persistent secret, stored in the OS credential
+  store.
+- **Remote channels are limited.** A message from the bridge is a user turn. But
+  Telegram and the phone can never create a standing approval or approve a T1
+  new-access card. Neither can start or approve control of the user's own
+  desktop. The paired phone app may approve control of a Boat sandbox desktop,
+  and Telegram never may
+  ([THREAT_MODEL S8](THREAT_MODEL.md#7-screen)). Planned, not built.
 
 ## 5. Run modes
 
@@ -232,18 +310,25 @@ frames are downscaled and sent only on demand, and they are not written to disk.
 |---|---|---|
 | Where the brain runs | Sidecar process on the user's machine, loopback only | Persistent Ubuntu VM in a Boat sandbox the user owns |
 | Cost | No hosting cost. Model calls cost whatever the chosen model costs, or nothing for a local model. | Boat bills per second with a $20/month minimum plan. Small (2 vCPU/4 GB) is $0.018/h and the default (4 vCPU/8 GB) is $0.036/h. There is a 7-day trial with a card and 25 compute hours. Plus model calls. |
-| Privacy | Data stays on the machine unless a remote provider is chosen. | Chat, and any screen frames the user enabled, reach the sandbox and the model provider. |
+| Privacy | Data stays on the machine unless a remote provider or the plan gateway is chosen. | Chat, and any screen frames the user enabled, reach the sandbox and the model provider. |
 | Works offline | Yes, with a local model and local STT/TTS | No. The sandbox and the provider need the network. |
-| Computer-use target | The user's real desktop, only after approval | Kelp's own cloud computer: a 60fps virtual desktop with a browser and Docker, so long or risky tasks do not touch the user's desktop |
+| Computer-use target | The user's real desktop, only after approval | Kelp's own cloud computer by default: a 60fps virtual desktop with a browser and Docker, so long or risky tasks do not touch the user's desktop. The user's real desktop only when the user asks for that task, with the same S8 card and local checks. |
 | Limits | Depends on the user's hardware | Machines only in Germany, Finland and France. No GPU, so no large local model inside the sandbox. Auto-stop defaults to 1 h (configurable up to 30 days, or off on paid plans). A stopped sandbox keeps its disk for at least 14 days, but memory and processes are not saved across a stop. The IP changes on resume. |
 
 Boat figures were read from boat.dev on 2026-11-23 and belong to a third party, so
 re-check them before relying on them. An earlier draft pilot (Nov 9, now
 archived) planned to measure how long Boat desktop tasks take and what they cost.
 It was never run, so measured numbers are still missing. Because the IP changes on
-resume, the desktop app must not pin a Boat brain by IP address. How the app
-reaches the sandbox (an exposed HTTP port or a tunnel) is not decided here and is
-listed in section 17.
+resume, the desktop app must not pin a Boat brain by IP address. The brain inside
+the sandbox listens on 127.0.0.1 only, with no public port and no Boat public
+URL. The app reaches it through an SSH local port forward to the sandbox's
+loopback port. Boat documents this as `boat forward`, which binds 127.0.0.1 on
+the user's computer by default and makes nothing public
+(<https://docs.boat.dev/ssh-access.md>). The owner chose this on 2026-11-24
+(open question 3). The rules are in
+[ADR 0004 §2, item 8](adr/0004-desktop-companion.md#2-decision) and
+[THREAT_MODEL §6, L4](THREAT_MODEL.md#6-local-brain-boundary-local-mode). They
+are planned and not built.
 
 Local mode is still one owner. ADR 0002 (single-owner identity) and ADR 0003 (the
 frozen service contract) stay in force in both modes.
@@ -260,37 +345,59 @@ local user yet, and the local installer is an open Phase 0 problem. The options:
 | (c) One-line script (`curl \| sh`), like Boat's | A shell or PowerShell script installs the app and a runtime. | Familiar to developers, fast to try | The user pipes a remote script into a shell, which is a poor fit for a project whose principle is explicit approval. It still needs a runtime and the app underneath it. |
 | (d) Container (Docker) for local | The brain runs in a container and the app talks to it. | Same image as a server deploy, clean isolation | Requires Docker on the user's machine, which many students and non-developers do not have. It also adds a daemon to the first-run setup. |
 
-**Recommendation: option (a).** Deliver it through signed per-OS installers (dmg
-for macOS, msi for Windows, AppImage and deb for Linux), plus a one-line script
-that fetches the same signed installer for people who prefer a terminal. Updates
-use Tauri's updater. This keeps one artifact per OS and one runtime that Kelp
-controls, and the one-line script becomes a convenience instead of a second
-install path.
+**Decision (owner, 2026-11-24): option (a).** Deliver it through signed per-OS
+installers (dmg for macOS, msi for Windows, AppImage and deb for Linux), plus a
+one-line script that fetches the same signed installer for people who prefer a
+terminal. Updates use Tauri's updater. This keeps one artifact per OS and one
+runtime that Kelp controls, and the one-line script becomes a convenience
+instead of a second install path.
+
+Signing timing: unsigned Linux builds are fine while building in public. macOS
+signing and notarisation and Windows signing are required before general users
+are invited (Phase 4 in section 16).
 
 Costs to plan for: Apple code signing and notarisation, a Windows code-signing
 certificate, and the updater signing keys. The desktop app today ships unsigned
-dev builds only, with the updater off (`desktop/README.md`). Phase 0 only decides.
-Phase 1 builds it.
+dev builds only, with the updater off (`desktop/README.md`). Phase 1 builds the
+installer.
 
 ## 7. Reacting versus acting
 
 Kelp does two different kinds of work, and they must not share a cost model.
 
-**Reaction loop (cheap, local, frequent).** It watches cheap signals: the active
+**Reaction loop (cheap, local, frequent).** Reaction calls are the frequent,
+small model calls the avatar makes to react to what the user is doing. The loop
+watches cheap signals: the active
 app, idle time, other OS signals, and an occasional downscaled screenshot. It is
 rate-limited and uses a small, cheap model, ideally a local one. Its output is a
 pet state, such as the existing `curious` or `surprised`, and at most one short
 line. The reaction loop has no tool access. It can propose an offer, but an offer
 only turns into an action when the user accepts and a normal turn starts.
 
+With the desk pet turned off (planned), the reaction loop still runs on the apps
+the user allowed ([THREAT_MODEL S1](THREAT_MODEL.md#7-screen)). Its line appears
+as a small notification from the tray or menu-bar icon instead of a pet state,
+under the same rate limit.
+
 **Actions (rare, expensive, gated).** Anything that does work runs through the
 kernel, the skills, and the approval gate. This is the path that exists today.
+Screen control (computer use on the user's own desktop or a Boat sandbox
+desktop) is one of these actions
+and is available in every run mode (in Boat mode the sandbox desktop is the
+default target). Its rules are in
+[THREAT_MODEL §7, S8](THREAT_MODEL.md#7-screen) (planned, not built). Typing
+into a terminal, or into any field that launches a program, counts as running a
+command, so it stays off while the exec
+boundary in [`docs/PRIVACY.md`](PRIVACY.md) §5 holds. Turning it on is a
+separate owner decision, and each command then gets its own card.
 
 The cost reason is direct. Spend caps fail closed (`kernel/usage.py`), so a
 frontier model called on every frame would exhaust the cap and then stop the
 whole assistant, including the actions the user actually asked for. Reaction
-calls count against the same spend caps. Whether they need a sub-cap of their own
-is listed in section 17.
+calls draw from the same single budget as everything else. Kelp rations them
+internally: a small fixed share of the budget and a rate limit, so reactions can
+never use up the money for real work. This rationing is not a user setting. It is
+planned. The share and the rate are not set yet, and no code applies them today.
 
 ## 8. Screen and voice privacy rules
 
@@ -338,11 +445,21 @@ files are plain files, so users can share them and edit them.
 
 ## 10. Avatar and voice
 
-**Avatar.** Start from the existing ten-state kit in `assets/kelp-pet/` (idle,
-working, waiting, done, offline, curious, happy, excited, thinking, surprised).
-The kit ships 384×384 animated WebP, 64-frame atlases, and a `kelp-pet.js` web
-component. Then move to VRM through three-vrm, which is open, or to Live2D. The
-Live2D Cubism SDK is not open source, so check its licence before adopting it.
+**Decided: the avatar is optional. Undecided: what it looks like.** The owner
+decided on 2026-11-24 that users choose a desk pet or no pet. Without it, Kelp
+lives in a tray or menu-bar icon plus the chat window, the phone app and
+Telegram, and keeps screen reactions, screen control and voice. None of this
+exists in `desktop/` today: there is no tray icon and no pet switch. Kelp's
+identity is still open, and the owner does not want to commit to Storm's pet
+sprites or an anime style yet.
+
+**Avatar.** The identity is undecided. The existing ten-state kit in
+`assets/kelp-pet/` (idle, working, waiting, done, offline, curious, happy,
+excited, thinking, surprised) is the placeholder pet, and its state names are
+the interface any avatar must implement. The kit ships 384×384 animated WebP,
+64-frame atlases, and a `kelp-pet.js` web component. VRM through three-vrm,
+which is open, or Live2D, are options, not a plan. The Live2D Cubism SDK is not
+open source, so check its licence before adopting it.
 
 **Reuse before building.** AIRI (MIT, Live2D and VRM, realtime voice) and
 Open-LLM-VTuber (Live2D, voice, vision, offline) already solve parts of this.
@@ -373,9 +490,13 @@ The targets are therefore:
   the end of endpointing to the first audio sample played. Getting
   there needs streaming STT (transcribing while the user speaks), which the spike
   did not measure.
-- **Local-only voice** needs a GPU or NPU to be conversational. On a CPU-only
-  machine, local mode uses a configured cloud model for voice replies and says so,
-  or offers text only.
+- **Local-only voice** needs a GPU or NPU to be conversational. On machines
+  without a capable GPU, local mode uses a cloud text model for voice replies,
+  only when a provider (or the plan, section 15) is already set up.
+  Speech-to-text and text-to-speech stay on the machine, so only text leaves it,
+  matching the V3 default in [THREAT_MODEL §8](THREAT_MODEL.md#8-voice). This
+  adds no setup step. Kelp says so when it does this. Without a provider, it
+  offers text only.
 - Kokoro TTS sounds better but took 3.6 s for the first sentence on this CPU, so
   Piper stays the default.
 - Speech-to-speech realtime APIs are the other route to sub-second replies. They
@@ -391,27 +512,29 @@ command panel (an overlay opened with `CommandOrControl+Shift+Space`), and a
 96×96 pet overlay (`desktop/src/pet.js`, `desktop/src/orb.js`).
 `desktop/pet_state.py` maps chat events to pet states (working, thinking,
 waiting, done, idle). The panel's screen button is inert, and no capture code
-exists. The seed of the avatar is on the branch `origin/kel-31-pet-motion-kit`
-(Storm, kept). Its 3 commits are 3bd69c5 (animate the pet from the kit's ten
-states), 4546460 (lean toward the cursor and fidget) and 84fa565 (overlay pill
-alignment). The branch is based on `desktop-demo`, which carries demo fixtures,
-so those commits should land on main by cherry-pick or a fresh PR, not by merging
-the branch. Issue #69 (Storm) covers desktop demo mode. The main app also has a
-Computer pane (`desktop/src/ComputerPane.tsx`): a view-only noVNC viewer onto a
-VM's graphical session. It is the natural starting point for watching Kelp work in
-a Boat sandbox's virtual desktop.
+exists. The current placeholder pet is on the branch
+`origin/kel-31-pet-motion-kit` (Storm, kept). Its 3 commits are 3bd69c5 (animate
+the pet from the kit's ten states), 4546460 (lean toward the cursor and fidget)
+and 84fa565 (overlay pill alignment). The branch is based on `desktop-demo`,
+which carries demo fixtures, so those commits should land on main by cherry-pick
+or a fresh PR, not by merging the branch. Issue #69 (Storm) covers desktop demo
+mode. The main app also has a Computer pane (`desktop/src/ComputerPane.tsx`): a
+view-only noVNC viewer onto a VM's graphical session. It is the natural starting
+point for watching Kelp work in a Boat sandbox's virtual desktop.
 
 ## 11. What pauses
 
 These stay on main and get no new work until the companion direction has
 something to try:
 
-- the payments wallet and Razorpay checkout,
-- multi-tenant entitlements,
-- the phone PWA (to be discussed with Ketock). This conflicts with requirement 9
-  in section 4.5: away-from-desk approvals need a remote approval channel, and the
-  phone PWA is one candidate for it. Pausing the PWA leaves that need open
-  (section 17, question 9).
+- the payments wallet and Razorpay checkout. They stay paused for now, but they
+  are the likely base for the plan's billing (section 15),
+- multi-tenant entitlements.
+
+**No longer paused: the phone app.** Ketock's native mobile app (see
+[`docs/KETOCK_NATIVE_APP_HANDOFF.md`](KETOCK_NATIVE_APP_HANDOFF.md)) is now the
+primary remote approval channel (requirement 9 in section 4.5, and section 4.6).
+The work is coordinated with Ketock.
 
 ## 12. Platform permissions risk
 
@@ -431,6 +554,16 @@ grant:
 - **macOS:** Screen Recording and Accessibility permissions.
 - **Windows:** Windows Graphics Capture.
 
+Screen control (S8) needs a second mechanism on each OS to send mouse and
+keyboard input. The capture spike probed the xdg-desktop-portal RemoteDesktop
+interface on the wlroots machine and found it unavailable. It names
+`wlr-virtual-pointer`/`virtual-keyboard` or uinput (`ydotool`) as the only
+wlroots route, which is a separate permission and risk decision. No input was
+actually sent on any OS. The other candidates (libei, macOS Accessibility,
+`SendInput` or UI Automation) are untested. An input spike belongs in Phase 0
+or Phase 1 next to the capture spike. It should also try to detect user input
+and offer a global stop shortcut, which S8 requires before control ships.
+
 Prototype all three in Phase 0 and Phase 1, before the design assumes that
 capture works without extra steps. Because some platforms ask for nothing, the
 rules in section 8 will be enforced by Kelp's own capture code, never delegated to
@@ -439,17 +572,24 @@ prompt, but it cannot grant an OS permission for them.
 
 ## 13. Companion risks
 
-These need decisions before launch:
+These need decisions before launch. The owner decided the last three on
+2026-11-24. Emotional dependence is still open:
 
 - **Proactive chatter.** An assistant that speaks too often becomes an annoyance
   and gets uninstalled. The default is that Kelp rarely speaks.
 - **Emotional dependence.** A companion that is present all day can become
   something a user leans on too hard. Decide what Kelp does and does not encourage.
-- **Minors and age stance.** Decide whether there is an age requirement and what
-  it is, and how that is stated.
-- **How Kelp describes itself.** Decide how Kelp answers questions about what it
-  is. A proposed baseline is that it says plainly that it is an AI, and that no
-  persona claims to be human or to have feelings it does not have.
+- **Minors and age stance (decided 2026-11-24).** There is no age gate on the
+  open-source download. A paid plan needs an adult payer under the payment
+  provider's terms. That is a billing rule, not an app gate.
+- **How Kelp describes itself (decided 2026-11-24).** Kelp always says that it is
+  an AI when asked, or when it matters. No persona can claim to be human or to
+  have feelings it does not have.
+- **Coursework (decided 2026-11-24).** Coursework is not a refusal category. Kelp
+  may prepare, do and submit graded work when the user asks, like any other task.
+  A submission is something another person sees, so it still gets a card like
+  sending an email
+  ([THREAT_MODEL §9, T4](THREAT_MODEL.md#9-self-setup-the-capability-resolver)).
 
 ## 14. Build in public
 
@@ -480,7 +620,7 @@ endpoint, and leave the machine only if the user opts in to sharing them.
 | Metric | Definition | Target |
 |---|---|---|
 | Time to first conversation | Installer start to the first rendered Kelp reply, in seconds | p50 ≤ 5 min, no config file edited |
-| First-run questions | Questions the user answers before that first reply | 1 (Local or Boat), plus one provider sign-in only when no local model fits. Boat adds one question, the Boat sign-in that includes the owner bearer handoff |
+| First-run questions | Questions the user answers before that first reply | 1 (Local or Boat), plus one provider sign-in only when no local model fits. Boat adds one question, the Boat sign-in that includes the owner bearer handoff. The desk pet switch (section 4.1) is not counted. |
 | Setup prompts per active week | Kelp-initiated prompts shown per user per week after the first day: resolver plan cards, credential handoff requests, and resolver steps that ask the OS for a permission | ≤ 1 median, trending to 0 |
 | Repeat asks | A Kelp-initiated setup prompt for a capability that was already approved and whose scope has not changed, excluding a re-request after an OS-initiated lapse (counted under OS re-consent) | **0.** Any non-zero value is a bug |
 | OS re-consent | Reminders the OS raises on its own, such as the macOS 15+ "continue to allow" screen-recording prompt. Counted when Kelp detects the permission lapsed | Watched, not a bug |
@@ -498,38 +638,65 @@ the step that triggers them is counted. Repeat asks are
 detected by comparing a new plan's capability ids and scopes with the remembered
 grants from section 4.3.
 
-## 15. Money (later, not now)
+## 15. Money: one plan price
 
-The core stays open source. Possible paid options for later:
+The core stays open source. The owner's answer (2026-11-24) is one price with no
+per-feature limits that covers model usage and the relay. Boat compute depends
+on the plan.
 
-- optional hosted sync,
-- managed model credits,
-- Boat-mode convenience,
-- premium voices.
+- **Plan user.** A user who wants Kelp to handle everything pays one plan price
+  to start. It covers model usage (including reactions, voice, and downscaled
+  screen frames for screen reactions and screen control), the push relay
+  (section 4.6) and, depending on the plan, Boat compute. The user sees one
+  number. The UI shows no sub-caps. Within a plan there are no per-feature
+  limits. Whether a plan includes Boat compute depends on the plan.
+- **Self-hoster.** A self-hoster runs the same open-source plan service
+  components on their own side instead of using the project's: the push relay,
+  and a model gateway only if they want one in front of their own provider key.
+  Billing is not needed. A self-hoster pays Kelp nothing. They have at most one
+  monthly cap, the existing `KELP_SPEND_CAP_MONTH_USD`
+  ([`docs/DEPLOY.md`](DEPLOY.md)). The day cap (`KELP_SPEND_CAP_DAY_USD`) stays
+  available to operators, but it is not shown to plan users.
+- **What this means for the project.** The Kelp project will operate a hosted
+  service for plan users: billing, a model gateway, the push relay, and Boat
+  provisioning on plans that include it (decided 2026-11-24). The service is
+  open source so self-hosters can run it. That is new. None of it exists today.
+  Decision D (no public hosted instance until production) still holds until the
+  plan service launches; decision D is revisited then. The existing Razorpay
+  wallet and Checkout code (section 11) may be reused for it. A hosted plan's
+  model gateway will receive conversation text and downscaled screen frames for
+  apps the user marked "may send to cloud", which the privacy documents do not
+  yet describe (see the follow-ups in
+  [ADR 0004](adr/0004-desktop-companion.md#7-follow-ups)).
 
-None of these are built or priced in Phase 0.
+Price, plan tiers and what a plan includes are not set. Nothing here is built.
 
 ## 16. Phases
 
 | Phase | Scope |
 |---|---|
-| 0 (now) | This brief and ADR 0004. Land Storm's 3 pet commits on main. Spikes for screen capture and voice. The installer decision. |
+| 0 (now) | This brief and ADR 0004. Land Storm's 3 pet commits on main (interim placeholder, not the identity). Spikes for screen capture, screen-control input and voice. The installer decision. |
 | 1 | Persona and voice chat with the animated avatar. Local sidecar installer, first run (section 4.1) and remember-once (section 4.3). A minimal resolver for the voice models only. No screen access. |
-| 2 | Opt-in screen awareness through the reaction loop. The resolver guides the user through the OS capture permission. |
+| 2 | Opt-in screen awareness through the reaction loop. The resolver guides the user through the OS capture permission. Frames go to a local model or the user's own provider key until the plan gateway exists. |
 | 3 | Actions through approval-gated skills. The full capability resolver with the signed catalog. Computer use, either on the local desktop or in a Boat sandbox. |
-| 4 | Production hardening, the real landing page, and invitations to the pre-register list. |
+| 4 | Production hardening, signed and notarised installers (section 6), the real landing page, and invitations to the pre-register list. The phone app approval channel, the push relay, the Telegram bridge and the plan service must be scheduled into a phase before invitations. |
 
 ## 17. Phase 0 exit criteria and open questions
 
 **Exit criteria (all checkable):**
 
-- [ ] The owner has accepted or changed this brief and ADR 0004.
-- [ ] The installer option is chosen, and the choice is written into ADR 0004.
+- [ ] The owner has accepted or changed this brief and ADR 0004. The owner
+      answered the open questions on 2026-11-24 (see below) but has not accepted
+      the whole brief or the whole ADR.
+- [x] The installer option is chosen, and the choice is written into ADR 0004.
+      (Option (a), 2026-11-24.)
 - [ ] Storm's 3 pet commits are on main by cherry-pick or a fresh PR, without
-      the `desktop-demo` fixtures.
-- [ ] A capture spike has run on Wayland, macOS and Windows, with notes on what
-      each permission prompt looks like. Wayland (wlroots) is done; GNOME, KDE,
-      macOS and Windows are not.
+      the `desktop-demo` fixtures. They are an interim placeholder, not the
+      identity.
+- [ ] A capture and screen-control input spike has run on Wayland, macOS and
+      Windows, with notes on what each permission prompt looks like. Wayland
+      (wlroots) capture is done and its input route was probed but sent
+      nothing; GNOME, KDE, macOS and Windows are not.
 - [x] A voice spike has measured the end-of-speech to start-of-reply latency of
       the local STT and TTS choice. Result: 3.1–3.3 s with a cloud model on one
       Linux laptop; the target is revised in section 10. A run on Apple Silicon
@@ -539,44 +706,141 @@ None of these are built or priced in Phase 0.
 - [x] [`docs/THREAT_MODEL.md`](THREAT_MODEL.md) has a plan for screen, voice and
       self-setup sections, to be written before any capture code lands. (sections
       written 2026-11-24, status planned)
-- [ ] The first pre-register `wish` answers have been read and the first
-      audience in section 2 confirmed or changed. As of 2026-11-23 there are no
-      submissions.
+- [ ] The first audience is decided (general users, 2026-11-24). The first
+      pre-register `wish` answers are read to choose the first errands. As of
+      2026-11-23 there are no submissions.
 - [ ] Measured Boat desktop-task durations and cost exist, or the owner has
       accepted going without them.
 
-**Open questions for the owner:**
+**Open questions for the owner.** The owner answered questions 1 to 12 on
+2026-11-24. The question text below is kept as a historical record. The answers
+and where each one is applied are in
+[Owner answers (2026-11-24)](#owner-answers-2026-11-24).
 
 1. Is developers and students the right first audience, or should the pre-register
-   answers decide first?
+   answers decide first? (answered, see below)
 2. Does the owner accept option (a) for the local installer, given the signing
-   and notarisation cost?
+   and notarisation cost? (answered, see below)
 3. How does the desktop app reach a brain inside a Boat sandbox: an exposed HTTP
-   port, or a tunnel? ADR 0004 sets the minimum (TLS only, owner bearer always
-   required, no pinning by IP, secrets kept inside the sandbox). The transport
-   choice blocks Boat mode.
+   port, or a tunnel? The answer is an SSH local port forward to a loopback-only
+   brain. ADR 0004 item 8 and
+   [THREAT_MODEL §6, L4](THREAT_MODEL.md#6-local-brain-boundary-local-mode) hold
+   the rules. (answered, see below)
 4. In local mode, where do the owner secrets live? A local installer has to
    generate the owner bearer (`KELP_AUTH_TOKEN`) and the credential settings
    `KELP_VAULT_KEY`, `KELP_BROWSER_WORKER_TOKEN` and `KELP_CREDENTIAL_SIGNING_KEY`
    ([`docs/CREDENTIAL_HANDOFF.md`](CREDENTIAL_HANDOFF.md)), and store them. It also
    sets the two non-secret settings `KELP_CREDENTIALS_ENABLED` and
-   `KELP_BROWSER_ALLOWED_ORIGINS`. The
-   OS keychain is the likely home, but note that `docs/DESKTOP_SCOPE.md` says
-   "token in OS keychain only" while `desktop/README.md` records that the old
-   `keychain.js` and its Stronghold wiring were removed and nothing is stored at
-   rest. It says any future at-rest storage belongs on the Rust side, inside
-   `bridge_sign_in`, never in the webview. Local mode has to add that.
-5. Do reaction-loop calls get their own spend sub-cap?
+   `KELP_BROWSER_ALLOWED_ORIGINS`. `docs/DESKTOP_SCOPE.md` says "token in OS
+   keychain only", while `desktop/README.md` records that the old `keychain.js`
+   and its Stronghold wiring were removed and nothing is stored at rest. It says
+   any future at-rest storage belongs on the Rust side, inside `bridge_sign_in`,
+   never in the webview. Local mode has to add that. (answered, see below)
+5. Do reaction-loop calls get their own spend sub-cap? (answered, see below)
 6. Should the resolver's catalog wait for publisher signing
-   (`skills/signing.py`), or ship first with digest pinning only?
-7. What is the age and self-description stance (section 13)?
+   (`skills/signing.py`), or ship first with digest pinning only? (answered, see
+   below)
+7. What is the age and self-description stance (section 13)? (answered, see
+   below)
 8. Should voice replies in local mode fall back to a cloud model on machines
-   without a GPU (section 10), or stay local and slower?
+   without a GPU (section 10), or stay local and slower? (answered, see below)
 9. How does an approval reach the user away from the desk? A late yes loses
    time-sensitive work, so Kelp needs a remote approval channel: a push to the
-   phone, or a messaging bridge (section 4.5, requirement 9). This conflicts with
-   pausing the phone PWA (section 11).
-10. Graded and timed work: Kelp never sits timed tests or quizzes. Should Kelp
-    ever submit graded coursework the user reviewed, behind a card that
+   phone, or a messaging bridge (section 4.5, requirement 9). (answered, see
+   below)
+10. Graded and timed work: should Kelp ever submit graded coursework the user
+    reviewed, behind a card that
     [THREAT_MODEL §9, T4](THREAT_MODEL.md#9-self-setup-the-capability-resolver)
-    requires, or only prepare it and remind the user?
+    requires, or only prepare it and remind the user? (answered, see below)
+
+**Open questions raised by the answers:**
+
+11. Will the Kelp project run the hosted plan service, and does the one price
+    include Boat compute or only model usage and the relay? At the time of
+    asking, under [THREAT_MODEL S3](THREAT_MODEL.md#7-screen) the plan's model
+    gateway carries text only, so a plan user without their own provider key
+    gets no frame-based reactions. Should the gateway carry downscaled frames
+    for apps the user allowed, under the same no-storage rules? (answered, see
+    below)
+12. Should submissions to a course the user names be allowed under a standing
+    approval, which T4 currently forbids for anything another person sees?
+    (answered, see below)
+
+### Owner answers (2026-11-24)
+
+These are the owner's answers to questions 1 to 12 above. Each entry says where
+the answer is applied. Nothing here is built unless the linked section says so.
+
+1. **Audience: general users, anyone.** The first audience is general users with
+   no technical background. No step ever needs a terminal, config file or API key
+   copy-paste for a plan user, and the `wish` answers now refine which errands to
+   support first. Applied in
+   [section 2](#2-who-it-is-for-first-and-the-first-daily-loop).
+2. **Installer: option (a) accepted.** Unsigned Linux builds are fine while
+   building in public. macOS and Windows signing and notarisation are required
+   before general users are invited. Applied in
+   [section 6](#6-the-local-install-problem) and in
+   [ADR 0004](adr/0004-desktop-companion.md#2-decision) (item 6 and the
+   follow-ups). The ADR status stays Proposed.
+3. **Reaching a Boat brain: SSH port forward.** The owner asked for best
+   practice. The brain listens on loopback inside the sandbox, and the desktop
+   app reaches it through an SSH local port forward with a per-device key and a
+   pinned host key. Applied in [section 5](#5-run-modes), in
+   [ADR 0004](adr/0004-desktop-companion.md#2-decision) (item 8) and in
+   [THREAT_MODEL §6, L4](THREAT_MODEL.md#6-local-brain-boundary-local-mode).
+4. **Local secrets: OS credential store, generated by Rust.** The owner asked
+   for best practice. The Rust side generates all secrets and keeps the
+   persistent ones in the OS credential store. The per-launch ones are held in
+   memory and never stored. In Boat mode the Boat brain's bearer is stored too.
+   Applied in
+   [ADR 0004](adr/0004-desktop-companion.md#2-decision) (item 9) and in
+   [THREAT_MODEL §6, L5](THREAT_MODEL.md#6-local-brain-boundary-local-mode).
+5. **Money: one price that covers everything, no per-feature limits.** Reactions
+   draw from the same single budget, and Kelp rations them internally. Applied in
+   [section 7](#7-reacting-versus-acting), [section 11](#11-what-pauses) and
+   [section 15](#15-money-one-plan-price). It raises open question 11.
+6. **Catalog signing: ship with pinning first.** Kelp's own release-pinned
+   entries ship first, and publisher signing comes before the catalog accepts any
+   outside entry and before the full resolver in Phase 3. Applied in
+   [section 4.4](#44-safety-limits) and in
+   [ADR 0004](adr/0004-desktop-companion.md#5-consequences).
+7. **Age and self-description: recommendation accepted.** There is no age gate on
+   the open-source download, and Kelp always says it is an AI when asked or when
+   it matters. Applied in [section 13](#13-companion-risks).
+8. **Local voice without a GPU: cloud fallback.** Local mode uses a cloud text
+   model for voice replies when a provider or the plan is already set up, and
+   speech-to-text and text-to-speech stay on the machine. Applied in
+   [section 10](#10-avatar-and-voice).
+9. **Approvals away from the desk: Ketock's native app first, Telegram second.**
+   A push relay carries content-free pushes, and a Telegram bridge shows only the
+   action type and target. Applied in
+   [section 4.6](#46-remote-approvals-planned),
+   [section 11](#11-what-pauses),
+   [ADR 0004](adr/0004-desktop-companion.md#2-decision) (item 10) and
+   [THREAT_MODEL §6, L6 and
+   L7](THREAT_MODEL.md#6-local-brain-boundary-local-mode).
+10. **Graded coursework: no guardrails.** Kelp may prepare, do and submit
+    coursework when the user asks, like any other task, so no refusal rule for it
+    remains. The T4 card for anything another person sees stays, because it
+    protects against injected instructions. This raises open question 12. Applied
+    in [section 13](#13-companion-risks) and
+    [THREAT_MODEL §9, T4](THREAT_MODEL.md#9-self-setup-the-capability-resolver).
+11. **Plan service: yes for plan users; self-hosters run their own.** The
+    project runs the hosted plan service for plan users. Whether a plan includes
+    Boat compute depends on the plan. Self-hosters run the same open-source
+    components on their side instead. Users choose a desk pet or no pet. Screen
+    frames, screen-based reactions and screen control are supported in every
+    mode, so the plan gateway carries downscaled frames for apps the user
+    marked "may send to cloud" (off for every app by default), under the S2
+    no-storage rule. Applied in
+    [section 1](#1-what-kelp-becomes), [section 4.1](#41-first-run),
+    [section 7](#7-reacting-versus-acting), [section 10](#10-avatar-and-voice),
+    [section 12](#12-platform-permissions-risk),
+    [section 15](#15-money-one-plan-price),
+    [ADR 0004](adr/0004-desktop-companion.md#2-decision) (item 11) and
+    [THREAT_MODEL §7, S3 and S8](THREAT_MODEL.md#7-screen). "Supported in every
+    mode" does not switch watching on by default: S1 opt-in, the S4 block list
+    and the S7 indicator still apply.
+12. **Course submissions keep the card.** A submission is something another
+    person sees, so it always shows an approval card, and a standing approval
+    cannot cover it. T4 is unchanged.

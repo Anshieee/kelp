@@ -5,7 +5,9 @@
 - **Scope:** the server process started by `python -m chat.server` — `kernel/`, `skills/`, `openshell/`, and `chat/`
   and, as planned rules, the desktop companion (screen, voice, self-setup, local brain)
 - **Companion sections:** added 2026-11-24, see [`docs/PRODUCT_BRIEF.md`](PRODUCT_BRIEF.md) and
-  [ADR 0004](adr/0004-desktop-companion.md)
+  [ADR 0004](adr/0004-desktop-companion.md). Updated 2026-11-24 with the
+  owner's answers 1 to 12 (brief §17, including the Q11 and Q12 answers): L4 to
+  L7 in §6, S3 and S8 in §7 and T2 in §9
 - **Companions:** the recipient table ([`docs/PRIVACY.md`](PRIVACY.md) §2), the principal table and
   share-link threat model ([ADR 0002](adr/0002-sharing-and-identity.md) §4 and §10), the policy gate
   ([`docs/OPENSHELL.md`](OPENSHELL.md)), and the skill contract ([`docs/SKILL_SPEC.md`](SKILL_SPEC.md))
@@ -282,33 +284,221 @@ designed.
   side (`bridge_sign_in`). The webview holds it only in memory while the sign-in
   dialog is open, and the app stores it nowhere (`desktop/README.md`). Any future
   at-rest storage goes on the Rust side as well. Today the app stores nothing at
-  rest, so the storage location is undecided and is open question 4 in the
-  [product brief](PRODUCT_BRIEF.md) §17. That decision sets how private Local mode
-  is, because any process that can read the chosen location can drive the brain.
+  rest. Where local secrets live is decided in L5 below (planned, not built).
+  That decision sets how private Local mode is, because any process that can
+  read the chosen location can drive the brain.
 - **L3. OS-level confinement before network-capable skills.** The skill egress
   guard (`skills/policy.py`) is cooperative at the Python layer, and §5 relies on
   a deployment boundary behind it (no exec, container egress rules). A sidecar
   running as the user has neither. Before any network-capable skill runs in Local
   mode, the sidecar must run under OS-level confinement with three properties:
   - no process execution outside `openshell`,
-  - outbound network limited to the hosts the skill manifests declare plus the
-    model providers the user configured,
+  - outbound network limited to the hosts the skill manifests declare and the
+    model providers the user configured, plus exactly three more: the push relay
+    (L6), the Telegram Bot API host (`api.telegram.org`, L7) and, for plan
+    users, the plan model gateway. Nothing else,
   - filesystem access limited to Kelp's data directory plus folders the user
     approved.
 
   The mechanism on each OS is open. This section does not pick one. Until
   confinement exists, Local mode does not enable network-capable skills.
-- **L4. Boat mode transport.** TLS only, the owner bearer always required, no
-  pinning by IP address (it changes on resume), and provider keys, the vault key
-  and credentials kept only inside the sandbox (ADR 0004 §2, item 8). Whether the
-  app reaches the sandbox through an exposed port or a tunnel is open question 3
-  in the brief and blocks Boat mode.
+- **L4. Boat mode transport: an SSH port forward (planned).** The owner chose
+  this on 2026-11-24 and asked for best practice. The Boat behaviour below was
+  read from Boat's documentation (docs.boat.dev) on 2026-11-24 and can change.
+  None of it is built. It needs new code in the desktop shell's Rust side.
+  - The brain inside the sandbox binds `127.0.0.1` only, like the local sidecar
+    (L1, ADR 0004 §2, item 7). There is no public port and no Boat public URL for
+    the brain.
+  - The desktop app reaches it through an SSH local port forward to the sandbox's
+    loopback port. Boat documents this as `boat forward`, which binds `127.0.0.1`
+    on the user's computer by default and makes nothing public
+    ([Boat SSH access](https://docs.boat.dev/ssh-access.md)).
+  - The forward's local end binds `127.0.0.1` explicitly, on an ephemeral port.
+    L1's Host, Origin and bearer checks apply to the Boat brain too.
+  - The desktop generates its own ed25519 SSH key per device, authorises it on
+    the sandbox through the Boat API, and pins the host key from the Boat API
+    response. Boat documents that the machine, IP address and host key change
+    after each resume and fork. The app therefore refreshes the endpoint and
+    host key from the Boat API after every resume or fork. It never uses
+    trust-on-first-use, and it never pins the brain by IP address. If the Boat
+    API response carries no host key, the app refuses to connect.
+  - Removing a device in the desktop app deletes its key from the sandbox
+    through the Boat API.
+  - Where possible, the desktop's authorised key is restricted to forwarding the
+    one loopback port, with the OpenSSH options
+    `restrict,port-forwarding,permitopen="127.0.0.1:PORT"`. Whether Boat lets
+    the app set `authorized_keys` options is unverified. It is an ADR 0004
+    follow-up.
+  - The owner bearer is still required on every request inside the tunnel. The
+    tunnel is a transport and does not replace it. The Boat brain's bearer is
+    persistent (L5).
+  - Provider keys, the vault key and credentials stay inside the sandbox (ADR
+    0004 §2, item 8).
+  - **Why not the Boat public URL (`boat host`).** Boat terminates TLS for
+    `on.boat.dev` and proxies to the sandbox
+    ([how hosting works](https://docs.boat.dev/hosting/how-it-works.md)), so Boat
+    would see the plaintext chat and the owner bearer. The default protection is
+    a `_token` query parameter, so anyone with the full URL can open it
+    ([hosting](https://docs.boat.dev/hosting.md)). Query strings end up in logs
+    and history.
+  - **Why not a mesh VPN (WireGuard or a hosted mesh).** It adds an account or
+    key exchange step for every user, which breaks zero setup. It can be an
+    advanced option later.
+  - **The Boat API key.** The desktop needs a Boat API key to resume the sandbox
+    and refresh the host key. The same key can authorise new SSH keys on the
+    sandbox, so it is the highest-value secret on the desktop. It follows L5
+    (OS credential store, Rust side) and never uses the plain-file fallback. It
+    uses the narrowest Boat API key preset that can resume and read that
+    sandbox. Whether Boat offers a per-sandbox key is unverified.
+  - The phone app and the messaging bridge do not use this tunnel (L6, L7).
+- **L5. Local secrets (planned).** The owner chose this on 2026-11-24 and asked
+  for best practice. Enforced in the desktop shell's Rust side and the sidecar
+  launcher. Every rule below needs new code there. None of it is built.
+  - The Rust side of the desktop app generates all secrets on first run from the
+    OS random source. The user never sees, types or copies one.
+  - Persistent secrets are stored in the OS credential store, from Rust only:
+    macOS Keychain, Windows Credential Manager, or Linux Secret Service. In
+    Local mode they are `KELP_VAULT_KEY`, `KELP_CREDENTIAL_SIGNING_KEY`, and once
+    L6 and L7 exist, the brain's per-brain relay credential, its long-term
+    end-to-end private key, the paired phones' public keys and device records,
+    and the Telegram bot token. The webview never reads them.
+    This matches `desktop/README.md`: future at-rest storage belongs in
+    `bridge_sign_in` on the Rust side.
+  - The per-launch set is generated fresh on every launch, held in memory,
+    passed to the sidecar over stdin or an inherited descriptor (L1), and never
+    stored. It is the owner bearer (`KELP_AUTH_TOKEN`), `KELP_CSRF_TOKEN`,
+    `KELP_SESSION_SECRET` and `KELP_BROWSER_WORKER_TOKEN` for the local brain.
+    - **Session secret.** `KELP_SESSION_SECRET` (`.env.example:65`,
+      `chat/api.py:180`) falls back to `KELP_AUTH_TOKEN` (`chat/server.py:813`),
+      and device sessions persist across restarts (`.env.example:56`). Once the
+      secret is per-launch, device sessions in Local mode are not expected to
+      survive a restart. The desktop body signs in again automatically on each
+      launch, with no user step.
+    - **Worker token.** The browser worker reads `KELP_BROWSER_WORKER_TOKEN` from
+      `os.environ` today (`chat/credential_browser.py:218`). Local mode needs new
+      code so the worker gets it over stdin or an inherited descriptor, like the
+      bearer (L1).
+    - **Scope.** Only the desktop body talks to the local brain directly, so
+      nothing else needs the bearer, the CSRF secret or the session secret. The
+      worker token is the exception above, because the browser worker uses it.
+    - A credential request left pending across a restart cannot be claimed with
+      the old tokens and has to be requested again.
+      [`docs/CREDENTIAL_HANDOFF.md`](CREDENTIAL_HANDOFF.md) describes that
+      outcome for a rotated signing key or worker token.
+  - **Lost credential-store entry.** The current code aborts startup when the
+    vault key does not match an existing store: `chat/credentials.py:154-156`
+    raises `ValueError('Vault key does not unlock the existing credential
+    store.')`. Planned rule, which needs new code in the sidecar launcher: when
+    the vault key is missing from the OS credential store but `credentials.db`
+    exists, the launcher renames `credentials.db` aside with a timestamp (it is
+    never deleted silently), generates a new key, and starts. Kelp then asks for
+    each login again as new access (one card, T1). An encrypted export of the
+    vault key can live in Settings for users who want it. It is never part of
+    first run.
+  - **Linux fallback.** On a machine with no Secret Service daemon (common on
+    minimal Wayland compositors), a 0600 file stands in for the credential
+    store. It covers only the vault key and the credential signing key. It is
+    created with `O_EXCL` and mode 0600 inside `$XDG_DATA_HOME/kelp/secrets/`
+    (mode 0700), a directory separate from the database directory, and Kelp's own
+    backups exclude it. When a Secret Service later becomes available, Kelp
+    moves both values into it on first use and then removes the file, so the
+    lost-entry rule above never discards saved logins because of the move. Kelp
+    shows a one-time notice in Settings, not a setup step. The fallback is
+    weaker than a credential store.
+    - The SSH private key, the Boat API key, the Boat brain's bearer, the
+      Telegram bot token and the L6 relay credential, end-to-end key and device
+      records never use the file fallback.
+    - Kelp offers to set up a Secret Service through the resolver (a catalog
+      entry, one card, T1). Until then Boat mode and the Telegram bridge are
+      unavailable.
+  - **Boat mode.** Provider keys, the vault key and credentials stay inside the
+    sandbox (L4), and so do the brain's L6 relay credential, end-to-end key,
+    device records and the Telegram bot token, which the desktop sends into the
+    sandbox over the SSH channel when the user pairs a channel. The desktop
+    stores at least three secrets in the OS credential store: its SSH private
+    key, the Boat API key and the Boat brain's owner bearer. The bearer cannot be
+    per-launch, because a Boat sandbox persists across resumes. To rotate it,
+    the desktop writes a new bearer into the sandbox over the SSH channel and
+    restarts the brain. A second desktop gets the bearer the same way: once its
+    own SSH key is authorised (L4), it reads the bearer over the SSH channel, and
+    a rotation from any desktop means the others read it again on their next
+    connection.
+- **L6. Push relay for remote approvals (planned).** The owner chose Ketock's
+  native mobile app as the primary channel on 2026-11-24 (design in
+  [brief §4.6](PRODUCT_BRIEF.md#46-remote-approvals-planned)). The relay is a
+  hosted component, so it sits outside the brain's trust boundary. Every rule
+  below needs new code in the brain, the desktop app, the phone app and the
+  relay. None of it is built.
+  - A relay is required because Apple and Google push services accept only pushes
+    signed with the app publisher's credentials. A self-hosted brain cannot push
+    to the store app directly.
+  - The brain keeps an outbound connection to the relay. It works behind home
+    NAT and opens no inbound port in Local mode or in Boat mode.
+  - The push carries no content: only that a card is waiting, and an opaque id.
+  - The app fetches the card details and sends the decision back through the
+    relay. Both directions are end-to-end encrypted between the paired phone and
+    the brain, and the decision is signed with a device key created at pairing.
+    The relay sees only ciphertext and timing.
+  - Pairing is one QR scan from the desktop app. The QR secret is short-lived and
+    single-use, and the desktop shows it only after a local user action.
+  - The relay is open source, so self-hosters can run their own.
+  - The relay never receives screen frames or audio (S3).
+  - **Unpair and revoke.** The user can unpair and revoke a phone from the
+    desktop app. A lost phone's device key stops working at once.
+  - **Decision binding.** Each decision is bound to the card id, the
+    `argument_hash` and the expiry. The brain rejects replays and mismatches.
+    Today's approvals enforce expiry and single use in `openshell/approvals.py`
+    (600 s, `APPROVAL_TTL_SECONDS`) and the `argument_hash` match in
+    `chat/service.py`. A signed remote decision over (card id, `argument_hash`,
+    expiry) is new code.
+  - **Relay authentication.** The relay authenticates the brain's outbound
+    connection with a per-brain credential, so one brain cannot receive another
+    brain's traffic. It is stored as in L5.
+  - **Structured rendering.** The phone renders each card from structured fields
+    (action type, target, expiry, as in T4), never from model text.
+  - **Failure mode.** If a relay message is dropped or arrives late, the card
+    expires and the action does not run.
+  - The remote-channel rule in L7 applies to the phone too.
+- **L7. Telegram bridge (planned).** The secondary channel. The bridge is a bot
+  that the brain reaches by long polling, which is outbound only. Every rule
+  below needs new code in the brain. None of it is built.
+  - Telegram bot messages are not end-to-end encrypted, so Telegram receives the
+    plaintext of every bridge message: the user's turns and Kelp's replies. A
+    Telegram card therefore shows only the action type and the target. Full
+    details stay in the desktop or phone app.
+  - **What never goes over the bridge.** Content read through the credential
+    flow, content from blocked or private apps (the S4 and V4 rules), screen
+    frames and audio, and the details of T1 new-access cards.
+  - **What Telegram may approve.** A card is approvable from Telegram only when
+    the fields Telegram shows fully determine the action, and the card is not in
+    a T4 category (money, anything another person sees, irreversible acts, terms
+    of service) and is not new access (T1). It is also never a screen-control
+    card (S8). Every other card shows "open in the app" in Telegram. Whether to
+    widen this is a follow-up.
+  - **Inbound messages.** The bridge accepts messages only from the paired
+    Telegram user id and refuses group chats. Pairing uses a one-time code that
+    the desktop app shows. The bot token is a persistent secret, stored per L5
+    and never in the file fallback.
+  - **Remote-channel rule (applies to L6 and L7).** A message from the bridge is
+    a user turn. Remote channels (Telegram and the phone) can never create a
+    standing approval and can never approve a T1 new-access card. Neither can
+    start or approve control of the user's own desktop (S8). Only the phone may
+    approve control of a Boat sandbox desktop.
+  - Like L6, it opens no inbound port and does not use the Boat tunnel (L4).
 
 | Open decision | Where it is tracked |
 |---|---|
-| Where the owner bearer and vault key live in Local mode | Brief §17, question 4 |
 | Confinement mechanism per OS | Open, no owner decision yet |
-| Boat transport (exposed port or tunnel) | Brief §17, question 3 |
+| Narrowest Boat API key that can resume and read one sandbox (L4) | [ADR 0004](adr/0004-desktop-companion.md) follow-ups |
+| Whether Boat lets the app set `authorized_keys` options on the sandbox (L4) | [ADR 0004](adr/0004-desktop-companion.md) follow-ups |
+| Push relay design: pairing, key exchange, per-brain credential, hosting (L6) | [ADR 0004](adr/0004-desktop-companion.md) follow-ups |
+| Whether to widen which cards may be approved from Telegram (L7) | [ADR 0004](adr/0004-desktop-companion.md) follow-ups |
+| Detecting user input to pause screen control, and a global stop shortcut, on each OS (S8). Screen control does not ship on an OS without both | [ADR 0004](adr/0004-desktop-companion.md) follow-ups (input spike) |
+| Update [`docs/PRIVACY.md`](PRIVACY.md) §2 and the telemetry and recipient statements here (§1.1, §10) before a hosted plan or the Telegram bridge ships (S3, L7) | [ADR 0004](adr/0004-desktop-companion.md) follow-ups |
+
+Decided on 2026-11-24 and no longer open: where the owner bearer and vault key
+live (L5, brief §17 question 4) and how the app reaches a Boat brain (L4, brief
+§17 question 3).
 
 ---
 
@@ -339,17 +529,34 @@ Windows were not tested.
   Observations are stored as untrusted data and are never promoted to memory or to
   a rule without the user's confirmation. The 24 hour expiry will be enforced in
   the brain's store, not in the capture module.
-- **S3. Where frames go.** Kelp the project runs no server that receives frames,
-  audio, transcripts or telemetry. "Cloud" always means a provider the user
-  configured with their own key, or the user's own Boat VM. What leaves the
-  machine depends on the run mode:
+- **S3. Where frames go.** The only Kelp-run server that may receive screen
+  frames is the plan model gateway ([product brief](PRODUCT_BRIEF.md) §15),
+  for plan users (owner decision 2026-11-24, owner answer 11). No Kelp-run
+  server receives audio. The push relay (L6) never receives frames or audio and
+  sees only ciphertext and timing. The Telegram bridge (L7), when the user turns
+  it on, receives the plaintext of bridge messages but never frames or audio.
+  The plan gateway receives conversation text, because it forwards the user's
+  turns to a model, downscaled frames for apps marked "may send to cloud",
+  reaction metadata (app id and window title) and text observations. The "may
+  send to cloud" tick is off for every app by default and is never part of the
+  suggested defaults in S1. The gateway forwards each frame to the model and
+  keeps nothing itself: no frame is written to disk, a log, a queue that
+  outlives the request, or a training set. A self-hoster's own gateway follows
+  the same rule. The gateway's upstream provider keeps whatever its terms
+  allow. Before frames are enabled for plan users, the project names that
+  provider and its retention terms in [`docs/PRIVACY.md`](PRIVACY.md) and on
+  the plan page. The gateway enforces its own per-account rate cap and maximum
+  frame size, and rejects anything larger. "Cloud" for frames means the
+  plan gateway, a provider the user configured with their own key, or the user's
+  own Boat VM. What leaves the machine depends on the run mode:
 
   | Run mode | What leaves the machine | Rule |
   |---|---|---|
   | Default reaction signals, any mode | Metadata only: the focused app id (11 ms to read on wlroots in the spike), idle time, and the window title, read only after the S4 check passes and never for blocked or private windows | No pixels leave the machine by default. |
   | Local mode, local vision model | Nothing. Frames stay on the machine. | Used only if a hardware check passes. The spikes did not measure a local vision model, so it is unproven until that check exists. |
   | Local mode, cloud provider | A downscaled frame, to the provider the user configured | Only for apps the user marked "may send to cloud". That is a separate tick from "may watch". Never for blocked apps. Rate-limited. The indicator shows the destination (for example "watching: sent to <provider>"). Provider retention is out of scope (§5), and the setting says so plainly. The brain enforces the rate limit, because it makes the model call. The desktop app holds the per-app ticks and draws the indicator. |
-  | Boat mode | When the user has enabled frame sending ([product brief](PRODUCT_BRIEF.md) §5), frames go to the user's own VM, on demand only, over the TLS and bearer link (L4) | The VM counts as the user's machine for retention, and the same no-disk rule (S2) applies inside the VM. If the VM's model is a third-party provider, the "may send to cloud" tick applies. |
+  | Plan user, plan gateway | A downscaled frame, to the plan gateway, which forwards it to the plan's model | The same "may send to cloud" tick, block list and rate limit as the row above. The indicator names the destination ("watching: sent to Kelp plan"). The gateway stores no frames. |
+  | Boat mode | When the user has enabled frame sending ([product brief](PRODUCT_BRIEF.md) §5), frames go to the user's own VM, on demand only, over the SSH port forward, with the owner bearer (L4) | The VM counts as the user's machine for retention, and the same no-disk rule (S2) applies inside the VM. If the VM's model is a third-party provider or the plan gateway, the "may send to cloud" tick applies. The indicator names the final destination. |
 - **S4. Block list.** Two tiers, checked against the focused app before any frame
   is taken:
   - Always blocked, cannot be lifted: password managers, private or incognito
@@ -386,6 +593,78 @@ Windows were not tested.
   does nothing else.
 - **S7. Indicator.** Kelp draws its own watching and listening indicator. On
   wlroots the OS shows nothing during capture (spike).
+- **S8. Screen control (planned, not built).** Screen control means Kelp sending
+  mouse and keyboard input to a desktop: the user's own, or a Boat sandbox
+  desktop. The owner made it a core capability in every mode on 2026-11-24. No
+  input was sent in any spike (brief §12).
+  - **Started only by an approved task.** Control starts only inside a user
+    turn, after a card rendered by the desktop app from structured fields:
+    target app id or site origin, a step cap, and an expiry. It is never
+    rendered from model-written text. The approval is a new single-use kind
+    bound to the hash of those fields. Each input step is checked against that
+    hash. A standing approval can never cover screen control. Every T4 category
+    still gets its own card at its step.
+  - **The user's own desktop is approved locally.** Control of the user's real
+    desktop starts and is approved only at the desktop app, because the user
+    must be able to take over. A scheduled watch, Telegram and the phone can
+    never start or approve it.
+  - **Boat sandbox desktop.** The focus check, takeover detection and S1 to S5
+    app list below apply to the user's real desktop only. For a sandbox desktop
+    the card is rendered from the same structured fields by the desktop app or
+    the paired phone app (L6), never Telegram. The brain in the sandbox enforces
+    the target-site, T4 step and terminal checks, and the "Kelp is controlling"
+    indicator names the sandbox. S4 blocks and S1 to S5 still apply to any of
+    the user's own windows Kelp is shown, never to the sandbox screen.
+  - **Enforced in the desktop app (user's own desktop).** The body applies S4,
+    S7 and S8 to every input event, whatever brain sent it, including a Boat
+    brain. Before each event it re-reads the focused app and window and targets
+    the approved window where the OS allows it. If the focused app, window or
+    site cannot be determined, or does not match the card, no input is sent.
+  - **Frames follow S1 to S5 (user's own desktop).** The control loop sees only
+    apps on the allowed list and sends frames to a cloud model only for apps
+    ticked "may send to cloud". A task for any other app uses a local vision
+    model or does not run. Control pauses while S5 is active.
+  - **Screen text cannot widen the task.** The control loop reads the screen
+    (S6), so what it reads is untrusted. It may choose clicks and keystrokes
+    within the approved task and target app or site. A step that would leave
+    that app or site, or start something the card did not name, stops and asks.
+  - **Each T4 step gets a card.** Each step in any T4 category gets its own
+    card at that step. The desktop app classifies the step from the UI
+    element's role and label (Send, Post, Submit, Pay, Buy, Delete, Accept,
+    Enter in a form) and from the target app. The model does not. A step it
+    cannot classify is treated as T4 and shows a card.
+  - **Blocked apps are never controlled.** Kelp sends no input while an S4
+    blocked app or window has focus, and stops if one takes focus. Passwords and
+    one-time codes are never typed from model output. In a browser, a login
+    goes through the credential handoff
+    ([`docs/CREDENTIAL_HANDOFF.md`](CREDENTIAL_HANDOFF.md)), which is
+    origin-bound and needs a fresh owner entry each time. In a native app Kelp
+    stops and asks the user to enter it. While private entry is active Kelp
+    sends no input to that page.
+  - **Typing into a terminal is command execution.** Input to a terminal
+    emulator, shell window, IDE terminal, remote-shell session, or any field
+    that launches a program or runs a command (Run dialog, launcher, command
+    palette, task runner) is treated as running a command. The desktop app
+    classifies the target as it does in the T4 step rule, and a text target it
+    cannot classify is treated as one of these. The rule applies unchanged in a
+    Boat sandbox desktop until the owner decides otherwise. It stays off while
+    the exec boundary in [`docs/PRIVACY.md`](PRIVACY.md) §5 holds (nothing runs
+    a command in this build). Turning it on is a separate owner decision that
+    reverses that boundary. When it is on, each command gets its own card that
+    shows the exact command text, rendered from the keystrokes Kelp is about to
+    send, never from model prose.
+  - **The user can always take over.** A separate "Kelp is controlling"
+    indicator shows while control is active. Any physical mouse or keyboard
+    input from the user pauses control at once, and a stop shortcut ends it.
+    Control resumes only when the user says so. The detection method and the
+    global stop shortcut on each OS are open (the same status as S5). Screen
+    control does not ship on an OS where Kelp cannot detect user input and
+    offer a stop control on the "Kelp is controlling" indicator.
+  - **Logged without frames.** Each control step writes an audit row with the
+    approval id, step index, step type (click, key, scroll, text), target app
+    id and an `argument_hash`. It holds no task text, frame or typed text.
+  - In Boat mode, long or risky tasks run in the sandbox's own desktop by
+    default, so they do not touch the user's desktop (brief §5).
 
 Prior art: Windows Recall filters apps and private browsing
 ([Microsoft support](https://support.microsoft.com/en-us/windows/ai/ai-features/filtering-apps-websites-and-sensitive-information-in-recall));
@@ -455,7 +734,10 @@ rules below will be enforced in the resolver, in the approval gate
     Until then every install shows a card. In Boat mode silent installs run inside
     the sandbox.
 - **T2. Sources.** Installs come only from the pinned catalog (digest pinning in
-  `skills/loader.py`; publisher signing is a spike, open question 6 in the brief).
+  `skills/loader.py`). Kelp's own release-pinned entries ship first (Phase 1
+  voice models). Publisher signing is a spike (`skills/signing.py`) and is wired
+  in before the catalog accepts any entry from outside Kelp's own release, and
+  before the full resolver ships in Phase 3 (owner decision, 2026-11-24).
   Kelp may propose a new catalog entry. It cannot install an arbitrary package,
   and it never asks the user to paste a command into a terminal. Prior art: a Koi
   Security audit of 2,857 OpenClaw skills, reported by NeuralTrust, found 341
@@ -484,8 +766,8 @@ rules below will be enforced in the resolver, in the approval gate
     scoped to one action type and one target, is time-limited (default 30 days),
     and is listed and revocable in Settings. It can never cover spending money,
     deletion or any other irreversible act, anything another person will see, or
-    accepting terms. It cannot waive a T1 card for new access (accounts and
-    logins, folders, hosts, OS permissions).
+    accepting terms, or starting screen control (S8). It cannot waive a T1 card
+    for new access (accounts and logins, folders, hosts, OS permissions).
 
   Both kinds are created only from a confirmation that the desktop app renders
   from structured fields (action type, target, expiry), never from model-written
@@ -534,6 +816,11 @@ rules below will be enforced in the resolver, in the approval gate
   planned sections 6 to 9 come from:
   [`docs/PRODUCT_BRIEF.md`](PRODUCT_BRIEF.md) and
   [ADR 0004](adr/0004-desktop-companion.md).
+- **Owner answers**: the answers that set L4 to L7, S3, S8 and T2 (answers 1
+  to 12, including Q11 and Q12):
+  [`docs/PRODUCT_BRIEF.md`](PRODUCT_BRIEF.md#owner-answers-2026-11-24). The
+  remote approval design is in
+  [brief §4.6](PRODUCT_BRIEF.md#46-remote-approvals-planned).
 - **Tests** — [`tests/test_privacy.py`](../tests/test_privacy.py),
   [`tests/test_kernel_loop.py`](../tests/test_kernel_loop.py),
   [`tests/test_policy_enforcement.py`](../tests/test_policy_enforcement.py),
