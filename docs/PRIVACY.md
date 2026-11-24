@@ -295,6 +295,19 @@ function. The honest card is smaller, reversible, and testable, and it removes a
 false promise from a product whose pitch is that it does not overstate what it
 does.
 
+**Planned change (2026-11-24).** The owner decided to allow commands behind
+approvals (planned, not built). Each command will show a card with its exact
+argv, and a mode that skips cards for allowlisted read-only commands is planned
+([THREAT_MODEL §9, T7 and
+T8](THREAT_MODEL.md#9-self-setup-the-capability-resolver)). Nothing changes in
+this build. The boundary above and `tests/test_privacy.py` stay as they are
+until the three wiring steps listed above land in one change. Those steps are
+not enough. Any command, in either mode, also needs OS-level confinement of
+the brain first (T8, L3). The skip-the-card mode also needs an
+argument-aware allowlist (today `openshell/policy.py` checks `argv[0]` only)
+and a logged "Approved for you" approval path (today `ExecGate.execute` always
+consumes an approval).
+
 ---
 
 ## 6. What this review does not promise
