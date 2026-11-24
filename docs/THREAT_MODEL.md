@@ -1012,9 +1012,14 @@ approval gate.
     routine, and a command needs a card unless it is in the action set of the
     watch or standing approval the turn runs under. Silent installs stay off in
     such a turn (T1). No T6 rule is weakened.
-  - **Default on a new install.** Not decided (brief §17, question 16). The
-    recommendation is "Approve for me", because T4, T1 and destructive commands
-    always ask anyway, and it matches the zero repeated setup goal.
+  - **Default on a new install.** "Approve for me" (owner decision
+    2026-11-24, brief §17, answer 16), because T4, T1 and destructive commands
+    always ask anyway, and it matches the zero repeated setup goal. Where the
+    mode is unavailable (the L5 fallback file before L3 confinement), a new
+    install starts in "Ask before doing anything" and never widens itself;
+    the user turns "Approve for me" on from the desktop app once Settings
+    shows it is available. The always-ask list is expected to be tuned by
+    later threat-model revisions.
 - **T8. Commands (planned, not built).** The rule that typing into a terminal
   counts as running a command stays (S8). The owner decided on 2026-11-24 that
   commands become allowed, each approved with a button (brief §17, answer 14).

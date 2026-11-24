@@ -305,8 +305,9 @@ decided:
       or standing approval the turn runs under. The brain stores the mode and
       accepts a change to "Approve for me" only when it is signed with the
       desktop app's device key. The phone and Telegram cannot reach that setter,
-      and narrowing is accepted from any authenticated channel. The default for
-      a new install is not decided (brief section 17, question 16).
+      and narrowing is accepted from any authenticated channel. A new install
+      starts in "Approve for me", or in "Ask before doing anything" where
+      that mode is unavailable (brief section 17, answer 16).
     - **Commands.** Typing into a terminal still counts as running a command.
       Commands are allowed behind approvals and run through
       `openshell/exec_gate.py`. In "Approve for me" only a read-only command

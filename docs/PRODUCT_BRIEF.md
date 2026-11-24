@@ -102,8 +102,8 @@ are an equal entry point to this loop. They are not limited to desktop moments.
   grant no new access ([THREAT_MODEL §9,
   T1](THREAT_MODEL.md#9-self-setup-the-capability-resolver)), which are silent
   only in "Approve for me", and actions covered by a standing approval the user
-  created (T4). The default mode on a new install is an open question (section
-  17, question 16).
+  created (T4). A new install starts in "Approve for me" (section 17, answer
+  16).
 - **Screen content is untrusted input.** Text on screen or on a web page can
   describe a task but can never authorise one, and it can never start a setup step.
 - **Local-first, cloud by choice.** The user picks Local or Boat. Neither is the
@@ -889,7 +889,7 @@ later answers below, which did not answer a numbered question):
     "Approve for me". Money, anything another person sees, anything that cannot
     be undone, new access and destructive commands always show a card in both
     modes, so the default removes only routine cards, which fits the zero
-    repeated setup goal. The owner has not decided. (open)
+    repeated setup goal. (answered, see below)
 
 ### Owner answers (2026-11-24)
 
@@ -1001,11 +1001,23 @@ a numbered question. Each entry says where it is applied. Nothing here is built.
     [ADR 0004](adr/0004-desktop-companion.md#2-decision) (item 12),
     [THREAT_MODEL §9, T4, T7 and
     T8](THREAT_MODEL.md#9-self-setup-the-capability-resolver) and a planned
-    change note in [`docs/PRIVACY.md`](PRIVACY.md) §5. Question 16 above asks
-    for the default mode.
+    change note in [`docs/PRIVACY.md`](PRIVACY.md) §5. Question 16 above asked
+    for the default mode (answer 16).
 15. **Identity is lower priority.** Complete the desktop app and the phone app
     before the desk pet and identity. Kelp's look stays undecided, and Storm's 3
     pet commits move from Phase 0 to Phase 3 as "consider". Applied in
     [section 1](#1-what-kelp-becomes), [section 4.1](#41-first-run),
     [section 10](#10-avatar-and-voice), [section 16](#16-phases) and
     [ADR 0004](adr/0004-desktop-companion.md#7-follow-ups).
+16. **Default mode: "Approve for me".** A new install starts in "Approve for
+    me". The owner expects to tune which actions need a card later, so the
+    always-ask list in
+    [THREAT_MODEL §9, T7](THREAT_MODEL.md#9-self-setup-the-capability-resolver)
+    is a starting point that a later threat-model revision can change, not a
+    runtime setting. Where "Approve for me" is not yet available (the Linux
+    fallback without a Secret Service, until L3 confinement exists), a new
+    install starts in "Ask before doing anything". It does not switch itself
+    later: Settings shows that the mode became available, and the user turns
+    it on from the desktop app. Applied in [section 3](#3-principles),
+    [ADR 0004](adr/0004-desktop-companion.md#2-decision) (item 12) and
+    [THREAT_MODEL §9, T7](THREAT_MODEL.md#9-self-setup-the-capability-resolver).
