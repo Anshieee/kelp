@@ -160,7 +160,8 @@ decided:
    None of it is built.
    - The Rust side of the desktop app generates all secrets on first run from the
      OS random source. The user never sees, types or copies one.
-   - Persistent secrets (`KELP_VAULT_KEY`, `KELP_CREDENTIAL_SIGNING_KEY`) are
+   - Persistent secrets (`KELP_VAULT_KEY`, `KELP_CREDENTIAL_SIGNING_KEY`, and
+     the desktop device key that signs a change to "Approve for me") are
      stored in the OS credential store from Rust only: macOS Keychain, Windows
      Credential Manager, or Linux Secret Service. The webview never reads them,
      which matches `desktop/README.md` (future at-rest storage belongs in
@@ -193,10 +194,13 @@ decided:
    - Linux without a Secret Service daemon (common on minimal Wayland
      compositors): a 0600 file stands in for the credential store, for the
      Local-mode persistent secrets only (the vault key and the credential signing
-     key). It is created with `O_EXCL` and mode 0600 inside
-     `$XDG_DATA_HOME/kelp/secrets/` (mode 0700), separate from the database
-     directory, and Kelp's own backups exclude it. When a Secret Service later
-     becomes available, Kelp moves both values into it and removes the file.
+     key). The desktop device key never goes in it; on the fallback it gets its
+     own file that only the Rust side reads and that L3 confinement denies to
+     the brain (THREAT_MODEL L5). It is created with `O_EXCL` and mode 0600
+     inside `$XDG_DATA_HOME/kelp/secrets/` (mode 0700), separate from the
+     database directory, and Kelp's own backups exclude it. When a Secret
+     Service later becomes available, Kelp moves both values into it and
+     removes the file.
      Kelp shows a one-time notice in Settings, not a setup step. It is weaker
      than a credential store. The SSH private key, the Boat API key, the Boat
      brain's bearer, the Telegram bot token and the relay credential, end-to-end
@@ -285,7 +289,8 @@ decided:
     - **Permission modes.** A global setting, in the desktop app settings and
       the chat input: "Ask before doing anything" (every action shows a card,
       except where a standing approval the user created covers it, which is
-      never the start of screen control or an install granting new access)
+      never the start of screen control, an install granting new access or a
+      command outside the T8 allowlist)
       and "Approve for me"
       (routine actions run, are logged and are marked "Approved for you").
       For screen control, "Ask" means the start card plus the T4 step cards,
@@ -515,8 +520,9 @@ updated on every OS, or measured Boat numbers make Boat mode unworkable.
   chat-input controls (item 12). Wiring `openshell/exec_gate.py` for "Approve
   for me" is more than the three steps in
   [`docs/PRIVACY.md`](../PRIVACY.md) §5: it also needs an argument-aware
-  allowlist, an "Approved for you" approval path and OS-level confinement
-  (THREAT_MODEL L3, T8). Do that work before the gate is wired.
+  allowlist and an "Approved for you" approval path (THREAT_MODEL T8). Any
+  command, in either permission mode, needs OS-level confinement first in
+  Local mode (THREAT_MODEL L3). Do that work before the gate is wired.
 - Before the plan ships, update the recipient table in
   [`docs/PRIVACY.md`](../PRIVACY.md) section 2, and the statements in
   [`docs/THREAT_MODEL.md`](../THREAT_MODEL.md) about telemetry and recipients

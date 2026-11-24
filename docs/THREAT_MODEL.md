@@ -308,7 +308,7 @@ designed.
     (L6), the Telegram Bot API host (`api.telegram.org`, L7) and, for plan
     users, the plan model gateway. Nothing else,
   - filesystem access limited to Kelp's data directory plus folders the user
-    approved.
+    approved, and never the desktop app's device-key directory (L5, T7).
 
   The mechanism on each OS is open. This section does not pick one. Until
   confinement exists, Local mode does not enable network-capable skills or
@@ -371,9 +371,9 @@ designed.
     macOS Keychain, Windows Credential Manager, or Linux Secret Service. In
     Local mode they are `KELP_VAULT_KEY`, `KELP_CREDENTIAL_SIGNING_KEY`, the
     desktop app's device signing key (created at first run, used to sign a
-    permission-mode change to "Approve for me", T7), and once
-    L6 and L7 exist, the brain's per-brain relay credential, its long-term
-    end-to-end private key, the paired phones' public keys and device records,
+    permission-mode change to "Approve for me", T7), and once L6 and L7 exist,
+    the brain's per-brain relay credential, its long-term end-to-end private
+    key, the paired phones' public keys and device records,
     and the Telegram bot token. The webview never reads them.
     This matches `desktop/README.md`: future at-rest storage belongs in
     `bridge_sign_in` on the Rust side.
@@ -410,11 +410,18 @@ designed.
     first run.
   - **Linux fallback.** On a machine with no Secret Service daemon (common on
     minimal Wayland compositors), a 0600 file stands in for the credential
-    store. It covers only the vault key, the credential signing key and the
-    desktop device key (T7). It is
+    store. It covers only the vault key and the credential signing key. It is
     created with `O_EXCL` and mode 0600 inside `$XDG_DATA_HOME/kelp/secrets/`
-    (mode 0700), a directory separate from the database directory, and Kelp's own
-    backups exclude it. When a Secret Service later becomes available, Kelp
+    (mode 0700), a directory separate from the database directory, and Kelp's
+    own backups exclude it.
+    - The desktop device key (T7) never goes in that file, because the brain
+      may read Kelp's data directory. On the fallback it gets its own 0600
+      file in the desktop app's config directory
+      (`$XDG_CONFIG_HOME/kelp-desktop/`, mode 0700), which only the Rust side
+      reads and which L3 denies to the sidecar. Any other process running as
+      the user can still read it, so on the fallback "Approve for me" is only
+      as safe as a same-user file. It stays unavailable there until L3
+      confinement exists. When a Secret Service later becomes available, Kelp
     moves these values into it on first use and then removes the file, so the
     lost-entry rule above never discards saved logins because of the move. Kelp
     shows a one-time notice in Settings, not a setup step. The fallback is
@@ -975,16 +982,27 @@ approval gate.
     the desktop app's device key, which is created at first run and kept per
     L5. The desktop app registers the device public key with the brain at
     first run (Local) or when it pairs with a Boat brain over the SSH channel
-    (L4). The desktop app signs only from a confirmation it renders itself,
-    and each signed change carries a nonce and an expiry and is single-use, as
-    in the L6 decision binding, so a captured change cannot be replayed. The
-    desktop app also keeps its own copy of the signed mode and uses that copy,
-    never a mode the brain reports, when it decides whether a routine step on
-    the user's desktop skips a card. A
-    change is never accepted from model text or a scheduled watch, and the
-    phone and Telegram routes cannot reach that setter. Switching to "Ask before
-    doing anything" is accepted from any authenticated channel, including
-    Telegram.
+    (L4). The brain accepts a registration only when no key is registered and
+    the request arrives on the desktop's authenticated loopback or SSH
+    channel, or, to replace a key, when the request is signed by the key
+    already registered. It never accepts one from the phone, Telegram, a watch
+    or model text. If the device key is lost, the user pairs the desktop again
+    and the mode resets to "Ask before doing anything".
+    - The desktop app signs only from a confirmation it renders itself. The
+      signed payload covers the target mode, the brain id, a nonce and an
+      expiry (the 600 s approval TTL, `APPROVAL_TTL_SECONDS`). Each change is
+      single-use, and the brain keeps used nonces across restarts, so a
+      captured change cannot be replayed, and a change made for a Local brain
+      cannot be replayed to a Boat brain.
+    - The desktop app keeps its own copy of the signed mode and uses it when
+      it decides whether a routine step on the user's desktop skips a card. It
+      adopts a brain-reported "Ask before doing anything" at once, because
+      narrowing is always safe, and never adopts a reported "Approve for me"
+      unless it holds the matching signed change.
+    - A change is never accepted from model text or a scheduled watch, and the
+      phone and Telegram routes cannot reach that setter. Switching to "Ask
+      before doing anything" is accepted from any authenticated channel,
+      including Telegram.
   - **Scheduled watches.** A scheduled watch auto-runs only the action set that
     the user approved when creating the watch in the desktop app. Any other
     action in a watch shows a card, which is pushed to the phone (L6). A T4, T1
@@ -1025,7 +1043,9 @@ approval gate.
       catalog entry, not from `PATH` at run time.
     - **Path arguments.** Each must be inside a folder the user approved (T1)
       and outside a secret-path denylist, for example `~/.ssh`, browser
-      profiles, keyrings, `.env` files and Kelp's own credential store.
+      profiles, keyrings, `.env` files, Kelp's own credential store, the
+      `$XDG_DATA_HOME/kelp/secrets/` fallback directory and the desktop app's
+      device-key directory (L5).
     - **Who can change it.** The allowlist ships in the pinned release. It
       cannot be edited from chat, the phone, Telegram or a watch.
   - **Tainted turns and watches.** In a turn whose context includes screen, web
@@ -1056,8 +1076,9 @@ approval gate.
       event with the actor. Nothing records an approval the user did not give.
     - `PolicyEngine._execute` also requires a working directory inside the
       workspace (`policy.py:236-243`).
-  - **Before any command runs, in either mode.** OS-level confinement (L3)
-    must be in place first. The cooperative egress guard is justified by "no
+  - **Before any command runs, in either permission mode.** In Local mode,
+    OS-level confinement (L3) must be in place first. In Boat mode the sandbox
+    is the boundary (L4). The cooperative egress guard is justified by "no
     exec" (§5), and that assumption ends when T8 ships. A command approved by
     a card still starts a process.
   - **Extra work before "Approve for me" can run a command.** This is more than

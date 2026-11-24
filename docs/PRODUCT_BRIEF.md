@@ -82,9 +82,9 @@ are an equal entry point to this loop. They are not limited to desktop moments.
   button: each skill call with side effects, each command, the start of each
   screen-control task (the start card plus the T4 step cards, not a card per
   click) and each install. A standing approval the user created skips the card
-  for what it covers, but never the start of screen control or an install that
-  grants new access. In
-  **Approve for me**, routine actions run without a card and are logged and
+  for what it covers, but never the start of screen control, an install that
+  grants new access or a command outside the T8 allowlist. In **Approve for
+  me**, routine actions run without a card and are logged and
   listed as "Approved for you". No model decides what is routine. The desktop
   app and the catalog classify each action deterministically, and an action
   they cannot classify gets a card. Routine is a positive list: an action whose
@@ -446,9 +446,10 @@ Commands run through `openshell/exec_gate.py`. Keystrokes into a terminal, a
 remote shell, a REPL, a `sudo` prompt or a launcher always show a card with the
 exact text, in both modes, because the allowlist applies only to commands run
 through the gate. The exec boundary in [`docs/PRIVACY.md`](PRIVACY.md) §5 stays
-in place until the wiring steps listed there and the extra work in T8 land: an
-argument-aware allowlist, an "Approved for you" approval path and OS-level
-confinement (THREAT_MODEL L3). The no-exec assumption behind the egress guard
+in place until the wiring steps listed there land, with OS-level confinement
+(THREAT_MODEL L3) first for any command in Local mode, and, for "Approve for
+me", the extra work in T8: an argument-aware allowlist and an "Approved for
+you" approval path. The no-exec assumption behind the egress guard
 ends when commands ship.
 
 The cost reason is direct. Spend caps fail closed (`kernel/usage.py`), so a
