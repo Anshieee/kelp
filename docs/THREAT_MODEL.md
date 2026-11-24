@@ -410,11 +410,12 @@ designed.
     first run.
   - **Linux fallback.** On a machine with no Secret Service daemon (common on
     minimal Wayland compositors), a 0600 file stands in for the credential
-    store. It covers only the vault key and the credential signing key. It is
+    store. It covers only the vault key, the credential signing key and the
+    desktop device key (T7). It is
     created with `O_EXCL` and mode 0600 inside `$XDG_DATA_HOME/kelp/secrets/`
     (mode 0700), a directory separate from the database directory, and Kelp's own
     backups exclude it. When a Secret Service later becomes available, Kelp
-    moves both values into it on first use and then removes the file, so the
+    moves these values into it on first use and then removes the file, so the
     lost-entry rule above never discards saved logins because of the move. Kelp
     shows a one-time notice in Settings, not a setup step. The fallback is
     weaker than a credential store.
@@ -708,9 +709,9 @@ Windows were not tested.
     unlocked can still approve starting control. That risk remains. The step
     cap, the target binding and the T4 step cards limit what the approval can
     do. Telegram never. A scheduled watch can never start control. This is a
-    change made on 2026-11-24. The earlier rule let
-    only the desktop app approve control of the user's own desktop, because the
-    user had to be able to take over. That reason no longer holds, because Kelp
+    change made on 2026-11-24. The earlier rule let only the desktop app
+    approve control of the user's own desktop, because the user had to be able
+    to take over. That reason no longer holds, because Kelp
     never takes over.
   - **Boat sandbox desktop.** The target-window checks, the yield rule and the
     S1 to S5 app lists below apply to the user's own desktop only. For a sandbox
@@ -908,8 +909,8 @@ approval gate.
     accepting terms, or starting screen control (S8). It also can never cover
     a command outside the T8 allowlist or any T8-destructive command. A standing
     approval for commands binds to an exact `argv` pattern, never to a command
-    name alone. It cannot waive a T1 card
-    for new access (accounts and logins, folders, hosts, OS permissions).
+    name alone. It cannot waive a T1 card for new access (accounts and logins,
+    folders, hosts, OS permissions).
 
   Both kinds are created only from a confirmation that the desktop app renders
   from structured fields (action type, target, expiry), never from model-written
@@ -943,11 +944,13 @@ approval gate.
   settings and from the chat input. It will be enforced in the desktop app,
   which classifies each action, and in the approval gate (`openshell/`).
   - **Ask before doing anything.** Every action shows a card with an Approve
-    button, except under a standing approval the user created: each skill call
-    with side effects, each command, the start of each screen-control task and
-    each install. For screen control the card is the start card plus the T4
-    step cards (S8). It is not a card per click. In this mode the
-    silent-install exception in T1 is off.
+    button: each skill call with side effects, each command, the start of each
+    screen-control task and each install. A standing approval the user created
+    skips the card for the action it covers. It never covers the start of a
+    screen-control task (S8) or an install that grants new access (T1), and
+    T4 limits what else it may cover. For screen control the card is the
+    start card plus the T4 step cards (S8). It is not a card per click. In
+    this mode the silent-install exception in T1 is off.
   - **Approve for me.** Routine actions run without a card. Each is logged and
     listed, and the action carries an "Approved for you" mark, as in Kiro. These
     always show a card in both modes: everything in T4, new access (T1) and
@@ -970,7 +973,14 @@ approval gate.
   - **Where the mode lives and who may widen it.** The brain stores the mode.
     It accepts a change to "Approve for me" only when the change is signed with
     the desktop app's device key, which is created at first run and kept per
-    L5. The desktop app signs only from a confirmation it renders itself. A
+    L5. The desktop app registers the device public key with the brain at
+    first run (Local) or when it pairs with a Boat brain over the SSH channel
+    (L4). The desktop app signs only from a confirmation it renders itself,
+    and each signed change carries a nonce and an expiry and is single-use, as
+    in the L6 decision binding, so a captured change cannot be replayed. The
+    desktop app also keeps its own copy of the signed mode and uses that copy,
+    never a mode the brain reports, when it decides whether a routine step on
+    the user's desktop skips a card. A
     change is never accepted from model text or a scheduled watch, and the
     phone and Telegram routes cannot reach that setter. Switching to "Ask before
     doing anything" is accepted from any authenticated channel, including
@@ -992,11 +1002,12 @@ approval gate.
   commands become allowed, each approved with a button (brief §17, answer 14).
   - **Ask before doing anything.** Every command shows a card with the exact
     command text (`argv`), rendered from what will run and never from model
-    prose, except under a standing approval the user created (T4), which binds
-    to an exact `argv` pattern.
+    prose. A standing approval the user created (T4) can skip that card only
+    for an allowlisted command, and it binds to an exact `argv` pattern.
   - **Approve for me.** A command runs without a card only if it is on the
     catalog allowlist of read-only commands. Everything else shows a card, also
-    in this mode, except under a standing approval the user created (T4). A
+    in this mode. No standing approval covers a command outside the allowlist
+    (T4). A
     command that deletes, overwrites, moves, changes permissions, installs,
     pushes, sends, kills processes or uses `sudo` is destructive for this rule
     and always shows a card in both modes (T4). Unknown means card.
@@ -1041,23 +1052,24 @@ approval gate.
       always calls `self._approvals.consume(request_id)` and returns an
       `exec_blocked` result if that fails (`exec_gate.py:197-211`). There is no
       path that runs a command without a consumed approval.
-    - `ExecGate.approve` (`exec_gate.py:154-167`) writes one `approval_granted`
+    - `ExecGate.approve` (`exec_gate.py:154-168`) writes one `approval_granted`
       event with the actor. Nothing records an approval the user did not give.
     - `PolicyEngine._execute` also requires a working directory inside the
       workspace (`policy.py:236-243`).
+  - **Before any command runs, in either mode.** OS-level confinement (L3)
+    must be in place first. The cooperative egress guard is justified by "no
+    exec" (§5), and that assumption ends when T8 ships. A command approved by
+    a card still starts a process.
   - **Extra work before "Approve for me" can run a command.** This is more than
     the wiring steps in [`docs/PRIVACY.md`](PRIVACY.md) §5:
     - an argument-aware allowlist, with the grammar and the path checks above,
       that can return `ALLOW` for a matching command,
     - a logged "Approved for you" approval path in `ExecGate`, which records
-      the rule that matched instead of a user decision,
-    - OS-level confinement (L3) in place first. The cooperative egress guard is
-      justified by "no exec" (§5), and that assumption ends when T8
-      ships.
+      the rule that matched instead of a user decision.
   - **The exec boundary stays for now.** [`docs/PRIVACY.md`](PRIVACY.md) §5 and
     `tests/test_privacy.py` stay as they are until the three wiring steps listed
-    in §5 and the extra work above land. The wiring steps alone are not enough
-    for "Approve for me".
+    in §5, L3 confinement and, for "Approve for me", the extra work above
+    land. The wiring steps alone are not enough for either mode.
 
 ---
 

@@ -284,7 +284,9 @@ decided:
       disguise a control. That residual risk is stated in S8.
     - **Permission modes.** A global setting, in the desktop app settings and
       the chat input: "Ask before doing anything" (every action shows a card,
-      except under a standing approval the user created) and "Approve for me"
+      except where a standing approval the user created covers it, which is
+      never the start of screen control or an install granting new access)
+      and "Approve for me"
       (routine actions run, are logged and are marked "Approved for you").
       For screen control, "Ask" means the start card plus the T4 step cards,
       not a card per click. Money, anything another person sees, anything that
@@ -311,8 +313,9 @@ decided:
       always show a card with the exact text, in both modes. Today
       `openshell/policy.py` checks `argv[0]` only and `ExecGate.execute` always
       consumes an approval, so "Approve for me" for commands needs an
-      argument-aware allowlist, an "Approved for you" approval path and
-      OS-level confinement first (THREAT_MODEL T8, L3). The exec boundary in
+      argument-aware allowlist and an "Approved for you" approval path.
+      Commands in either mode need OS-level confinement first (THREAT_MODEL
+      T8, L3). The exec boundary in
       [`docs/PRIVACY.md`](../PRIVACY.md) §5 stays until the wiring steps there
       and that extra work land.
     - **Phases.** The desktop app and the phone app come before the desk pet and

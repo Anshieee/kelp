@@ -302,10 +302,11 @@ argv, and a mode that skips cards for allowlisted read-only commands is planned
 T8](THREAT_MODEL.md#9-self-setup-the-capability-resolver)). Nothing changes in
 this build. The boundary above and `tests/test_privacy.py` stay as they are
 until the three wiring steps listed above land in one change. Those steps are
-not enough for the skip-the-card mode. It also needs an argument-aware
-allowlist (today `openshell/policy.py` checks `argv[0]` only), a logged
-"Approved for you" approval path (today `ExecGate.execute` always consumes an
-approval), and OS-level confinement of the brain first (T8, L3).
+not enough. Any command, in either mode, also needs OS-level confinement of
+the brain first (T8, L3). The skip-the-card mode also needs an
+argument-aware allowlist (today `openshell/policy.py` checks `argv[0]` only)
+and a logged "Approved for you" approval path (today `ExecGate.execute` always
+consumes an approval).
 
 ---
 

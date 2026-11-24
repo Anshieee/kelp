@@ -79,9 +79,11 @@ are an equal entry point to this loop. They are not limited to desktop moments.
   permission mode sets how often a card appears
   ([THREAT_MODEL §9, T7](THREAT_MODEL.md#9-self-setup-the-capability-resolver)).
   In **Ask before doing anything**, every action shows a card with an Approve
-  button, except under a standing approval the user created: each skill call
-  with side effects, each command, the start of each screen-control task (the
-  start card plus the T4 step cards, not a card per click) and each install. In
+  button: each skill call with side effects, each command, the start of each
+  screen-control task (the start card plus the T4 step cards, not a card per
+  click) and each install. A standing approval the user created skips the card
+  for what it covers, but never the start of screen control or an install that
+  grants new access. In
   **Approve for me**, routine actions run without a card and are logged and
   listed as "Approved for you". No model decides what is routine. The desktop
   app and the catalog classify each action deterministically, and an action
@@ -89,11 +91,10 @@ are an equal entry point to this loop. They are not limited to desktop moments.
   catalog effect class is on a pinned routine list. A scheduled watch auto-runs
   only the action set the user approved when creating it. The brain stores the
   mode and accepts a change to "Approve for me" only when it is signed with the
-  desktop app's device key, so the phone and Telegram cannot widen it (T7). In
-  both modes a card
-  is always shown for the always-ask list: money, anything another person
-  sees (including course submissions), anything that cannot be undone or is
-  destructive, accepting terms
+  desktop app's device key, so the phone and Telegram cannot widen it (T7).
+  In both modes a card is always shown for the always-ask list: money,
+  anything another person sees (including course submissions), anything that
+  cannot be undone or is destructive, accepting terms
   ([THREAT_MODEL §9, T4](THREAT_MODEL.md#9-self-setup-the-capability-resolver)),
   new access (accounts and logins, folders, hosts, OS permissions, T1),
   destructive commands (T8) and starting a screen-control task
