@@ -7,7 +7,9 @@
 - **Companion sections:** added 2026-11-24, see [`docs/PRODUCT_BRIEF.md`](PRODUCT_BRIEF.md) and
   [ADR 0004](adr/0004-desktop-companion.md). Updated 2026-11-24 with the
   owner's answers 1 to 12 (brief §17, including the Q11 and Q12 answers): L4 to
-  L7 in §6, S3 and S8 in §7 and T2 in §9
+  L7 in §6, S3 and S8 in §7 and T2 in §9. Updated again 2026-11-24 with the
+  later answers 13 to 15 (brief §17): the background-control model in S8 (§7),
+  the remote-channel rule in L7 (§6), and T4, T5, T7 and T8 in §9
 - **Companions:** the recipient table ([`docs/PRIVACY.md`](PRIVACY.md) §2), the principal table and
   share-link threat model ([ADR 0002](adr/0002-sharing-and-identity.md) §4 and §10), the policy gate
   ([`docs/OPENSHELL.md`](OPENSHELL.md)), and the skill contract ([`docs/SKILL_SPEC.md`](SKILL_SPEC.md))
@@ -481,9 +483,13 @@ designed.
     and never in the file fallback.
   - **Remote-channel rule (applies to L6 and L7).** A message from the bridge is
     a user turn. Remote channels (Telegram and the phone) can never create a
-    standing approval and can never approve a T1 new-access card. Neither can
-    start or approve control of the user's own desktop (S8). Only the phone may
-    approve control of a Boat sandbox desktop.
+    standing approval, can never approve a T1 new-access card, and can never
+    switch the permission mode to "Approve for me" (T7). Telegram can never
+    start or approve screen control (S8). The paired phone may approve starting
+    control, on the user's own desktop or on a Boat sandbox desktop, with a
+    signed decision (L6). Changed 2026-11-24: the earlier text let only the
+    desktop app approve control of the user's own desktop, because the user had
+    to be able to take over. Kelp now never takes over (S8).
   - Like L6, it opens no inbound port and does not use the Boat tunnel (L4).
 
 | Open decision | Where it is tracked |
@@ -493,7 +499,8 @@ designed.
 | Whether Boat lets the app set `authorized_keys` options on the sandbox (L4) | [ADR 0004](adr/0004-desktop-companion.md) follow-ups |
 | Push relay design: pairing, key exchange, per-brain credential, hosting (L6) | [ADR 0004](adr/0004-desktop-companion.md) follow-ups |
 | Whether to widen which cards may be approved from Telegram (L7) | [ADR 0004](adr/0004-desktop-companion.md) follow-ups |
-| Detecting user input to pause screen control, and a global stop shortcut, on each OS (S8). Screen control does not ship on an OS without both | [ADR 0004](adr/0004-desktop-companion.md) follow-ups (input spike) |
+| Background-input spike on each OS: tier 1 drives an unfocused window without changing the user's pointer or keyboard focus, the action reads back as landed, and per-window capture of an occluded window works. Tier 2 nested-compositor test on wlroots. A global stop shortcut on each OS (S8). Screen control does not ship on an OS where tier 1 and tier 2 both fail the spike, and Kelp offers Boat there | [ADR 0004](adr/0004-desktop-companion.md) follow-ups (background-input spike) |
+| How Kelp detects that the user focused or typed in the window it is acting in, on each OS (S8, yield rule) | [ADR 0004](adr/0004-desktop-companion.md) follow-ups (background-input spike) |
 | Update [`docs/PRIVACY.md`](PRIVACY.md) §2 and the telemetry and recipient statements here (§1.1, §10) before a hosted plan or the Telegram bridge ships (S3, L7) | [ADR 0004](adr/0004-desktop-companion.md) follow-ups |
 
 Decided on 2026-11-24 and no longer open: where the owner bearer and vault key
@@ -576,7 +583,8 @@ Windows were not tested.
   - A frame covers only the focused allowed window. A full-screen frame would
     include every visible window, notifications and other monitors. If a blocked
     window is visible, the frame is dropped. The spike captured the full screen,
-    so window-scoped capture is untested.
+    so window-scoped capture is untested. (A frame for screen control comes from
+    the window Kelp is acting in instead, see S8.)
   - The focus check is repeated after the frame is taken. If the focus changed,
     the frame is discarded.
   - If the focused app, window or site cannot be determined, no frame is taken.
@@ -593,73 +601,141 @@ Windows were not tested.
   does nothing else.
 - **S7. Indicator.** Kelp draws its own watching and listening indicator. On
   wlroots the OS shows nothing during capture (spike).
-- **S8. Screen control (planned, not built).** Screen control means Kelp sending
-  mouse and keyboard input to a desktop: the user's own, or a Boat sandbox
-  desktop. The owner made it a core capability in every mode on 2026-11-24. No
-  input was sent in any spike (brief §12).
+- **S8. Screen control (planned, not built).** Screen control means Kelp acting
+  in apps on a desktop, with its own pointer and keyboard input: the user's own
+  desktop, or a Boat sandbox desktop. The owner made it a core capability in
+  every mode on 2026-11-24. The same day the owner replaced the shared-input
+  model: Kelp never takes over. It has input devices of its own and works in
+  apps that are not focused, so the user keeps working at the same time (brief
+  §17, answer 13). No input was sent in any spike (brief §12).
+  - **Kelp never uses the user's input seat.** Kelp never moves the user's
+    pointer, never types on the user's keyboard focus, never raises or focuses a
+    window and never switches the user's workspace. Any mechanism that injects
+    into the user's own input seat is never used on the user's desktop: uinput
+    or `ydotool`, `zwlr_virtual_pointer_v1` and `zwp_virtual_keyboard_v1` on the
+    user's seat, Windows `SendInput`, and macOS HID-level `CGEventPost`. If a
+    task cannot be done without one of them, Kelp does not do it on the user's
+    desktop. It offers tier 2 or Boat, or asks the user.
+  - **Tier 1: act on the target window directly, in the background.** Kelp
+    addresses every action to an approved window or UI element handle, never to
+    whatever has focus. The planned mechanisms are all untested: macOS
+    Accessibility (`AXUIElement` actions such as AXPress, and setting AXValue)
+    on an unfocused app; Windows UI Automation patterns (Invoke, Value,
+    Selection) and, for native controls, window messages; Linux AT-SPI (the
+    Action, EditableText and Value interfaces). Kelp reads the result back from
+    the same API and reports done, failed or unknown. It does not assume
+    success. Precedents: OpenAI's Computer Use runs "a scoped task in the
+    background while you keep working elsewhere" on macOS, but on Windows it
+    "can't operate in the background while you keep using the same Windows
+    session" and suggests a VM
+    ([OpenAI](https://developers.openai.com/codex/app/computer-use)). A Windows
+    developer reported the order window messages, then UI Automation, then
+    refuse, and never the real cursor
+    ([dev.to](https://dev.to/keyaburi/i-wanted-to-game-while-my-ai-agent-ran-tests-so-i-built-it-a-cursor-of-its-own-m22)).
+  - **Tier 2: Kelp's own workspace.** For apps tier 1 cannot drive (canvas apps,
+    games, apps with no accessibility tree), Kelp opens the app in a workspace
+    with its own input seat. Its pointer and keyboard are real, but separate
+    from the user's. All of it is untested.
+    - Linux: a nested headless wlroots compositor run by the body (headless
+      sway or a similar compositor; sway is installed on the owner's machine).
+      Kelp uses the virtual-pointer and virtual-keyboard protocols on that
+      nested compositor only.
+    - Windows: a VM or the Boat sandbox. A second Windows desktop object is
+      untested.
+    - macOS: tier 1 first. Tier 2 is open.
+    - Boat: the sandbox desktop is already Kelp's own workspace.
+
+    The user can watch the workspace in a pane without it taking focus. The
+    existing view-only Computer pane (`desktop/src/ComputerPane.tsx`) is a
+    starting point. Apps in the workspace are separate instances. A browser
+    profile that the user has open cannot be opened twice, so the workspace uses
+    Kelp's own browser profile, and logins go through the credential handoff
+    ([`docs/CREDENTIAL_HANDOFF.md`](CREDENTIAL_HANDOFF.md)). S4 blocked apps are
+    not opened or acted in there either.
+  - **Kelp's pointer is visible.** On the user's desktop Kelp draws its own
+    click-through cursor and a `Kelp is working in <app>` label over the window
+    it acts in, as an overlay (for example `wlr-layer-shell` on wlroots), so the
+    user always sees where it works. A Stop button on the label and a global
+    stop shortcut end the task. The stop shortcut on each OS is open. Screen
+    control does not ship on an OS where Kelp cannot offer this stop control.
+  - **Yield, do not fight.** If the user focuses or types in the window Kelp is
+    acting in, Kelp pauses its actions in that window until the user leaves it,
+    then resumes. It never takes the window back. How Kelp detects this on each
+    OS is open.
   - **Started only by an approved task.** Control starts only inside a user
     turn, after a card rendered by the desktop app from structured fields:
     target app id or site origin, a step cap, and an expiry. It is never
     rendered from model-written text. The approval is a new single-use kind
-    bound to the hash of those fields. Each input step is checked against that
-    hash. A standing approval can never cover screen control. Every T4 category
-    still gets its own card at its step.
-  - **The user's own desktop is approved locally.** Control of the user's real
-    desktop starts and is approved only at the desktop app, because the user
-    must be able to take over. A scheduled watch, Telegram and the phone can
-    never start or approve it.
-  - **Boat sandbox desktop.** The focus check, takeover detection and S1 to S5
-    app list below apply to the user's real desktop only. For a sandbox desktop
-    the card is rendered from the same structured fields by the desktop app or
-    the paired phone app (L6), never Telegram. The brain in the sandbox enforces
-    the target-site, T4 step and terminal checks, and the "Kelp is controlling"
-    indicator names the sandbox. S4 blocks and S1 to S5 still apply to any of
-    the user's own windows Kelp is shown, never to the sandbox screen.
+    bound to the hash of those fields. Each action is checked against that hash.
+    A standing approval can never cover screen control. The card for starting a
+    task is shown in both permission modes (T7), as this section already
+    required before the modes existed. Every T4 category still gets its own card
+    at its step.
+  - **Who may approve starting control.** The desktop app, or the paired phone
+    app with a signed decision (L6). Telegram never. A scheduled watch can never
+    start control. This is a change made on 2026-11-24. The earlier rule let
+    only the desktop app approve control of the user's own desktop, because the
+    user had to be able to take over. That reason no longer holds, because Kelp
+    never takes over.
+  - **Boat sandbox desktop.** The target-window checks, the yield rule and the
+    S1 to S5 app lists below apply to the user's own desktop only. For a sandbox
+    desktop the card is rendered from the same structured fields and approved
+    as above. The brain in the sandbox enforces the target-site, T4 step and
+    terminal checks, and the "Kelp is working" label names the sandbox. S4
+    blocks and S1 to S5 still apply to any of the user's own windows Kelp is
+    shown, never to the sandbox screen.
   - **Enforced in the desktop app (user's own desktop).** The body applies S4,
-    S7 and S8 to every input event, whatever brain sent it, including a Boat
-    brain. Before each event it re-reads the focused app and window and targets
-    the approved window where the OS allows it. If the focused app, window or
-    site cannot be determined, or does not match the card, no input is sent.
-  - **Frames follow S1 to S5 (user's own desktop).** The control loop sees only
-    apps on the allowed list and sends frames to a cloud model only for apps
-    ticked "may send to cloud". A task for any other app uses a local vision
-    model or does not run. Control pauses while S5 is active.
+    S7 and S8 to every action, whatever brain sent it, including a Boat brain.
+    Every action is addressed to the approved target window. Before each action
+    the body re-reads that window's app, title and, for browsers, origin. If
+    they cannot be determined, or do not match the card or the task, no action
+    is sent.
+  - **Blocked apps are never acted in.** S4 blocked apps are checked by target,
+    not by focus. Kelp stops if the target becomes a blocked app or window or a
+    private browser window. Passwords and one-time codes are never typed from
+    model output. In a browser, a login goes through the credential handoff
+    ([`docs/CREDENTIAL_HANDOFF.md`](CREDENTIAL_HANDOFF.md)), which is
+    origin-bound and needs a fresh owner entry each time. In a native app Kelp
+    stops and asks the user to enter it. While private entry is active Kelp
+    sends no action to that page.
+  - **Frames come from the target window (user's own desktop).** Frames for
+    control are captured from the target window, not the focused one. The
+    planned per-window capture is ScreenCaptureKit on macOS, Windows Graphics
+    Capture on Windows, and
+    `ext_foreign_toplevel_image_capture_source_manager_v1` with
+    `ext_image_copy_capture_manager_v1` on wlroots, which the compositor on the
+    owner's machine advertises (brief §12). Capture of an occluded window is
+    untested. S1 to S5 still decide which apps may be watched and sent to the
+    cloud: the control loop sees only apps on the allowed list and sends frames
+    to a cloud model only for apps ticked "may send to cloud". A task for any
+    other app uses a local vision model or does not run. Control pauses while S5
+    is active.
   - **Screen text cannot widen the task.** The control loop reads the screen
     (S6), so what it reads is untrusted. It may choose clicks and keystrokes
     within the approved task and target app or site. A step that would leave
     that app or site, or start something the card did not name, stops and asks.
   - **Each T4 step gets a card.** Each step in any T4 category gets its own
-    card at that step. The desktop app classifies the step from the UI
-    element's role and label (Send, Post, Submit, Pay, Buy, Delete, Accept,
-    Enter in a form) and from the target app. The model does not. A step it
-    cannot classify is treated as T4 and shows a card.
-  - **Blocked apps are never controlled.** Kelp sends no input while an S4
-    blocked app or window has focus, and stops if one takes focus. Passwords and
-    one-time codes are never typed from model output. In a browser, a login
-    goes through the credential handoff
-    ([`docs/CREDENTIAL_HANDOFF.md`](CREDENTIAL_HANDOFF.md)), which is
-    origin-bound and needs a fresh owner entry each time. In a native app Kelp
-    stops and asks the user to enter it. While private entry is active Kelp
-    sends no input to that page.
+    card at that step, in both permission modes. The desktop app classifies the
+    step from the UI element's role and label (Send, Post, Submit, Pay, Buy,
+    Delete, Accept, Enter in a form) and from the target app. The model does
+    not. A step it cannot classify is treated as T4 and shows a card.
   - **Typing into a terminal is command execution.** Input to a terminal
     emulator, shell window, IDE terminal, remote-shell session, or any field
     that launches a program or runs a command (Run dialog, launcher, command
-    palette, task runner) is treated as running a command. The desktop app
-    classifies the target as it does in the T4 step rule, and a text target it
-    cannot classify is treated as one of these. The rule applies unchanged in a
-    Boat sandbox desktop until the owner decides otherwise. It stays off while
-    the exec boundary in [`docs/PRIVACY.md`](PRIVACY.md) §5 holds (nothing runs
-    a command in this build). Turning it on is a separate owner decision that
-    reverses that boundary. When it is on, each command gets its own card that
-    shows the exact command text, rendered from the keystrokes Kelp is about to
-    send, never from model prose.
-  - **The user can always take over.** A separate "Kelp is controlling"
-    indicator shows while control is active. Any physical mouse or keyboard
-    input from the user pauses control at once, and a stop shortcut ends it.
-    Control resumes only when the user says so. The detection method and the
-    global stop shortcut on each OS are open (the same status as S5). Screen
-    control does not ship on an OS where Kelp cannot detect user input and
-    offer a stop control on the "Kelp is controlling" indicator.
+    palette, task runner) is treated as running a command. It gets the same
+    classification and card as a command run through the exec gate (T8). The
+    desktop app classifies the target as it does in the T4 step rule, and a
+    text target it cannot classify is treated as one of these. The rule applies
+    unchanged in a Boat sandbox desktop. Commands are allowed behind approvals
+    (planned, owner decision 2026-11-24, brief §17 answer 14). Each command
+    shows a card with the exact command text, rendered from the keystrokes Kelp
+    is about to send, never from model prose. In "Approve for me", the T8
+    allowlist rule applies, and text that cannot be parsed into an argv shows a
+    card. The exec boundary in [`docs/PRIVACY.md`](PRIVACY.md) §5 stays in place
+    until the wiring steps listed there land in one change.
+  - **Ships only after the spike.** Screen control does not ship on an OS where
+    tier 1 and tier 2 both fail the background-input spike (brief §12, and the
+    open decision table in §6). Kelp then offers Boat.
   - **Logged without frames.** Each control step writes an audit row with the
     approval id, step index, step type (click, key, scroll, text), target app
     id and an `argument_hash`. It holds no task text, frame or typed text.
@@ -715,7 +791,9 @@ Status: planned. No code enforces this yet. Must land before the code it governs
 The resolver is described in [product brief](PRODUCT_BRIEF.md) §4 and
 [ADR 0004](adr/0004-desktop-companion.md) §2, item 4. It does not exist yet. The
 rules below will be enforced in the resolver, in the approval gate
-(`openshell/`), and in the desktop app, which renders the confirmations.
+(`openshell/`), and in the desktop app, which renders the confirmations. T7 and
+T8 below also cover the permission modes and commands, which use the same
+approval gate.
 
 - **T1. What installs without a card.** Silent install applies only to catalog
   entries whose pinned catalog metadata sets `grants_new_access: false`. Because
@@ -727,17 +805,19 @@ rules below will be enforced in the resolver, in the approval gate
   a new account or login, a new folder, a new network host, a new OS permission,
   or spending money. This refines the single approval card in brief §4.2: the
   card is shown when the plan grants new access, and the plan is still logged.
-  Two further conditions:
+  Further conditions:
   - Silent install is disabled in a turn whose context includes screen or web
     text, until the user confirms.
+  - In "Ask before doing anything" (T7), silent install is off: every install
+    shows a card.
   - In Local mode, silent install is off until the OS confinement in L3 exists.
     Until then every install shows a card. In Boat mode silent installs run inside
     the sandbox.
 - **T2. Sources.** Installs come only from the pinned catalog (digest pinning in
-  `skills/loader.py`). Kelp's own release-pinned entries ship first (Phase 1
+  `skills/loader.py`). Kelp's own release-pinned entries ship first (Phase 2
   voice models). Publisher signing is a spike (`skills/signing.py`) and is wired
   in before the catalog accepts any entry from outside Kelp's own release, and
-  before the full resolver ships in Phase 3 (owner decision, 2026-11-24).
+  before the full resolver ships in Phase 2 (owner decision, 2026-11-24).
   Kelp may propose a new catalog entry. It cannot install an arbitrary package,
   and it never asks the user to paste a command into a terminal. Prior art: a Koi
   Security audit of 2,857 OpenClaw skills, reported by NeuralTrust, found 341
@@ -750,11 +830,14 @@ rules below will be enforced in the resolver, in the approval gate
   everything Kelp derived from that source: memory entries, observations and
   cached files. That requires every derived item to be tagged with its source.
   The tagging is planned and not designed yet.
-- **T4. What always needs a card.**
+- **T4. What always needs a card.** In both permission modes, "Ask before doing
+  anything" and "Approve for me" (T7), these always show a card. So do new
+  access (T1) and destructive commands (T8).
   - Anything another person will see: messages, posts, emails, form or assignment
     submissions, pull request comments.
   - Anything that costs money. The card states the exact amount.
-  - Anything that cannot be undone: delete, cancel, account changes.
+  - Anything that cannot be undone or is destructive: delete, cancel, account
+    changes, and a command that deletes or overwrites data (T8).
   - Accepting terms of service or any other agreement. Kelp always shows this as a
     card.
 
@@ -781,15 +864,76 @@ rules below will be enforced in the resolver, in the approval gate
   plan-bound kind from brief §4.2, are new approval kinds. Both are planned. Prior
   art: OpenAI's agent asks before "actions of consequence"
   ([OpenAI](https://openai.com/index/introducing-chatgpt-agent/)).
-- **T5. No AI reviewer in version 1.** No AI reviewer approves actions. Revisit
-  with the card approval rate (the "Card approval rate" row in brief §14.1
-  metrics). Prior art: Claude Code's auto mode replaces most per-action prompts
-  with a classifier, after finding that users approved 93% of manual prompts
+- **T5. No AI reviewer in version 1.** No AI reviewer approves actions. The
+  "Approve for me" mode (T7) keeps this: a deterministic classifier decides, and
+  no model does. Revisit with the card approval rate (the "Card approval rate"
+  row in brief §14.1 metrics). Prior art: Claude Code's auto mode replaces most
+  per-action prompts with a classifier, after finding that users approved 93% of
+  manual prompts
   ([Anthropic](https://www.anthropic.com/engineering/claude-code-auto-mode)).
 - **T6. Setup starts only inside a user turn.** A setup plan can start only inside
   a turn the user started. The card text comes from catalog metadata only (brief
   §4.2). Resuming after a blocked one-tap user action continues an already
   approved plan. It never starts a new setup step.
+- **T7. Permission modes (planned, not built).** The owner decided on
+  2026-11-24 (brief §17, answer 14) that a global permission mode sets how often
+  a card appears. It is modelled on Kiro IDE, which has Supervised, Accept file
+  changes and Approve for me, where permission rules apply first and a model
+  judges the rest ([Kiro](https://kiro.dev/docs/ide/chat/autopilot/)). Kelp
+  differs on purpose: no model decides. The mode is chosen in the desktop app
+  settings and from the chat input. It will be enforced in the desktop app,
+  which classifies each action, and in the approval gate (`openshell/`).
+  - **Ask before doing anything.** Every action shows a card with an Approve
+    button: each skill call with side effects, each command, the start of each
+    screen-control task and each install. In this mode the silent-install
+    exception in T1 is off.
+  - **Approve for me.** Routine actions run without a card. Each is logged and
+    listed, and the action carries an "Approved for you" mark, as in Kiro. These
+    always show a card in both modes: everything in T4, new access (T1) and
+    destructive commands (T8). Starting a screen-control task also shows a card
+    in both modes, because S8 required it before the modes existed.
+  - **No model decides.** The desktop app and the catalog classify each action
+    deterministically. An action they cannot classify gets a card. This keeps
+    T5.
+  - **Standing approvals stay.** The mode is the coarse setting and standing
+    approvals (T4) are the fine-grained rules. A standing approval the user
+    created applies in both modes, so it skips the card in "Ask before doing
+    anything" too. Nothing in this item changes what a standing approval can
+    never cover.
+  - **Who may widen the mode.** Switching to "Approve for me" is allowed only in
+    the desktop app, from a confirmation it renders itself. It is never allowed
+    from model text, a scheduled watch, the phone or Telegram. Switching to
+    "Ask before doing anything" is allowed from any channel, including
+    Telegram.
+  - **Scheduled watches.** Under "Approve for me" a watch may run routine
+    actions. A T4, T1 or destructive-command step waits for a card, which is
+    pushed to the phone (L6).
+  - **Injection.** In a turn whose context includes screen, web or tool-result
+    text, "Approve for me" still applies only to actions the classifier marks
+    routine. Silent installs stay off in such a turn (T1). No T6 rule is
+    weakened.
+  - **Default on a new install.** Not decided (brief §17, question 16). The
+    recommendation is "Approve for me", because T4, T1 and destructive commands
+    always ask anyway, and it matches the zero repeated setup goal.
+- **T8. Commands (planned, not built).** The rule that typing into a terminal
+  counts as running a command stays (S8). The owner decided on 2026-11-24 that
+  commands become allowed, each approved with a button (brief §17, answer 14).
+  - **Ask before doing anything.** Every command shows a card with the exact
+    command text (`argv`), rendered from what will run and never from model
+    prose.
+  - **Approve for me.** A command runs without a card only if its `argv[0]` and
+    its arguments match a catalog allowlist of read-only or non-destructive
+    commands. Everything else shows a card. A command that deletes, overwrites,
+    moves, changes permissions, installs, pushes, sends, kills processes or uses
+    `sudo` is destructive for this rule and always shows a card in both modes
+    (T4). Unknown means card.
+  - **Route.** Commands run through `openshell/exec_gate.py` (argv only,
+    allowlisted `argv[0]`, no `shell=True`, single-use approval, scrubbed
+    output), not by typing keystrokes. Typing into a terminal through screen
+    control gets the same classification and card (S8).
+  - **The exec boundary stays for now.** [`docs/PRIVACY.md`](PRIVACY.md) §5 and
+    `tests/test_privacy.py` stay as they are until the three wiring steps listed
+    in §5 land in one change.
 
 ---
 
@@ -808,7 +952,9 @@ rules below will be enforced in the resolver, in the approval gate
 - **Share-link threat model** — token leakage, enumeration, revocation latency,
   CSRF, cross-read: [ADR 0002 §10](adr/0002-sharing-and-identity.md).
 - **Exec boundary decision** — why no command runs in this build, and how to
-  reverse it deliberately: [`docs/PRIVACY.md`](PRIVACY.md) §5.
+  reverse it deliberately: [`docs/PRIVACY.md`](PRIVACY.md) §5. The owner decided
+  on 2026-11-24 to allow commands behind approvals (planned, T8). The boundary
+  stays until the wiring steps there land in one change.
 - **Policy gate and audit log** — [`docs/OPENSHELL.md`](OPENSHELL.md).
 - **Skill contract** — manifest rules including the `execute` prohibition:
   [`docs/SKILL_SPEC.md`](SKILL_SPEC.md).
@@ -816,9 +962,10 @@ rules below will be enforced in the resolver, in the approval gate
   planned sections 6 to 9 come from:
   [`docs/PRODUCT_BRIEF.md`](PRODUCT_BRIEF.md) and
   [ADR 0004](adr/0004-desktop-companion.md).
-- **Owner answers**: the answers that set L4 to L7, S3, S8 and T2 (answers 1
-  to 12, including Q11 and Q12):
-  [`docs/PRODUCT_BRIEF.md`](PRODUCT_BRIEF.md#owner-answers-2026-11-24). The
+- **Owner answers**: the answers that set L4 to L7, S3, S8, T2, T4, T7 and T8
+  (answers 1 to 12, including Q11 and Q12, and the later answers 13 to 15):
+  [`docs/PRODUCT_BRIEF.md`](PRODUCT_BRIEF.md#owner-answers-2026-11-24) and
+  [later answers](PRODUCT_BRIEF.md#later-answers-2026-11-24). The
   remote approval design is in
   [brief §4.6](PRODUCT_BRIEF.md#46-remote-approvals-planned).
 - **Tests** — [`tests/test_privacy.py`](../tests/test_privacy.py),
