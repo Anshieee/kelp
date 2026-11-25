@@ -818,7 +818,9 @@ Price, plan tiers and what a plan includes are not set. Nothing here is built.
       Linux laptop; the target is revised in section 10. A run on Apple Silicon
       and a Windows laptop is still useful before the number is final.
 - [ ] The Live2D licence has been checked, and the AIRI and Open-LLM-VTuber
-      licences have been checked for the parts to be reused.
+      licences have been checked for the parts to be reused. The
+      [licence preflight](spikes/2026-11-avatar-licensing.md) covers the
+      general terms. The exact components and assets remain undecided.
 - [x] [`docs/THREAT_MODEL.md`](THREAT_MODEL.md) has a plan for screen, voice and
       self-setup sections, to be written before any capture code lands. (sections
       written 2026-11-24, status planned)
