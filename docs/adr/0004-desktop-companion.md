@@ -268,11 +268,15 @@ decided:
       AT-SPI. Kelp reads the result back and reports done, failed or unknown.
       Calls that can steal focus (`AXRaise`, UI Automation `SetFocus`, AT-SPI
       `grab_focus`) are not used on the user's desktop, and an app that is not
-      running is not launched there, because a launch can take focus. Tier 2
-      handles that case. All of it is untested.
+      running is not launched there, because a launch can take focus or
+      change the layout without taking focus. Tier 2 handles that case.
+      [Brief §12](../PRODUCT_BRIEF.md#12-platform-permissions-risk)
+      records preliminary Linux evidence, not a product implementation.
     - **Tier 2 is Kelp's own workspace** for apps tier 1 cannot drive: a nested
       headless wlroots compositor on Linux, a VM or the Boat sandbox on Windows,
-      and the Boat sandbox desktop. macOS tier 2 is open. All of it is untested.
+      and the Boat sandbox desktop. macOS tier 2 is open. The only trial
+      so far used synthetic windows in a nested Linux compositor, not
+      an implementation of Kelp's workspace (brief §12).
     - **Kelp's pointer is visible,** with a label and a Stop button over the
       window it acts in. Kelp pauses in a window the user focuses or types in
       and does not take it back.
