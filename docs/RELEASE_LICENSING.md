@@ -80,7 +80,7 @@ Assess each service's licence and boundaries separately; this does not
 automatically place a separate relay under the same licence. MIT and
 Apache-2.0 are also open-source options.
 
-Whichever option D1 chooses, it cannot be presented as covering the vendored
+Whichever option D1 chooses, it cannot be presented as covering the third-party
 components in §5–§7, whose terms are fixed by their own authors.
 
 ## 4. Scope split: code, docs, assets
@@ -136,9 +136,9 @@ copies, before applying package or repository licence metadata.
   as a direct dependency. The
   [lockfile](../desktop/package-lock.json) resolves `1.7.0` with
   `"license": "MPL-2.0"`.
-- [`desktop/src/useViewer.ts`](../desktop/src/useViewer.ts) :158 imports it
-  dynamically inside the connect path, so the module is loaded only when a
-  remote viewer session starts — a conditional path, not every use of the app.
+- [`desktop/src/useViewer.ts`](../desktop/src/useViewer.ts) imports it
+  dynamically inside the connect path. The emitted chunk, preload and
+  distribution behaviour have not been inspected.
 - MPL-2.0 is file-level copyleft. If the emitted desktop artifact carries
   noVNC in executable or minified form, recipients must be told where to get
   the MPL-covered source; the Mozilla FAQ entries for this are Q8 (unmodified
@@ -191,6 +191,5 @@ dependency notices in the virtual environment cover this material.
 ## 9. Out of scope here
 
 Writing the `LICENSE`/`NOTICE` files, editing `Dockerfile`, `.dockerignore`,
-`pyproject.toml` or `package.json`, moving files, and the avatar note are
-separate changes. This file is a checklist for the owner's decision, nothing
-more.
+`pyproject.toml` or `package.json`, moving files, and deciding on avatar
+reuse are separate follow-ups.

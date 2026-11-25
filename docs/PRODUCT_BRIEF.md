@@ -637,7 +637,7 @@ grant:
 Screen control (S8) works without sharing the user's input seat, so it needs a
 different mechanism on each OS: tier 1 acts on the target window through the
 accessibility API, and tier 2 uses a workspace with an input seat of its own.
-Planned and untested: macOS Accessibility (`AXUIElement` actions), Windows UI
+The planned APIs are macOS Accessibility (`AXUIElement` actions), Windows UI
 Automation patterns (and window messages for native controls), and Linux AT-SPI
 (Action, EditableText, Value). Tier 2 on Linux is a nested headless wlroots
 compositor, where the virtual-pointer and virtual-keyboard protocols are used on
@@ -652,9 +652,9 @@ own seat (uinput or `ydotool`, `zwlr_virtual_pointer_v1` and
 probed the xdg-desktop-portal RemoteDesktop interface on the wlroots machine and
 found it unavailable, and it named those virtual-input routes as the only
 wlroots route on the user's seat. That route is now ruled out for the user's
-desktop. No input was actually sent on any OS.
+desktop. The initial capture spike did not send input.
 
-**Background-input spike (Phase 0, not yet run).** On each OS, drive an
+**Background-input exit test (Phase 0, incomplete).** On each OS, drive an
 unfocused test window through tier 1 and confirm that (a) the user's pointer
 position, keyboard focus, active window, z-order, workspace and clipboard did
 not change, (b) the action landed, read back through the same API, and (c)
@@ -665,17 +665,16 @@ calls that can steal focus are not used on the user's desktop: `AXRaise` on
 macOS, UI Automation `SetFocus` on Windows and AT-SPI `grab_focus` on Linux.
 A global stop shortcut for each OS is a separate open item (S8).
 
-**Already probed, with no input sent.** On the owner's machine (mango 0.18.6, a
-wlroots compositor) the compositor advertises `zwlr_virtual_pointer_manager_v1`,
-`zwp_virtual_keyboard_manager_v1`, `ext_foreign_toplevel_list_v1`,
-`zwlr_foreign_toplevel_manager_v1`,
-`ext_foreign_toplevel_image_capture_source_manager_v1`,
-`ext_image_copy_capture_manager_v1` and `zwlr_layer_shell_v1`. That shows the
-protocols exist. It does not show that they work. The AT-SPI bus runs
-(at-spi2-core 2.62.1), but at probe time only two processes were registered on
-it: the polkit agent and xdg-desktop-portal-gtk. Other apps there may need
-accessibility enabled before tier 1 can see them. Sway is installed on the same
-machine, and the tier 2 test has not been run.
+**Preliminary Linux evidence.** On one MangoWC setup, AT-SPI drove
+synthetic GTK 3 and GTK 4 buttons and text fields. The GTK 4 checkbox
+exposed no action. A nested headless sway session exercised synthetic
+GTK controls using its own virtual pointer and keyboard. Neither test
+covered real apps, GNOME, KDE, macOS or Windows. A separate
+[MangoWC visibility follow-up](spikes/2026-11-mango-window-visibility.md)
+showed that a window can stay unfocused and still tile on a visible
+tag. Check visibility and layout as well as focus from before mapping
+through removal; the original spot checks do not establish that the
+live desktop went uninterrupted.
 
 Prototype all three OSes before the design assumes that capture and background
 input work without extra steps. Because some platforms ask for nothing, the
@@ -788,7 +787,7 @@ Price, plan tiers and what a plan includes are not set. Nothing here is built.
 
 | Phase | Scope |
 |---|---|
-| 0 (now) | This brief and ADR 0004. Spikes for screen capture (done), voice (done) and background input (section 12, not yet run). The installer decision (done). |
+| 0 (now) | This brief and ADR 0004. Initial Linux screen capture and voice spikes are recorded. Background input has preliminary Linux evidence; full platform validation is open (section 12). The installer decision is recorded. |
 | 1 | The desktop app: the local brain sidecar and installer, first run (section 4.1), remember-once (section 4.3), chat, approval cards with the permission modes (section 3), the tray or menu-bar icon, and Boat mode over the SSH forward. No desk pet. In parallel, with Ketock: the phone app with chat and push approvals (relay, THREAT_MODEL L6). The Telegram bridge comes after the phone app. |
 | 2 | Actions: approval-gated skills, the full capability resolver with the signed catalog, commands through the exec gate (THREAT_MODEL T8), background screen control (THREAT_MODEL S8), screen awareness with reactions shown as notifications, and voice chat (the minimal resolver for voice models moves here). The resolver guides the user through the OS capture permission, and frames go to a local model or the user's own provider key until the plan gateway exists. |
 | 3 | The desk pet and identity: decide Kelp's look, the avatar, animation, lip-sync and persona visuals, plus the persona file and its setup flow (section 9). Until then Kelp uses one neutral built-in persona. Consider Storm's 3 pet commits here (section 10), not before. Identity is still not decided. |
@@ -809,10 +808,10 @@ Price, plan tiers and what a plan includes are not set. Nothing here is built.
       user's pointer, keyboard focus, active window, z-order, workspace or
       clipboard, that the action landed (read back), and
       that per-window capture of an occluded window works. On wlroots it also
-      tests tier 2 in a nested compositor (section 12). Wayland (wlroots)
-      capture is done. For input, only the compositor's advertised protocols
-      and the AT-SPI bus were probed, and nothing was sent. GNOME, KDE, macOS
-      and Windows are not done.
+      tests tier 2 in a nested compositor (section 12). One MangoWC setup
+      has preliminary capture and background-input evidence, including
+      a separate visibility and layout test. GNOME, KDE, macOS and Windows
+      are not done.
 - [x] A voice spike has measured the end-of-speech to start-of-reply latency of
       the local STT and TTS choice. Result: 3.1–3.3 s with a cloud model on one
       Linux laptop; the target is revised in section 10. A run on Apple Silicon
