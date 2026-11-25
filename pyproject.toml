@@ -32,6 +32,12 @@ include = [
 
 [tool.setuptools.package-data]
 chat = ["credential_inbox.html"]
+# skills/loader.py reads the meta-schema and each builtin manifest from disk
+# next to the imported module, so both must be copied out of a source checkout.
+# The glob is limited to builtin/<skill>/manifest.json: adding a skill needs no
+# packaging edit, and unrelated manifests (assets/, fixtures/) are not shipped.
+skills = ["manifest.schema.json"]
+"skills.builtin" = ["*/manifest.json"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
