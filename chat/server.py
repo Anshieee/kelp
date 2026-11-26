@@ -29,10 +29,11 @@ import signal
 import sys
 import threading
 from dataclasses import dataclass, field
+from functools import partial
 from pathlib import Path
 from typing import Any, Callable, Mapping, Sequence
 
-from kernel import JsonlUsageStore, KernelConfig
+from kernel import JsonlUsageStore, KernelConfig, TurnBudget
 from kernel.config import API_KEY_ENV, BASE_URL_ENV, TENANT_SECRETS_FILE_ENV
 from kernel.providers import OpenAICompatibleClient, build_provider
 from kernel.secrets import (
@@ -54,6 +55,7 @@ from .api import (
     AuthFailureTracker,
     ChatAPI,
     HealthProbe,
+    RateLimiter,
     SessionStore,
     make_server,
 )
@@ -78,6 +80,7 @@ from .service import ChatService
 from .store import ChatStore
 from .tenancy import OWNER_TENANT_ID, StaticTenantResolver
 from .wallet import WalletAPI
+from payments.entitlements import StaticEntitlementStore
 from payments.razorpay_checkout import RazorpayCheckout
 from payments.razorpay_gateway import RazorpayWallet
 from payments.wallet import WalletLedger
@@ -593,18 +596,24 @@ def _tool_specs(registry: SkillRegistry) -> tuple[dict[str, Any], ...]:
 
 
 def _service_secrets(
-    registry: SkillRegistry,
+    registry: SkillRegistry | None,
     config: ServerConfig,
     environ: Mapping[str, str],
 ) -> dict[str, str]:
-    """Only declared skill secrets plus this process's own credentials."""
+    """Only declared skill secrets plus this process's own credentials.
+
+    ``registry=None`` is the Local profile: there is no skill to receive a
+    declared secret, so the returned mapping is redaction-only input for the
+    process scrubbers and must not be passed to ``ChatService(secrets=...)``.
+    """
 
     values: dict[str, str] = {}
-    for skill_name in registry.names():
-        for name in registry.get(skill_name).declared_secrets:
-            value = environ.get(name)
-            if isinstance(value, str) and value:
-                values[name] = value
+    if registry is not None:
+        for skill_name in registry.names():
+            for name in registry.get(skill_name).declared_secrets:
+                value = environ.get(name)
+                if isinstance(value, str) and value:
+                    values[name] = value
     if config.kernel.api_key:
         values["KELP_PROVIDER_API_KEY"] = config.kernel.api_key
     values["KELP_AUTH_TOKEN"] = config.auth_token
@@ -630,15 +639,63 @@ def _service_secrets(
     return values
 
 
+def _validate_local_profile(config: ServerConfig) -> None:
+    """Refuse a Local boot that is not the sealed owner/loopback profile.
+
+    This runs before ``ensure_directories`` and the database lock, so a bad
+    profile leaves the tree untouched. The Local entrypoint is the only
+    intended caller and composes ``KELP_HOST=127.0.0.1``/``KELP_PORT=0``
+    explicitly; there is no ambient or multi-tenant fallback here.
+    """
+
+    if not config.auth_token:
+        raise ConfigError(
+            "invalid_config",
+            "A Local runtime requires the configured owner bearer token.",
+        )
+    if config.host != DEFAULT_HOST or config.port != 0:
+        raise ConfigError(
+            "invalid_config",
+            f"A Local runtime must bind {DEFAULT_HOST} on port 0.",
+        )
+    if config.kernel.tenant_id != OWNER_TENANT_ID:
+        raise ConfigError(
+            "invalid_config",
+            "A Local runtime is owner-only; tenant overrides are not supported.",
+        )
+    if config.kernel.tenant_secrets_file:
+        raise ConfigError(
+            "invalid_config",
+            "A Local runtime does not accept a tenant secrets file.",
+        )
+
+
 def build_app(
     config: ServerConfig,
     *,
     provider: Any | None = None,
     environ: Mapping[str, str] | None = None,
+    local_only: bool = False,
 ) -> Application:
-    """Build the full runtime and run boot recovery exactly once."""
+    """Build the full runtime and run boot recovery exactly once.
 
-    source = os.environ if environ is None else environ
+    ``local_only`` opts into the sealed sidecar profile. It is intentionally
+    not wired into ``serve`` here: the Local supervisor passes every setting
+    through the explicit ``environ`` mapping, binds the literal loopback
+    address on port 0, and gets no skill discovery, schedules, payments, or
+    credential broker. The default path is the unchanged hosted runtime.
+    """
+
+    if local_only:
+        if environ is None:
+            raise ConfigError(
+                "invalid_config",
+                "local_only requires the explicit environ mapping for this process.",
+            )
+        _validate_local_profile(config)
+        source = environ
+    else:
+        source = os.environ if environ is None else environ
     try:
         retention_policy = RetentionPolicy.from_env(source)
     except ValueError as exc:
@@ -654,7 +711,14 @@ def build_app(
     owns_provider = provider is None
     runtime_provider = provider
     try:
-        registry = SkillRegistry.load(config.skill_root, environ=source)
+        # The Local profile has no skills at all. Skipping discovery is the
+        # contract: no manifest read, no plugin root, no tool specs. The
+        # existing ChatService seam already accepts ``registry=None``.
+        registry = (
+            None
+            if local_only
+            else SkillRegistry.load(config.skill_root, environ=source)
+        )
         # P4-1: one resolver for the process. A tenant file resolves this
         # tenant's provider key; otherwise the explicit boot mapping does,
         # preserving the single-tenant path. Values never leave this scope
@@ -696,10 +760,15 @@ def build_app(
             # configured its resolver is the key source; otherwise the boot
             # environment's key is passed directly, unchanged from P1-2.
             # ``factory`` keeps the module-level ``ProviderClient`` seam a
-            # one-argument callable.
+            # one-argument callable. The Local profile seals its own transport
+            # against ambient proxies/CA files; hosted keeps ``ProviderClient``.
             runtime_provider = build_provider(
                 config.kernel,
-                factory=ProviderClient,
+                factory=(
+                    partial(OpenAICompatibleClient, trust_env=False)
+                    if local_only
+                    else ProviderClient
+                ),
                 api_key=(
                     None
                     if config.kernel.tenant_secrets_file
@@ -733,17 +802,26 @@ def build_app(
             artifacts=artifacts,
             approvals=ApprovalStore(),
             usage_store=usage_store,
+            # Local has no tools at all: the model sees an empty tool list and
+            # a zero tool-call budget, so even a model-authored call is stopped
+            # before any executor exists.
+            budget=TurnBudget(max_tool_calls=0) if local_only else None,
             model=config.kernel.primary_model,
             config=config.kernel,
-            secrets=secrets,
+            # Local's provider/frame values are redaction-only: they are fed
+            # to the scrubbers through ``scrub_values`` and never to a skill.
+            secrets={} if local_only else secrets,
             # Redaction-only: tenant-file values are scrubbed from chat records
             # but never supplied to a skill (only the provider key is read).
-            scrub_values=tuple(tenant_values),
+            scrub_values=secret_values if local_only else tuple(tenant_values),
             workspace_root=str(config.workspace_root),
-            tools=_tool_specs(registry),
+            tools=() if local_only else _tool_specs(registry),
             audit=audit,
             metrics=metrics,
             spend_guard=spend_guard,
+            entitlements=(
+                StaticEntitlementStore.from_env(source) if local_only else None
+            ),
         )
         # Publish persisted spend before the first scrape: the gauge is derived
         # from the records on disk, so a restart shows the real total.
@@ -771,7 +849,10 @@ def build_app(
                 status="error",
             )
         maintenance.start()
-        if validate_credential_env(source):
+        # Local never starts the browser credential worker, the wallet ledger,
+        # or hosted Checkout: those are hosted surfaces with their own state
+        # and outbound transports. The attributes stay ``None`` on Application.
+        if not local_only and validate_credential_env(source):
             credential_broker = CredentialBroker(
                 config.db_path.parent / "credentials.db",
                 source["KELP_VAULT_KEY"], source["KELP_BROWSER_WORKER_TOKEN"],
@@ -779,22 +860,31 @@ def build_app(
                 signing_key=source["KELP_CREDENTIAL_SIGNING_KEY"],
                 audit=audit,
             )
-        # Wallet and hosted Checkout share one durable ledger. Razorpay's
-        # transport stays lazy inside RazorpayWallet and is never constructed
-        # unless both server-side keys are present and a payment call is made.
-        # When it is, every call writes one content-free row to the same egress
-        # ledger the model client and skills use (recipient ``razorpay``).
-        wallet_ledger = WalletLedger(
-            config.db_path.parent / "wallet" / "wallet.db"
-        )
-        wallet = RazorpayWallet.from_env(source, ledger=wallet_ledger, egress=egress)
-        # upstream_authorized: ChatAPI._dispatch_inner runs auth_routes._authorize
-        # (auth + CSRF, chat/api.py) before routing any /api/wallet/* request here.
-        wallet_api = WalletAPI(wallet, upstream_authorized=True)
-        checkout_api = CheckoutAPI(
-            RazorpayCheckout.from_env(source, ledger=wallet_ledger, egress=egress),
-            upstream_authorized=True,
-        )
+        wallet_api: WalletAPI | None = None
+        checkout_api: CheckoutAPI | None = None
+        if not local_only:
+            # Wallet and hosted Checkout share one durable ledger. Razorpay's
+            # transport stays lazy inside RazorpayWallet and is never
+            # constructed unless both server-side keys are present and a
+            # payment call is made. When it is, every call writes one
+            # content-free row to the same egress ledger the model client and
+            # skills use (recipient ``razorpay``).
+            wallet_ledger = WalletLedger(
+                config.db_path.parent / "wallet" / "wallet.db"
+            )
+            wallet = RazorpayWallet.from_env(
+                source, ledger=wallet_ledger, egress=egress
+            )
+            # upstream_authorized: ChatAPI._dispatch_inner runs
+            # auth_routes._authorize (auth + CSRF, chat/api.py) before routing
+            # any /api/wallet/* request here.
+            wallet_api = WalletAPI(wallet, upstream_authorized=True)
+            checkout_api = CheckoutAPI(
+                RazorpayCheckout.from_env(
+                    source, ledger=wallet_ledger, egress=egress
+                ),
+                upstream_authorized=True,
+            )
         api = ChatAPI(
             service,
             credentials=credential_broker,
@@ -808,6 +898,11 @@ def build_app(
             tenant_resolver=StaticTenantResolver(config.auth_token),
             health=HealthProbe.from_service(service, audit=audit),
             metrics=metrics,
+            # Local resolves the limiter from the composed mapping instead of
+            # the constructor's ambient fallback. ChatAPI still reads
+            # os.environ for its remaining share/capacity knobs; a later
+            # contract change supplies those through an explicit mapping too.
+            limiter=RateLimiter.from_env(source) if local_only else None,
             # Sessions persist in the chat database (KEL-24): several devices
             # survive a restart, and the root bearer token remains recovery.
             # The CSRF half is derived from KELP_SESSION_SECRET, falling back
@@ -824,34 +919,36 @@ def build_app(
         # KEL-27: wire the M4-A ticker to a real turn runner. The scheduler
         # starts only after recovery above has settled every interrupted turn,
         # so a proactive turn killed with the process is never retried; the
-        # only thing added here is the run row the kill prevented.
-        try:
-            proactive_config = ProactiveConfig.from_env(source)
-        except ValueError as exc:
-            raise ConfigError("invalid_config", str(exc)) from None
-        schedule_store = ScheduleStore(config.workspace_root)
-        proactive = ProactiveRunner(
-            service=service,
-            store=store,
-            schedule_store=schedule_store,
-            audit=boot_audit,
-            runner=api.runner,
-            config=proactive_config,
-        )
-        proactive.after_recovery(recovery.closed_turns)
-        scheduler = SchedulerRuntime(
-            schedule_store,
-            on_fire=proactive.fire,
-            audit=proactive.audit_gate,
-            enabled=_flag(source, ENABLED_ENV, True),
-            tick_seconds=_env_int_value(
-                source, TICK_ENV, DEFAULT_TICK_SECONDS, minimum=1
-            ),
-            grace_seconds=_env_int_value(
-                source, GRACE_ENV, DEFAULT_GRACE_SECONDS, minimum=0
-            ),
-        )
-        scheduler.start()
+        # only thing added here is the run row the kill prevented. Local has no
+        # schedule store, proactive runner, or ticker.
+        if not local_only:
+            try:
+                proactive_config = ProactiveConfig.from_env(source)
+            except ValueError as exc:
+                raise ConfigError("invalid_config", str(exc)) from None
+            schedule_store = ScheduleStore(config.workspace_root)
+            proactive = ProactiveRunner(
+                service=service,
+                store=store,
+                schedule_store=schedule_store,
+                audit=boot_audit,
+                runner=api.runner,
+                config=proactive_config,
+            )
+            proactive.after_recovery(recovery.closed_turns)
+            scheduler = SchedulerRuntime(
+                schedule_store,
+                on_fire=proactive.fire,
+                audit=proactive.audit_gate,
+                enabled=_flag(source, ENABLED_ENV, True),
+                tick_seconds=_env_int_value(
+                    source, TICK_ENV, DEFAULT_TICK_SECONDS, minimum=1
+                ),
+                grace_seconds=_env_int_value(
+                    source, GRACE_ENV, DEFAULT_GRACE_SECONDS, minimum=0
+                ),
+            )
+            scheduler.start()
         return Application(
             config=config,
             store=store,
