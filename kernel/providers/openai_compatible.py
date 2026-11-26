@@ -284,6 +284,7 @@ class OpenAICompatibleClient:
         client: httpx.AsyncClient | None = None,
         ledger: EgressLedger | None = None,
         tenant_id: str = OWNER_TENANT_ID,
+        trust_env: bool = True,
     ):
         self._config = config
         self.tenant_id = tenant_id
@@ -292,6 +293,13 @@ class OpenAICompatibleClient:
         #: process ledger after construction, keeping ``ProviderClient(config)``
         #: a one-argument call for deployments and test harnesses that replace it.
         self.ledger = ledger
+        #: ``trust_env=False`` seals the internally owned transport against this
+        #: process's HTTP configuration: no ``HTTP(S)_PROXY`` and no
+        #: ``SSL_CERT_FILE``/``SSL_CERT_DIR``. The Local sidecar selects it with
+        #: ``functools.partial(OpenAICompatibleClient, trust_env=False)`` so its
+        #: loopback model is reached directly. It is inert unless passed, so
+        #: hosted deployments keep inheriting the environment. An injected
+        #: ``client`` keeps its own configuration and ownership untouched.
         self._client = client or httpx.AsyncClient(
             timeout=httpx.Timeout(
                 connect=config.connect_timeout_s,
@@ -300,6 +308,7 @@ class OpenAICompatibleClient:
                 pool=config.connect_timeout_s,
             ),
             follow_redirects=False,
+            trust_env=trust_env,
         )
 
     @classmethod
