@@ -13,6 +13,8 @@
 mod bridge;
 #[cfg(all(test, target_os = "linux"))]
 mod local_supervisor;
+#[cfg(all(test, target_os = "linux"))]
+mod local_transport;
 
 use tauri::{Emitter, LogicalSize, Manager, PhysicalPosition, WebviewUrl, WebviewWindowBuilder};
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
