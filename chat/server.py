@@ -680,11 +680,12 @@ def build_app(
 ) -> Application:
     """Build the full runtime and run boot recovery exactly once.
 
-    ``local_only`` opts into the sealed sidecar profile. It is intentionally
-    not wired into ``serve`` here: the Local supervisor passes every setting
-    through the explicit ``environ`` mapping, binds the literal loopback
-    address on port 0, and gets no skill discovery, schedules, payments, or
-    credential broker. The default path is the unchanged hosted runtime.
+    ``local_only`` opts into the sealed sidecar profile. The Local supervisor
+    passes every setting through the explicit ``environ`` mapping, binds the
+    literal loopback address on port 0, and gets no skill discovery, schedules,
+    payments, or credential broker. ``ChatAPI`` also receives that same mapping
+    so no capacity, session, or limiter default falls back to ``os.environ``.
+    The default path is the unchanged hosted runtime.
     """
 
     if local_only:
@@ -917,6 +918,10 @@ def build_app(
             ),
             auth_failures=AuthFailureTracker.from_env(source),
             cookie_secure=_flag(source, SESSION_SECURE_ENV, True),
+            # Local supplies the composed mapping so ChatAPI's remaining
+            # capacity/session defaults cannot read the inherited process
+            # environment. Hosted keeps the ambient default unchanged.
+            environ=source if local_only else None,
         )
         # KEL-27: wire the M4-A ticker to a real turn runner. The scheduler
         # starts only after recovery above has settled every interrupted turn,
@@ -1071,6 +1076,7 @@ def serve(
     *,
     provider: Any | None = None,
     environ: Mapping[str, str] | None = None,
+    local_only: bool = False,
     on_listening: Callable[[str, int, Any], None] | None = None,
     stop_event: threading.Event | None = None,
 ) -> int:
@@ -1081,11 +1087,20 @@ def serve(
     announcement is suppressed and the callback owns readiness signalling.
     ``stop_event`` lets that entrypoint request a cooperative shutdown from
     another thread; the server loop observes it between requests.
+    ``local_only`` selects the sealed Local application profile and the L1
+    loopback adapter; the default is the unchanged hosted runtime.
     """
 
-    app = build_app(config, provider=provider, environ=environ)
+    app = build_app(
+        config,
+        provider=provider,
+        environ=environ,
+        local_only=local_only,
+    )
     try:
-        server = make_server(app.api, config.host, config.port)
+        server = make_server(
+            app.api, config.host, config.port, local_only=local_only
+        )
     except BaseException:
         app.close()
         raise

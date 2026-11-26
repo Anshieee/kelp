@@ -8,12 +8,13 @@ There is no environment selector and no default human desktop path. The parent
 must pass a connected ``AF_UNIX``/``SOCK_STREAM`` socket as fd 0. This module
 validates it, duplicates it non-inheritably, and replaces fd 0 with
 ``/dev/null`` *before* importing :mod:`chat.server`. It then reads one config
-frame, composes the server mapping, and starts the ordinary hosted API with a
-loopback/port-0 override.
+frame, composes the server mapping, and starts the sealed Local runtime
+(``serve(..., local_only=True)``) with a loopback/port-0 override.
 
-The visible HTTP surface is deliberately the existing owner-authenticated
-hosted surface. Local trust work (health/static exclusions, cookie policy) is a
-later phase.
+The visible HTTP surface is the Local chat profile: the L1 loopback header
+guard plus exact health, thread, turn, stream, and stop/retry targets. Hosted
+routes, skills/tools, schedules, payments, credentials, and UI/bridge
+activation stay out of this entrypoint.
 
 Exit status is part of the contract: ``0`` is returned only after a complete
 ready frame was written and the server shut down cleanly. Configuration,
@@ -322,6 +323,7 @@ def _run(channel: socket.socket) -> int:
             result = serve(
                 server_config,
                 environ=environ,
+                local_only=True,
                 on_listening=on_listening,
                 stop_event=stop,
             )

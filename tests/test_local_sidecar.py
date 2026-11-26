@@ -2,9 +2,11 @@
 
 These tests spawn ``python -I -B -m chat.local_serve`` with a real
 ``AF_UNIX``/``SOCK_STREAM`` stdin socketpair, exchange the dedicated frames,
-and prove the listener is loopback-only and owner-authenticated. They never
-inspect or parse stdout/stderr for control; captured output is used only to
-assert that fake credentials did not leak.
+and prove the listener selects the sealed Local profile: L1 loopback headers,
+the exact chat target profile, an authorized turn over the real provider
+transport, and event-log SSE replay. They never inspect or parse stdout/stderr
+for control; captured output is used only to assert that fake credentials did
+not leak.
 """
 
 from __future__ import annotations
@@ -19,7 +21,10 @@ import subprocess
 import sys
 import threading
 import time
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from types import SimpleNamespace
+from typing import Any
 
 import pytest
 
@@ -174,15 +179,177 @@ def _status(parent: socket.socket, timeout: float = 30.0) -> dict[str, object]:
     return json.loads(frame)
 
 
-def _http(port: int, path: str, token: str | None = None) -> tuple[int, bytes]:
-    connection = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
-    headers = {"Authorization": f"Bearer {token}"} if token else {}
+def _origin(port: int) -> str:
+    """The only Origin value the Local L1 guard accepts for this listener."""
+
+    return f"http://127.0.0.1:{port}"
+
+
+def _http(
+    port: int,
+    path: str,
+    token: str | None = None,
+    *,
+    origin: str | None = None,
+    csrf: str | None = None,
+    method: str = "GET",
+    body: bytes | None = None,
+    timeout: float = 5.0,
+) -> tuple[int, bytes]:
+    connection = http.client.HTTPConnection("127.0.0.1", port, timeout=timeout)
+    headers: dict[str, str] = {}
+    if token is not None:
+        headers["Authorization"] = f"Bearer {token}"
+    if origin is not None:
+        headers["Origin"] = origin
+    if csrf is not None:
+        headers["X-CSRF-Token"] = csrf
+    if body is not None:
+        headers["Content-Type"] = "application/json"
     try:
-        connection.request("GET", path, headers=headers)
+        connection.request(method, path, body=body, headers=headers)
         response = connection.getresponse()
         return response.status, response.read()
     finally:
         connection.close()
+
+
+def _sse_request(
+    port: int,
+    path: str,
+    *,
+    origin: str | None,
+    token: str | None,
+    needle: bytes | None = None,
+    timeout: float = 10.0,
+) -> tuple[int, bytes, bytes]:
+    """Send one raw SSE request and read through ``needle`` (or EOF).
+
+    Using a raw socket keeps the test independent of ``http.client``'s
+    close-delimited response bookkeeping while still proving the exact bytes
+    the listener put on the wire.
+    """
+
+    lines = [
+        f"GET {path} HTTP/1.1",
+        f"Host: 127.0.0.1:{port}",
+        "Accept: text/event-stream",
+        "Connection: close",
+    ]
+    if origin is not None:
+        lines.append(f"Origin: {origin}")
+    if token is not None:
+        lines.append(f"Authorization: Bearer {token}")
+    request = ("\r\n".join(lines) + "\r\n\r\n").encode("ascii")
+    with socket.create_connection(("127.0.0.1", port), timeout=timeout) as sock:
+        sock.sendall(request)
+        sock.settimeout(timeout)
+        raw = bytearray()
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            if needle is not None and needle in raw:
+                break
+            try:
+                chunk = sock.recv(65536)
+            except TimeoutError:
+                break
+            if not chunk:
+                break
+            raw.extend(chunk)
+        head, _separator, body = bytes(raw).partition(b"\r\n\r\n")
+        status = int(head.split()[1]) if head else 0
+        return status, head, body
+
+
+PROVIDER_TEXT = "synthetic-provider-text-9f3a"
+
+
+def _provider_sse() -> bytes:
+    """A minimal OpenAI-compatible streaming answer with usage and ``[DONE]``."""
+
+    def chunk(delta: dict[str, Any], finish: str | None = None) -> str:
+        payload = {
+            "id": "chatcmpl-local-test",
+            "object": "chat.completion.chunk",
+            "created": 1,
+            "model": "test-model",
+            "choices": [
+                {"index": 0, "delta": delta, "finish_reason": finish}
+            ],
+        }
+        return f"data: {json.dumps(payload, separators=(',', ':'))}\n\n"
+
+    usage = {
+        "id": "chatcmpl-local-test",
+        "object": "chat.completion.chunk",
+        "created": 1,
+        "model": "test-model",
+        "choices": [],
+        "usage": {
+            "prompt_tokens": 7,
+            "completion_tokens": 3,
+            "total_tokens": 10,
+        },
+    }
+    return (
+        chunk({"role": "assistant", "content": ""})
+        + chunk({"content": "synthetic-provider-text-"})
+        + chunk({"content": "9f3a"})
+        + chunk({}, "stop")
+        + f"data: {json.dumps(usage, separators=(',', ':'))}\n\n"
+        + "data: [DONE]\n\n"
+    ).encode("utf-8")
+
+
+class _ProviderStub:
+    """A loopback OpenAI-compatible endpoint owned by the test process."""
+
+    def __init__(self) -> None:
+        self.requests: list[dict[str, Any]] = []
+        self.paths: list[str] = []
+        provider = self
+
+        class Handler(BaseHTTPRequestHandler):
+            protocol_version = "HTTP/1.1"
+
+            def do_POST(self) -> None:  # noqa: N802 - stdlib spelling
+                length = int(self.headers.get("Content-Length") or "0")
+                raw = self.rfile.read(length)
+                provider.paths.append(self.path)
+                provider.requests.append(json.loads(raw.decode("utf-8")))
+                body = _provider_sse()
+                self.send_response(200)
+                self.send_header("Content-Type", "text/event-stream")
+                self.send_header("Cache-Control", "no-store")
+                self.send_header("Content-Length", str(len(body)))
+                self.send_header("Connection", "close")
+                self.end_headers()
+                self.wfile.write(body)
+                self.wfile.flush()
+
+            def log_message(self, _format: str, *args: object) -> None:
+                return None
+
+        self._server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        self._server.daemon_threads = True
+        self._thread = threading.Thread(
+            target=self._server.serve_forever,
+            name="fake-openai-provider",
+            daemon=True,
+        )
+
+    @property
+    def base_url(self) -> str:
+        host, port = self._server.server_address[:2]
+        return f"http://{host}:{port}/v1"
+
+    def start(self) -> None:
+        self._thread.start()
+
+    def close(self) -> None:
+        self._server.shutdown()
+        self._server.server_close()
+        self._thread.join(timeout=5.0)
 
 
 def _port_refused(port: int, timeout: float = 5.0) -> bool:
@@ -262,11 +429,15 @@ def test_ready_serves_authed_health_and_eof_shuts_down(
             assert secret.encode() not in environ
             assert secret.encode() not in argv
 
-        status, body = _http(port, "/api/health")
+        status, body = _http(
+            port, "/api/health", origin=_origin(port)
+        )
         assert status == 401
         assert json.loads(body)["error"]["code"] == "unauthorized"
 
-        status, body = _http(port, "/api/health", token=AUTH)
+        status, body = _http(
+            port, "/api/health", AUTH, origin=_origin(port)
+        )
         assert status == 200
         assert json.loads(body) == {"ok": True}
     finally:
@@ -279,6 +450,209 @@ def test_ready_serves_authed_health_and_eof_shuts_down(
     logs = sidecar.output()
     for secret in (AUTH, API_KEY, CSRF, SESSION):
         assert secret.encode() not in logs
+
+
+def test_local_l1_healthz_separates_origin_and_bearer(
+    sidecar_python: str, tmp_path: Path
+) -> None:
+    state = tmp_path / "state"
+    parent, child = socket.socketpair(socket.AF_UNIX, socket.SOCK_STREAM)
+    sidecar = _spawn(sidecar_python, tmp_path, child, _env(state, tmp_path))
+    try:
+        _send(parent, _config_payload())
+        port = int(_status(parent)["port"])
+        origin = _origin(port)
+
+        status, body = _http(port, "/api/healthz", AUTH, origin=origin)
+        assert status == 200, body
+        assert json.loads(body)["ok"] is True
+
+        # Origin is checked independently of the bearer: a wrong or missing
+        # Origin is 403 even when the owner token is correct.
+        for bad_origin in (
+            f"http://localhost:{port}",
+            "http://127.0.0.1:1",
+            None,
+        ):
+            status, body = _http(
+                port, "/api/healthz", AUTH, origin=bad_origin
+            )
+            assert status == 403, (bad_origin, body)
+            assert json.loads(body)["error"]["code"] == "invalid_origin"
+
+        # A missing or wrong bearer with a valid Origin is a distinct 401.
+        for token in (None, "wrong-local-bearer"):
+            status, body = _http(port, "/api/healthz", token, origin=origin)
+            assert status == 401, (token, body)
+            assert json.loads(body)["error"]["code"] == "unauthorized"
+    finally:
+        parent.close()
+        code = sidecar.wait()
+
+    assert code == 0
+    assert AUTH.encode() not in sidecar.output()
+
+
+def test_local_profile_refuses_authenticated_off_profile_routes(
+    sidecar_python: str, tmp_path: Path
+) -> None:
+    state = tmp_path / "state"
+    parent, child = socket.socketpair(socket.AF_UNIX, socket.SOCK_STREAM)
+    sidecar = _spawn(sidecar_python, tmp_path, child, _env(state, tmp_path))
+    try:
+        _send(parent, _config_payload())
+        port = int(_status(parent)["port"])
+        for path in (
+            "/api/runs",
+            "/api/auth/session",
+            "/api/readyz",
+            "/credential-requests",
+            "/phone/",
+        ):
+            status, body = _http(
+                port, path, AUTH, origin=_origin(port)
+            )
+            assert status == 404, (path, body)
+            assert json.loads(body)["error"]["code"] == "not_found"
+            assert AUTH.encode() not in body
+    finally:
+        parent.close()
+        code = sidecar.wait()
+
+    assert code == 0
+
+
+def _message_text(message: dict[str, Any]) -> str:
+    return "".join(
+        str(block.get("text", ""))
+        for block in message.get("blocks", [])
+        if isinstance(block, dict) and block.get("type") == "text"
+    )
+
+
+def test_local_authorized_turn_reaches_provider_and_replays_over_sse(
+    sidecar_python: str, tmp_path: Path
+) -> None:
+    provider = _ProviderStub()
+    provider.start()
+    state = tmp_path / "state"
+    parent, child = socket.socketpair(socket.AF_UNIX, socket.SOCK_STREAM)
+    sidecar = _spawn(
+        sidecar_python,
+        tmp_path,
+        child,
+        _env(
+            state,
+            tmp_path,
+            KELP_PROVIDER_BASE_URL=provider.base_url,
+        ),
+    )
+    try:
+        _send(parent, _config_payload())
+        ready = _status(parent)
+        port = int(ready["port"])
+        origin = _origin(port)
+
+        status, body = _http(port, "/api/healthz", AUTH, origin=origin)
+        assert status == 200, body
+
+        status, body = _http(
+            port,
+            "/api/threads",
+            AUTH,
+            origin=origin,
+            csrf=CSRF,
+            method="POST",
+            body=b"{}",
+        )
+        assert status == 201, body
+        thread_id = json.loads(body)["thread"]["id"]
+
+        message = "hello local synthetic provider"
+        status, body = _http(
+            port,
+            f"/api/threads/{thread_id}/turns",
+            AUTH,
+            origin=origin,
+            csrf=CSRF,
+            method="POST",
+            body=json.dumps(
+                {"client_turn_id": "ct-local-sse", "text": message},
+                separators=(",", ":"),
+            ).encode("utf-8"),
+        )
+        assert status == 202, body
+        assert json.loads(body)["turn_id"]
+
+        snapshot: dict[str, Any] | None = None
+        deadline = time.monotonic() + 20.0
+        while time.monotonic() < deadline:
+            status, body = _http(
+                port, f"/api/threads/{thread_id}", AUTH, origin=origin
+            )
+            assert status == 200, body
+            snapshot = json.loads(body)
+            assistant = [
+                item
+                for item in snapshot["messages"]
+                if item["role"] == "assistant"
+            ]
+            if (
+                assistant
+                and assistant[-1]["status"] == "complete"
+                and PROVIDER_TEXT in _message_text(assistant[-1])
+            ):
+                break
+            time.sleep(0.05)
+        else:
+            pytest.fail(f"turn did not complete; last snapshot: {snapshot}")
+
+        assistant = [
+            item for item in snapshot["messages"] if item["role"] == "assistant"
+        ][-1]
+        assert _message_text(assistant) == PROVIDER_TEXT
+
+        # The provider saw the turn through the sealed Local transport and the
+        # Local runtime offered no tools, so neither key is on the wire.
+        assert provider.paths == ["/v1/chat/completions"]
+        wire = provider.requests[0]
+        assert "tools" not in wire
+        assert "tool_choice" not in wire
+        assert wire["stream"] is True
+        assert wire["model"] == "test-model"
+        assert [item["role"] for item in wire["messages"]] == ["user"]
+        assert wire["messages"][0]["content"] == message
+
+        status, head, raw = _sse_request(
+            port,
+            f"/api/threads/{thread_id}/stream",
+            origin=origin,
+            token=AUTH,
+            needle=b"9f3a",
+        )
+        assert status == 200, head
+        assert b"Content-Type: text/event-stream" in head
+        assert PROVIDER_TEXT.encode() not in raw
+        assert b"9f3a" in raw
+        assert b"synthetic-provider-text-" in raw
+        assert b"event: token_delta" in raw
+
+        # The same guard protects SSE: no Origin is refused before routing.
+        status, _head, body = _sse_request(
+            port,
+            f"/api/threads/{thread_id}/stream",
+            origin=None,
+            token=AUTH,
+        )
+        assert status == 403
+        assert json.loads(body)["error"]["code"] == "invalid_origin"
+    finally:
+        parent.close()
+        code = sidecar.wait()
+        provider.close()
+
+    assert code == 0
+    assert PROVIDER_TEXT.encode() not in sidecar.output()
 
 
 def test_sigterm_and_eof_cleanup_allow_the_same_state_root(
@@ -711,10 +1085,89 @@ def _unit_run(
     return code, status, second
 
 
+@pytest.mark.parametrize("local_only", [True, False])
+def test_serve_forwards_local_only_to_profile_and_adapter(
+    monkeypatch: pytest.MonkeyPatch, local_only: bool
+) -> None:
+    import chat.server as server_module
+
+    calls: dict[str, Any] = {}
+    observed: list[tuple[str, int]] = []
+
+    class FakeApp:
+        api = object()
+
+        def close(self) -> None:
+            calls["app_closed"] = True
+
+    class FakeServer:
+        server_address = ("127.0.0.1", 4567)
+        daemon_threads = False
+
+        def serve_forever(self, poll_interval: float = 0.5) -> None:
+            calls["poll_interval"] = poll_interval
+
+        def server_close(self) -> None:
+            calls["server_closed"] = True
+
+        def shutdown(self) -> None:
+            pass
+
+    def fake_build_app(
+        config: object,
+        *,
+        provider: object = None,
+        environ: object = None,
+        local_only: bool = False,
+    ) -> FakeApp:
+        calls["build"] = (provider, environ, local_only)
+        return FakeApp()
+
+    def fake_make_server(
+        api: object,
+        host: str,
+        port: int,
+        *,
+        local_only: bool = False,
+    ) -> FakeServer:
+        calls["make"] = (host, port, local_only)
+        return FakeServer()
+
+    monkeypatch.setattr(server_module, "build_app", fake_build_app)
+    monkeypatch.setattr(server_module, "make_server", fake_make_server)
+    monkeypatch.setattr(
+        server_module, "_install_stop_handlers", lambda *args, **kwargs: {}
+    )
+    environ = {"KELP_HOST": "127.0.0.1"}
+    config = SimpleNamespace(host="127.0.0.1", port=0)
+
+    code = server_module.serve(
+        config,
+        environ=environ,
+        local_only=local_only,
+        on_listening=lambda host, port, _server: observed.append((host, port)),
+    )
+
+    assert code == 0
+    assert calls["build"] == (None, environ, local_only)
+    assert calls["make"] == ("127.0.0.1", 0, local_only)
+    assert observed == [("127.0.0.1", 4567)]
+    assert calls["app_closed"] is True
+    assert calls["server_closed"] is True
+
+
 def test_invalid_bound_endpoint_is_startup_failed_not_bad_frame(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    def fake_serve(config, *, environ=None, on_listening=None, stop_event=None):
+    def fake_serve(
+        config,
+        *,
+        environ=None,
+        local_only=False,
+        on_listening=None,
+        stop_event=None,
+    ):
+        assert local_only is True
         assert on_listening is not None
         # A listener that did not bind the advertised loopback endpoint is a
         # server fault, never a protocol violation.
@@ -735,7 +1188,15 @@ def test_invalid_bound_endpoint_is_startup_failed_not_bad_frame(
 def test_bind_failure_reports_startup_failed(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    def fake_serve(config, *, environ=None, on_listening=None, stop_event=None):
+    def fake_serve(
+        config,
+        *,
+        environ=None,
+        local_only=False,
+        on_listening=None,
+        stop_event=None,
+    ):
+        assert local_only is True
         raise OSError("cannot bind")
 
     code, status, second = _unit_run(monkeypatch, tmp_path, fake_serve)
@@ -757,7 +1218,15 @@ def test_ready_write_failure_cannot_exit_zero(
     def fail_ready(*_args: object, **_kwargs: object) -> None:
         raise ProtocolError("bad_frame")
 
-    def fake_serve(config, *, environ=None, on_listening=None, stop_event=None):
+    def fake_serve(
+        config,
+        *,
+        environ=None,
+        local_only=False,
+        on_listening=None,
+        stop_event=None,
+    ):
+        assert local_only is True
         assert on_listening is not None
         on_listening("127.0.0.1", 4567, object())
         return 0
@@ -776,7 +1245,15 @@ def test_ready_write_failure_cannot_exit_zero(
 def test_serve_returning_without_readiness_cannot_exit_zero(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    def fake_serve(config, *, environ=None, on_listening=None, stop_event=None):
+    def fake_serve(
+        config,
+        *,
+        environ=None,
+        local_only=False,
+        on_listening=None,
+        stop_event=None,
+    ):
+        assert local_only is True
         return 0
 
     code, status, second = _unit_run(monkeypatch, tmp_path, fake_serve)
@@ -793,7 +1270,15 @@ def test_serve_returning_without_readiness_cannot_exit_zero(
 def test_complete_ready_send_allows_exit_zero(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    def fake_serve(config, *, environ=None, on_listening=None, stop_event=None):
+    def fake_serve(
+        config,
+        *,
+        environ=None,
+        local_only=False,
+        on_listening=None,
+        stop_event=None,
+    ):
+        assert local_only is True
         assert on_listening is not None
         on_listening("127.0.0.1", 4567, object())
         return 0

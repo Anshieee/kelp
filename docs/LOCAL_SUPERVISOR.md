@@ -1,8 +1,9 @@
 # Local supervisor channel (v1)
 
-Status: Phase 1, stage 1. This is a dedicated Linux-only sidecar entrypoint,
-not a default user entrypoint and not a desktop/UI path. Do not ship a normal
-user build on top of it until the Local trust checks described below exist.
+Status: Phase 1, stage 2. This is a dedicated Linux-only sidecar entrypoint,
+not a default user entrypoint and not a desktop/UI path. The Local runtime
+profile and L1 loopback HTTP guard are implemented; the desktop bridge and UI
+activation remain out of scope.
 
 ## Entrypoint
 
@@ -208,40 +209,78 @@ not installed into `os.environ`.
 
 ## Application and HTTP surface
 
-The child uses the existing hosted application and API. This stage does **not**
-add local trust policy. Current behavior is therefore:
+`chat.local_serve::_run` is the only caller that names
+`serve(..., local_only=True)`. `serve`'s default stays `local_only=False`, so
+the hosted default and `python -m chat.server` path remain the existing
+application and adapter. In Local mode `serve`:
 
-* `/api/health` remains owner-authenticated: a missing/wrong bearer token or
-  session is `401`, and the configured frame `KELP_AUTH_TOKEN` is accepted.
-* `/api/readyz` is not used as the readiness signal for this channel. The
-  channel's own `ready` frame means the process built the app and bound the
-  listener.
-* No turn or provider request is made during readiness or health checks.
+* builds `build_app(..., local_only=True)`, which validates the owner-only,
+  literal loopback, port-0 profile before creating state;
+* passes the composed mapping to `ChatAPI(environ=source)` so limiter, session,
+  capacity, and share defaults never fall back to `os.environ`;
+* loads no skills or plugins, registers no tools, starts no scheduler, wallet,
+  payment, credential broker, or proactive runner, and uses a zero tool-call
+  budget;
+* constructs the model transport with `trust_env=False`, so process proxy and
+  CA-file variables cannot redirect the loopback provider call;
+* selects `make_server(..., local_only=True)` for the L1 adapter.
 
-Not yet installed (Local trust phase):
+The listener binds `127.0.0.1` on an ephemeral port (`KELP_PORT=0`). Every
+request, including health and SSE, must carry:
 
-* public `healthz`/static exclusions;
-* local cookie policy;
-* any desktop/browser trust boundary beyond the existing hosted auth surface.
+* exactly one `Host` equal to `127.0.0.1:<actual-port>` or
+  `localhost:<actual-port>`;
+* exactly one `Origin` equal to `http://` plus that same Host;
+* exactly one `Authorization: Bearer <KELP_AUTH_TOKEN>` from the config frame.
 
-Do not claim an L1 local-trust posture until those checks land.
+Refusals happen before the route, query, or body is processed and before a
+`100 Continue` is sent. They are fixed JSON with no CORS header, no
+`Set-Cookie`, and no secret echo:
 
-## Plugin loading
+| Failure | Status | Error code |
+| --- | --- | --- |
+| missing or wrong `Host` | `400` | `invalid_host` |
+| missing or wrong `Origin` | `403` | `invalid_origin` |
+| missing or wrong bearer | `401` | `unauthorized` |
 
-Installed plugin discovery is pinned to `<state>/plugins` through the composed
-`KELP_PLUGIN_ROOT`, and the store is `<state>/skill-store` through
-`KELP_PLUGIN_STORE`. `build_app` passes its explicit environment mapping to
-`SkillRegistry.load(..., environ=source)`, so a parent's unrelated plugin root
-and pin bypass cannot leak into the local sidecar.
+A cookie is never consulted by L1. Mutating chat requests still pass the
+ordinary API CSRF gate, so with a bearer credential they require
+`X-CSRF-Token: <KELP_CSRF_TOKEN>`.
 
-`SkillRegistry.reload()` (used after an approved plugin install) calls `load`
-again without an environment mapping, so that latent path reads the real
-`os.environ` for `KELP_PLUGINS_ALLOW_UNPINNED`; it keeps the registry's
-already-resolved `plugin_root`. Because the local entrypoint refuses that
-inherited name at startup, there is no supported way to set it for the reload
-path. No code captures secrets or rewrites `os.environ` to close this gap.
+After L1, only these exact origin-form targets are dispatched:
 
-The sidecar does not search outside the state root for installed plugins.
+```text
+GET    /api/health
+GET    /api/healthz
+GET    /api/threads[?limit=<digits>]
+POST   /api/threads
+GET    /api/threads/<id>
+GET    /api/threads/<id>/stream[?after=<digits>]
+POST   /api/threads/<id>/turns
+POST   /api/turns/<id>/stop
+POST   /api/turns/<id>/retry
+```
+
+`<id>` is 1–128 ASCII alphanumerics, `_`, or `-`. Every other authenticated
+target, method, query, percent-encoded alias, or absolute-form target gets one
+fixed `404 not_found` with `Connection: close` before routing. Shares, phone,
+static assets, credential inbox, auth/session, admin, runs, approvals,
+artifacts, wallet, readyz, and metrics are not on this surface.
+
+Health probes do not start a turn or contact the provider. A turn uses the
+configured OpenAI-compatible endpoint; the Local profile sends no tool
+definitions because it has no registry. The thread stream replays the persisted
+event log from `after` (or `Last-Event-ID`) and then tails it, subject to the
+same L1 headers and owner authentication.
+
+## Skills, plugins, and credentials
+
+The Local profile calls `build_app` with `registry=None`: no plugin or skill
+discovery, manifest read, tool specification, or install/reload path exists.
+The composed mapping still derives `<state>/plugins` and `<state>/skill-store`
+from the required state root and refuses the inherited plugin pin bypass, but
+the Local profile never loads a registry. There is no credential worker,
+vault, wallet, checkout, scheduler, or proactive runner in this profile.
 
 ## Lifecycle and shutdown
 
@@ -272,9 +311,16 @@ The sidecar does not search outside the state root for installed plugins.
 ## Limitations in this stage
 
 * Linux only.
-* No credential worker or vault. Credential configuration is deliberately
-  refused; the frame secrets are the only credentials.
-* No UI, no default desktop entrypoint, and no normal user shipping path.
-* No local static/healthz exclusions or cookie-policy work yet.
+* No UI, no default desktop entrypoint, no bridge activation, and no normal
+  user shipping path.
+* The Local HTTP profile is chat-only: no shares, phone/static shell,
+  credential inbox, admin, runs, approvals, artifacts, wallet, metrics, or
+  `readyz`; those targets are refused with the fixed 404.
+* `healthz` is still L1-authenticated; there is no public health/static
+  exclusion and no local cookie-policy surface.
+* No credential worker, vault, wallet, payments, scheduler, or proactive
+  runner. Credential configuration is deliberately refused; the frame secrets
+  are the only credentials.
+* No skills or tools are loaded, and the Local API offers no install path.
 * Parent must implement framing and lifecycle exactly; stdout/stderr are not a
   control channel and may be discarded.

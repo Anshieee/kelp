@@ -839,13 +839,16 @@ fn spawn_failure_is_reported_without_leaking_a_child() {
     }
 }
 
-fn http_health(port: u16, token: Option<&str>) -> std::io::Result<u16> {
+fn http_health(port: u16, token: Option<&str>, origin: Option<&str>) -> std::io::Result<u16> {
     let address = SocketAddr::from(([127, 0, 0, 1], port));
     let mut stream = TcpStream::connect_timeout(&address, Duration::from_secs(5))?;
     stream.set_read_timeout(Some(Duration::from_secs(15)))?;
     stream.set_write_timeout(Some(Duration::from_secs(5)))?;
     let mut request =
         format!("GET /api/health HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nConnection: close\r\n");
+    if let Some(origin) = origin {
+        request.push_str(&format!("Origin: {origin}\r\n"));
+    }
     if let Some(token) = token {
         request.push_str(&format!("Authorization: Bearer {token}\r\n"));
     }
@@ -909,15 +912,29 @@ fn installed_wheel_health_and_stop() {
     };
     let port = supervisor.endpoint().port();
     let owner_token = supervisor.credentials().owner_token().to_owned();
+    let origin = supervisor.endpoint().origin();
+    let wrong_origin = format!("http://localhost:{port}");
     assert_hex(&owner_token, 64);
     assert_eq!(supervisor.endpoint().host(), "127.0.0.1");
-    assert_eq!(http_health(port, None).expect("unauth health"), 401);
     assert_eq!(
-        http_health(port, Some(WRONG_TOKEN)).expect("wrong token health"),
+        http_health(port, None, Some(origin.as_str())).expect("missing bearer health"),
         401
     );
     assert_eq!(
-        http_health(port, Some(&owner_token)).expect("authenticated health"),
+        http_health(port, Some(WRONG_TOKEN), Some(origin.as_str())).expect("wrong token health"),
+        401
+    );
+    assert_eq!(
+        http_health(port, Some(&owner_token), None).expect("missing origin health"),
+        403
+    );
+    assert_eq!(
+        http_health(port, Some(&owner_token), Some(wrong_origin.as_str()))
+            .expect("wrong origin health"),
+        403
+    );
+    assert_eq!(
+        http_health(port, Some(&owner_token), Some(origin.as_str())).expect("authenticated health"),
         200
     );
 
