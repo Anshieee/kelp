@@ -68,10 +68,12 @@ decision and starts no Phase 1 work. These items are decided:
 **Acceptance (owner, 2026-11-26).** The owner accepted this ADR and the product
 brief subject to split gates. After this acceptance, the Local and native-phone
 foundation is not held by the screen, data/asset or Boat-pilot work. Real-app
-cross-platform background-input and occluded capture remain mandatory before
-screen features; exact component reuse rights are needed before avatar work; and
+Linux background-input and occluded capture remain mandatory before Linux screen
+features; exact component reuse rights are needed before avatar work; and
 the first wish responses inform choosing the first errands, not the Local or
-native-phone foundation. Implementing Boat provisioning or promising Boat compute
+native-phone foundation. macOS (all Macs) and Windows development and validation
+are deferred to a future platform milestone, not proven or waived here.
+Implementing Boat provisioning or promising Boat compute
 in the paid plan waits on measured Boat desktop-task durations and cost, or an
 explicit owner waiver (brief section 17 exit criteria). That gate is scoped to
 that work only: it is not a waiver, a price/plan choice or a removal of Boat from
@@ -118,10 +120,12 @@ Phase 1, and it does not hold back the Local or native-phone foundation.
    the same installer, and it updates through Tauri's updater. The brief
    compares this with a single-binary freeze, a `curl | sh` script alone, and a
    Docker container (brief section 6). The owner chose this option on
-   2026-11-24. Unsigned Linux builds are fine while building in public. macOS and
-   Windows signing and notarisation are required before general users are
-   invited. The owner accepted this ADR on 2026-11-26 subject to split gates,
-   recorded above.
+   2026-11-24. Phase 1 builds the Linux installer (AppImage and deb); the dmg
+   and msi installers are deferred to the macOS and Windows platform milestones.
+   Unsigned Linux builds are fine while building in public. macOS signing and
+   notarisation and Windows signing are required before general users are
+   invited on those platforms. The owner accepted this ADR on 2026-11-26
+   subject to split gates, recorded above.
 7. **The local sidecar is never open.** It binds 127.0.0.1 only, on a random
    per-launch port, always requires the owner bearer, and rejects requests whose
    Host or Origin is not the expected loopback value. Any local process or browser
@@ -341,7 +345,9 @@ Phase 1, and it does not hold back the Local or native-phone foundation.
       [`docs/PRIVACY.md`](../PRIVACY.md) §5 stays until the wiring steps there
       and that extra work land.
     - **Phases.** The desktop app and the phone app come before the desk pet and
-      identity, which are Phase 3 (brief section 16).
+      identity, which are Phase 3 (brief section 16). Phase 0 desktop validation
+      and current Phase 1 desktop development are Linux-only; macOS (all Macs)
+      and Windows work is deferred to future platform milestones.
 
 ## 3. What stays
 
@@ -384,17 +390,18 @@ chat API, approval gate, skills and spend caps are reused instead of rewritten.
 
 **Packaging and signing work.** Bundling a Python runtime and its dependencies
 makes the installer larger. Each OS needs code signing, and macOS needs
-notarisation. The updater needs signing keys. Linux builds may stay unsigned
-while building in public. macOS and Windows signing and notarisation are
-required before general users are invited. Today the desktop app ships
-unsigned dev builds with the updater off (`desktop/README.md`). The sidecar needs a
-lifecycle: start, health check, restart, and a loopback port that does not
-collide.
+notarisation at its platform milestone. The updater needs signing keys.
+Linux builds may stay unsigned while building in public. macOS signing and
+notarisation and Windows signing are required before general users are invited
+on those platforms. Today the desktop app ships unsigned dev builds with the updater off
+(`desktop/README.md`). The sidecar needs a lifecycle: start, health check,
+restart, and a loopback port that does not collide.
 
 **OS permission work.** Capture differs on each platform: Wayland through
 wlr-screencopy or xdg-desktop-portal depending on the compositor, macOS Screen
-Recording and Accessibility, and Windows Graphics Capture. Each needs a prototype
-before the design relies on it. The first one, on a wlroots compositor, captured
+Recording and Accessibility, and Windows Graphics Capture. Phase 0 prototypes and
+validates the Linux path only; macOS and Windows are taken up at their platform
+milestones. The Linux prototype, on a wlroots compositor, captured
 the screen with no prompt at all
 ([`docs/spikes/2026-11-screen-capture.md`](../spikes/2026-11-screen-capture.md)),
 so Kelp's own capture code must enforce the opt-in and the indicator. Screen
@@ -490,13 +497,20 @@ updated on every OS, or measured Boat numbers make Boat mode unworkable.
 - Done (2026-11-26): owner decision on the whole ADR. The installer option (a)
   is decided; see "Decisions recorded 2026-11-24" and "Acceptance (owner,
   2026-11-26)" in section 2.
+- Future platform milestones for macOS (all Macs) and Windows: build and validate
+  the desktop app on each platform, keep each platform's condition-specific
+  checks (macOS Screen Recording and Accessibility, Windows Graphics Capture),
+  signing, and macOS notarisation before a supported release for that platform.
+  These are outside Phases 0 and 1 (brief section 16).
 - Phase 3: consider Storm's 3 pet commits from `origin/kel-31-pet-motion-kit`
   (3bd69c5, 4546460, 84fa565), by cherry-pick or a fresh PR, as an interim
   placeholder and not the identity. Do not merge the
   branch, because it is based on `desktop-demo`, which carries demo fixtures.
   The desktop app and the phone app come first (brief section 16). Identity is
   still not decided.
-- Capture spikes on Wayland, macOS and Windows, and a local voice spike.
+- Capture spike on Linux (Wayland) ran on a wlroots compositor; capture spikes on
+  macOS and Windows are deferred to their platform milestones. A local voice
+  spike was recorded (brief section 10).
 - Done (2026-11-24): screen, voice, self-setup and local-brain sections written in
   `docs/THREAT_MODEL.md` (§6 to §9), including OS-level confinement of the local
   sidecar. Status is planned: the enforcement code is still to build, and the
@@ -526,15 +540,17 @@ updated on every OS, or measured Boat numbers make Boat mode unworkable.
   frames, the push relay and Boat provisioning on plans that include it (brief
   section 17, owner answer 11). Package the relay and gateway so a self-hoster
   can run them.
-- Background-input spike on each OS next to the capture spike (brief section
-  12, THREAT_MODEL S8). Drive an unfocused test window through tier 1 and
+- Linux background-input validation next to the capture spike (brief section 12,
+  THREAT_MODEL S8). Drive a real, unfocused app window through tier 1 and
   confirm (a) the user's pointer position, keyboard focus, active window,
   z-order, workspace and clipboard did not change, (b)
   the action landed, read back, and (c) per-window capture of an occluded window
-  works. Add a tier 2 nested-compositor test on wlroots. Control does not ship
-  on an OS where tier 1 and tier 2 both fail, and Kelp offers Boat there. Also
-  decide the global stop shortcut on each OS and how Kelp detects that the user
-  focused or typed in the window it is acting in.
+  works. Add a tier 2 nested-compositor test on wlroots, and cover the applicable
+  compositors (GNOME, KDE and wlroots). Control does not ship on Linux where
+  tier 1 and tier 2 both fail, and Kelp offers Boat there. Also decide the
+  global stop shortcut and how Kelp detects that the user focused or typed in
+  the window it is acting in. macOS and Windows background-input validation
+  is deferred to their platform milestones.
 - Design the permission-mode classifier (deterministic, no model), the pinned
   routine list of effect classes, the catalog allowlist of read-only commands
   with its argument grammar and secret-path denylist, and the settings and
