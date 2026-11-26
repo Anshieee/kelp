@@ -25,16 +25,22 @@
 //! credentials implement `Debug`/`Serialize`, and errors carry fixed text: no
 //! token, header value, or URL is ever formatted into a message.
 //!
-//! The module is compiled only for Linux tests at this stage; no desktop
-//! entrypoint is bound to it.
+//! The bridge receives only [`LocalTransport::send_api`] and
+//! [`LocalTransport::open_stream`]; request builders stay inside this module.
+//! REST bodies are bounded by [`REST_BODY_LIMIT`], and the SSE send is
+//! cancellable before headers arrive.
+//!
+//! The module is compiled for Linux tests and for the non-default
+//! `local-dev` Linux build; no default desktop path names it.
 
 use std::fmt;
 use std::num::NonZeroU16;
 use std::time::Duration;
 
-use reqwest::header::{HeaderValue, AUTHORIZATION, ORIGIN};
+use reqwest::header::{HeaderValue, ACCEPT, AUTHORIZATION, ORIGIN};
 use reqwest::{Client, Method, RequestBuilder, Url};
 use serde_json::Value;
+use tokio::sync::watch;
 
 /// Literal IPv4 loopback. Only the validated port varies.
 const LOOPBACK_HOST: &str = "127.0.0.1";
@@ -42,14 +48,21 @@ const LOOPBACK_HOST: &str = "127.0.0.1";
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(2);
 /// Overall deadline for one non-streaming REST request.
 const REST_TIMEOUT: Duration = Duration::from_secs(10);
+/// Deadline for the SSE response headers only. The long-lived body is not
+/// covered by this deadline.
+const STREAM_HEADER_TIMEOUT: Duration = Duration::from_secs(15);
 /// Bound for the status envelope read by the guard tripwire.
 const GUARD_BODY_LIMIT: usize = 4_096;
+/// Bound for one non-streaming REST response body.
+pub(crate) const REST_BODY_LIMIT: usize = 8 * 1024 * 1024;
 /// Bound for the owner and CSRF header values.
 const CREDENTIAL_LIMIT: usize = 1_024;
 /// The Local contract's mutation header. Never sent on GET.
 const CSRF_HEADER: &str = "x-csrf-token";
 /// The Local contract's one id segment limit.
 const MAX_ID_LEN: usize = 128;
+/// The SSE request profile's one media type.
+const EVENT_STREAM: &str = "text/event-stream";
 
 /// A fixed local-transport refusal.
 ///
@@ -64,6 +77,9 @@ pub(crate) enum LocalTransportError {
     ClientBuild,
     UnsupportedRequest,
     GuardProbeFailed,
+    RequestFailed,
+    Cancelled,
+    HeaderTimeout,
 }
 
 impl fmt::Display for LocalTransportError {
@@ -74,6 +90,9 @@ impl fmt::Display for LocalTransportError {
             Self::ClientBuild => "local transport client could not be built",
             Self::UnsupportedRequest => "local transport request is not permitted",
             Self::GuardProbeFailed => "local transport guard verification failed",
+            Self::RequestFailed => "local transport request failed",
+            Self::Cancelled => "local transport request was cancelled",
+            Self::HeaderTimeout => "local stream headers timed out",
         })
     }
 }
@@ -91,6 +110,35 @@ pub(crate) struct LocalTransport {
     origin: HeaderValue,
     owner: HeaderValue,
     csrf: HeaderValue,
+    /// Headers-only deadline for one SSE request. Tests may shorten it.
+    stream_header_timeout: Duration,
+}
+
+/// One bounded Local REST reply. The body is owned so the command layer never
+/// holds a live response or a builder it could mutate.
+pub(crate) struct LocalResponse {
+    status: u16,
+    body: Vec<u8>,
+}
+
+impl LocalResponse {
+    pub(crate) fn status(&self) -> u16 {
+        self.status
+    }
+
+    pub(crate) fn body(&self) -> &[u8] {
+        &self.body
+    }
+}
+
+impl fmt::Debug for LocalResponse {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("LocalResponse")
+            .field("status", &self.status)
+            .field("body_len", &self.body.len())
+            .finish()
+    }
 }
 
 impl LocalTransport {
@@ -128,6 +176,7 @@ impl LocalTransport {
             origin,
             owner,
             csrf,
+            stream_header_timeout: STREAM_HEADER_TIMEOUT,
         })
     }
 
@@ -137,7 +186,7 @@ impl LocalTransport {
     /// at most one `limit=<digits>` query, thread create, thread detail, send,
     /// stop, and retry. There is no prefix check and no caller header. `body`
     /// is JSON only where the endpoint takes one.
-    pub(crate) fn api_request(
+    fn api_request(
         &self,
         method: Method,
         path: &str,
@@ -174,10 +223,10 @@ impl LocalTransport {
     ///
     /// The path is assembled from an already validated id and a `u64`, so no
     /// caller text reaches the query. The request carries `Origin` and the
-    /// bearer like every other Local request, but no CSRF header because the
-    /// method is GET. No overall timeout is installed: the stream is expected
-    /// to stay open.
-    pub(crate) fn stream_request(
+    /// bearer like every other Local request, the fixed event-stream `Accept`,
+    /// and no CSRF header because the method is GET. No overall timeout is
+    /// installed: the stream is expected to stay open.
+    fn stream_request(
         &self,
         thread_id: &str,
         after: u64,
@@ -191,7 +240,62 @@ impl LocalTransport {
             .client
             .get(url)
             .header(ORIGIN, self.origin.clone())
-            .header(AUTHORIZATION, self.owner.clone()))
+            .header(AUTHORIZATION, self.owner.clone())
+            .header(ACCEPT, HeaderValue::from_static(EVENT_STREAM)))
+    }
+
+    /// Execute one allowlisted REST request and return a bounded reply.
+    ///
+    /// This is the only REST entry point exposed to the bridge. The request
+    /// builder never escapes, the response body is capped at
+    /// [`REST_BODY_LIMIT`], and any transport fault collapses to one fixed
+    /// error with no URL, status text, or header value.
+    pub(crate) async fn send_api(
+        &self,
+        method: Method,
+        path: &str,
+        body: Option<Value>,
+    ) -> Result<LocalResponse, LocalTransportError> {
+        let request = self.api_request(method, path, body)?;
+        let mut response = request
+            .send()
+            .await
+            .map_err(|_| LocalTransportError::RequestFailed)?;
+        let status = response.status().as_u16();
+        let body = read_capped(&mut response, REST_BODY_LIMIT).await?;
+        Ok(LocalResponse { status, body })
+    }
+
+    /// Send the SSE request while staying cancellable before headers arrive.
+    ///
+    /// `cancel` is the bridge's per-thread signal. It is checked once before
+    /// the request and then raced against the headers future. A close during
+    /// DNS, connect, or header wait drops the request instead of waiting for
+    /// the server. The headers themselves are bounded by
+    /// [`Self::stream_header_timeout`]; the long-lived body that follows is
+    /// intentionally not deadline-bound. The body is consumed by the caller,
+    /// which owns the frame parser and its memory bound.
+    pub(crate) async fn open_stream(
+        &self,
+        thread_id: &str,
+        after: u64,
+        cancel: &mut watch::Receiver<bool>,
+    ) -> Result<reqwest::Response, LocalTransportError> {
+        if *cancel.borrow() {
+            return Err(LocalTransportError::Cancelled);
+        }
+        let request = self.stream_request(thread_id, after)?;
+        tokio::select! {
+            biased;
+            _ = cancel.changed() => Err(LocalTransportError::Cancelled),
+            result = tokio::time::timeout(self.stream_header_timeout, request.send()) => {
+                match result {
+                    Ok(Ok(response)) => Ok(response),
+                    Ok(Err(_)) => Err(LocalTransportError::RequestFailed),
+                    Err(_) => Err(LocalTransportError::HeaderTimeout),
+                }
+            },
+        }
     }
 
     /// Provisionally verify that this port is the committed guarded Local
@@ -415,14 +519,25 @@ fn digits_query(query: Option<&str>, name: &str) -> Result<(), LocalTransportErr
 
 /// Read at most [`GUARD_BODY_LIMIT`] bytes from a probe response.
 async fn read_bounded(mut response: reqwest::Response) -> Result<Vec<u8>, LocalTransportError> {
+    read_capped(&mut response, GUARD_BODY_LIMIT)
+        .await
+        .map_err(|_| LocalTransportError::GuardProbeFailed)
+}
+
+/// Read a response body up to `limit` bytes. Oversize or failed reads collapse
+/// to one transport error; no partial body and no URL is returned.
+async fn read_capped(
+    response: &mut reqwest::Response,
+    limit: usize,
+) -> Result<Vec<u8>, LocalTransportError> {
     let mut body = Vec::new();
     while let Some(chunk) = response
         .chunk()
         .await
-        .map_err(|_| LocalTransportError::GuardProbeFailed)?
+        .map_err(|_| LocalTransportError::RequestFailed)?
     {
-        if body.len().saturating_add(chunk.len()) > GUARD_BODY_LIMIT {
-            return Err(LocalTransportError::GuardProbeFailed);
+        if body.len().saturating_add(chunk.len()) > limit {
+            return Err(LocalTransportError::RequestFailed);
         }
         body.extend_from_slice(&chunk);
     }

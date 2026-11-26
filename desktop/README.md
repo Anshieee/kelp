@@ -1,9 +1,9 @@
 # Kelp desktop app + desk pet (Tauri thin client)
 
-Thin client over the Kelp server (`chat/api.py`). The React shell talks to the
-server through the Rust bridge (`src-tauri/src/bridge.rs`), which owns the
-cookie jar and the per-thread SSE stream; the webview only invokes commands
-and listens for `chat-event` frames.
+The React shell talks to Kelp through the Rust bridge
+(`src-tauri/src/bridge.rs`). In the default hosted mode, Rust owns the cookie
+jar and per-thread SSE subscriptions; the webview invokes commands and
+listens for `chat-event` frames.
 
 - **Main window** (`src/index.html`, `src/App.tsx`): a ChatGPT-shaped shell —
   history sidebar grouped by day, conversation column, composer. Chat and
@@ -20,8 +20,8 @@ and listens for `chat-event` frames.
   the bottom right of the primary monitor — always-on-top, frameless, 96×96, no
   shadow and no drag region, so only the disc takes clicks. Tapping it toggles
   the panel. Vanilla on purpose — no React.
-- **Server URL** is one constant (`src/config.js`) pointing at the Kelp host.
-  No runtime switcher, no per-environment list.
+- **Hosted server URL** comes from `KELP_SERVER_URL` in the Rust shell. There
+  is no in-app backend switcher.
 
 ## Develop
 
@@ -41,21 +41,27 @@ cd desktop/src-tauri
 cargo build
 ```
 
+## Linux Local developer fixture
+
+See the [Linux Local developer handoff](../docs/LOCAL_LINUX_DEVELOPER_HANDOFF.md)
+for the private sidecar protocol, guarded headless verification, and remaining
+release gates. Local is a non-default Linux build option for synthetic tests,
+not a real-provider setup flow or an installer.
+
 ## Tests
 
-Python contract tests (run from repo root):
+From `desktop`, after installing dependencies:
 
 ```sh
-pytest tests/test_desktop_app.py -q
+npm test
+npm run build
+cargo test --locked --manifest-path src-tauri/Cargo.toml
 ```
 
-JS unit tests (no deps, `node --test`):
+See the handoff for installed-wheel tests and network isolation. None of these
+commands opens a desktop window.
 
-```sh
-node --test desktop/tests/
-```
-
-## Auth
+## Hosted auth
 
 One bearer exchange, then the Rust bridge owns the session. The webview holds
 the bearer in React state only while the sign-in dialog is open and clears it

@@ -19,3 +19,4 @@ tokio = { version = "1", features = ["time", "sync", "macros"] }
 [features]
 default = ["custom-protocol"]
 custom-protocol = ["tauri/custom-protocol"]
+local-dev = []

@@ -371,9 +371,105 @@ async fn stream_uses_validated_thread_id_and_after() {
         assert_eq!(request.method, "GET");
         assert_single(request, "origin", &origin);
         assert_single(request, "authorization", &bearer);
+        assert_single(request, "accept", "text/event-stream");
         assert!(request.header("x-csrf-token").is_none());
         assert!(request.header("cookie").is_none());
     }
+}
+
+#[tokio::test]
+async fn send_api_returns_a_bounded_reply() {
+    let server = TestServer::start(|_| TestReply::json(200, json!({"ok": true})));
+    let transport = server.transport();
+
+    let response = transport
+        .send_api(Method::GET, "/api/threads?limit=5", None)
+        .await
+        .expect("loopback reply");
+    assert_eq!(response.status(), 200);
+    let value: Value = serde_json::from_slice(response.body()).expect("json body");
+    assert_eq!(value["ok"], true);
+}
+
+#[tokio::test]
+async fn rest_replies_over_the_body_bound_are_refused() {
+    let server = TestServer::start(|_| TestReply {
+        status: 200,
+        headers: Vec::new(),
+        body: vec![b'x'; REST_BODY_LIMIT + 1],
+    });
+    let transport = server.transport();
+    let error = transport
+        .send_api(Method::GET, "/api/threads", None)
+        .await
+        .expect_err("oversize REST body must fail");
+    assert_eq!(error, LocalTransportError::RequestFailed);
+    assert!(!error.to_string().contains(&expected_origin(&server)));
+}
+
+#[tokio::test]
+async fn stream_header_wait_is_bounded_for_a_hanging_server() {
+    let server = TestServer::start(|_| {
+        thread::sleep(Duration::from_millis(800));
+        TestReply {
+            status: 200,
+            headers: vec![("content-type".into(), "text/event-stream".into())],
+            body: Vec::new(),
+        }
+    });
+    let mut transport = server.transport();
+    transport.stream_header_timeout = Duration::from_millis(100);
+    let (_cancel_tx, mut cancel_rx) = tokio::sync::watch::channel(false);
+
+    let started = std::time::Instant::now();
+    let error = match transport.open_stream("thread_1", 0, &mut cancel_rx).await {
+        Ok(_) => panic!("hanging headers must not be accepted"),
+        Err(error) => error,
+    };
+    assert_eq!(error, LocalTransportError::HeaderTimeout);
+    assert!(
+        started.elapsed() < Duration::from_millis(500),
+        "header deadline did not bound the wait: {:?}",
+        started.elapsed()
+    );
+}
+
+#[tokio::test]
+async fn stream_open_cancels_while_waiting_for_headers() {
+    let server = TestServer::start(|_| {
+        thread::sleep(Duration::from_millis(600));
+        TestReply {
+            status: 200,
+            headers: vec![("content-type".into(), "text/event-stream".into())],
+            body: Vec::new(),
+        }
+    });
+    let transport = server.transport();
+    let (cancel_tx, mut cancel_rx) = tokio::sync::watch::channel(false);
+    let started = std::time::Instant::now();
+    let canceller = thread::spawn(move || {
+        thread::sleep(Duration::from_millis(60));
+        let _ = cancel_tx.send(true);
+    });
+
+    let error = tokio::time::timeout(
+        Duration::from_secs(3),
+        transport.open_stream("thread_1", 0, &mut cancel_rx),
+    )
+    .await
+    .expect("cancellation must not wait for headers")
+    .expect_err("cancel before headers must refuse the stream");
+    assert_eq!(error, LocalTransportError::Cancelled);
+    assert!(started.elapsed() < Duration::from_millis(500));
+    let _ = canceller.join();
+
+    // The server eventually gets a request; the transport must not have sent
+    // the authoritative headers twice or a body.
+    thread::sleep(Duration::from_millis(50));
+    assert!(server
+        .requests()
+        .iter()
+        .all(|request| request.header("accept") == Some("text/event-stream")));
 }
 
 #[test]

@@ -6,10 +6,13 @@ import {
   getThread,
   listThreads,
   messageText,
+  NO_BRIDGE,
+  parseBackendMode,
   retryTurn,
   sendTurn,
   stopTurn,
   type ApiFailure,
+  type BackendMode,
   type ChatEvent,
   type Message,
   type StreamState,
@@ -31,6 +34,9 @@ export function clientTurnId(): string {
 
 export function useChat() {
   const [phase, setPhase] = useState<Phase>("loading");
+  // Which backend Rust reports. Null until the explicit lookup answers, and
+  // null again if that answer is unusable — never defaulted to hosted.
+  const [mode, setMode] = useState<BackendMode | null>(null);
   const [failure, setFailure] = useState<ApiFailure | null>(null);
   const [threads, setThreads] = useState<Thread[]>([]);
   const [activeId, setActiveId] = useState<string | null>(null);
@@ -42,15 +48,69 @@ export function useChat() {
 
   const activeRef = useRef<string | null>(null);
   const lastSeq = useRef(0);
+  // Mirror of `mode` for callbacks that must not read a stale render. Every
+  // chat action checks it before issuing IPC, so a programmatic caller cannot
+  // run ahead of the explicit lookup the UI depends on.
+  const modeRef = useRef<BackendMode | null>(null);
   // Fabricated computer cards, per thread: scaffolding for the debug trigger
   // until the backend emits `surface: "computer"`. They never reach chat.db,
   // and they are re-injected on return because the transcript is the wrong
   // place for them to survive. Cleared on sign-out and on reload.
   const syntheticRef = useRef<Map<string, Message[]>>(new Map());
 
+  /**
+   * Ask Rust which backend this window talks to, before any chat call. The
+   * answer drives auth and the Computer viewer; an unknown, missing, or
+   * rejected answer is a hard error, never a guess at hosted.
+   */
+  const lookupMode = useCallback(async (): Promise<BackendMode | null> => {
+    // The backend cannot change under a live window. Once Rust has confirmed
+    // it, reuse that answer instead of re-asking; a failed lookup (null) still
+    // retries on the next explicit Retry.
+    if (modeRef.current) return modeRef.current;
+    try {
+      const resolved = parseBackendMode(await bridge.backendMode());
+      modeRef.current = resolved;
+      setMode(resolved);
+      if (!resolved) {
+        setFailure({
+          status: 0,
+          code: "unknown_backend_mode",
+          message: "The desktop bridge reported an unknown backend mode.",
+          retryable: true,
+        });
+        setPhase("error");
+      }
+      return resolved;
+    } catch (error) {
+      const api = error as Partial<ApiFailure> | undefined;
+      const bridgeMissing = api?.code === NO_BRIDGE.code;
+      modeRef.current = null;
+      setMode(null);
+      // Keep the two failures with a stable meaning. Any other rejected
+      // lookup collapses to the fixed no-mode error: echoing a low-level
+      // message here could surface a sidecar URL or credential detail.
+      setFailure(
+        bridgeMissing
+          ? { ...NO_BRIDGE }
+          : {
+              status: 0,
+              code: "unknown_backend_mode",
+              message: "The desktop bridge did not report a usable backend mode.",
+              retryable: true,
+            },
+      );
+      setPhase("error");
+      return null;
+    }
+  }, []);
+
   const fail = useCallback((error: unknown) => {
     const api = error as ApiFailure;
-    if (api?.status === 401) {
+    // A 401 means "signed out" only on the hosted server, and only after the
+    // mode lookup confirmed it. Local and unknown modes never prompt for a
+    // bearer, so their 401s surface as an ordinary failure instead.
+    if (api?.status === 401 && modeRef.current === "hosted") {
       setPhase("signed-out");
       return;
     }
@@ -65,21 +125,30 @@ export function useChat() {
   }, []);
 
   const refreshThreads = useCallback(async (): Promise<boolean> => {
+    // Retry after a failed/unknown lookup re-asks Rust first: no chat request
+    // may run before the mode is known.
+    if (!modeRef.current && !(await lookupMode())) return false;
     try {
       setThreads(await listThreads());
       // A refresh that worked retires the failure that the Retry button would
       // have retried; otherwise one flaky startup call leaves a permanent
-      // "Something went wrong" banner over a perfectly working session.
+      // "Something went wrong" banner over a perfectly working session. It
+      // also finishes a stalled startup, but it never skips a hosted sign-in:
+      // signed-out stays signed-out until the explicit sign-in path restarts
+      // the session.
       setFailure(null);
+      setPhase((current) => (current === "loading" || current === "error" ? "ready" : current));
       return true;
     } catch (error) {
       fail(error);
       return false;
     }
-  }, [fail]);
+  }, [fail, lookupMode]);
 
   const openThread = useCallback(
     async (threadId: string) => {
+      // No speculative chat IPC before the mode lookup has answered.
+      if (!modeRef.current) return;
       if (activeRef.current) void bridge.closeStream(activeRef.current);
       activeRef.current = threadId;
       setActiveId(threadId);
@@ -102,12 +171,15 @@ export function useChat() {
     [fail],
   );
 
-  const startSession = useCallback(async () => {
-    // `fail` has already chosen signed-out or error; only a successful load
-    // may move the UI to ready.
+  const startSession = useCallback(async (): Promise<boolean> => {
+    // Explicit lookup before any chat call (reused once confirmed); `fail` has
+    // already chosen signed-out or error, and only a successful load may move
+    // the UI to ready.
+    if (!(await lookupMode())) return false;
     const ok = await refreshThreads();
     if (ok) setPhase("ready");
-  }, [refreshThreads]);
+    return ok;
+  }, [lookupMode, refreshThreads]);
 
   useEffect(() => {
     void (async () => {
@@ -199,19 +271,42 @@ export function useChat() {
   }, [refreshThreads]);
 
   const signIn = useCallback(
-    async (bearer: string) => {
+    async (bearer: string): Promise<boolean> => {
+      // The hosted sign-in endpoint does not exist for a local sidecar, and an
+      // unknown mode cannot prove it does. This is the UI half of the guard;
+      // Rust refuses the command as well.
+      if (modeRef.current !== "hosted") {
+        // Local gets the fixed refusal. An unknown mode keeps the lookup
+        // failure on screen instead of replacing the root cause with an auth
+        // message that implies the backend was fine.
+        if (modeRef.current === "local") {
+          setFailure({
+            status: 0,
+            code: "auth_unavailable",
+            message: "Sign-in is only available in hosted mode.",
+            retryable: false,
+          });
+        }
+        return false;
+      }
       setFailure(null);
       try {
         await bridge.signIn(bearer, "Kelp desktop");
         await startSession();
+        return true;
       } catch (error) {
         fail(error);
+        return false;
       }
     },
     [fail, startSession],
   );
 
-  const signOut = useCallback(async () => {
+  const signOut = useCallback(async (): Promise<boolean> => {
+    // Only the hosted backend has a sign-out endpoint. Bail before touching
+    // the active chat or its stream: a direct hook call in Local (or an
+    // unknown mode) must not tear down state the UI still shows.
+    if (modeRef.current !== "hosted") return false;
     if (activeRef.current) void bridge.closeStream(activeRef.current);
     activeRef.current = null;
     syntheticRef.current.clear();
@@ -224,9 +319,12 @@ export function useChat() {
       /* signing out locally is enough for the UI */
     }
     setPhase("signed-out");
+    return true;
   }, []);
 
   const newChat = useCallback(async () => {
+    // Creating a thread mutates server state, so it may not run on a guess.
+    if (!modeRef.current) return;
     try {
       const { thread } = await createThread();
       await refreshThreads();
@@ -243,6 +341,9 @@ export function useChat() {
    * one debug card instead of stacking a tool row per press.
    */
   const injectComputerCard = useCallback(() => {
+    // Debug cards exist only on the hosted backend; a Local sidecar has no
+    // Computer viewer for them to point at.
+    if (modeRef.current !== "hosted") return false;
     const threadId = activeRef.current;
     if (!threadId) return false;
     injectDebugCard(syntheticRef.current, threadId);
@@ -271,6 +372,7 @@ export function useChat() {
 
   const send = useCallback(
     async (text: string) => {
+      if (!modeRef.current) return;
       const threadId = activeRef.current;
       const trimmed = text.trim();
       if (!threadId || !trimmed) return;
@@ -284,7 +386,7 @@ export function useChat() {
   );
 
   const stop = useCallback(async () => {
-    if (!turnId) return;
+    if (!modeRef.current || !turnId) return;
     try {
       await stopTurn(turnId);
     } catch (error) {
@@ -293,7 +395,7 @@ export function useChat() {
   }, [fail, turnId]);
 
   const retry = useCallback(async () => {
-    if (!turnId) return;
+    if (!modeRef.current || !turnId) return;
     try {
       const { turn_id } = await retryTurn(turnId);
       setTurnId(turn_id);
@@ -306,6 +408,9 @@ export function useChat() {
 
   const decide = useCallback(
     async (approvalId: string, decision: "approve" | "deny", note?: string) => {
+      // Approvals are a hosted workflow; the Local sidecar denies them itself,
+      // so deciding one from a stale card must not reach the bridge.
+      if (modeRef.current !== "hosted") return;
       try {
         await decideApproval(approvalId, decision, note);
       } catch (error) {
@@ -317,6 +422,7 @@ export function useChat() {
 
   return {
     phase,
+    mode,
     failure,
     threads,
     activeId,

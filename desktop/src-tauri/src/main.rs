@@ -11,10 +11,15 @@
 #![cfg_attr(all(not(debug_assertions), target_os = "windows"), windows_subsystem = "windows")]
 
 mod bridge;
-#[cfg(all(test, target_os = "linux"))]
+mod local_runtime;
+#[cfg(all(any(test, feature = "local-dev"), target_os = "linux"))]
 mod local_supervisor;
-#[cfg(all(test, target_os = "linux"))]
+#[cfg(all(any(test, feature = "local-dev"), target_os = "linux"))]
 mod local_transport;
+
+#[cfg(all(feature = "local-dev", target_os = "linux"))]
+use local_runtime::{LocalConfig, LocalRuntime, LocalSession};
+use local_runtime::{DesktopBackend, RuntimeError};
 
 use tauri::{Emitter, LogicalSize, Manager, PhysicalPosition, WebviewUrl, WebviewWindowBuilder};
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
@@ -285,24 +290,70 @@ fn spawn_gaze_emitter(app: tauri::AppHandle) {
     });
 }
 
+/// Window, shortcut, and focus effects shared by both backends. The Local
+/// path deliberately omits the live pointer poll, which is a hosted-only
+/// desk-pet effect.
+fn install_window_effects(
+    app: &tauri::AppHandle,
+) -> Result<(), Box<dyn std::error::Error>> {
+    app.global_shortcut().register(OVERLAY_SHORTCUT)?;
+    place_pet(app);
+    watch_overlay_blur(app);
+    keep_main_alive(app);
+
+    // Desk pet rides on all workspaces (macOS). Elsewhere the always-on-top
+    // frameless window is the whole story.
+    #[cfg(target_os = "macos")]
+    if let Some(pet) = app.get_webview_window("pet") {
+        let _ = pet.set_visible_on_all_workspaces(true);
+    }
+    Ok(())
+}
+
+fn backend_plugin() -> tauri::plugin::TauriPlugin<tauri::Wry> {
+    tauri_plugin_global_shortcut::Builder::new()
+        .with_handler(|app, _shortcut, event| {
+            if event.state() == ShortcutState::Pressed {
+                toggle_panel(app);
+            }
+        })
+        .build()
+}
+
 fn main() {
+    let backend = match local_runtime::select_backend() {
+        Ok(backend) => backend,
+        Err(error) => fail_startup(error),
+    };
+
+    match backend {
+        DesktopBackend::Hosted => run_hosted(),
+        #[cfg(all(feature = "local-dev", target_os = "linux"))]
+        DesktopBackend::Local => run_local(),
+        #[cfg(not(all(feature = "local-dev", target_os = "linux")))]
+        DesktopBackend::Local => fail_startup(RuntimeError::LocalUnsupported),
+    }
+}
+
+/// One fixed startup failure. It runs before Tauri setup and before any
+/// hosted client or fallback can be constructed.
+fn fail_startup(error: RuntimeError) -> ! {
+    eprintln!("kelp desktop: {error}");
+    std::process::exit(2);
+}
+
+/// The default hosted path, preserved from the first bridge.
+fn run_hosted() {
     tauri::Builder::default()
         .manage(bridge::Bridge::new())
-        .plugin(
-            tauri_plugin_global_shortcut::Builder::new()
-                .with_handler(|app, _shortcut, event| {
-                    if event.state() == ShortcutState::Pressed {
-                        toggle_panel(app);
-                    }
-                })
-                .build(),
-        )
+        .plugin(backend_plugin())
         .invoke_handler(tauri::generate_handler![
             toggle_overlay,
             resize_overlay,
             open_main,
             debug_computer_card,
             bridge::bridge_server_url,
+            bridge::bridge_backend,
             bridge::bridge_sign_in,
             bridge::bridge_sign_out,
             bridge::bridge_api,
@@ -310,20 +361,75 @@ fn main() {
             bridge::bridge_close_stream
         ])
         .setup(|app| {
-            app.global_shortcut().register(OVERLAY_SHORTCUT)?;
-            place_pet(app.handle());
-            watch_overlay_blur(app.handle());
-            keep_main_alive(app.handle());
+            install_window_effects(app.handle())?;
             spawn_gaze_emitter(app.handle().clone());
-
-            // Desk pet rides on all workspaces (macOS). Elsewhere the
-            // always-on-top frameless window is the whole story.
-            #[cfg(target_os = "macos")]
-            if let Some(pet) = app.get_webview_window("pet") {
-                let _ = pet.set_visible_on_all_workspaces(true);
-            }
             Ok(())
         })
         .run(tauri::generate_context!())
         .expect("failed to run kelp desktop");
+}
+
+/// The explicit Local path. The supervisor and guard must succeed before the
+/// builder is created; on failure nothing Tauri-owned exists yet.
+#[cfg(all(feature = "local-dev", target_os = "linux"))]
+fn run_local() {
+    let config = match LocalConfig::from_env() {
+        Ok(config) => config,
+        Err(error) => fail_startup(error),
+    };
+    let session = match LocalSession::start(&config) {
+        Ok(session) => session,
+        Err(error) => fail_startup(error),
+    };
+    let LocalSession { runtime, transport } = session;
+    let bridge = bridge::Bridge::local(transport, runtime.closed_flag());
+
+    let app = match tauri::Builder::default()
+        .manage(bridge)
+        .manage(runtime)
+        .plugin(backend_plugin())
+        .invoke_handler(tauri::generate_handler![
+            toggle_overlay,
+            resize_overlay,
+            open_main,
+            debug_computer_card,
+            bridge::bridge_server_url,
+            bridge::bridge_backend,
+            bridge::bridge_sign_in,
+            bridge::bridge_sign_out,
+            bridge::bridge_api,
+            bridge::bridge_open_stream,
+            bridge::bridge_close_stream
+        ])
+        .setup(|app| {
+            install_window_effects(app.handle())?;
+            // Local is a headless fixture: do not poll the live pointer.
+            Ok(())
+        })
+        .build(tauri::generate_context!())
+    {
+        Ok(app) => app,
+        Err(error) => {
+            eprintln!("kelp desktop: failed to run: {error}");
+            std::process::exit(1);
+        }
+    };
+
+    app.run(|handle, event| {
+        if !matches!(event, tauri::RunEvent::Exit) {
+            return;
+        }
+        // Idempotent: mark closed first, then drain/cancel local streams, then
+        // close and reap the child. LocalRuntime::Drop repeats the teardown if
+        // the event never fires.
+        if let Some(runtime) = handle.try_state::<LocalRuntime>() {
+            runtime.mark_closed();
+        }
+        if let Some(bridge) = handle.try_state::<bridge::Bridge>() {
+            bridge.cancel_all_streams();
+        }
+        if let Some(runtime) = handle.try_state::<LocalRuntime>() {
+            runtime.shutdown();
+        }
+    });
 }

@@ -1,9 +1,10 @@
 # Local supervisor channel (v1)
 
-Status: Phase 1, stage 2. This is a dedicated Linux-only sidecar entrypoint,
-not a default user entrypoint and not a desktop/UI path. The Local runtime
-profile and L1 loopback HTTP guard are implemented; the desktop bridge and UI
-activation remain out of scope.
+This is the Linux-only sidecar entrypoint, not a default user command. The
+non-default `local-dev` desktop fixture uses this channel and checks the
+guarded HTTP listener before creating a Tauri window. See the
+[Linux developer handoff](LOCAL_LINUX_DEVELOPER_HANDOFF.md) for activation
+constraints and headless verification.
 
 ## Entrypoint
 
@@ -209,8 +210,8 @@ not installed into `os.environ`.
 
 ## Application and HTTP surface
 
-`chat.local_serve::_run` is the only caller that names
-`serve(..., local_only=True)`. `serve`'s default stays `local_only=False`, so
+`chat.local_serve::_run` is the only production caller of
+`chat.server.serve(..., local_only=True)`. The default stays `local_only=False`, so
 the hosted default and `python -m chat.server` path remain the existing
 application and adapter. In Local mode `serve`:
 
@@ -301,9 +302,10 @@ vault, wallet, checkout, scheduler, or proactive runner in this profile.
   a lock or dispatching from the signal handler. The server loop consumes
   that intent and any channel stop once, then starts a helper thread for
   `shutdown()`. The hosted signal path is unchanged.
-* Watcher joining and channel closing are bounded. Startup failures before the
-  listener is bound send one fixed error code and never create state or bind a
-  port.
+* Watcher joining and channel closing are bounded. Startup failures send at
+  most one fixed error code. Config validation and already observed pre-ready
+  EOF or extra bytes can reject before creating state. The application is
+  built before bind, so later startup failures can leave state on disk.
 * A later launch can reuse the same isolated state root: the database lock,
   listener, and watcher are released before exit (verified after both
   `SIGTERM` and channel EOF).
@@ -311,8 +313,9 @@ vault, wallet, checkout, scheduler, or proactive runner in this profile.
 ## Limitations in this stage
 
 * Linux only.
-* No UI, no default desktop entrypoint, no bridge activation, and no normal
-  user shipping path.
+* The desktop integration is a synthetic-provider developer fixture only.
+  Hosted remains the default. No live desktop validation, installer,
+  user setup, keychain, or OS confinement is implied.
 * The Local HTTP profile is chat-only: no shares, phone/static shell,
   credential inbox, admin, runs, approvals, artifacts, wallet, metrics, or
   `readyz`; those targets are refused with the fixed 404.
