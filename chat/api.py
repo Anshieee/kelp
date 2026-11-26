@@ -27,6 +27,7 @@ import threading
 import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
+from email.message import Message
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any, Callable, Iterator, Mapping
@@ -40,6 +41,7 @@ from . import phone as phone_routes
 from .compare import constant_time_equals
 from .credentials import CredentialBroker
 from .errors import ChatError
+from .local_http import LocalHttpRejection, check_local_headers
 from .logging import (
     is_valid_request_id,
     log,
@@ -2010,6 +2012,33 @@ class ChatAPI:
 # -- stdlib adapter --------------------------------------------------------
 
 
+#: One fixed status/code/message per Local rejection. Nothing here reflects a
+#: header, cookie, session, or bearer, and no variant ever adds CORS.
+_LOCAL_REJECTIONS: dict[LocalHttpRejection, tuple[int, str, str]] = {
+    LocalHttpRejection.INVALID_HOST: (
+        400,
+        "invalid_host",
+        "The request host is not allowed.",
+    ),
+    LocalHttpRejection.INVALID_ORIGIN: (
+        403,
+        "invalid_origin",
+        "The request origin is not allowed.",
+    ),
+    LocalHttpRejection.UNAUTHORIZED: (
+        401,
+        "unauthorized",
+        "The local owner credential is required.",
+    ),
+}
+
+
+def _local_rejection_response(rejection: LocalHttpRejection) -> Response:
+    status, code, message = _LOCAL_REJECTIONS[rejection]
+    error = ChatError(code, status=status, message=message)
+    return _json_response(status, error.to_body())
+
+
 class _Handler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
     api: ChatAPI
@@ -2289,10 +2318,147 @@ class _Handler(BaseHTTPRequestHandler):
             return
 
 
+class _LocalHandler(_Handler):
+    """The loopback entry point: validate L1 headers before doing any work.
+
+    The guard reads the parsed ``http.headers`` Message directly (never the
+    flattened ``Request.headers``), rejects before the route or query is parsed
+    and before ``_read_body`` can read a byte, and gates the stdlib's
+    ``100 Continue`` through :meth:`handle_expect_100`. Every method and route,
+    including hosted-public ``/api/healthz``, the phone mount, shares, and SSE,
+    therefore reaches the application only after this check.
+    """
+
+    def _local_rejection(self) -> LocalHttpRejection | None:
+        owner_bearer = getattr(self.api, "auth_token", None)
+        headers = getattr(self, "headers", None)
+        if not isinstance(headers, Message):
+            # Defensive only: ``parse_request`` installs a Message on success,
+            # and ``_local_protocol_error`` rejects anything else first. Keep
+            # the fallback fail-closed.
+            return LocalHttpRejection.INVALID_HOST
+        address = getattr(self.server, "server_address", (None, 0))
+        return check_local_headers(
+            headers,
+            port=address[1],
+            owner_bearer=owner_bearer if isinstance(owner_bearer, str) else "",
+        )
+
+    def _local_protocol_error(self) -> bool:
+        """True unless the parsed request is a clean HTTP/1.x message.
+
+        ``http.client.parse_headers`` treats a malformed line after valid
+        fields as recoverable: it returns a ``Message`` that still carries the
+        earlier fields and records the problem in ``Message.defects``. A
+        Message alone therefore does not prove a clean header block. Python
+        3.12 also parses a header block for the two-word HTTP/0.9 request
+        form, leaving ``request_version`` at its ``HTTP/0.9`` default, so the
+        version must be checked independently of the headers.
+        """
+
+        headers = getattr(self, "headers", None)
+        if not isinstance(headers, Message) or getattr(headers, "defects", ()):
+            return True
+        version = getattr(self, "request_version", "")
+        return not isinstance(version, str) or not version.startswith("HTTP/1.")
+
+    def parse_request(self) -> bool:
+        # ``handle_one_request`` resolves ``do_<METHOD>`` immediately after
+        # ``parse_request`` succeeds, so an unsupported method would otherwise
+        # answer 501 before any guard. Validate here, after the headers are
+        # parsed and before the method lookup. A malformed header block or an
+        # HTTP/0.9 request line is refused as a fixed 400 before the L1 check;
+        # the flag set by a successful ``handle_expect_100`` avoids checking
+        # the same headers twice.
+        self._local_verified = False
+        if not super().parse_request():
+            return False
+        if self._local_protocol_error():
+            self.send_error(400)
+            return False
+        if not self._local_verified:
+            rejection = self._local_rejection()
+            if rejection is not None:
+                self._reject_local(rejection)
+                return False
+        return True
+
+    def handle_expect_100(self) -> bool:
+        # ``parse_request`` calls this after parsing headers but before the
+        # body and before ``do_*``. A rejection here must answer the 4xx and
+        # return False, otherwise the stdlib emits ``100 Continue`` and waits
+        # for a body the caller may never send.
+        if self._local_protocol_error():
+            self.send_error(400)
+            return False
+        rejection = self._local_rejection()
+        if rejection is not None:
+            self._reject_local(rejection)
+            return False
+        self._local_verified = True
+        return super().handle_expect_100()
+
+    def send_error(
+        self,
+        code: int,
+        message: str | None = None,
+        explain: str | None = None,
+    ) -> None:
+        """Render a stdlib protocol error as fixed JSON, never as HTML.
+
+        The base implementation builds a page from the request line, the
+        method, and the parser's message, any of which is caller-controlled.
+        The Local surface answers one fixed envelope instead; the hosted
+        handler's error policy is untouched.
+
+        A malformed or unsupported request is answered with one fixed 400
+        envelope. The only stdlib error that can follow a successful L1 guard
+        is the 501 from ``handle_one_request`` for a method with no ``do_*``
+        handler, so that code alone is preserved; every parser failure stays
+        400. On Python 3.12 the version branches call this while
+        ``request_version`` is still the HTTP/0.9 default; that would suppress
+        the status line entirely, so the Local renderer sets a real protocol
+        version before responding.
+        """
+
+        status = 501 if code == 501 else 400
+        self.request_version = "HTTP/1.1"
+        error = ChatError(
+            "invalid_request",
+            status=status,
+            message="The request could not be read.",
+        )
+        self._respond(_json_response(status, error.to_body()), close=True)
+
+    def _reject_local(self, rejection: LocalHttpRejection) -> None:
+        # Close unconditionally: a rejected request may still have an unread
+        # body, and that byte stream must never be parsed as a second request.
+        self._respond(_local_rejection_response(rejection), close=True)
+
+
 def make_server(
-    api: ChatAPI, host: str = "127.0.0.1", port: int = 0
+    api: ChatAPI,
+    host: str = "127.0.0.1",
+    port: int = 0,
+    *,
+    local_only: bool = False,
 ) -> ThreadingHTTPServer:
-    handler = type("ChatRequestHandler", (_Handler,), {"api": api})
+    """Bind the stdlib adapter, optionally with the loopback L1 guard.
+
+    ``local_only`` is opt-in and fails closed at construction: the literal
+    IPv4 loopback address and a non-empty owner bearer are both required. The
+    default path is the unchanged hosted adapter.
+    """
+
+    if local_only:
+        if host != "127.0.0.1":
+            raise ValueError("local_only requires host 127.0.0.1")
+        bearer = getattr(api, "auth_token", None)
+        if not isinstance(bearer, str) or not bearer:
+            raise ValueError("local_only requires a configured owner bearer")
+        handler = type("LocalChatRequestHandler", (_LocalHandler,), {"api": api})
+    else:
+        handler = type("ChatRequestHandler", (_Handler,), {"api": api})
     return ThreadingHTTPServer((host, port), handler)
 
 
