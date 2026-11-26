@@ -1,8 +1,8 @@
 # ADR 0004: a desktop companion with a local body and a local-or-Boat brain
 
-- **Status:** Proposed
+- **Status:** Accepted (owner, 2026-11-26)
 - **Date:** 2026-11-23
-- **Issue:** Phase 0 product direction (planning gate; Phase 1 waits on it)
+- **Issue:** Phase 0 product direction (planning gate; after owner acceptance, the Local and native-phone foundation is not held by the screen, data/asset or Boat-pilot work)
 - **Related:** [ADR 0002](0002-sharing-and-identity.md) (single-owner identity),
   [ADR 0003](0003-service-control-layer.md) (frozen service contract),
   [`docs/DESKTOP_SCOPE.md`](../DESKTOP_SCOPE.md),
@@ -44,9 +44,9 @@ these reasons:
 Split Kelp into a body and a brain, and let the user choose where the brain runs.
 
 **Decisions recorded 2026-11-24.** The owner answered the open questions in
-[`docs/PRODUCT_BRIEF.md`](../PRODUCT_BRIEF.md) section 17. The owner has not
-accepted this ADR as a whole, so its status stays Proposed. These items are
-decided:
+[`docs/PRODUCT_BRIEF.md`](../PRODUCT_BRIEF.md) section 17. The owner accepted
+this ADR on 2026-11-26 subject to split gates (recorded below); this records the
+decision and starts no Phase 1 work. These items are decided:
 
 - **Local installer: option (a)** (answer 2). Item 6 below.
 - **Reaching a Boat brain: SSH local port forward** (answer 3). Item 8 below.
@@ -64,6 +64,18 @@ decided:
   the phase order** (later answers 13 to 15). Items 11 and 12 below. The desktop
   app and the phone app come before the desk pet and identity (brief section
   16).
+
+**Acceptance (owner, 2026-11-26).** The owner accepted this ADR and the product
+brief subject to split gates. After this acceptance, the Local and native-phone
+foundation is not held by the screen, data/asset or Boat-pilot work. Real-app
+cross-platform background-input and occluded capture remain mandatory before
+screen features; exact component reuse rights are needed before avatar work; and
+the first wish responses inform choosing the first errands, not the Local or
+native-phone foundation. Implementing Boat provisioning or promising Boat compute
+in the paid plan waits on measured Boat desktop-task durations and cost, or an
+explicit owner waiver (brief section 17 exit criteria). That gate is scoped to
+that work only: it is not a waiver, a price/plan choice or a removal of Boat from
+Phase 1, and it does not hold back the Local or native-phone foundation.
 
 1. **The body is always local.** It is the avatar rendering, screen capture,
    microphone and speaker, OS permission handling, and the approval UI. It lives
@@ -108,8 +120,8 @@ decided:
    Docker container (brief section 6). The owner chose this option on
    2026-11-24. Unsigned Linux builds are fine while building in public. macOS and
    Windows signing and notarisation are required before general users are
-   invited. The status of this ADR stays Proposed, because the owner has not
-   accepted the whole ADR.
+   invited. The owner accepted this ADR on 2026-11-26 subject to split gates,
+   recorded above.
 7. **The local sidecar is never open.** It binds 127.0.0.1 only, on a random
    per-launch port, always requires the owner bearer, and rejects requests whose
    Host or Origin is not the expected loopback value. Any local process or browser
@@ -430,7 +442,10 @@ trustworthy as that step.
 **Kelp will run a hosted service.** The owner's money answer (brief section 15)
 means the Kelp project operates a hosted plan service for plan users: billing, a
 model gateway, the push relay (item 10) and Boat provisioning on plans that
-include it. The service is open source, and self-hosters run its components on
+include it. Implementing Boat provisioning and promising Boat compute in the paid
+plan wait on measured Boat desktop-task durations and cost, or an explicit owner
+waiver (recorded in the acceptance note above). The service is open source, and
+self-hosters run its components on
 their own side instead. That is new for this project, and none of it exists yet.
 The existing Razorpay wallet code may be reused for billing. A hosted plan's
 model gateway will receive conversation text and downscaled frames for apps the
@@ -472,8 +487,9 @@ updated on every OS, or measured Boat numbers make Boat mode unworkable.
 
 ## 7. Follow-ups
 
-- Owner decision on the whole ADR. The installer option (a) is decided; see
-  "Decisions recorded 2026-11-24" in section 2.
+- Done (2026-11-26): owner decision on the whole ADR. The installer option (a)
+  is decided; see "Decisions recorded 2026-11-24" and "Acceptance (owner,
+  2026-11-26)" in section 2.
 - Phase 3: consider Storm's 3 pet commits from `origin/kel-31-pet-motion-kit`
   (3bd69c5, 4546460, 84fa565), by cherry-pick or a fresh PR, as an interim
   placeholder and not the identity. Do not merge the
@@ -537,5 +553,5 @@ updated on every OS, or measured Boat numbers make Boat mode unworkable.
   plaintext of bridge messages.
   Do the Telegram part before the bridge ships, even if the plan does not.
 - Licence checks for Live2D, AIRI and Open-LLM-VTuber before any reuse.
-- When accepted, change the Status line here and update the note at the top of
-  `docs/DESKTOP_SCOPE.md`.
+- Done (2026-11-26): the Status line above is updated on acceptance, and the
+  note at the top of `docs/DESKTOP_SCOPE.md` points to the accepted ADR.
