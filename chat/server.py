@@ -30,7 +30,7 @@ import sys
 import threading
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Mapping, Sequence
+from typing import Any, Callable, Mapping, Sequence
 
 from kernel import JsonlUsageStore, KernelConfig
 from kernel.config import API_KEY_ENV, BASE_URL_ENV, TENANT_SECRETS_FILE_ENV
@@ -654,7 +654,7 @@ def build_app(
     owns_provider = provider is None
     runtime_provider = provider
     try:
-        registry = SkillRegistry.load(config.skill_root)
+        registry = SkillRegistry.load(config.skill_root, environ=source)
         # P4-1: one resolver for the process. A tenant file resolves this
         # tenant's provider key; otherwise the explicit boot mapping does,
         # preserving the single-tenant path. Values never leave this scope
@@ -889,24 +889,57 @@ def build_app(
         raise
 
 
-def _install_stop_handlers(server: Any, stop: threading.Event) -> dict[int, Any]:
-    previous: dict[int, Any] = {}
+def _install_stop_handlers(
+    server: Any,
+    stop: threading.Event,
+    *,
+    stop_event: threading.Event | None = None,
+) -> dict[int, Any]:
+    """Install SIGTERM/SIGINT and one shared, at-most-once stop dispatch.
 
-    def request_stop(_signum: int, _frame: object) -> None:
-        if stop.is_set():
-            return
-        stop.set()
+    A dedicated entrypoint's signal handler only records intent: it can
+    interrupt the server loop, so it must not acquire a dispatch lock or start
+    a thread. The loop claims the stop once and delegates ``shutdown`` to a
+    helper because ``shutdown`` waits for ``serve_forever`` to exit. The
+    hosted path retains its original signal handler behavior.
+    """
+
+    previous: dict[int, Any] = {}
+    signal_requested = False
+    dispatched = False
+
+    def request_shutdown() -> None:
         threading.Thread(
             target=server.shutdown,
             name="kelp-shutdown",
             daemon=True,
         ).start()
 
+    def request_stop(_signum: int, _frame: object) -> None:
+        nonlocal signal_requested
+        if stop_event is not None:
+            signal_requested = True
+            return
+        if stop.is_set():
+            return
+        stop.set()
+        request_shutdown()
+
     for signum in (signal.SIGTERM, signal.SIGINT):
         try:
             previous[signum] = signal.signal(signum, request_stop)
         except (ValueError, OSError):  # pragma: no cover - non-main thread
             continue
+
+    if stop_event is not None:
+
+        def service_actions() -> None:
+            nonlocal dispatched
+            if not dispatched and (signal_requested or stop_event.is_set()):
+                dispatched = True
+                request_shutdown()
+
+        server.service_actions = service_actions
     return previous
 
 
@@ -915,8 +948,17 @@ def serve(
     *,
     provider: Any | None = None,
     environ: Mapping[str, str] | None = None,
+    on_listening: Callable[[str, int, Any], None] | None = None,
+    stop_event: threading.Event | None = None,
 ) -> int:
-    """Run until SIGTERM/SIGINT, then close everything cleanly."""
+    """Run until SIGTERM/SIGINT, then close everything cleanly.
+
+    ``on_listening`` is a dedicated-entrypoint hook. It runs after the socket
+    is bound and before ``serve_forever``; when supplied, the hosted stdout
+    announcement is suppressed and the callback owns readiness signalling.
+    ``stop_event`` lets that entrypoint request a cooperative shutdown from
+    another thread; the server loop observes it between requests.
+    """
 
     app = build_app(config, provider=provider, environ=environ)
     try:
@@ -926,17 +968,20 @@ def serve(
         raise
     server.daemon_threads = True
     stop = threading.Event()
-    previous = _install_stop_handlers(server, stop)
+    previous = _install_stop_handlers(server, stop, stop_event=stop_event)
     host, port = server.server_address[0], int(server.server_address[1])
     try:
-        print(
-            "kelp: listening on "
-            f"http://{host}:{port} "
-            f"(db={app.config.db_path}, "
-            f"recovered={len(app.recovery.closed_turns)}, "
-            f"expired_approvals={len(app.recovery.expired_approvals)})",
-            flush=True,
-        )
+        if on_listening is None:
+            print(
+                "kelp: listening on "
+                f"http://{host}:{port} "
+                f"(db={app.config.db_path}, "
+                f"recovered={len(app.recovery.closed_turns)}, "
+                f"expired_approvals={len(app.recovery.expired_approvals)})",
+                flush=True,
+            )
+        else:
+            on_listening(host, port, server)
         server.serve_forever(poll_interval=0.1)
     finally:
         server.server_close()
