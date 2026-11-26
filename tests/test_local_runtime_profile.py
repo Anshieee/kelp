@@ -47,6 +47,20 @@ class _EmptyRegistry:
         return ()
 
 
+class _AsyncClosingProvider(_NoopProvider):
+    """Records the async ``aclose`` a failed build's cleanup must call."""
+
+    def __init__(self) -> None:
+        self.close_calls = 0
+
+    async def aclose(self) -> None:
+        self.close_calls += 1
+
+
+class _BuildFailure(RuntimeError):
+    """A disposable failure injected after the runtime provider is allocated."""
+
+
 def _env(root: Path, **overrides: str) -> dict[str, str]:
     env = {
         "KELP_PROVIDER_API_KEY": API_KEY,
@@ -124,6 +138,86 @@ def test_local_only_rejects_a_nonowner_nonloopback_or_nonzero_port_profile_befor
             )
         assert raised.value.code == "invalid_config", config
         _assert_no_state(config)
+
+
+def test_local_failed_build_closes_the_owned_provider_and_releases_the_lock(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    env = _env(tmp_path)
+    config = ServerConfig.from_env(env)
+    provider = _AsyncClosingProvider()
+    monkeypatch.setattr(server, "build_provider", lambda *a, **k: provider)
+
+    def fail(*_args: Any, **_kwargs: Any) -> Any:
+        raise _BuildFailure("later setup failed")
+
+    monkeypatch.setattr(server, "ChatService", fail)
+
+    async def scenario() -> None:
+        # A caller-owned loop must not break cleanup: closing the owned
+        # provider runs on the bounded background LoopRunner instead.
+        with pytest.raises(_BuildFailure, match="later setup failed"):
+            build_app(config, environ=env, local_only=True)
+
+    asyncio.run(scenario())
+    assert provider.close_calls == 1
+    reacquired = server.DatabaseLock(config.db_path).acquire()
+    try:
+        assert reacquired.held
+    finally:
+        reacquired.release()
+
+
+def test_local_failed_build_never_closes_an_injected_provider(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    env = _env(tmp_path)
+    config = ServerConfig.from_env(env)
+    provider = _AsyncClosingProvider()
+
+    def fail(*_args: Any, **_kwargs: Any) -> Any:
+        raise _BuildFailure("later setup failed")
+
+    monkeypatch.setattr(server, "ChatService", fail)
+
+    with pytest.raises(_BuildFailure, match="later setup failed"):
+        build_app(config, provider=provider, environ=env, local_only=True)
+
+    assert provider.close_calls == 0
+    reacquired = server.DatabaseLock(config.db_path).acquire()
+    try:
+        assert reacquired.held
+    finally:
+        reacquired.release()
+
+
+def test_local_failed_build_closes_the_allocated_api_runner(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    env = _env(tmp_path)
+    config = ServerConfig.from_env(env)
+    provider = _AsyncClosingProvider()
+    monkeypatch.setattr(server, "build_provider", lambda *a, **k: provider)
+    runners: list[Any] = []
+    api_class = server.ChatAPI
+
+    class TrackingChatAPI(api_class):  # type: ignore[misc, valid-type]
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
+            super().__init__(*args, **kwargs)
+            runners.append(self.runner)
+
+    def fail(*_args: Any, **_kwargs: Any) -> Any:
+        raise _BuildFailure("application assembly failed")
+
+    monkeypatch.setattr(server, "ChatAPI", TrackingChatAPI)
+    monkeypatch.setattr(server, "Application", fail)
+
+    with pytest.raises(_BuildFailure, match="application assembly failed"):
+        build_app(config, environ=env, local_only=True)
+
+    assert provider.close_calls == 1
+    assert len(runners) == 1
+    assert runners[0]._loop.is_closed()
 
 
 def test_local_runtime_omits_skill_discovery_schedules_payments_and_credentials(

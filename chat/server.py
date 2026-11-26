@@ -55,6 +55,7 @@ from .api import (
     AuthFailureTracker,
     ChatAPI,
     HealthProbe,
+    LoopRunner,
     RateLimiter,
     SessionStore,
     make_server,
@@ -708,6 +709,7 @@ def build_app(
     proactive: ProactiveRunner | None = None
     credential_broker: CredentialBroker | None = None
     wallet_ledger: WalletLedger | None = None
+    api: ChatAPI | None = None
     owns_provider = provider is None
     runtime_provider = provider
     try:
@@ -967,6 +969,30 @@ def build_app(
             proactive=proactive,
         )
     except BaseException:
+        # A Local boot allocates its owned runtime provider before the later
+        # fallible setup, and no Application exists yet to close it. Release
+        # that provider and any ChatAPI background loop this build created.
+        # An injected provider belongs to the caller; hosted keeps its
+        # historical failed-build behavior.
+        if local_only and owns_provider and runtime_provider is not None:
+            try:
+                aclose = getattr(runtime_provider, "aclose", None)
+                if aclose is not None:
+                    # The caller may already run a loop, so use the existing
+                    # bounded LoopRunner rather than asyncio.run here.
+                    cleanup_runner = api.runner if api is not None else LoopRunner()
+                    try:
+                        cleanup_runner.run(aclose(), timeout=5.0)
+                    finally:
+                        if api is None:
+                            cleanup_runner.close()
+            except BaseException:  # noqa: BLE001 - cleanup must not mask the failure
+                pass
+        if local_only and api is not None:
+            try:
+                api.close()
+            except BaseException:  # noqa: BLE001 - cleanup must not mask the failure
+                pass
         if credential_broker is not None:
             credential_broker.close()
         if wallet_ledger is not None:
