@@ -1,6 +1,6 @@
 # Desktop app + desk pet — scope (v1)
 
-> **Superseded in part (2026-11-23, proposed):** owner decision 2 below ("one
+> **Superseded in part (2026-11-23; ADR accepted 2026-11-26):** owner decision 2 below ("one
 > Nebius-hosted server, no bundled sidecar") and the out-of-scope items "bundled
 > server sidecar" and "voice input" are superseded by
 > [ADR 0004](adr/0004-desktop-companion.md). The direction is in

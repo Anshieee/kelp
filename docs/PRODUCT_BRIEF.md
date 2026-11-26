@@ -1,6 +1,6 @@
 # Product brief: Kelp as a desktop companion (Phase 0)
 
-- **Status:** Proposed, for owner review
+- **Status:** Accepted (owner, 2026-11-26). This records the decision and starts no Phase 1 work. Earlier status: Proposed.
 - **Date:** 2026-11-23
 - **Decision record:** [ADR 0004](adr/0004-desktop-companion.md)
 - **Owner answers:** recorded 2026-11-24 in
@@ -12,10 +12,12 @@
   [ADR 0002](adr/0002-sharing-and-identity.md),
   [ADR 0003](adr/0003-service-control-layer.md)
 
-This brief says where Kelp is going and what Phase 0 has to settle before any
-Phase 1 code is written. Phase 0 only decides. It builds nothing except the
-small spikes listed in section 16. Where this brief makes a claim about the
-current code, the file is named so the claim can be checked.
+This brief says where Kelp is going and what Phase 0 settles. The owner accepted
+it on 2026-11-26 subject to split gates: after that acceptance, the Local and
+native-phone foundation is not held by the screen, data/asset or Boat-pilot
+work. Phase 0 only decides. It builds nothing except the small spikes listed in
+section 16. Where this brief makes a claim about the current code, the file is
+named so the claim can be checked.
 
 ## 1. What Kelp becomes
 
@@ -771,7 +773,10 @@ on the plan.
   available to operators, but it is not shown to plan users.
 - **What this means for the project.** The Kelp project will operate a hosted
   service for plan users: billing, a model gateway, the push relay, and Boat
-  provisioning on plans that include it (decided 2026-11-24). The service is
+  provisioning on plans that include it (decided 2026-11-24). Implementing Boat
+  provisioning and promising Boat compute in the paid plan require measured Boat
+  desktop-task durations and cost, or an explicit owner waiver (section 17 exit
+  criteria). The service is
   open source so self-hosters can run it. That is new. None of it exists today.
   Decision D (no public hosted instance until production) still holds until the
   plan service launches; decision D is revisited then. The existing Razorpay
@@ -795,11 +800,15 @@ Price, plan tiers and what a plan includes are not set. Nothing here is built.
 
 ## 17. Phase 0 exit criteria and open questions
 
-**Exit criteria (all checkable):**
+**Exit criteria (all checkable):** This checklist tracks Phase 0 validation.
+An open item blocks only the work that depends on it: screen validation before
+screen features, exact reuse rights before avatar work, and pre-register `wish`
+responses for choosing the first errands. The Boat pilot gates the work named
+below. None of these open items blocks the Local or native-phone foundations.
 
-- [ ] The owner has accepted or changed this brief and ADR 0004. The owner
-      answered the open questions on 2026-11-24 (see below) but has not accepted
-      the whole brief or the whole ADR.
+- [x] The owner accepts this brief and ADR 0004 on 2026-11-26, subject to the
+      split gates recorded there. This records the decision and starts no Phase 1
+      work. The owner answered the open questions on 2026-11-24 (see below).
 - [x] The installer option is chosen, and the choice is written into ADR 0004.
       (Option (a), 2026-11-24.)
 - [ ] A capture and background-input spike has run on Wayland, macOS and
@@ -826,8 +835,12 @@ Price, plan tiers and what a plan includes are not set. Nothing here is built.
 - [ ] The first audience is decided (general users, 2026-11-24). The first
       pre-register `wish` answers are read to choose the first errands. As of
       2026-11-23 there are no submissions.
-- [ ] Measured Boat desktop-task durations and cost exist, or the owner has
-      accepted going without them.
+- [ ] Measured Boat desktop-task durations and cost exist, or the owner gives an
+      explicit waiver. Until one of those holds, do not implement Boat
+      provisioning or promise Boat compute in the paid plan. This gate is scoped
+      to that work only: it is not a waiver, a price/plan choice, or removal of
+      Boat from Phase 1, and it does not hold back the Local or native-phone
+      foundation.
 
 **Open questions for the owner.** The owner answered questions 1 to 12 on
 2026-11-24. The question text below is kept as a historical record. The answers
@@ -907,7 +920,7 @@ the answer is applied. Nothing here is built unless the linked section says so.
    before general users are invited. Applied in
    [section 6](#6-the-local-install-problem) and in
    [ADR 0004](adr/0004-desktop-companion.md#2-decision) (item 6 and the
-   follow-ups). The ADR status stays Proposed.
+   follow-ups). The ADR status stayed Proposed until the owner accepted it on 2026-11-26.
 3. **Reaching a Boat brain: SSH port forward.** The owner asked for best
    practice. The brain listens on loopback inside the sandbox, and the desktop
    app reaches it through an SSH local port forward with a per-device key and a

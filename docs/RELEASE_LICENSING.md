@@ -1,7 +1,11 @@
 # Release and licensing checklist (Phase 0)
 
-- **Status:** draft checklist awaiting owner decision, 2026-11-25. This is an
-  engineering checklist, not a legal opinion, and it adopts no licence.
+- **Status:** owner decision recorded 2026-11-26: Apache-2.0 is the intended
+  outbound licence for Kelp's original code, pending verification of
+  contributor/rightsholder permissions and downstream release prep. No grant is
+  published, the current public repo is not blanket licensed, and no root
+  `LICENSE`, package metadata or landing copy is added here. This is an
+  engineering checklist, not a legal opinion, and it publishes no licence.
 - **Evidence baseline:** `fdb6daa`. No release artifact was built or inspected.
 - **Scope:** what the tree states about licensing today, the decisions the
   owner must make before publishing a release, and the artifact checks that
@@ -40,15 +44,22 @@ components separate from a future Kelp-wide licence.
 
 ## 2. Owner decisions (blocking; each needs an explicit answer)
 
-- [ ] **D1 Grant.** Choose and record the outbound licence for Kelp's original
-      code. Align the root `LICENSE`, applicable package metadata and
-      OCI label with the scope of that grant.
+- [ ] **D1 Grant (selected 2026-11-26, pending verification).** Apache-2.0 is
+      the intended outbound licence for Kelp's **original code** only, pending
+      verification of contributor/rightsholder permissions and downstream
+      release prep. No grant is published: no root `LICENSE`, package metadata,
+      OCI label or landing copy is added, and the current public repo is not
+      blanket licensed. This selection does not cover docs, art or third-party
+      material; the scope of that other material is a separate future decision
+      (D2–D4 remain open).
 - [ ] **D2 Rights.** Document the existing rights or obtain permission from
       the relevant rightsholders for the code and assets being released.
       Commit identities are provenance clues, not evidence of a grant.
       Decide how to document permissions for future contributions.
-- [ ] **D3 Scope.** Decide whether the grant covers code only, or code plus
-      `docs/` and the assets in §4.
+- [ ] **D3 Scope.** D1 selects a licence for original code only. Decide
+      separately whether and how to license original docs and artwork in §4.
+      Any third-party material distributed with Kelp remains under its own
+      terms.
 - [ ] **D4 Claim.** Check all tracked release claims (`git grep -inE
       'open[- ]source'`). Distinguish what the landing page promises now
       from future commitments in planning docs. Describe the current
