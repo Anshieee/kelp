@@ -588,6 +588,156 @@ def test_local_guard_rejects_http_0_9_with_parsed_headers(
         store.close()
 
 
+def test_local_profile_rejects_off_profile_targets_before_routing(
+    tmp_path: Path,
+) -> None:
+    api, store = _make_api(tmp_path)
+    try:
+        calls = _track_handle(api)
+        with _running(api, local_only=True) as port:
+            host = f"127.0.0.1:{port}"
+            origin = f"http://{host}"
+            cases = [
+                ("GET", "/api/auth/session", None),
+                ("GET", "/api/readyz", None),
+                ("GET", "/api/shared/share-token", None),
+                ("GET", "/phone/", None),
+                ("GET", "/api/threads?limit=1&extra=2", None),
+                ("GET", "/api/threads?limit=", None),
+                ("GET", "/api/threads/%41", None),
+                ("GET", "/api/threads/abc/stream?after=1&extra=2", None),
+                ("POST", "/api/approvals/abc/decision", b"{}"),
+                ("POST", "/api/threads/abc/turns?limit=1", b"{}"),
+            ]
+            for method, path, body in cases:
+                headers = {
+                    "Host": host,
+                    "Origin": origin,
+                    "Authorization": f"Bearer {AUTH}",
+                    "Connection": "close",
+                }
+                if body is not None:
+                    headers["Content-Type"] = "application/json"
+                status, response_headers, response_body = _request(
+                    port, method, path, headers=headers, body=body
+                )
+                assert status == 404, (method, path, response_body)
+                assert _error_body(response_body)["error"]["code"] == "not_found"
+                assert response_headers.get("Connection") == "close"
+                assert "Access-Control-Allow-Origin" not in response_headers
+                assert "Set-Cookie" not in response_headers
+                assert AUTH.encode() not in response_body
+
+            # gh-87389: the stdlib collapses a leading ``//`` in ``self.path``
+            # before this guard runs, so an exact-target matcher reading that
+            # attribute would accept the network-path alias. The request-line
+            # token is the target the caller actually sent, so the alias gets
+            # the same fixed 404 and the application is never called.
+            raw = _raw(
+                port,
+                [
+                    "GET //api/health HTTP/1.1",
+                    f"Host: {host}",
+                    f"Origin: {origin}",
+                    f"Authorization: Bearer {AUTH}",
+                    "Connection: close",
+                ],
+                timeout=3,
+            )
+            assert raw.startswith(b"HTTP/1.1 404 "), raw[:120]
+            assert _error(raw)["error"]["code"] == "not_found"
+            assert AUTH.encode() not in raw
+            assert b"Access-Control-Allow-Origin" not in raw
+            assert b"Set-Cookie" not in raw
+        assert calls == []
+    finally:
+        api.close()
+        store.close()
+
+
+def test_local_profile_rejects_off_profile_expect_before_100(
+    tmp_path: Path,
+) -> None:
+    api, store = _make_api(tmp_path)
+    try:
+        calls = _track_handle(api)
+        with _running(api, local_only=True) as port:
+            host = f"127.0.0.1:{port}"
+            started = time.monotonic()
+            raw = _raw(
+                port,
+                [
+                    "POST /api/auth/logout HTTP/1.1",
+                    f"Host: {host}",
+                    f"Origin: http://{host}",
+                    f"Authorization: Bearer {AUTH}",
+                    "Content-Type: application/json",
+                    "Content-Length: 64",
+                    "Expect: 100-continue",
+                    "Connection: close",
+                ],
+                # The body is never sent: the off-profile answer must come
+                # from the target alone, never after a 100 Continue waits for
+                # bytes that will not arrive.
+                timeout=3,
+            )
+            elapsed = time.monotonic() - started
+        assert raw.startswith(b"HTTP/1.1 404 "), raw[:120]
+        assert b"100 Continue" not in raw
+        assert _error(raw)["error"]["code"] == "not_found"
+        assert elapsed < 2.0
+        assert calls == []
+    finally:
+        api.close()
+        store.close()
+
+
+def test_chat_api_explicit_environ_suppresses_ambient_defaults(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setenv("KELP_MAX_CONCURRENT_TURNS", "9")
+    monkeypatch.setenv("KELP_RATE_LIMIT_ENABLED", "0")
+
+    store = ChatStore(tmp_path / "environ.db")
+    service = ChatService(
+        store=store,
+        provider=StubProvider([text_script("Hello")]),
+        model=MODEL,
+    )
+    ambient = ChatAPI(service, auth_token=AUTH, csrf_token=CSRF)
+    try:
+        assert ambient._turn_slots.limit == 9
+        assert ambient.limiter.enabled is False
+
+        explicit = ChatAPI(
+            service, auth_token=AUTH, csrf_token=CSRF, environ={}
+        )
+        try:
+            assert explicit._turn_slots.limit == 4
+            assert explicit.limiter.enabled is True
+        finally:
+            explicit.close()
+
+        mapped = ChatAPI(
+            service,
+            auth_token=AUTH,
+            csrf_token=CSRF,
+            environ={
+                "KELP_MAX_CONCURRENT_TURNS": "2",
+                "KELP_RATE_LIMIT_ENABLED": "0",
+            },
+        )
+        try:
+            assert mapped._turn_slots.limit == 2
+            assert mapped.limiter.enabled is False
+        finally:
+            mapped.close()
+    finally:
+        ambient.close()
+        store.close()
+
+
 def test_local_host_must_name_the_actual_bound_port(tmp_path: Path) -> None:
     api, store = _make_api(tmp_path)
     try:
