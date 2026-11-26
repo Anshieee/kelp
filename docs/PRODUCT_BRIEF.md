@@ -386,26 +386,29 @@ local user yet, and the local installer is an open Phase 0 problem. The options:
 
 | Option | How it works | For | Against |
 |---|---|---|---|
-| (a) Tauri app bundles the Python brain as a sidecar, using a relocatable Python (python-build-standalone) managed by `uv` | The desktop installer carries the Tauri app plus a pinned Python 3.12 runtime and the brain's dependencies. The app starts and stops the sidecar on loopback. | One download, no system Python, the runtime is pinned, updates can ship together | Larger installer, signing and notarisation work per OS, process lifecycle (start, restart, port, lock) must be built |
+| (a) Tauri app bundles the Python brain as a sidecar, using a relocatable Python (python-build-standalone) managed by `uv` | The desktop installer carries the Tauri app plus a pinned Python 3.12 runtime and the brain's dependencies. The app starts and stops the sidecar on loopback. | One download, no system Python, the runtime is pinned, updates can ship together | Larger installer, per-platform signing and macOS notarisation, process lifecycle (start, restart, port, lock) must be built |
 | (b) Single-binary freeze (PyInstaller or Nuitka) | The brain is frozen into one executable that the app launches. | One file, simple to describe | Frozen builds are fragile with dynamic imports, and skills are loaded from directories and packages at runtime (`skills/loader.py`), which a freeze fights. Harder to debug and to update only the runtime. |
 | (c) One-line script (`curl \| sh`), like Boat's | A shell or PowerShell script installs the app and a runtime. | Familiar to developers, fast to try | The user pipes a remote script into a shell, which is a poor fit for a project whose principle is explicit approval. It still needs a runtime and the app underneath it. |
 | (d) Container (Docker) for local | The brain runs in a container and the app talks to it. | Same image as a server deploy, clean isolation | Requires Docker on the user's machine, which many students and non-developers do not have. It also adds a daemon to the first-run setup. |
 
-**Decision (owner, 2026-11-24): option (a).** Deliver it through signed per-OS
-installers (dmg for macOS, msi for Windows, AppImage and deb for Linux), plus a
-one-line script that fetches the same signed installer for people who prefer a
-terminal. Updates use Tauri's updater. This keeps one artifact per OS and one
-runtime that Kelp controls, and the one-line script becomes a convenience
-instead of a second install path.
+**Decision (owner, 2026-11-24): option (a).** Deliver it through signed
+per-OS installers (dmg for macOS, msi for Windows, AppImage and deb for Linux),
+plus a one-line script that fetches the same signed installer for people who
+prefer a terminal. Updates use Tauri's updater. This keeps one artifact per OS
+and one runtime that Kelp controls, and the one-line script becomes a
+convenience instead of a second install path. Phase 1 builds the Linux installer
+(AppImage and deb); the dmg and msi installers are deferred to the macOS and
+Windows platform milestones.
 
 Signing timing: unsigned Linux builds are fine while building in public. macOS
 signing and notarisation and Windows signing are required before general users
-are invited (Phase 4 in section 16).
+are invited on those platforms (Phase 4 in section 16).
 
 Costs to plan for: Apple code signing and notarisation, a Windows code-signing
-certificate, and the updater signing keys. The desktop app today ships unsigned
-dev builds only, with the updater off (`desktop/README.md`). Phase 1 builds the
-installer.
+certificate, and the updater signing keys. Those Apple and Windows costs apply
+when those platforms are taken up in their milestones. The desktop app today
+ships unsigned dev builds only, with the updater off (`desktop/README.md`).
+Phase 1 builds the Linux installer.
 
 ## 7. Reacting versus acting
 
@@ -583,9 +586,12 @@ The targets are therefore:
   opt-in ("fast voice") with the user's own provider key, off by default, decided
   in [THREAT_MODEL §8, V3](THREAT_MODEL.md#8-voice).
 
-**What exists today.** `desktop/` is a Tauri app. The Rust bridge
-`desktop/src-tauri/src/bridge.rs` owns the cookies, CSRF and the SSE stream. The
-debug build defaults to `http://127.0.0.1:8000` and the release build uses the
+**What exists today.** `desktop/` is a Tauri thin client. A headless Linux build
+check compiled its Rust test target and built the web assets. That did not
+validate capture or background input (section 12); the Local installer is
+planned. The Rust bridge
+`desktop/src-tauri/src/bridge.rs` owns the cookies, CSRF and the SSE stream.
+The debug build defaults to `http://127.0.0.1:8000` and the release build uses the
 placeholder `https://kelp.example.com`. There are three windows: the main app, the
 command panel (an overlay opened with `CommandOrControl+Shift+Space`), and a
 96×96 pet overlay (`desktop/src/pet.js`, `desktop/src/orb.js`).
@@ -621,7 +627,11 @@ desktop app (section 16).
 ## 12. Platform permissions risk
 
 Screen capture is different on each OS, and each needs a permission the user must
-grant:
+grant. Phase 0 records and validates the Linux desktop app only: macOS (all
+Macs) and Windows are deferred to a future platform milestone (section 16) and
+are not proven or waived here. The macOS and Windows entries below are kept as
+cross-platform reference for that milestone, not as current Phase 0/1
+deliverables.
 
 - **Linux (Wayland):** it depends on the compositor. The Phase 0 capture spike
   ([`docs/spikes/2026-11-screen-capture.md`](spikes/2026-11-screen-capture.md))
@@ -633,8 +643,9 @@ grant:
   portal's non-interactive Screenshot also left the image in `/tmp` as a
   world-readable (0644) file, so Kelp captures frames in memory and does not use
   that portal call.
-- **macOS:** Screen Recording and Accessibility permissions.
-- **Windows:** Windows Graphics Capture.
+- **macOS:** Screen Recording and Accessibility permissions (future platform
+  milestone).
+- **Windows:** Windows Graphics Capture (future platform milestone).
 
 Screen control (S8) works without sharing the user's input seat, so it needs a
 different mechanism on each OS: tier 1 acts on the target window through the
@@ -656,33 +667,45 @@ found it unavailable, and it named those virtual-input routes as the only
 wlroots route on the user's seat. That route is now ruled out for the user's
 desktop. The initial capture spike did not send input.
 
-**Background-input exit test (Phase 0, incomplete).** On each OS, drive an
-unfocused test window through tier 1 and confirm that (a) the user's pointer
-position, keyboard focus, active window, z-order, workspace and clipboard did
-not change, (b) the action landed, read back through the same API, and (c)
-per-window capture of an occluded window works. On wlroots, also run a tier 2
-test in a nested compositor. Screen control does not ship on an OS where tier 1
-and tier 2 both fail this spike, and Kelp offers Boat there instead. Tier 1
-calls that can steal focus are not used on the user's desktop: `AXRaise` on
-macOS, UI Automation `SetFocus` on Windows and AT-SPI `grab_focus` on Linux.
-A global stop shortcut for each OS is a separate open item (S8).
+**Linux background-input validation (Phase 0, in progress).** Phase 0 validates
+background input on Linux only; macOS and Windows are deferred to a future
+platform milestone and are not proven or waived here. Drive a real, unfocused
+app window (not a synthetic test window) through tier 1 and confirm that (a)
+the user's pointer position, keyboard focus, active window, z-order, workspace
+and clipboard did not change, (b) the action landed and read back through the
+same API, and (c) per-window capture of an occluded window works. On wlroots,
+also run a tier 2 test in a nested compositor. Test on the applicable Linux
+compositors: GNOME and KDE (through the xdg-desktop-portal ScreenCast dialog)
+and wlroots compositors such as MangoWC and sway, plus a nested headless
+wlroots compositor for tier 2. Record the permission flow on each: what prompt,
+if any, the compositor shows and what Kelp must do to enforce opt-in and the
+indicator itself, because on wlroots the OS shows nothing during capture.
+Screen control does not ship on Linux where tier 1 and tier 2 both fail this
+validation, and Kelp offers Boat there instead. Tier 1 calls that can steal
+focus are not used on the user's desktop: AT-SPI `grab_focus` on Linux (and
+`AXRaise` on macOS and UI Automation `SetFocus` on Windows when those platforms
+are taken up). A global stop shortcut is a separate open item (S8).
 
-**Preliminary Linux evidence.** On one MangoWC setup, AT-SPI drove
-synthetic GTK 3 and GTK 4 buttons and text fields. The GTK 4 checkbox
-exposed no action. A nested headless sway session exercised synthetic
-GTK controls using its own virtual pointer and keyboard. Neither test
-covered real apps, GNOME, KDE, macOS or Windows. A separate
+**Preliminary Linux evidence.** On one MangoWC setup, AT-SPI drove synthetic
+GTK 3 and GTK 4 buttons and text fields; the GTK 4 checkbox exposed no action.
+A nested headless sway session exercised synthetic GTK controls using its own
+virtual pointer and keyboard. Neither test covered real apps, and neither was
+run on GNOME or KDE. A separate
 [MangoWC visibility follow-up](spikes/2026-11-mango-window-visibility.md)
 showed that a window can stay unfocused and still tile on a visible
 tag. Check visibility and layout as well as focus from before mapping
 through removal; the original spot checks do not establish that the
-live desktop went uninterrupted.
+live desktop went uninterrupted. Real-app background input, occluded
+per-window capture and the GNOME/KDE/wlroots and nested runs above are the
+outstanding Linux Phase 0 work (section 17).
 
-Prototype all three OSes before the design assumes that capture and background
-input work without extra steps. Because some platforms ask for nothing, the
-rules in section 8 will be enforced by Kelp's own capture code, never delegated to
-the OS prompt. The capability resolver can guide the user to a permission
-prompt, but it cannot grant an OS permission for them.
+Prototype Linux first before the design assumes that capture and background
+input work without extra steps on Linux. macOS (all Macs) and Windows are
+deferred to future platform milestones; a supported release still requires
+that platform's checks and signing, plus notarisation on macOS. Some platforms
+do not show a prompt, so Kelp's own capture code will enforce the rules in
+section 8. The capability resolver can guide the user to a permission prompt,
+but it cannot grant an OS permission for them.
 
 ## 13. Companion risks
 
@@ -792,11 +815,16 @@ Price, plan tiers and what a plan includes are not set. Nothing here is built.
 
 | Phase | Scope |
 |---|---|
-| 0 (now) | This brief and ADR 0004. Initial Linux screen capture and voice spikes are recorded. Background input has preliminary Linux evidence; full platform validation is open (section 12). The installer decision is recorded. |
-| 1 | The desktop app: the local brain sidecar and installer, first run (section 4.1), remember-once (section 4.3), chat, approval cards with the permission modes (section 3), the tray or menu-bar icon, and Boat mode over the SSH forward. No desk pet. In parallel, with Ketock: the phone app with chat and push approvals (relay, THREAT_MODEL L6). The Telegram bridge comes after the phone app. |
+| 0 (now) | This brief and ADR 0004. Initial Linux screen capture and voice spikes are recorded. Linux background input has preliminary evidence; Linux desktop validation is open (section 12). macOS (all Macs) and Windows are deferred to a future platform milestone and are not proven or waived here. The installer decision is recorded. |
+| 1 | The Linux desktop app: the local brain sidecar and Linux installer, first run (section 4.1), remember-once (section 4.3), chat, approval cards with the permission modes (section 3), the tray icon, and Boat mode over the SSH forward. No desk pet. In parallel, with Ketock: the phone app with chat and push approvals (relay, THREAT_MODEL L6). The Telegram bridge comes after the phone app. |
 | 2 | Actions: approval-gated skills, the full capability resolver with the signed catalog, commands through the exec gate (THREAT_MODEL T8), background screen control (THREAT_MODEL S8), screen awareness with reactions shown as notifications, and voice chat (the minimal resolver for voice models moves here). The resolver guides the user through the OS capture permission, and frames go to a local model or the user's own provider key until the plan gateway exists. |
 | 3 | The desk pet and identity: decide Kelp's look, the avatar, animation, lip-sync and persona visuals, plus the persona file and its setup flow (section 9). Until then Kelp uses one neutral built-in persona. Consider Storm's 3 pet commits here (section 10), not before. Identity is still not decided. |
-| 4 | Production hardening, signed and notarised installers (section 6), the real landing page, and invitations to the pre-register list. The plan service must exist before invitations. |
+| 4 | Production hardening, signed Linux installers (section 6), the real landing page, and invitations to the pre-register list. The plan service must exist before invitations. |
+
+macOS (all Macs) and Windows desktop development and validation are not part of
+the current Linux milestone. They move to future platform milestones whose
+timing is undecided. A supported release still requires that platform's
+validation and signing, plus notarisation on macOS.
 
 ## 17. Phase 0 exit criteria and open questions
 
@@ -811,20 +839,21 @@ below. None of these open items blocks the Local or native-phone foundations.
       work. The owner answered the open questions on 2026-11-24 (see below).
 - [x] The installer option is chosen, and the choice is written into ADR 0004.
       (Option (a), 2026-11-24.)
-- [ ] A capture and background-input spike has run on Wayland, macOS and
-      Windows, with notes on what each permission prompt looks like. For each OS
-      it confirms that tier 1 drove an unfocused window without changing the
-      user's pointer, keyboard focus, active window, z-order, workspace or
-      clipboard, that the action landed (read back), and
-      that per-window capture of an occluded window works. On wlroots it also
-      tests tier 2 in a nested compositor (section 12). One MangoWC setup
-      has preliminary capture and background-input evidence, including
-      a separate visibility and layout test. GNOME, KDE, macOS and Windows
-      are not done.
+- [ ] Linux desktop validation (section 12): real-app background input through
+      tier 1 without changing the user's pointer, keyboard focus, active window,
+      z-order, workspace or clipboard, with the action landed (read back) and
+      per-window capture of an occluded window working; tier 2 in a nested
+      compositor on wlroots; and the permission flow on the applicable
+      compositors (GNOME, KDE and wlroots). One MangoWC setup has preliminary
+      capture and background-input evidence from synthetic GTK windows, plus a
+      separate visibility and layout test. Real-app, GNOME and KDE runs are not
+      done. macOS (all Macs) and Windows validation is deferred to a future
+      platform milestone and is not proven or waived here.
 - [x] A voice spike has measured the end-of-speech to start-of-reply latency of
       the local STT and TTS choice. Result: 3.1–3.3 s with a cloud model on one
       Linux laptop; the target is revised in section 10. A run on Apple Silicon
-      and a Windows laptop is still useful before the number is final.
+      and a Windows laptop is deferred with the macOS and Windows platform
+      milestones and is still useful before the number is final.
 - [ ] The Live2D licence has been checked, and the AIRI and Open-LLM-VTuber
       licences have been checked for the parts to be reused. The
       [licence preflight](spikes/2026-11-avatar-licensing.md) covers the
@@ -917,7 +946,9 @@ the answer is applied. Nothing here is built unless the linked section says so.
    [section 2](#2-who-it-is-for-first-and-the-first-daily-loop).
 2. **Installer: option (a) accepted.** Unsigned Linux builds are fine while
    building in public. macOS and Windows signing and notarisation are required
-   before general users are invited. Applied in
+   before general users are invited. **Scope clarification, 2026-11-26:**
+   signing and notarisation apply to macOS; signing applies to Windows.
+   Both platforms are deferred; see section 6. Applied in
    [section 6](#6-the-local-install-problem) and in
    [ADR 0004](adr/0004-desktop-companion.md#2-decision) (item 6 and the
    follow-ups). The ADR status stayed Proposed until the owner accepted it on 2026-11-26.
