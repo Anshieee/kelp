@@ -236,6 +236,21 @@ fn keep_main_alive(app: &tauri::AppHandle) {
     });
 }
 
+/// Local has no orb-only lifetime, so an ordinary main-window close is a
+/// request to exit the whole app. Tauri then emits `RunEvent::Exit`, whose
+/// existing handler owns the single closed-flag/drain/reap teardown.
+fn close_local_on_main_exit(app: &tauri::AppHandle) {
+    let Some(main) = app.get_webview_window("main") else {
+        return;
+    };
+    let handle = app.clone();
+    main.on_window_event(move |event| {
+        if matches!(event, tauri::WindowEvent::CloseRequested { .. }) {
+            handle.exit(0);
+        }
+    });
+}
+
 /// Feed the orb the cursor position from anywhere on screen. A webview only
 /// sees pointer events inside its own window, so without this the eyes freeze
 /// the moment the cursor leaves the 96px orb.
@@ -295,11 +310,17 @@ fn spawn_gaze_emitter(app: tauri::AppHandle) {
 /// desk-pet effect.
 fn install_window_effects(
     app: &tauri::AppHandle,
+    backend: DesktopBackend,
 ) -> Result<(), Box<dyn std::error::Error>> {
     app.global_shortcut().register(OVERLAY_SHORTCUT)?;
     place_pet(app);
     watch_overlay_blur(app);
-    keep_main_alive(app);
+    // Hosted keeps close-to-hide; Local turns an ordinary main close into an
+    // orderly app exit so `RunEvent::Exit` can reap the sidecar.
+    match backend {
+        DesktopBackend::Hosted => keep_main_alive(app),
+        DesktopBackend::Local => close_local_on_main_exit(app),
+    }
 
     // Desk pet rides on all workspaces (macOS). Elsewhere the always-on-top
     // frameless window is the whole story.
@@ -361,7 +382,7 @@ fn run_hosted() {
             bridge::bridge_close_stream
         ])
         .setup(|app| {
-            install_window_effects(app.handle())?;
+            install_window_effects(app.handle(), DesktopBackend::Hosted)?;
             spawn_gaze_emitter(app.handle().clone());
             Ok(())
         })
@@ -402,7 +423,7 @@ fn run_local() {
             bridge::bridge_close_stream
         ])
         .setup(|app| {
-            install_window_effects(app.handle())?;
+            install_window_effects(app.handle(), DesktopBackend::Local)?;
             // Local is a headless fixture: do not poll the live pointer.
             Ok(())
         })

@@ -527,3 +527,60 @@ describe("Overlay and transcript keep hosted auth/approval actions behind the mo
     assert.doesNotMatch(blocks, /onDecide\?\.\(/, "no no-op buttons behind an optional call");
   });
 });
+
+describe("main window close semantics", () => {
+  const root = new URL("..", import.meta.url);
+  const read = (rel) => readFileSync(new URL(rel, root), "utf8");
+
+  // Slice a top-level Rust fn body so a policy assertion cannot accidentally
+  // match a call site or another handler with the same event.
+  function fnBody(source, name) {
+    const start = source.indexOf(`fn ${name}`);
+    assert.notEqual(start, -1, `missing fn ${name}`);
+    const open = source.indexOf("{", start);
+    let depth = 0;
+    for (let i = open; i < source.length; i++) {
+      if (source[i] === "{") depth += 1;
+      else if (source[i] === "}" && (depth -= 1) === 0) {
+        return source.slice(open, i + 1);
+      }
+    }
+    throw new Error(`unterminated fn ${name}`);
+  }
+
+  it("hosted close only hides the main window", () => {
+    const main = read("src-tauri/src/main.rs");
+    const hosted = fnBody(main, "keep_main_alive");
+    assert.match(hosted, /WindowEvent::CloseRequested/);
+    assert.match(hosted, /api\.prevent_close\(\)/);
+    assert.match(hosted, /window\.hide\(\)/);
+    assert.doesNotMatch(hosted, /\.exit\(/, "hosted must never exit on window close");
+  });
+
+  it("local close requests the orderly app exit handled by RunEvent::Exit", () => {
+    const main = read("src-tauri/src/main.rs");
+    const local = fnBody(main, "close_local_on_main_exit");
+    assert.match(local, /WindowEvent::CloseRequested/);
+    assert.match(local, /\.exit\(0\)/);
+    // The handler only requests exit: the closed flag, stream drain, and child
+    // reap stay in the single central RunEvent::Exit teardown.
+    assert.doesNotMatch(local, /prevent_close|\.hide\(|shutdown|cancel_all_streams/);
+    assert.equal(
+      main.split(".exit(0)").length - 1,
+      1,
+      "only the Local main-close handler requests an app exit",
+    );
+  });
+
+  it("each backend installs its own main-close policy through the shared effects", () => {
+    const main = read("src-tauri/src/main.rs");
+    const effects = fnBody(main, "install_window_effects");
+    assert.match(effects, /DesktopBackend::Hosted\s*=>\s*keep_main_alive\(app\)/);
+    assert.match(effects, /DesktopBackend::Local\s*=>\s*close_local_on_main_exit\(app\)/);
+    assert.match(main, /install_window_effects\(app\.handle\(\), DesktopBackend::Hosted\)/);
+    assert.match(main, /install_window_effects\(app\.handle\(\), DesktopBackend::Local\)/);
+    const local = fnBody(main, "run_local");
+    assert.match(local, /RunEvent::Exit/);
+    assert.match(local, /runtime\.shutdown\(\)/);
+  });
+});

@@ -1,16 +1,16 @@
 # Linux Local sidecar — developer handoff
 
-**Date:** 2026-11-26. **Scope:** the non-default Linux developer fixture on
+**Date:** 2026-11-27. **Scope:** the non-default Linux developer fixture on
 `feat/local-sidecar-lifecycle`, not a release or rollout. Runtime checks use
 synthetic credentials, disposable state and loopback only, without starting
-a desktop. The precursor Python evidence at `d92a45d` is distinct from the
+a live desktop. The precursor Python evidence at `d92a45d` is distinct from the
 integrated desktop evidence in §7.
 
 ## 1. Scope
 This records verified precursor evidence, the private fd 0 protocol, what the
 Local guard proves, and a reproducible headless fixture for fresh verification
-without a desktop. It is **not** a claim that the desktop app launches, that a
-live desktop was touched, or that any remote/cloud contract exists.
+without a live desktop. The private Sway smoke test in §7 does not validate
+the user's desktop, other compositors, or any remote/cloud contract.
 
 ## 2. Verified precursor evidence
 From `~/Projects/kelp-research/PROGRESS-2026-11-24.md` and this committed state:
@@ -75,17 +75,23 @@ existing user data or a real local model service. The fixture uses a fixed
 synthetic provider key, never a real key in an environment variable. An
 explicit Local startup failure cannot select hosted.
 
+**Window close:** an ordinary main-window close exits the whole Local app
+(reusing the `RunEvent::Exit` sidecar teardown); Hosted keeps close-to-hide.
+
 | Command or check | Observed result |
 | --- | --- |
-| `npm test` and `npm run build` (`desktop/`) | 137 passed, zero skipped; TypeScript/Vite build passed. |
+| `npm test` and `npm run build` (`desktop/`) | 140 passed, zero skipped; TypeScript/Vite build passed. |
 | `cargo test --locked --offline`, with and without `--features local-dev` | 48 passed, 3 fixture tests ignored per configuration. Covers bounded SSE header wait without a whole-stream deadline, refusal of redirects, and ownership/cleanup of replaced Local subscriptions. |
 | `installed_wheel_health_and_stop` and `installed_wheel_local_runtime_lifecycle` selected separately with `--ignored --exact` | Each passed against a guarded installed wheel. The latter submits a synthetic provider turn through the Rust Local transport, reads SSE text and replay, checks no tool schemas/events, and verifies child reap and port closure. |
 | `unguarded_control_interpreter_is_refused_and_reaped` selected with `--ignored --exact` | Passed against an installed `8114aa0` wheel that completes the v1 handshake but lacks the Local HTTP guard. |
 | `cargo build --locked --offline`, with and without `--features local-dev` | Both Linux binaries built; the feature build reported three dead-code warnings in `local_supervisor.rs`. |
 | Compiled-binary probes, without a display or session bus | Feature disabled, missing interpreter, and older wheel each produced only its fixed stderr diagnostic and exit status `2`. No hosted fallback or window creation. |
+| Private Sway GUI main-window Close | Local exited `0`, the owned Python process was gone, and its loopback port was closed. Hosted still hid the main window and kept the pet and app alive without starting a sidecar. |
 
-No successful window launch was attempted or validated. The two installed
-wheel SHA-256 values used for these checks were
+The window check ran in a disposable headless Sway session, with a private
+Wayland display, session bus, and loopback-only network. It is not validation
+on the user's desktop or across Linux compositors. The two installed wheel
+SHA-256 values used for these checks were
 `3a9bf11763e890af323eabd324ad8a89bf111429b9d91148803079011e05fcee`
 (guarded, `11b9745`) and
 `04dd9b75b3ee3c7421c7ffde117c32b05dd4a4aabe68c132e94cf4830a96de5d`
