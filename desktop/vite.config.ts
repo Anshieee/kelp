@@ -1,8 +1,9 @@
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 
-// Three windows, three entry points: the full app, the overlay panel, and the
-// untouched vanilla desk pet. The pet is deliberately not a React entry.
+// One entry point per window: the full app, the overlay panel, the untouched
+// vanilla desk pet, and first-run setup. The pet is deliberately not a React
+// entry. Setup is built but not yet opened by the shell (see #83).
 export default defineConfig({
   root: "src",
   plugins: [react()],
@@ -23,6 +24,7 @@ export default defineConfig({
         main: "src/index.html",
         overlay: "src/overlay.html",
         pet: "src/pet.html",
+        setup: "src/setup.html",
       },
     },
   },
