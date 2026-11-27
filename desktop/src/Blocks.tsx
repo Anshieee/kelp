@@ -129,16 +129,19 @@ function ApprovalCard({
         </Stack>
       )}
       <Stack direction="row" spacing={1} alignItems="center" sx={{ mt: 1.5 }}>
-        {pending ? (
+        {/* Buttons only exist when the host supplied a decision handler. A
+            stale pending card from a Local/unknown transcript stays a
+            read-only status row instead of an action the bridge refuses. */}
+        {pending && onDecide ? (
           <>
             <Button
               size="small"
               variant="contained"
-              onClick={() => onDecide?.(approval.id, "approve")}
+              onClick={() => onDecide(approval.id, "approve")}
             >
               Approve
             </Button>
-            <Button size="small" color="inherit" onClick={() => onDecide?.(approval.id, "deny")}>
+            <Button size="small" color="inherit" onClick={() => onDecide(approval.id, "deny")}>
               Deny
             </Button>
             {typeof approval.ttl_seconds === "number" && approval.ttl_seconds > 0 && (

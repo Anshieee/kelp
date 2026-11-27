@@ -83,45 +83,57 @@ function groupByDay(threads: Thread[]) {
 
 export default function App() {
   const chat = useChat();
-  const viewer = useViewer({ enabled: chat.phase === "ready" });
+  // Rust is the authority on the mode; null while looking up and after an
+  // unusable answer. Only a confirmed hosted backend gets auth and the viewer.
+  const hosted = chat.mode === "hosted";
+  const localMode = chat.mode === "local";
+  const viewer = useViewer({ enabled: chat.phase === "ready" && hosted });
   const [draft, setDraft] = useState("");
   const [bearer, setBearer] = useState("");
   const [askSignIn, setAskSignIn] = useState(false);
   // The Computer panel is a toggle on top of an always-mounted viewer: closing
   // it hides the surface but keeps the RFB session, WebSocket, and framebuffer
-  // warm in the background.
-  const [computerOpen, setComputerOpen] = useState(false);
+  // warm in the background. Derive the visible flag from `hosted` so a stale
+  // toggle can never hide both the chat surface and the unmounted pane.
+  const [computerPanelOpen, setComputerPanelOpen] = useState(false);
+  const computerOpen = hosted && computerPanelOpen;
 
   const groups = useMemo(() => groupByDay(chat.threads), [chat.threads]);
 
   // One card per session, anchored to the first call that mentioned it.
   const cardAnchors = useMemo(() => computerCardAnchors(chat.messages), [chat.messages]);
-  const computerCards = useMemo<ComputerCardHost>(
-    () => ({
-      viewer: {
-        status: viewer.status,
-        activeSessionId: viewer.activeSessionId,
-        hostRef: viewer.hostRef,
-        openSessionUrl: viewer.openSessionUrl,
-      },
-      anchors: cardAnchors,
-      onOpen: () => setComputerOpen(true),
-      onDismiss: chat.dismissComputerCard,
-    }),
-    [viewer.status, viewer.activeSessionId, viewer.hostRef, viewer.openSessionUrl, cardAnchors, chat.dismissComputerCard],
+  const computerCards = useMemo<ComputerCardHost | undefined>(
+    () =>
+      hosted
+        ? {
+            viewer: {
+              status: viewer.status,
+              activeSessionId: viewer.activeSessionId,
+              hostRef: viewer.hostRef,
+              openSessionUrl: viewer.openSessionUrl,
+            },
+            anchors: cardAnchors,
+            onOpen: () => setComputerPanelOpen(true),
+            onDismiss: chat.dismissComputerCard,
+          }
+        : undefined,
+    [hosted, viewer.status, viewer.activeSessionId, viewer.hostRef, viewer.openSessionUrl, cardAnchors, chat.dismissComputerCard],
   );
 
   // Debug scaffold: fabricate a computer card so the inline preview can be
   // exercised before the backend emits `surface: "computer"`. Gated out of
-  // production, and the block it injects never reaches the server.
+  // production, and out of Local/unknown modes so a sidecar fixture can never
+  // drive the desktop/VNC viewer. The block it injects never reaches the server.
   const chatRef = useRef(chat);
   chatRef.current = chat;
   useEffect(() => {
     if (!import.meta.env.DEV) return;
+    if (chat.mode !== "hosted") return;
     let disposed = false;
     let stop: (() => void) | undefined;
     const fire = async () => {
       const current = chatRef.current;
+      if (current.mode !== "hosted") return;
       if (current.phase !== "ready") return;
       if (!current.activeId) await current.newChat();
       current.injectComputerCard();
@@ -151,7 +163,7 @@ export default function App() {
       window.removeEventListener("keydown", onKey);
       stop?.();
     };
-  }, []);
+  }, [chat.mode]);
 
   const submit = () => {
     void chat.send(draft);
@@ -244,20 +256,22 @@ export default function App() {
         </Box>
 
         <Divider />
-        <Box sx={{ p: 1.5 }}>
-          <Button
-            fullWidth
-            startIcon={<SettingsRoundedIcon />}
-            onClick={() => {
-              // The viewer's socket must not outlive the session it belongs to.
-              viewer.disconnect();
-              void chat.signOut();
-            }}
-            sx={{ justifyContent: "flex-start", color: "text.secondary" }}
-          >
-            Sign out
-          </Button>
-        </Box>
+        {hosted && (
+          <Box sx={{ p: 1.5 }}>
+            <Button
+              fullWidth
+              startIcon={<SettingsRoundedIcon />}
+              onClick={() => {
+                // The viewer's socket must not outlive the session it belongs to.
+                viewer.disconnect();
+                void chat.signOut();
+              }}
+              sx={{ justifyContent: "flex-start", color: "text.secondary" }}
+            >
+              Sign out
+            </Button>
+          </Box>
+        )}
       </Drawer>
 
       <Box sx={{ flex: 1, display: "flex", flexDirection: "column", minWidth: 0 }}>
@@ -268,32 +282,34 @@ export default function App() {
           sx={{ px: 3, py: 1.5, borderBottom: "1px solid rgba(25,24,23,0.08)" }}
         >
           <Tabs
-            value={computerOpen ? "computer" : "chat"}
+            value={hosted && computerOpen ? "computer" : "chat"}
             onChange={(_, value: "chat" | "computer") => {
-              if (value === "chat") setComputerOpen(false);
+              if (value === "chat") setComputerPanelOpen(false);
             }}
             sx={{ minHeight: 32, mr: 1 }}
           >
             <Tab value="chat" label="Chat" sx={{ minHeight: 32, py: 0, px: 1.5 }} />
-            <Tab
-              value="computer"
-              // MUI skips onChange for the already-selected tab; the toggle
-              // lives here so a second click closes the panel.
-              onClick={() => setComputerOpen((open) => !open)}
-              sx={{ minHeight: 32, py: 0, px: 1.5 }}
-              label={
-                <Stack component="span" direction="row" spacing={0.75} alignItems="baseline">
-                  <span>Computer</span>
-                  <Typography
-                    component="span"
-                    variant="caption"
-                    sx={{ color: "text.secondary", fontSize: 11, lineHeight: 1.2 }}
-                  >
-                    {buttonStatusLabel(viewer.status)}
-                  </Typography>
-                </Stack>
-              }
-            />
+            {hosted && (
+              <Tab
+                value="computer"
+                // MUI skips onChange for the already-selected tab; the toggle
+                // lives here so a second click closes the panel.
+                onClick={() => setComputerPanelOpen((open) => !open)}
+                sx={{ minHeight: 32, py: 0, px: 1.5 }}
+                label={
+                  <Stack component="span" direction="row" spacing={0.75} alignItems="baseline">
+                    <span>Computer</span>
+                    <Typography
+                      component="span"
+                      variant="caption"
+                      sx={{ color: "text.secondary", fontSize: 11, lineHeight: 1.2 }}
+                    >
+                      {buttonStatusLabel(viewer.status)}
+                    </Typography>
+                  </Stack>
+                }
+              />
+            )}
           </Tabs>
           {!computerOpen ? (
             <Typography variant="subtitle1" noWrap sx={{ flex: 1, fontWeight: 600 }}>
@@ -301,6 +317,9 @@ export default function App() {
             </Typography>
           ) : (
             <Box sx={{ flex: 1 }} />
+          )}
+          {localMode && (
+            <Chip size="small" variant="outlined" label="Local (developer)" />
           )}
           {!computerOpen && (
             <>
@@ -334,9 +353,11 @@ export default function App() {
                 <Button color="inherit" size="small" onClick={() => void chat.refreshThreads()}>
                   Retry
                 </Button>
-                <Button color="inherit" size="small" onClick={() => setAskSignIn(true)}>
-                  Sign in
-                </Button>
+                {hosted && (
+                  <Button color="inherit" size="small" onClick={() => setAskSignIn(true)}>
+                    Sign in
+                  </Button>
+                )}
               </Stack>
             }
           >
@@ -351,7 +372,7 @@ export default function App() {
                 <MessageRow
                   key={message.id}
                   message={message}
-                  onDecide={chat.decide}
+                  onDecide={hosted ? chat.decide : undefined}
                   computer={computerCards}
                 />
               ))}
@@ -473,60 +494,68 @@ export default function App() {
           </>
         )}
 
-        {/* Mounted once, for the app's whole lifetime: hiding the panel must
-            preserve the RFB session, WebSocket, and framebuffer. Hidden means
-            display:none + inert — out of the tab order, with no pointer or
-            keyboard capture. The viewer itself is view-only regardless. */}
-        <Box
-          inert={!computerOpen}
-          sx={{ display: computerOpen ? "flex" : "none", flex: 1, minHeight: 0 }}
-        >
-          <ComputerPane viewer={viewer} />
-        </Box>
+        {/* Hosted only. The Local sidecar has no viewer capability, so the
+            pane — and with it any RFB auto-connect — is not mounted there at
+            all. On hosted the panel stays mounted once, for the app's whole
+            lifetime: hiding it must preserve the RFB session, WebSocket, and
+            framebuffer. Hidden means display:none + inert — out of the tab
+            order, with no pointer or keyboard capture. */}
+        {hosted && (
+          <Box
+            inert={!computerOpen}
+            sx={{ display: computerOpen ? "flex" : "none", flex: 1, minHeight: 0 }}
+          >
+            <ComputerPane viewer={viewer} />
+          </Box>
+        )}
       </Box>
 
-      <Dialog open={chat.phase === "signed-out" || askSignIn} fullWidth maxWidth="xs">
-        <DialogTitle>Sign in</DialogTitle>
-        <DialogContent>
-          <DialogContentText sx={{ mb: 2 }}>
-            Paste the owner bearer once. It is exchanged for a session; the
-            bridge holds the cookies, not the page.
-          </DialogContentText>
-          <TextField
-            autoFocus
-            fullWidth
-            type="password"
-            label="Kelp owner bearer"
-            value={bearer}
-            onChange={(event) => setBearer(event.target.value)}
-            onKeyDown={(event) => {
-              if (event.key === "Enter" && bearer.trim()) {
+      {/* The bearer dialog exists only for a confirmed hosted backend: Local
+          never mounts it, and unknown modes cannot prove auth is available. */}
+      {hosted && (
+        <Dialog open={chat.phase === "signed-out" || askSignIn} fullWidth maxWidth="xs">
+          <DialogTitle>Sign in</DialogTitle>
+          <DialogContent>
+            <DialogContentText sx={{ mb: 2 }}>
+              Paste the owner bearer once. It is exchanged for a session; the
+              bridge holds the cookies, not the page.
+            </DialogContentText>
+            <TextField
+              autoFocus
+              fullWidth
+              type="password"
+              label="Kelp owner bearer"
+              value={bearer}
+              onChange={(event) => setBearer(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === "Enter" && bearer.trim()) {
+                  setAskSignIn(false);
+                  void chat.signIn(bearer.trim());
+                  setBearer("");
+                }
+              }}
+            />
+            {chat.failure && chat.phase === "signed-out" && (
+              <Alert severity="error" sx={{ mt: 2 }}>
+                {chat.failure.message}
+              </Alert>
+            )}
+          </DialogContent>
+          <DialogActions>
+            <Button
+              variant="contained"
+              disabled={!bearer.trim()}
+              onClick={() => {
                 setAskSignIn(false);
                 void chat.signIn(bearer.trim());
                 setBearer("");
-              }
-            }}
-          />
-          {chat.failure && chat.phase === "signed-out" && (
-            <Alert severity="error" sx={{ mt: 2 }}>
-              {chat.failure.message}
-            </Alert>
-          )}
-        </DialogContent>
-        <DialogActions>
-          <Button
-            variant="contained"
-            disabled={!bearer.trim()}
-            onClick={() => {
-              setAskSignIn(false);
-              void chat.signIn(bearer.trim());
-              setBearer("");
-            }}
-          >
-            Sign in
-          </Button>
-        </DialogActions>
-      </Dialog>
+              }}
+            >
+              Sign in
+            </Button>
+          </DialogActions>
+        </Dialog>
+      )}
     </Box>
   );
 }
@@ -537,7 +566,7 @@ function MessageRow({
   computer,
 }: {
   message: Message;
-  onDecide: (id: string, decision: "approve" | "deny") => void;
+  onDecide?: (id: string, decision: "approve" | "deny") => void;
   computer?: ComputerCardHost;
 }) {
   const mine = message.role === "user";

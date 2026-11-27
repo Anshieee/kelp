@@ -18,6 +18,27 @@ export interface ApiFailure {
   retryable: boolean;
 }
 
+/**
+ * Which backend the Rust bridge is attached to. Rust is the only authority:
+ * `bridge_backend` answers with one of these two literals, and the webview
+ * never infers the mode from a URL, a failed request, or a build flag.
+ *
+ * - `"hosted"` — the normal remote Kelp server; the bearer sign-in flow and
+ *   the Computer viewer are available.
+ * - `"local"` — an explicit Local developer sidecar on loopback. It has no
+ *   hosted session API and no Computer viewer.
+ */
+export type BackendMode = "hosted" | "local";
+
+/**
+ * Accept only the two literals the bridge contract defines. Anything else —
+ * an empty string, an unknown mode name, a null from an older shell — is
+ * "unknown", never silently treated as hosted.
+ */
+export function parseBackendMode(value: unknown): BackendMode | null {
+  return value === "hosted" || value === "local" ? value : null;
+}
+
 export interface Thread {
   id: string;
   title: string;
@@ -106,6 +127,10 @@ async function call<T>(command: string, args?: Record<string, unknown>): Promise
 }
 
 export const bridge = {
+  // Mode metadata only: Rust returns the literal "hosted" or "local". The
+  // local URL/port and any credential stay inside the Rust sidecar.
+  backendMode: () => call<unknown>("bridge_backend"),
+
   serverUrl: () => call<string>("bridge_server_url"),
 
   signIn: (bearer: string, deviceLabel: string) =>

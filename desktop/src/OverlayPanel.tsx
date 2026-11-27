@@ -39,7 +39,23 @@ export default function OverlayPanel() {
   const inputRef = useRef<HTMLInputElement>(null);
   const resumed = useRef(false);
 
+  const hosted = chat.mode === "hosted";
   const ready = chat.phase === "ready";
+  // Sign-in is a hosted workflow. Local and unconfirmed modes have no bearer to
+  // enter, so they must never be described as "signed out": they get neutral
+  // connecting/unavailable copy instead.
+  const signInRequired = hosted && chat.phase === "signed-out";
+  const placeholder = ready
+    ? "Ask Kelp…"
+    : signInRequired
+      ? "Sign in from the full app"
+      : chat.phase === "loading"
+        ? "Connecting…"
+        : "Kelp is unavailable";
+  // Approvals are hosted-only. Passing the callback on Local/unknown would put
+  // actionable Approve/Deny buttons on a stale card even though the bridge
+  // refuses the decision.
+  const decide = hosted ? chat.decide : undefined;
 
   useEffect(() => {
     inputRef.current?.focus();
@@ -146,7 +162,7 @@ export default function OverlayPanel() {
               if (canSend) void send();
             }
           }}
-          placeholder={ready ? "Ask Kelp…" : "Sign in from the full app"}
+          placeholder={placeholder}
           disabled={!ready}
           // Text sits at 6 (window) + 8 (pill) + 8 (input) = 22px from the
           // window edge, matching the expanded panel's 6 + 16 = 22px.
@@ -252,7 +268,9 @@ export default function OverlayPanel() {
               <Typography variant="body2" color="text.secondary">
                 {chat.phase === "loading"
                   ? "Connecting to the Kelp server…"
-                  : chat.failure?.message ?? "Sign in from the full app to chat here."}
+                  : signInRequired
+                    ? "Sign in from the full app to chat here."
+                    : chat.failure?.message ?? "Kelp is unavailable right now."}
               </Typography>
               <Button
                 size="small"
@@ -272,7 +290,7 @@ export default function OverlayPanel() {
               ) : (
                 <Stack spacing={1.5}>
                   {chat.messages.map((message) => (
-                    <MessageBubble key={message.id} message={message} onDecide={chat.decide} />
+                    <MessageBubble key={message.id} message={message} onDecide={decide} />
                   ))}
                 </Stack>
               )}
@@ -316,7 +334,7 @@ function MessageBubble({
   onDecide,
 }: {
   message: Message;
-  onDecide: (id: string, decision: "approve" | "deny") => void;
+  onDecide?: (id: string, decision: "approve" | "deny") => void;
 }) {
   const mine = message.role === "user";
   const renderable =
