@@ -30,9 +30,21 @@ cd desktop
 npm install
 npm run dev         # vite dev server (open / and /overlay.html)
 npm run typecheck   # tsc --noEmit
-npm run build       # typecheck + vite build (three entries)
+npm run build       # typecheck + vite build (four entries)
 npm run pet:dev     # pet overlay only
 ```
+
+### First-run setup (in progress, #83)
+
+`setup.html` is the setup and recovery window. The shell does not open it
+yet: the Rust side (`setup_status`, `setup_choose`, `setup_retry`,
+`setup_quit`, and the `setup-status` event) lands separately. The contract
+and its rules live in `src/setup.ts`.
+
+To review the screen in a browser, run `npm run dev` and open
+`/setup.html?setup=<scenario>`, where the scenario is `first-run`,
+`local-only`, `broken`, `guard`, `missing`, or `garbage`. That fake only
+loads in dev builds outside the shell; see `src/setupFake.ts`.
 
 Rust/Tauri shell:
 
